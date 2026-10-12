@@ -89,11 +89,12 @@ acceptance_scripts() {
 
 step "cargo fmt" cargo fmt --check
 step "cargo clippy" cargo_clippy
+# Browser e2e tests in `cargo test` serve web/dist and load the built extension, so build them first.
+js_checks web
+js_checks extension
 step "cargo test" cargo_test
 step "responsive first browser action" responsive_checks
 step "agent (ruff, pyright, pytest)" agent_checks
-js_checks web
-js_checks extension
 step "portability" tools/check-portability.sh
 step "tools tests" uv run --no-project --with pytest pytest -q tools/tests --junitxml="$DIR/tools-pytest.xml"
 step "bench dependencies" uv sync --frozen --project bench
