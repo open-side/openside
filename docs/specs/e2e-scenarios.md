@@ -128,3 +128,57 @@ process across two slow loopback browser navigations.
   including exact selection, missing tests, ignored tests, and skip attribution.
 - The optional B-5 command printed `SKIP: no reachable compositor IPC with an active window`.
   This is blocked-external evidence, not a successful compositor focus check.
+
+## C-10 login cards
+
+`crates/openside-e2e/tests/login_scenarios.rs` separately covers S1–S10 against
+the loopback Northwind fixture and its identity provider. The deterministic
+tests answer only the daemon's ticket API, never the site's browser controls.
+Account tiles show the person's name as the label and email as the description;
+the selection helper matches both. Phone approval remains pending until the
+site changes, then emits `ticket.resolved` and resumes the agent. A visible
+failure alert takes precedence over phone-approval wording, so a denied or
+expired request cannot leave the waiting card stuck.
+
+```sh
+flock --close /tmp/openside-heavy.lock nice -n 10 \
+  cargo test -p openside-e2e -j 4 --test login_scenarios -- --test-threads=2
+```
+
+The ignored `login_scenarios_live_model` test uses a real model authenticated by
+the local broker. Its private `[agent] command` removes `OPENSIDE_AGENT_SCRIPT`,
+reads `~/.omp/auth-broker.token` by an explicit absolute `token_file`, and refuses
+broker writes. The shared `live-request-count` ledger caps the entire QA run,
+including retries, at 40 model requests; do not remove it to obtain more requests.
+`live-results.json` records each attempt, the visible cards and selections, tool
+steps, site outcome, vault metadata, and per-attempt request count without
+passwords, codes, setup keys, or credentials. The default model is
+`anthropic:claude-haiku-5-5`; `OPENSIDE_LOGIN_LIVE_MODEL` selects another explicit
+broker-supported model. `OPENSIDE_LOGIN_LIVE_SCENARIOS` is a comma-separated
+filter for failed scenario groups (`S4`, `S3`, `S8/S9/S10`, `S5-SMS`,
+`S5-TOTP`, `S6`, `S2`, `S1/S7`); earlier attempts remain in the report. The
+default order prioritizes phone approval, provider login and authenticator
+enrollment. S10 shares the saved-password and later automatic sign-in exercised
+by S8/S9 rather than duplicating that live flow. Live SSE waits allow 120 seconds;
+deterministic waits retain their 30-second deadline. Budget-exhausted groups are
+recorded as deterministic-only, never as live passes.
+
+```sh
+flock --close /tmp/openside-heavy.lock nice -n 10 \
+  cargo test -p openside-e2e -j 4 --test login_scenarios \
+  login_scenarios_live_model -- --ignored --exact --nocapture --test-threads=2
+pnpm -C web build
+flock --close /tmp/openside-heavy.lock nice -n 10 \
+  env OPENSIDE_LOGIN_CARDS_DIR=/tmp/openside-qa/polish/LoginScenarios \
+  cargo test -p openside-e2e -j 4 --test login_scenarios \
+  login_cards_capture -- --ignored --exact --nocapture --test-threads=2
+```
+
+The capture test saves every pending card at 390×844 and 1440×900 in light and
+dark mode, plus its measured bounds, and asserts no horizontal overflow. It
+drives real tool/ticket APIs instead of restarting the scripted sidecar, so
+artificial crash warnings do not contaminate the cards. The shared web/extension
+placeholder style uses a 0.72 text alpha: the measured light-field contrast is
+4.97:1 rather than the previous 3.17:1. Model QA and screenshots are opt-in
+evidence, not part of the credential-free deterministic suite or the ten GOAL 3
+scenarios listed above.

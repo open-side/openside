@@ -1,4 +1,17 @@
 # Portability gate allowlist (tools/check-portability.sh). Format: <path>:<line|*>  # reason
-# Entries describe documented, optional omp-user defaults or quote the gate itself.
+# Entries are narrowly scoped to optional defaults, synthetic tests, or recorded evidence.
 agent/src/openside_agent/providers/broker.py:31  # optional omp auth broker default URL (used only when the broker source is configured/token present)
 tools/check-portability.sh:*  # defines the gate regex
+crates/opensided/src/onboarding.rs:233  # synthetic home for tilde-path tests, not a runtime default
+crates/opensided/src/onboarding.rs:235  # synthetic skills path in the same test
+crates/opensided/src/onboarding.rs:238  # exact-home abbreviation assertion
+crates/opensided/src/onboarding.rs:240  # distinct synthetic home tests component boundaries
+crates/opensided/src/onboarding.rs:241  # expected distinct-home path, not a runtime default
+crates/openside-e2e/tests/tasks.rs:496  # optional compositor skip diagnostic, not a platform requirement
+crates/openside-e2e/tests/login_scenarios.rs:149  # explicitly opted-in live broker test credential location
+crates/openside-e2e/tests/login_scenarios.rs:155  # same opted-in broker default, not the offline gate
+docs/specs/e2e-scenarios.md:150  # documents that optional live broker fixture
+docs/specs/acceptance.csv:109  # records the compositor test's skip and isolated evidence
+docs/specs/responsive-results.json:506  # preserves the exact historical evidence command
+docs/specs/responsive-results.json:522  # records compositor availability for that evidence run
+docs/01-requirements.md:157  # records isolated compositor verification, not a runtime dependency

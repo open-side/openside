@@ -3,7 +3,7 @@
 | 플랫폼 | 상태 | 근거 |
 |---|---|---|
 | Linux | 지원한다. 개발과 테스트 모두 Linux 환경에서 진행했고, CI는 Linux에서 `tools/gate.sh`를 실행한다 | 헤드리스 브라우저 컨트롤러 테스트는 디스플레이 종속성이 없음을 보이려고 일부러 잘못된 디스플레이 엔드포인트를 지정한 채 Wayland와 X11 세션 환경 모두에서 통과했다(특정 윈도우 매니저 호환성 인증은 아님). B-5 포커스 테스트는 실제 Wayland 컴포지터 세션에서 통과했다 |
-| macOS | `x86_64-apple-darwin` 및 `aarch64-apple-darwin` 크로스 컴파일 점검 통과(전체 워크스페이스, 모든 타깃). 단, 실제 macOS 환경에서 데몬·CLI·사이드카·브라우저 실행과 Keychain, launchd 동작은 `unverified` | `tools/check-platforms.py`, 아래 "macOS·Windows 컴파일 점검" 절 |
+| macOS | 빌드 및 핵심 런타임 지원. `x86_64-apple-darwin` 및 `aarch64-apple-darwin` 크로스 컴파일 점검을 통과했고, macOS 26.7.1 x86_64(Quickemu Tahoe VM) 환경에서 `cargo build --workspace -j 4` 무경고 빌드와 `cargo test --workspace --no-run -j 4` 전체 테스트 바이너리 링크를 확인했다. 데몬, CLI, 볼트/키링, 세션, 릴레이, 설정, 임포트 테스트가 모두 통과했으며 `opensided`·`openside`와 Keychain 볼트 초기화·추가·잠금 해제 E2E 동작을 검증했다. 브라우저 연동, 사이드카, launchd 동작은 `unverified` | 네이티브 검증(2026-10-13), 아래 "macOS 네이티브 검증" 절 |
 | Windows | 런타임 미지원. `x86_64-pc-windows-gnu` 와 `x86_64-pc-windows-msvc` 크로스 컴파일 점검 통과(msvc 는 `cargo-xwin` 으로 실제 Microsoft CRT/SDK 헤더를 받아 점검) | Unix 소켓 전송, 프로세스 그룹·신호, bwrap에 의존하며 런타임 구현은 여전히 Unix 전용이다. Windows 환경에서는 해당 경로 진입 시 명시적인 미지원 오류를 반환한다. `openside doctor` 는 `daemon.transport` 를 `fail` 로 알리고, `openside service` 는 systemd unit 을 만들지 않고 미지원 오류를 낸다 |
 
 설치는 [INSTALL.md](INSTALL.md), 경로 규칙은 [CONFIGURATION.md](CONFIGURATION.md#파일-위치와-경로) 를 본다.
@@ -14,7 +14,8 @@
 
 | 위치 | 의존 | Unix 밖에서의 동작 |
 |---|---|---|
-| `openside-browser/src/browser.rs` | Unix 환경에서는 `nix`(`kill`, `killpg`, `getpgid`), Chromium `process_group(0)` 실행, 프로필 디렉터리 0700 권한 사용(`nix`는 `cfg(unix)` 조건부 의존). Linux 전용 게이트웨이 FD/Unix 소켓 전송 경로 포함 | `cfg(not(unix))` 환경에서 브라우저 실행·접속·종료·정리 시도는 `Browser execution is unsupported on this platform` 오류로 거부한다. 필수 게이트웨이(`required = true`) 설정 시 Linux 전용 오류를 반환하며, 선택적 게이트웨이는 CDP 전용으로 동작한다 |
+| `openside-browser/src/browser.rs` | Unix 환경에서는 `nix`(`kill`, `killpg`, `getpgid`, `prctl`), Chromium `process_group(0)` 실행, 프로필 디렉터리 0700 권한 사용(`nix`는 `cfg(unix)` 조건부 의존). Linux 전용 게이트웨이 FD/Unix 소켓 전송 경로 포함. Linux에서는 자식 프로세스의 `pre_exec` 훅에 `prctl(PR_SET_PDEATHSIG, SIGKILL)`을 설정하여, 스폰 스레드가 소멸자를 실행하지 못하고 비정상 종료(abort, SIGKILL, 하네스 타임아웃)되더라도 Chromium이 함께 종료되도록 보장한다(데몬 재연결이 필요한 detached 실행은 의도적으로 감독 대상에서 제외되며, 테스트는 `die_with_spawner` 설정 플래그로 이를 명시적으로 활성화한다) | `cfg(not(unix))` 환경에서 브라우저 실행·접속·종료·정리 시도는 `Browser execution is unsupported on this platform` 오류로 거부한다. 필수 게이트웨이(`required = true`) 설정 시 Linux 전용 오류를 반환하며, 선택적 게이트웨이는 CDP 전용으로 동작한다 |
+| `openside-browser/src/uploads.rs`, `downloads.rs`, `spaces.rs` | Linux와 macOS에서는 Unix 파일 디스크립터 기반 no-follow 방식(`rustix` `openat`)으로 업로드 및 다운로드 스테이징을 처리하고 전용 디렉터리 권한을 적용한다. 이들 경로는 `cfg(unix)`로 제한된다. | 비Unix 환경에서는 경로 기반 대체 연산이나 권한 완화를 허용하지 않고 명시적으로 `Unsupported` 에러를 반환한다. |
 | `openside-cli/src/client.rs` | `tokio::net::UnixStream` 기반 로컬 소켓 통신은 `cfg(unix)`로 한정, 기본 소켓은 `$XDG_RUNTIME_DIR/openside/opensided.sock` | `cfg(not(unix))` 환경에서 로컬 데몬 전송 시도는 `Unix daemon transport is unsupported on this platform` 오류를 반환한다. 인증 루프백 TCP 클라이언트 코드는 컴파일되나 Windows 데몬 전송 구현체는 아니다 |
 | `openside-cli/src/cursor.rs` | `std::os::unix::fs::DirBuilderExt` 기반 비공개 디렉터리 잠금 및 영속화(0700 디렉터리, 0600 커서)는 `cfg(unix)`로 한정 | `cfg(not(unix))` 환경에서는 권한을 완화해 저장하지 않고, 미지원 개인 재개 커서(resume-cursor) 영속화 요청에 대해 명시적 오류를 반환한다 |
 | `opensided/src/engine.rs` | `serve` 는 `cfg(unix)`: Unix 소켓 bind, 0700/0600 권한, SIGTERM 처리. data 디렉터리 0700, lock 파일 0600. 소켓 상위 디렉터리는 기존 디렉터리라면 0700 이면서 소유자가 데몬의 euid 여야 한다(다른 사용자가 미리 만든 `/tmp/openside-<uid>` 는 거부) | `cfg(not(unix))` `serve` 는 `Unix daemon transport is unsupported on this platform` 오류. TCP 만 여는 대체 경로는 없다 |
@@ -44,6 +45,8 @@ Linux 전용 기능:
 ## macOS·Windows 컴파일 점검
 
 `tools/check-platforms.py`는 전체 워크스페이스와 모든 Cargo 타깃을 대상으로 크로스 컴파일 점검을 수행한다. 이미 설치된 타깃 std를 우선 사용하며, 없는 경우 `rust-src` 컴포넌트가 설치된 로컬 nightly 툴체인을 탐색해 `build-std`(`-Zbuild-std=std,panic_abort`) 모드로 검사한다. `x86_64-pc-windows-msvc` 는 `PATH` 에 `cargo-xwin` 이 있거나 `OPENSIDE_XWIN` 이 `cargo-xwin` 실행 파일(또는 `bin/cargo-xwin` 이 있는 설치 루트)을 가리키면 `cargo xwin check` 로 점검한다. 없으면 plain `cargo` 로 시도하며 C 의존성의 Microsoft SDK 헤더가 없어 `BLOCKED-EXTERNAL` 이 된다. 이 스크립트는 Rust 툴체인, std 라이브러리, C 컴파일러나 SDK를 임의로 내려받거나 설치하지 않는다(`cargo-xwin` 은 처음 실행할 때 `XWIN_CACHE_DIR` 로 CRT/SDK 를 직접 받는다). 타깃 std나 `rust-src`, 또는 교차 검증에 필요한 C/SDK 선행 도구가 없으면 `BLOCKED-EXTERNAL` 상태와 함께 `User action:` 안내를 출력하며, 실제 Rust 컴파일 오류가 발생할 때만 실패로 판정한다. 호출 환경에 설정된 컴파일러 및 헤더 환경 변수는 그대로 계승된다.
+
+`tools/check-platforms.py`는 `cargo -j 4`로 빌드 검사를 수행한다. Cargo가 컴파일러를 자동으로 찾는 네이티브 러너와 달리, Linux 크로스 컴파일 환경에서는 상속된 `CC`, `AR`, `CFLAGS` 환경 변수 등을 통해 타깃 컴파일러와 아카이버, SDK 헤더가 사전에 구성되어 있어야 C 네이티브 종속성을 빌드할 수 있다. 과거 `ring`이나 `libsqlite3-sys`에서 발생한 컴파일러 및 SDK 누락 오류는 이러한 외부 환경 구성 블로커에 해당하며, 환경 문제로 빌드가 중단된 상태를 두고 Rust 코드 자체의 컴파일이 성공했다고 볼 수는 없다.
 
 재현 환경 구성 예시:
 
@@ -76,15 +79,28 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-clang \
 - `build-std`를 통한 `cargo check` 통과는 타깃 바이너리의 링크나 실행을 뜻하지 않는다.
 - 이 점검은 nightly 컴파일러를 사용해 타깃 std API 준수 여부를 확인한 것이며, 저장소에 고정된 stable 툴체인이 실제 네이티브 macOS/Windows 러너에서 통과함을 입증하는 것은 아니다. 네이티브 CI 매트릭스의 `cargo check --workspace --all-targets --locked -j 8` 검증은 여전히 필수 후속 과제로 남아 있다.
 
-## macOS 주의점 (`unverified`)
+## macOS 주의점
 
 - bwrap 이 없으므로 `sandbox.required = false` 이면 `bash` 가 샌드박스 없이 실행되고(doctor `warn`), `true` 이면 `bash` 가 숨겨진다.
-- `XDG_RUNTIME_DIR` 이 보통 없다. 데몬과 CLI 모두 runtime 경로를 임시 디렉터리`/openside-<uid>` 로 잡고(`Loaded::socket_path`, 데몬과 CLI 가 공유) `daemon.socket` 이 있으면 그 값을 쓰므로 기본값으로 서로 연결된다. `--socket` 은 필요 없다. macOS 에서 확인하지 않았다(`unverified`).
+- `XDG_RUNTIME_DIR` 이 보통 없다. 데몬과 CLI 모두 runtime 경로를 임시 디렉터리`/openside-<uid>` 로 잡고(`Loaded::socket_path`, 데몬과 CLI 가 공유) `daemon.socket` 이 있으면 그 값을 쓰므로 기본값으로 서로 연결된다. `--socket` 은 필요 없다. macOS 에서 확인했다(`/var/folders/.../T/openside-501/opensided.sock` 바인드·연결 성공).
 - `dirs` crate 는 macOS 에서 state·runtime 디렉터리를 주지 않으므로 state 는 data 디렉터리를 쓴다.
 - 브라우저는 PATH 다음에 `/Applications/Chromium.app/Contents/MacOS/Chromium`, `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` 을 찾는다.
-- Unix 소켓 경로 길이 제한(macOS `sun_path` 104바이트)이 Linux(108바이트)보다 짧다. 임시 디렉터리 경로가 길면 데몬·사이드카 소켓 bind 가 실패할 수 있다 [INFERENCE: 확인 안 함].
+- Unix 소켓 경로 길이 제한(macOS `sun_path` 104바이트)이 Linux(108바이트)보다 짧다. 기본 `$TMPDIR/openside-<uid>` 경로(약 55바이트 + `opensided.sock`)는 안전하지만, 더 깊은 임시·런타임 디렉터리에서는 데몬·사이드카 소켓 bind 가 실패할 수 있다.
 - 호스트 파일 스크리닝(`crates/opensided/src/credential_paths.rs`의 `check_filesystem`)은 Linux 환경에만 구현되어 있다. macOS를 포함한 다른 Unix 계열 시스템에서는 "지원하지 않음(unsupported)" 오류를 반환하므로, 호스트 파일 도구인 `read`, `write`, `edit` 및 아티팩트 파일 수집 기능이 fail-closed 방식으로 동작을 중단한다(스크리닝 없이 실행되지 않고 거부됨). 이는 의도된 동작이며, macOS로의 스크리닝 기능 이식은 아직 진행하지 않았다.
 - 서비스 예시(launchd)는 [INSTALL.md](INSTALL.md#launchd-macos-unverified) 를 본다.
+
+## macOS 네이티브 검증 (2026-10-13)
+
+- **검증 환경**: macOS 26.7.1 (25G241), x86_64, 로컬 워크스테이션의 Quickemu VM. rustup stable 1.99.0 설치, Xcode 없이 Command Line Tools(CLT)만 사용.
+- **워크스페이스 빌드**: `cargo build --workspace -j 4` 통과(경고 0건, 약 2분 소요). `cargo test --workspace --no-run -j 4` 통과로 `#[cfg(unix)]` 테스트 타깃이 모두 정상 컴파일·링크됨을 확인했다(Linux 전용 타깃은 빈 크레이트로 컴파일된다).
+- **단위 및 통합 테스트**: `cargo test -j 4 -p openside-config -p openside-proto -p openside-vault -p openside-sessions -p openside-cli -p openside-relay -p openside-import -- --test-threads=2` 실행 결과 대상 크레이트가 모두 통과했다(config 46, proto 17, vault 32, sessions 25, cli 85, relay 3개 타깃 총 21, import 34).
+- **진단 도구 (`openside doctor`)**: 볼트 백엔드로 macOS Keychain을 정상 인식하고 런타임 디렉터리로 `$TMPDIR/openside-<uid>`, 데이터 및 native messaging 경로로 `~/Library/Application Support`를 잡는다. bwrap 부재 및 브라우저 미설치 경고도 의도대로 출력한다.
+- **데몬 스모크 테스트**: `opensided`가 Unix 소켓을 정상 바인드하며, `openside status` 호출 시 예상된 API 응답(`model_not_configured`)을 반환해 전송 계층 동작을 확인했다.
+- **볼트 네이티브 백엔드 엔드투엔드 검증**: `openside vault init` 실행 시 로그인 키체인에 `openside-vault` 항목으로 래핑 키를 저장하며, 항목 추가(`add`), 목록 조회(`items`), 잠금(`lock`), 잠금 해제(`unlock`) 왕복 동작이 정상 동작함을 확인했다.
+- **키체인 제약 사항**:
+  1. 테스트 환경처럼 `HOME`을 임의로 재지정한 상태에서 데몬을 실행하면 Security.framework가 `errSecNoDefaultKeychain`(-25307)을 반환하며, 데몬은 의도된 대로 `keyring_unavailable` 상태로 fail-closed 처리된다.
+  2. SSH 등 비-GUI 세션에서는 `security unlock-keychain`을 실행하기 전까지 `errSecInteractionNotAllowed` 오류가 발생한다. 이는 openside 결함이 아니라 macOS 세션 자체의 보안 특성이다.
+- **미검증 항목**: Chromium 계열 브라우저 미설치(브라우저 스택 미검증), Python 사이드카 가상환경 미설치(에이전트 런타임 미검증), launchd 서비스 파일 미검증.
 
 ## Windows
 
@@ -138,10 +154,10 @@ wine 11.17 가상 환경(임시 prefix)에서 Windows 런타임을 시험했다.
 
 2026-10-12 점검을 바탕으로 산정한 예상 공수다. 실제 검증용 네이티브 호스트가 없어 모두 추정치이며, 두 플랫폼 모두 사용자의 진행 결정이 필요하다.
 
-macOS의 경우 데몬, CLI, 사이드카 빌드가 이미 통과한 상태다 [INFERENCE: 컴파일 단계만 검증됨]. 지원 작업 단계는 다음과 같다.
+macOS는 위 "macOS 네이티브 검증" 절에 따라 데몬·CLI·Keychain 볼트의 네이티브 실행까지 확인했다. 남은 지원 작업 단계는 다음과 같다.
 - `fstatfs`의 `f_fstypename`을 활용해 macOS용 `check_filesystem`을 구현(0.5~1인일): 읽기, 쓰기, 수정 및 산출물 수집 기능을 다시 활성화한다.
 - bwrap 부재에 따른 `bash` 샌드박스 정책 결정: macOS에서 기본적으로 `bash` 도구를 숨기거나(비-Linux 환경에서 `sandbox.required`를 true로 설정, 0.5인일), `sandbox-exec` Seatbelt 백엔드를 추가하고(3~5인일) 고정 PATH에 `/opt/homebrew/bin`을 등록한다.
-- `macos-14` CI 잡 구성 및 Linux 전용 `/proc` 헬퍼 등 테스트 실패 수정(2~3인일).
+- `macos-14` CI 잡 구성(2~3인일). 네이티브 검증에서 `/proc` 헬퍼는 이미 모두 `cfg(target_os = "linux")`로 한정돼 있음을 확인했고, 발견된 두 건의 테스트 수정(키링 도출 반복 횟수 픽스처, 죽은 리스너 소켓 파일)은 이미 반영됐다.
 - 선택적 보안 강화: `private_directory` 검사 시 소유자 uid 검증(작업 완료).
 총 예상 공수는 4~6인일이며, Seatbelt 샌드박스까지 포함하면 1.5~2주가 걸린다.
 

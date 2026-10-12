@@ -6,7 +6,10 @@
   "browser_screenshot",
   "edit",
   "read",
+  "request_choice",
   "request_human_step",
+  "request_login",
   "request_otp",
+  "wait_for_approval",
   "write"
 ]

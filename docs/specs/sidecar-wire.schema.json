@@ -970,6 +970,9 @@
           "$ref": "#/$defs/Error"
         },
         {
+          "$ref": "#/$defs/SubagentSteerResult"
+        },
+        {
           "$ref": "#/$defs/Bye"
         }
       ],
@@ -987,6 +990,7 @@
           "settled": "#/$defs/Settled",
           "context_compacted": "#/$defs/ContextCompacted",
           "error": "#/$defs/Error",
+          "subagent_steer_result": "#/$defs/SubagentSteerResult",
           "bye": "#/$defs/Bye"
         }
       }
@@ -1062,6 +1066,18 @@
         "status": {
           "title": "Status",
           "type": "string"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
         }
       },
       "required": [
@@ -1119,15 +1135,53 @@
         "text": {
           "title": "Text",
           "type": "string"
+        },
+        "control_id": {
+          "title": "Control Id",
+          "type": "string"
         }
       },
       "required": [
         "subagent_id",
         "text",
+        "control_id",
         "v",
         "type"
       ],
       "title": "SubagentSteer",
+      "type": "object"
+    },
+    "SubagentSteerResult": {
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "subagent_steer_result",
+          "default": "subagent_steer_result",
+          "title": "Type",
+          "type": "string"
+        },
+        "control_id": {
+          "title": "Control Id",
+          "type": "string"
+        },
+        "delivered": {
+          "title": "Delivered",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "control_id",
+        "delivered",
+        "v",
+        "type"
+      ],
+      "title": "SubagentSteerResult",
       "type": "object"
     },
     "ThinkingDelta": {

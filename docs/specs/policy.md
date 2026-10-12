@@ -8,16 +8,18 @@
 |---|---|
 | `read` | 조회 API |
 | `steer` | 세션 생성·메시지·중지. `browse` 를 포함한다 |
-| `approve` | `confirm`/`info` 티켓 응답 |
-| `human_step` | `secret_input`/`device_approval`/`takeover` 티켓 응답 |
+| `approve` | `confirm`/`info`/`choice` 티켓 응답, 로그인 정보 저장(`login` 응답의 `save:true`) |
+| `human_step` | `secret_input`/`device_approval`/`takeover`/`login` 티켓 응답 |
 | `browse` | `POST /v1/sessions/{id}/repl` 만 |
 | `vault_use`, `otp_ingest` | 예약. 현재 이 스코프를 요구하는 라우트는 없다 |
 | `admin` | 모든 라우트 |
 
 - Unix 소켓 호출자는 `admin` 으로 취급한다. 소켓은 0700 디렉터리 안의 0600 파일이다.
-- loopback TCP 는 Bearer 토큰이 필요하다. 토큰이 없거나 모르는 토큰이면 401, 스코프가 모자라면 403.
+- loopback TCP 는 Bearer 토큰이 필요하다. 토큰이 없거나 모르는 토큰이면 401, 스코프가 모자라면 403. `Authorization` 헤더의 `Bearer` 스킴은 대소문자를 구분하지 않는다.
 - 라우트별 스코프 표는 `openside_proto::ROUTES` 하나뿐이다. OpenAPI 의 `x-capability` 도 여기서 생성한다.
 - 발급: `openside token create --scope browse [--scope ...] [--name NAME]`. 출력은 `device_id<TAB>token` 한 줄이다. 토큰은 다시 볼 수 없다.
+- loopback TCP 연결에서는 디바이스 토큰에 `steer` 권한이 있더라도 데몬의 현재 기본 모드보다 완화된 `mode`(`read-only` < `guard` < `full`)로 세션을 생성(`POST /v1/sessions`)할 수 없으며, `workspace`를 임의로 지정하는 것도 불가능하다. 페어링된 기기가 임의로 `full` 모드를 선택해 승인 절차를 우회하거나 샌드박스 루트 경로를 넓히는 일을 막기 위한 조치이며, 이를 시도하면 데몬이 403 `local_socket_required`를 반환한다. 로컬 Unix 소켓을 통한 요청은 이 제한을 받지 않으며, 원격 기기라도 기본 모드나 더 엄격한 모드는 그대로 선택할 수 있다.
+- loopback TCP 연결에서는 `admin` 토큰이라도 `PUT /v1/policy` 호출 시 403 `local_socket_required` 오류로 거부한다(`GET`을 통한 정책 조회는 허용). `POST /v1/routines` 및 `PATCH /v1/routines/{id}` 역시 데몬의 기본 모드보다 느슨한 `mode`를 설정하거나 임의의 `workspace`를 지정하는 `new_session` 액션을 요청하면 동일하게 403 오류로 거부하며, 기본 모드 범위 내의 루틴은 정상 처리한다. 이는 정책과 루틴이 향후 에이전트의 행위를 결정하므로, 위의 `POST /v1/sessions`나 실행 파일 경로를 담는 설정 키와 마찬가지로 디바이스 토큰이 유출되더라도 권한을 임의로 확장하지 못하게 차단하기 위함이다. 로컬 유닉스 소켓을 통한 요청은 이 제약의 영향을 받지 않는다.
 - 발급(`POST /v1/devices/pair`)은 Unix 소켓으로만 된다. TCP 로 호출하면 `admin` 토큰이어도 403 `local_socket_required` 다. 유출된 토큰으로 새 토큰을 만들지 못하게 하는 규칙이다.
 - `browse` 는 라우트 단위 스코프이고 세션 단위로 가두지 않는다. 토큰 소지자는 세션 id 를 알면 어느 세션의 REPL 이든 호출할 수 있다.
 
@@ -42,7 +44,7 @@
 | 메서드 | 경로 | 스코프 | 설명 |
 |---|---|---|---|
 | GET | `/v1/policy` | `read` | 현재 정책 |
-| PUT | `/v1/policy` | `admin` | 정책 교체. 검증에 실패하면 400 `invalid_policy` |
+| PUT | `/v1/policy` | `admin` | 정책 교체. 검증에 실패하면 400 `invalid_policy`. TCP 로 호출하면 `admin` 토큰이어도 403 `local_socket_required` 다 |
 | POST | `/v1/policy/test` | `read` | 행동 하나를 실행하지 않고 판단만 한다 |
 
 문서 형식:

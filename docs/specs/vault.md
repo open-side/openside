@@ -2,6 +2,8 @@
 
 상태: **구현됨**. 관련: C-1~C-6, D-6. 코드: `crates/openside-vault`(파일 형식·정책·감사·패스키·잠금 백엔드), `crates/opensided/src/tools/vault.rs`(`vault_login`·`vault_otp`·`vault_passkey`, 기동 시 잠금 해제), `crates/opensided/src/vault_api.rs`(`/v1/vault/*`), `crates/openside-proto/src/vault.rs`(API 타입), `crates/openside-cli/src/vault.rs`(`openside vault`), `crates/openside-config/src/lib.rs`(`[vault]`).
 
+**값의 보호 범위.** 데몬은 Vault 값을 직접 입력하고 도구 결과, 이벤트, 티켓, 감사 로그에서 redaction 처리한다. 다만 모델이 값을 전혀 볼 수 없다고 보장하지는 않는다. 에이전트가 실행한 페이지 스크립트(ADR-022)가 입력된 필드를 포함해 페이지 데이터를 직접 읽을 수 있고, 값을 변형해 반환하면 redaction을 우회할 수 있기 때문이다. 따라서 프롬프트 주입을 당한 페이지는 에이전트를 유도해 이러한 데이터를 읽어 낼 수 있다.
+
 ## 1. 파일 형식
 - 헤더: `OSVAULT\0`(8바이트), 버전(u32, big-endian), salt 16바이트, XChaCha20-Poly1305 nonce 24바이트. 헤더 52바이트 전체가 AEAD 연관 데이터다. 본문은 항목 전체(메타데이터, 패스키, 항목별 정책)를 담은 JSON 을 암호화한 것이다.
 - 버전 1(`unlock = "passphrase"`): 파일 키 = Argon2id(m=19456 KiB, t=2, p=1)(passphrase, salt). passphrase는 사용자가 `openside vault init`/`openside vault unlock` 시 터미널 프롬프트(입력 숨김)나 웹 Vault 페이지에서 입력하거나, 데몬 시작 시 `[vault].passphrase_cmd` 실행 결과로 전달한다.
@@ -18,7 +20,7 @@
 | `auto` (기본값) | 전체 | 위 규칙에 따름 | 단위 테스트(`VaultUnlockSetting::resolve`) |
 | `passphrase` | 전체 | 없음 (버전 1) | 단위 및 E2E 테스트 |
 | `secret-service` | Linux | Secret Service 항목(속성 `application=openside`, `openside-vault=<경로 SHA-256 앞 16바이트 hex>`). 없으면 기본 컬렉션에 만든다 | 비공개 `dbus-daemon` 위 가짜 Secret Service (`crates/openside-vault/tests/secret_service.rs`) |
-| `native` | macOS·Windows | Keychain·Credential Manager(`keyring` 크레이트, 서비스 `openside-vault`) | Windows(`x86_64-pc-windows-msvc`)는 `tools/check-platforms.py` 컴파일 검사 통과. macOS 는 SDK 가 없어 컴파일 검사를 하지 못했다. 둘 다 실행은 미검증(`unverified`) |
+| `native` | macOS·Windows | Keychain·Credential Manager(`keyring` 크레이트, 서비스 `openside-vault`) | Windows(`x86_64-pc-windows-msvc`)는 `tools/check-platforms.py` 컴파일 검사 통과, 실행은 미검증(`unverified`). macOS는 2026-10-13 네이티브 검증 완료: x86_64 Tahoe VM에서 `vault init`부터 항목 추가·잠금·재잠금 해제까지 로그인 키체인을 거쳐 정상 통과했다(`PLATFORMS.md` macOS 네이티브 검증 절) |
 
 - 키링이 잠겨 있고 잠금 해제에 프롬프트 입력이 필요하면 볼트를 열지 않는다. `GET /v1/vault`는 `state=locked`와 `reason=keyring_locked`를 반환하고, `openside doctor`에도 동일하게 표시되며 볼트 툴은 노출되지 않는다. 컴퓨터에서 키링을 잠금 해제한 뒤 `openside vault unlock`을 실행하거나 웹 Vault 페이지에서 Unlock을 누른다.
 - `while_unlocked` 판정은 호출마다 키링의 실제 잠금 상태를 확인하고(Secret Service 는 항목이 해제된 목록에 있는지, `native` 는 래핑 키를 읽을 수 있는지), 확인하지 못하면 잠긴 것으로 본다. 잠긴 것을 한 번 보면 Vault 를 다시 열 때까지 잠금 상태로 둔다.
@@ -54,6 +56,7 @@ TOTP 팩터는 RFC 6238에 따라 base32 시드와 함께 `digits`(6–8), `peri
 - `vault_login`(`fill`), `vault_otp`(`otp`), `vault_passkey`(`passkey_register`·`passkey_login`), 항목 목록(`get`), 정책 변경(`policy_update`)을 모두 기록한다. 판정 기록(`allowed`·`denied`)은 콜백 실행 전에 남기고, 끝나면 결과 기록(`filled`·`fill-failed`·`completed`·`failed`·`updated`)을 하나 더 남긴다. 툴이 Vault 콜백에 들어가기 전에 실패한 호출(origin 재확인 실패, 브라우저 오류, 잘못된 인자)과 취소된 호출은 결과 기록이 없다.
 - 정책 변경과 목록 조회는 잠긴 Vault 나 없는 항목에 대한 요청도 `denied`(`locked`·`unknown_item`)로 남긴다. 정책 변경은 판정 기록을 먼저 쓰고, 쓸 수 없으면 정책은 바뀌지 않는다. 변경이 저장된 뒤 결과 기록만 실패하면 `500 policy_applied_audit_incomplete` 를 돌려주며, 이때 변경은 이미 적용된 상태다.
 - 항목 추가와 삭제는 `item_add`, `item_delete`로 기록한다. 판정 기록(`allowed`, 또는 `locked`·`item_exists`·`unknown_item`에 따른 `denied`)을 먼저 남기며, 기록 작성에 실패하면 변경 사항을 반영하지 않는다. 이후 `added`, `deleted`, `failed` 결과 기록이 이어진다. 항목 삭제 시 `deleted` 기록의 대상은 `unknown-site`로 표기되므로, 앞서 남긴 `allowed` 기록에 해당 항목 ID를 포함한다.
+- 사용자가 `login` 티켓으로 승인한 로그인 정보를 보관할 때는 `login_save` 액션으로 기록한다. 정책이나 잠금 상태에 따른 결정 기록(`allowed`, 또는 거부 시 `denied`)을 변경 작업 전에 먼저 남기고, 실제 처리 결과 기록(새 항목 생성 시 `saved`, 동일한 origin 및 사용자 이름을 가진 기존 항목의 비밀번호만 바뀐 경우 `updated`)이 뒤따른다. 감사 로그를 기록하지 못하면 로그인 정보도 저장하지 않는다. 저장 항목은 페이지 origin에 정확히 바인딩되며 와일드카드나 추가 origin에는 절대 묶이지 않는다.
 - 수명주기 단계도 함께 기록한다: `setup`(`completed`, 또는 오류 코드가 포함된 `failed`), `unlock`(`unlocked`; `wrong_passphrase`가 포함된 `denied`; 오류 코드가 포함된 `failed`), `lock`(`locked`). 이 기록의 항목은 `*`, origin은 `-`로 표기하며 값은 일절 포함하지 않는다. 감사 기록을 남길 수 없는 잠금 해제 요청은 아예 수행하지 않는다(`500 audit_unavailable`). 잠금은 언제나 실행하며, 기록 작성에 실패하면 `500 vault_locked_audit_incomplete`로 응답한다. 설정(setup) 도중 기록 작성에 실패하더라도 볼트는 설정 및 잠금 해제 상태를 유지하며 `500 vault_set_up_audit_incomplete`로 응답한다. 횟수 제한(throttle)에 걸린 잠금 해제 시도는 기록하지 않으므로 무차별 대입 공격으로 로그가 넘쳐나지 않는다.
 - 필드 목록: 시간(초), 호출자(도구 호출 및 시작 시 데몬 자체의 잠금 해제는 `opensided`, API 호출 및 인증기 등록은 호출하거나 승인한 기기를 가리키며 페어링된 기기는 `device:<id>`, 로컬 소켓은 `local`), 작업(action), 항목 ID, 정규화된 origin, 결과, 세션 ID, tool_call_id, 세부사항(거절 사유 또는 새 정책). 값 자체는 절대 기록하지 않으며, 각 기록은 디스크에 쓰기 직전에 현재 볼트에 보관된 값들과 한 번 더 대조하여 마스킹한다.
 

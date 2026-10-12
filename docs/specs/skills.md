@@ -74,7 +74,7 @@ openside skills install AGENT [--to-dir PATH] [--force]
 openside skills import SOURCE [--from AGENT | --from-dir PATH] [--allow-scripts] [--force]
 ```
 - `list`·`show`·`new`·`enable`·`disable`·`rm` 은 데몬 API 를 쓴다(`--json` 지원).
-- `install` 은 데몬 없이 실행한다. openside 의 브라우저 스킬(`openside-browser`)을 다른 에이전트의 스킬 디렉터리에 설치해, 그 에이전트가 브라우저 작업을 `openside` 에 맡기게 한다(AC ③). 같은 이름이 이미 있으면 `--force` 가 있어야 바꾼다. 스테이징 디렉터리에 쓴 뒤 rename 하므로 중간에 멈춰도 반쪽짜리가 남지 않는다.
+- `install` 은 데몬 없이 실행한다. openside 의 브라우저 스킬(`openside-browser`)을 다른 에이전트의 스킬 디렉터리에 설치해, 그 에이전트가 브라우저 작업을 `openside` 에 맡기게 한다(AC ③). 스킬 안에는 언제 작업을 위임하고(`openside run --wait "goal"`, MCP `agent_run`: 여러 단계 작업, 로그인, 판단이 필요할 때), 언제 직접 제어할지(`openside repl` 에 heredoc 스크립트 전달, `openside browser <verb>`: 정해진 순서의 작업, 가공되지 않은 페이지 데이터 수집, 빠른 확인)를 짧은 예시와 함께 안내한다. 사용자에게 티켓이 전달되는 방식과 페어링된 원격 데몬을 위한 `--remote NAME` 도 함께 설명한다. 같은 이름이 이미 있으면 `--force` 가 있어야 바꾼다. 스테이징 디렉터리에 쓴 뒤 rename 하므로 중간에 멈춰도 반쪽짜리가 남지 않는다.
 - 에이전트의 스킬 디렉터리는 `--to-dir` → `[skills.agents]` 설정 → `OPENSIDE_SKILLS_<AGENT>_DIR` → 에이전트 관례 순으로 정한다. 관례를 내장한 에이전트는 `claude`(`$CLAUDE_CONFIG_DIR/skills`, 없으면 `$HOME/.claude/skills`), `codex`(`$CODEX_HOME/skills`, 없으면 `$HOME/.codex/skills`), `omp`(`$OMP_CODING_AGENT_DIR/skills`, 다음 `$PI_CODING_AGENT_DIR/skills`, 없으면 `$HOME` 아래 omp 의 설정 디렉터리 `agent/skills`)다. 그 밖의 에이전트는 설정이나 환경변수로 알려 줘야 하고, 모르면 어느 키를 쓰면 되는지 오류로 알려 준다.
 - `import` 는 반대 방향이다. `--from`/`--from-dir` 와 함께 쓰는 `SOURCE` 는 스킬 이름이어야 하고(`../`·경로 구분자는 거절), 이름 대신 경로를 쓰려면 두 옵션 없이 디렉터리 경로를 준다. 스킬 디렉터리(또는 `--from`/`--from-dir` 아래의 이름)를 openside 라이브러리로 복사한다. 이 경로가 실행 파일을 들여올 수 있는 유일한 길이라서 `--allow-scripts` 가 없으면 실행 권한이 있는 파일이 하나라도 있는 스킬은 거절한다.
 - `install`·`import` 는 `skills.dir`(없으면 `<data_dir>/skills`)을 설정에서 읽는다. 데몬을 `--data-dir` 로 따로 띄웠다면 CLI 와 경로가 달라지므로 `skills.dir` 을 직접 지정한다.
@@ -91,3 +91,5 @@ openside skills import SOURCE [--from AGENT | --from-dir PATH] [--allow-scripts]
 - API·도구·프롬프트: `crates/opensided/src/tests/skills.rs`.
 - 멘션: `agent/tests/test_skills.py`(가짜 데몬), `crates/openside-e2e/tests/skills.rs`(실제 사이드카와 CLI).
 - CLI: `crates/openside-cli/src/tests/skills.rs`.
+
+**웹 UI 설치.** 웹 첫 실행 안내는 `POST /v1/external-agents/{id}/browser-skill`(`admin` 스코프)을 호출해 번들로 제공되는 `openside-browser` 스킬을 설치한다. 이때 설치되는 내용과 대상 디렉터리는 `openside skills install`과 완전히 동일하며, 클라이언트 요청으로 임의의 디렉터리를 지정할 수는 없다. 자세한 내용은 `docs/specs/onboarding.md`를 참고한다.

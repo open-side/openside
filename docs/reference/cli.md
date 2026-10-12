@@ -14,12 +14,14 @@ Usage: openside [OPTIONS] [TASK] [COMMAND]
 |---|---|
 | `--json` | Emit JSON objects, one per line, with a final summary (task: the default when stdout is not a terminal) |
 | `--socket <PATH>` |  |
+| `--remote <NAME>` | Remote daemon profile saved by `openside connect` (see `openside remote profiles list`) Environment: `OPENSIDE_REMOTE`. |
 | `--url <URL>` | Loopback HTTP endpoint (requires a token) |
 | `--token <TOKEN>` | Environment: `OPENSIDE_TOKEN`. |
 | `[TASK]` |  |
 | `--model <MODEL>` | Model for the new session |
 | `--mode <MODE>` | Permission mode for the new session One of `read-only`, `guard`, `full`. |
 | `--workspace <PATH>` | Workspace for the new session |
+| `--browser-space <BROWSER_SPACE>` | Browser space for the new session: shared (default, the managed profile with its logins) or isolated (own cookies and storage, wiped when the session is archived or deleted) One of `shared`, `isolated`. |
 
 `--socket`, `--url`, `--token` and `--json` are global and apply to every subcommand.
 
@@ -42,6 +44,18 @@ Usage: openside session [OPTIONS] <COMMAND>
 ```text
 Usage: openside session list [OPTIONS]
 ```
+
+#### `openside session new`
+
+Create an empty session to drive with `browser` or `repl`; prints its id
+
+```text
+Usage: openside session new [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--title <TITLE>` |  |
 
 #### `openside session resume`
 
@@ -100,8 +114,12 @@ Usage: openside ticket resolve [OPTIONS] <ID> [VALUE]
 | Argument | Description |
 |---|---|
 | `<ID>` |  |
-| `[VALUE]` | JSON or text; '-' reads secret_input from stdin; omitted on a secret_input ticket, asks at a hidden prompt |
+| `[VALUE]` | JSON or text; '-' reads secret_input from stdin; omitted on a secret_input, login or choice ticket, asks at prompts |
 | `--totp` | With '-' or the prompt: the input is the site's authenticator (otpauth:// URI or base32 setup key) to save in the vault instead of a code; request_otp tickets that offer registration only |
+| `--save` | Login tickets: save the login to the vault (the default when the site allows it; needs the approve scope) |
+| `--no-save` | Login tickets: log in without saving to the vault |
+| `--alternative <ID>` | Login tickets: use the page's other sign-in option ID (see `ticket show`) instead of typing |
+| `--account <ITEM_ID>` | Login tickets: log in with this saved vault account (see `ticket show`) |
 
 #### `openside ticket done`
 
@@ -370,6 +388,7 @@ Usage: openside token create [OPTIONS] --scope <SCOPE>
 |---|---|
 | `--scope <SCOPE>` | Scope to grant; repeat for several (read, steer, approve, human_step, browse, vault_use, otp_ingest, admin) Required. |
 | `--name <NAME>` | Label shown for the device Default: `cli token`. |
+| `--person` | Issue a person's web/phone/extension token, not an agent-client token. Run this on the daemon host; never give a person token to an agent |
 
 ### `openside vault`
 
@@ -676,6 +695,383 @@ Usage: openside skills import [OPTIONS] <SOURCE>
 | `--force` | Replace a library skill of the same name |
 | `--config <PATH>` |  |
 
+### `openside run`
+
+Delegate a goal to the openside browser agent; prints the session and message ids
+
+```text
+Usage: openside run [OPTIONS] <GOAL>
+```
+
+| Argument | Description |
+|---|---|
+| `<GOAL>` | What the agent should do; `-` reads it from stdin |
+| `--session <SESSION_ID>` | Run in this session instead of a new one |
+| `--wait` | Wait until the run ends (through any tickets a person answers) and print the replies |
+| `--follow` | Stream the run's text, progress and tickets until the session settles |
+| `--timeout <SECS>` | With --wait: give up after this many seconds (status `timeout`, exit 1) |
+
+### `openside steer`
+
+Steer a running agent, or one of its Tasks with --task
+
+```text
+Usage: openside steer [OPTIONS] <SESSION> <TEXT>
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session to steer |
+| `<TEXT>` | The guidance to send |
+| `--task <TASK_ID>` | Steer this Task instead of the session's agent (ids from `openside tasks`) |
+
+### `openside cancel`
+
+Cancel one Task with --task, otherwise stop the session's run
+
+```text
+Usage: openside cancel [OPTIONS] <SESSION>
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose run or Task to cancel |
+| `--task <TASK_ID>` | Cancel only this Task; the agent and the other Tasks keep running |
+
+### `openside tasks`
+
+List a session's Tasks and subagents with their status and results
+
+```text
+Usage: openside tasks [OPTIONS] <SESSION>
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session to list |
+
+### `openside browser`
+
+Call the session's browser and human-step tools directly, like the in-app agent
+
+```text
+Usage: openside browser [OPTIONS] <COMMAND>
+```
+
+#### `openside browser tools`
+
+List the directly callable tools with their argument schemas (GET /v1/tools)
+
+```text
+Usage: openside browser tools [OPTIONS]
+```
+
+#### `openside browser tabs`
+
+browser_tabs: list the session's tabs
+
+```text
+Usage: openside browser tabs [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser open`
+
+browser_open_tab: open a tab (url=...)
+
+```text
+Usage: openside browser open [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser navigate`
+
+browser_navigate: go to a URL in a tab (tab_id=... url=...)
+
+```text
+Usage: openside browser navigate [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser snapshot`
+
+browser_snapshot: accessibility snapshot with eN refs (tab_id=... [scope=viewport])
+
+```text
+Usage: openside browser snapshot [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser act`
+
+browser_act: act on a snapshot ref (tab_id=... target=eN action=click; see `tools`)
+
+```text
+Usage: openside browser act [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser pointer`
+
+browser_pointer: click, type or scroll at viewport coordinates
+
+```text
+Usage: openside browser pointer [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser screenshot`
+
+browser_screenshot: capture a tab; prints the saved artifact path (`--out FILE` saves it)
+
+```text
+Usage: openside browser screenshot [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser close`
+
+browser_close_tab: close a tab (tab_id=...)
+
+```text
+Usage: openside browser close [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser login`
+
+request_login: sign in on the tab's login page; a person answers on their device
+
+```text
+Usage: openside browser login [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser choice`
+
+request_choice: let a person pick among the page's options
+
+```text
+Usage: openside browser choice [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser wait-approval`
+
+wait_for_approval: wait while a person approves the sign-in on their phone
+
+```text
+Usage: openside browser wait-approval [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser otp`
+
+request_otp: fill a one-time code from the vault or from a person
+
+```text
+Usage: openside browser otp [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser register-authenticator`
+
+register_authenticator: keep a site's 2FA setup key in the vault, with approval
+
+```text
+Usage: openside browser register-authenticator [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser human-step`
+
+request_human_step: hand a step to a person (takeover, device approval, secret input)
+
+```text
+Usage: openside browser human-step [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser ask`
+
+ask_user: ask a person a non-secret question
+
+```text
+Usage: openside browser ask [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser vault-login`
+
+vault_login: fill a saved login (needs the vault_use scope over TCP)
+
+```text
+Usage: openside browser vault-login [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser vault-otp`
+
+vault_otp: fill a saved TOTP code (needs the vault_use scope over TCP)
+
+```text
+Usage: openside browser vault-otp [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser vault-passkey`
+
+vault_passkey: register or use a vault passkey (needs the vault_use scope over TCP)
+
+```text
+Usage: openside browser vault-passkey [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
 ### `openside repl`
 
 Run Playwright-syntax JavaScript in a session's agent tab
@@ -736,8 +1132,86 @@ Usage: openside pair [OPTIONS]
 
 | Argument | Description |
 |---|---|
-| `--scope <SCOPE>` | Scope the new device gets; repeat for several. Default: read, approve, human_step |
+| `--scope <SCOPE>` | Scope the new device gets; repeat for several. Default: read, approve, human_step for a person; read, steer, browse, approve with --agent |
 | `--name <NAME>` | Label shown in `openside device list` Default: `phone`. |
+| `--via <TRANSPORT>` | Transport the QR link uses: tailscale, cloudflare or relay. Default: the first enabled `remote.mode` One of `tailscale`, `cloudflare`, `relay`. |
+| `--agent` | Pair an external CLI/MCP agent instead of a person's phone/browser. Its token cannot approve confirmations for sessions it drives |
+
+### `openside connect`
+
+Pair this computer with a remote daemon from its pairing link and save it as a `--remote` profile
+
+```text
+Usage: openside connect [OPTIONS] [LINK]
+```
+
+| Argument | Description |
+|---|---|
+| `[LINK]` | Pairing link; omit to read from stdin or a hidden prompt (recommended) |
+| `--name <NAME>` | Profile name used with `--remote NAME`; default: the host name's first label |
+| `--force` | Replace an existing profile with the same name |
+
+### `openside remote`
+
+This daemon's remote access (Tailscale, Cloudflare Tunnel or a relay) and the saved profiles for reaching other daemons
+
+```text
+Usage: openside remote [OPTIONS] <COMMAND>
+```
+
+#### `openside remote setup`
+
+Enable a transport (or `off`) in config.toml and check it
+
+```text
+Usage: openside remote setup [OPTIONS] <MODE>
+```
+
+| Argument | Description |
+|---|---|
+| `<MODE>` | One of `tailscale`, `cloudflare`, `relay`, `off`. |
+| `--config <PATH>` | Configuration file to edit; default: the discovered config.toml |
+| `--apply` | tailscale: also run `tailscale serve` (otherwise the command is printed) |
+| `--named` | cloudflare: use a named tunnel instead of a quick tunnel |
+| `--hostname <HOST>` | cloudflare --named: the public hostname routed to the tunnel |
+| `--token-file <PATH>` | cloudflare --named: file with the tunnel token; relay: file with the registration token |
+| `--relay-url <URL>` | relay: the relay's https:// origin |
+
+#### `openside remote status`
+
+Transports the running daemon has up, with their public URLs
+
+```text
+Usage: openside remote status [OPTIONS]
+```
+
+#### `openside remote profiles`
+
+Saved profiles for reaching other daemons with `--remote NAME` (add one with `openside connect`)
+
+```text
+Usage: openside remote profiles [OPTIONS] <COMMAND>
+```
+
+##### `openside remote profiles list`
+
+Saved remote daemons (tokens are never shown)
+
+```text
+Usage: openside remote profiles list [OPTIONS]
+```
+
+##### `openside remote profiles rm`
+
+Forget a remote and delete its stored token. The daemon keeps the device until you run `openside device revoke <id>` there
+
+```text
+Usage: openside remote profiles rm [OPTIONS] <NAME>
+```
+
+| Argument | Description |
+|---|---|
+| `<NAME>` | Profile name |
 
 ### `openside device`
 

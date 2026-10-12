@@ -4,6 +4,31 @@
 
 `.github/workflows/ci.yml` runs `tools/gate.sh` on Linux x86_64 for pushes and pull requests. The gate includes Rust fmt/clippy/tests, sidecar ruff/pyright/non-live pytest, web/extension install/lint/typecheck/test/build, portability, Python tool tests, generated docs/API checks, language/license/browser-UX checks and acceptance evidence. Missing Chromium/live dependencies use the existing explicit test skip conditions; no live model credentials are configured in CI. CI uploads `target/gate` even after failure.
 
+The gate invokes Vitest with default worker concurrency and both default and JSON
+reporters. UI tests must wait for the state they assert, not just the element's
+appearance: browser import profiles are loaded before an effect selects the
+initial profile, so its radio query includes `checked: true`. A standalone
+`--maxWorkers=2` run is not a substitute for the gate's command. Acceptance
+references use the full nested suite path when they include suite names.
+
+Two acceptance rows require checks outside the ordinary Cargo suite. The
+`responsive first browser action` step runs only
+`responsive::cold_and_warm_first_browser_action` with `--ignored --exact`,
+retaining its actual Cargo output in `responsive.log` and JUnit in
+`responsive.xml`. It fails if the test is missing, ignored, or reports a browser
+skip. Cargo jobs follow `OPENSIDE_GATE_JOBS`, then `CARGO_BUILD_JOBS`, then four;
+the focused test uses two test threads.
+
+The `browser UX evidence` step first checks the UX evidence registry, then runs
+`tools/qa/headed-ux.sh sway stock --prewarm-only` against the E2E daemon binary.
+This rootless Podman run has no network and uses its own headless sway; it never
+uses the host's desktop or daemon. All four prewarm/focus checks must complete
+and pass before `headed-pytest.xml` records `tools.qa.headed_ux::prewarm_checks`
+as passed. Screenshots, compositor focus changes and JSON results are retained
+under `target/gate/sway/stock`. CI installs Podman with bubblewrap; the stock-only
+run does not require a patched browser build. Local Chromium/Cargo invocations
+must still use the workstation's `/tmp/openside-heavy-run` wrapper.
+
 The same workflow has native `macos-latest` and `windows-latest` matrix runners invoking `cargo check --workspace --all-targets --locked -j 8`. Local workflow validation uses `tools/check-ci.py`: uv-managed PyYAML loading and dependency-free structure/canonical-contract validation always run, and actionlint adds syntax validation when installed. Either validator's failure fails the check; absent actionlint is explicitly reported and syntax certification is not claimed. The contract function is directly importable by pytest without PyYAML or jsonschema. Workflow syntax is not proof of a successful hosted run; this checkout has not been pushed or committed by the quality slot.
 
 ## Languages and platform boundaries (G-1, G-3)
@@ -12,7 +37,7 @@ The same workflow has native `macos-latest` and `windows-latest` matrix runners 
 
 Platform isolation exists in Vault's `PlatformLock` trait (including its wrapping-key interface) and cfg-selected Secret Service/native keyring implementations (`crates/openside-vault/src/platform.rs`, `platform/native.rs`), config discovery/paths/doctor cfg branches, the sidecar's Unix process module/non-Unix error implementation, daemon Unix transport/shell cfg branches, and the browser gateway's Linux/non-Linux cfg implementations. These boundaries do not claim that every crate already compiles or runs on Windows.
 
-`tools/check-platforms.py` checks **every workspace crate and all Cargo targets**, not a selected crate list. It first uses installed target std; when that is missing it discovers an already-installed nightly with `rust-src` and invokes `cargo +<nightly> check -Zbuild-std=std,panic_abort --workspace --all-targets --locked -j 8 --target-dir <temporary-directory>/openside-xcheck`. Targets cover x86_64/aarch64 macOS and both MSVC/GNU Windows. It never installs toolchains, target std, compilers or SDKs. Missing std/rust-src or recognized missing cross-compiler/SDK diagnostics are printed as `BLOCKED-EXTERNAL` with the exact build output and a `User action:`; Rust diagnostics and other compiler failures fail the gate. `CC_<target>`/`AR_<target>`, SDK flags and cross-toolchain `PATH` entries are inherited from the caller. A build-std compile check exercises the target's real Rust std surface and native C build scripts, but is not a link/run test or proof that the pinned stable toolchain passes on a native runner. The unchanged native CI matrix remains that final check. The headless Linux browser test `crates/openside-browser/tests/platforms.rs` runs real Chromium under both Wayland and X11 session metadata with deliberately invalid display endpoints. This proves core operation does not require a desktop connection, not that native window-manager focus or headful compositor behavior has been certified.
+`tools/check-platforms.py` checks **every workspace crate and all Cargo targets**, not a selected crate list. It first uses installed target std; when that is missing it discovers an already-installed nightly with `rust-src` and invokes `cargo +<nightly> check -Zbuild-std=std,panic_abort --workspace --all-targets --locked -j 4 --target-dir <temporary-directory>/openside-xcheck`. Targets cover x86_64/aarch64 macOS and both MSVC/GNU Windows. It never installs toolchains, target std, compilers or SDKs. Missing std/rust-src or recognized missing cross-compiler/SDK diagnostics are printed as `BLOCKED-EXTERNAL` with the exact build output and a `User action:`; Rust diagnostics and other compiler failures fail the gate. `CC_<target>`/`AR_<target>`, SDK flags and cross-toolchain `PATH` entries are inherited from the caller. A build-std compile check exercises the target's real Rust std surface and native C build scripts, but is not a link/run test or proof that the pinned stable toolchain passes on a native runner. The unchanged native CI matrix remains that final check. The headless Linux browser test `crates/openside-browser/tests/platforms.rs` runs real Chromium under both Wayland and X11 session metadata with deliberately invalid display endpoints. This proves core operation does not require a desktop connection, not that native window-manager focus or headful compositor behavior has been certified.
 
 ## Dependencies and NOTICE (PP-2)
 

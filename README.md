@@ -56,9 +56,28 @@ openside uses a stock Chromium or Chrome by default. The patched browser in [bro
 
 More: [docs/INSTALL.md](docs/INSTALL.md), [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/REMOTE.md](docs/REMOTE.md).
 
+## Where you can use it
+
+- Remote access: reach the daemon from a phone or another computer over Tailscale Serve, a Cloudflare Tunnel or your own relay; set it up with `openside remote setup` ([docs/REMOTE.md](docs/REMOTE.md)).
+- MCP and delegation: `openside mcp` serves the browser and agent tools to other agents, and `openside run` hands a goal to the openside browser agent ([docs/specs/mcp.md](docs/specs/mcp.md)).
+- First run: the web UI opens `/welcome` to detect installed agents, import browser profiles and set up the vault ([docs/specs/onboarding.md](docs/specs/onboarding.md)).
+- Phone app: the web UI installs as a PWA, with a share target, shortcuts, a pending-ticket badge and an offline outbox.
+
 ## Security
 
 The agent can browse, fill forms and run shell commands for you. Policy modes and per-action approvals limit this, but read [docs/specs/threat-model.md](docs/specs/threat-model.md) before you give it a workspace, stored secrets, or remote access. The daemon listens only on loopback; exposing it to other devices needs TLS in front of it ([docs/REMOTE.md](docs/REMOTE.md)). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+CLI/MCP connections over the relay are end-to-end encrypted with Noise and pin the daemon
+key from the pairing link. A PWA loaded from a relay protects traffic against passive
+observers, but trusts the relay operator to serve its code: modified scripts can capture
+pairing codes, tokens and plaintext. Prefer a self-hosted relay, or load and connect the
+PWA directly to your daemon/Tailscale origin instead of using the relay. Login values
+are omitted from agent tool results, not hidden from page scripts the agent runs.
+Confirm approvals, choice answers, authenticator enrollment and saving a login require
+a paired person device; agent clients and the local socket may deny or cancel, not approve.
+Issue agent pairing links on the daemon host with `openside pair --agent`, then redeem
+them with `openside connect`. An ordinary phone/browser link keeps its person-device
+approval authority even when a CLI redeems it; do not give that token to an agent.
 
 ## Documentation
 

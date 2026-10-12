@@ -48,7 +48,7 @@ Rust opensided ──(unix socket JSONL)── Python agent sidecar (Pydantic AI
 | steer (S-8) | 데몬 `MessageQueue` 가 도구 호출 경계에서 주입하도록 hook | **네이티브 `run.enqueue`/`ctx.enqueue` 금지.** `DeferredToolRequests` 로 끝나야 할 런을 덮어써 일반 문자열 출력으로 바꾸고(`DEFERRED BOUNDARY asap: output: str model-requests: 2`) 추가 모델 요청을 일으킨다. 대신 사이드카가 steer 버퍼를 소유하고 `SessionHooks.before_model_request` 에서 `UserPromptPart` 요청으로 주입한다. 런 종료 시 남은 메시지는 새 런, 보류 종료 시에는 재개 런에서 주입, abort 는 `run.cancel()`. 큐·영속화는 계속 데몬 소유 |
 | 보류 도구 | `CallDeferred`, `ApprovalRequired`, `DeferredToolResults` | 구현됨. 프록시가 outcome `deferred/kind:"approval"` → `ApprovalRequired`, `external` → `CallDeferred`(metadata 에 `ticket_id`), `denied`/`error` → `ModelRetry`(기본 3회, `agent.tool_retries`)로 바꾼다. 사람 단계는 항상 보류(D2, 90초 블록 fast path 없음), 보류 호출이 모두 해결되면 `DeferredToolResults` 로 새 런을 시작하며 재개는 최대 1회(`stale_ticket`). 열린 티켓이 있으면 큐 메시지를 사이드카로 보내지 않는다(D4). live: 실제 데몬+사이드카에서 `ask_user` 보류 → CLI resolve → 재개(모델 요청 2회), 최종 응답 `b` |
 | 툴 노출 게이트 | (계획 없음) | 추가됨. `open.tools` 로 받은 명세만 노출한다. 사이드카는 모델 요청 직전에 선언된 함수 툴 이름 집합이 기대 집합과 다르면 `ToolGateError`, 데몬은 `ready.tools` 가 `open.tools` 와 정확히 같지 않으면 세션 시작을 거부한다(`tool_gate`) |
-| 서브에이전트 | harness `Subagents` 사용 또는 자체 구현 | **BLOCKED-1, 채택하지 않음.** harness `SubAgents` 가 자식의 `CallDeferred`/`ApprovalRequired` 결과를 문자열로 바꿔 부모 `DeferredToolRequests` 로 올리지 않는다(S-9 `subagents.deferred parent_deferred=false`). 자체 어댑터는 티켓 소유권·자식 대화 재개·재시작 복구 설계가 필요하고 툴 노출 게이트와도 충돌한다. 프로토콜의 `tool_call.subagent`, `event subagent.*`, 티켓 `origin.subagent_id` 는 정의·매핑만 있고 현재 사이드카는 보내지 않는다. 어댑터를 만들지 harness 개선을 기다릴지는 사용자 결정 대기 |
+| 서브에이전트 | harness `Subagents` 사용 또는 자체 구현 | **ADR-020 으로 해결.** harness `SubAgents` 는 서브에이전트의 `CallDeferred`/`ApprovalRequired` 결과를 문자열로 바꿔 부모 `DeferredToolRequests` 로 올리지 못하므로(S-9 `subagents.deferred parent_deferred=false`) 채택하지 않는다. 대신 사이드카의 자체 어댑터(`runtime/subagents.py`)가 데몬 툴 `delegate` 뒤에서 서브에이전트를 실행한다. 서브에이전트의 승인 요청과 질의는 `origin.subagent_id` 를 붙여 부모 세션에 티켓을 열고, 부모의 `delegate` 호출은 서브에이전트가 끝날 때까지 보류된다. 취소·steer·복구 규칙은 `docs/specs/sidecar-protocol.md` §10 에 있다. `delegate` 는 데몬 툴이므로 툴 노출 게이트는 그대로다. 프로토콜의 `tool_call.subagent`, `event subagent.*` 도 이 어댑터가 보낸다 |
 | harness capability | 평가 후 채택(S-9) | §E. 5개를 툴 0개 노출 조건으로 연결 |
 | 테스트 | fake broker + fake provider, `pytest -m live` | 가상 broker 와 `MockTransport`, `FunctionModel`, `OPENSIDE_AGENT_SCRIPT`(스크립트 모델, 프로토콜 §9)로 hermetic 하게 돌린다. live 는 `@pytest.mark.live` 로 분리하고 `OPENSIDE_LIVE_MODEL` 을 지정할 때만 실행한다. 이번 goal 의 live 호출은 4회(Claude 1회): Codex `pytest -m live` 통과, Claude `pytest -m live` 통과(429 없음), 데몬+사이드카 `ask_user` 왕복 |
 
@@ -67,7 +67,7 @@ compaction 임계값(`compaction_max_messages` 기본 100, `compaction_keep_mess
 
 | capability | adopt / not adopt / later | 이유 | 설정 참고 | 최종 |
 |---|---|---|---|---|
-| subagents | later | 공용 프록시는 동작하지만 자식 deferred/approval 결과가 문자열로 변환됨 | explicit proxy binding; deprecated inherit_tools 금지; 자식 conversation/티켓 소유권과 부모 suspend adapter, 승인된 delegate 도구 필요 | 미연결 — BLOCKED-1: 자식 deferred 가 부모로 올라오지 않음 |
+| subagents | later | 공용 프록시는 동작하지만 자식 deferred/approval 결과가 문자열로 변환됨 | explicit proxy binding; deprecated inherit_tools 금지; 자식 conversation/티켓 소유권과 부모 suspend adapter, 승인된 delegate 도구 필요 | 미연결 — harness capability 로는 연결하지 않고 사이드카 자체 어댑터(ADR-020)로 대체. 자식 deferred 가 부모로 올라오지 않기 때문 |
 | skills | later | instruction 로딩은 동작하나 discovery와 load_capability의 도구 소유권 조정 필요 | directories와 include/exclude; 신뢰된 read-only/daemon workspace; PyYAML; 번들 자동 실행 금지 | 미연결 |
 | compaction | adopt | 도구 없는 history 훅 동작, 세션 모델로 요약 가능 | model=None; threshold/window 설정; summarization_capabilities와 streaming 설정; 압축 후 Conversation 저장 | 연결: `SummarizingCompaction(model=None, max_messages=100, keep_messages=20)` (임계값 키 `compaction_max_messages`/`compaction_keep_messages`, 데몬은 기본값 사용) |
 | memory | later | 기본은 프로세스 메모리이고 내장 도구가 store에 직접 씀 | daemon-backed MemoryStore/도구 schema; session/agent namespace; injection_errors='raise'; 비밀 저장 금지 | 미연결 |
@@ -110,4 +110,4 @@ compaction 임계값(`compaction_max_messages` 기본 100, `compaction_keep_mess
 
 기각 이유: stdio 모드는 `stream: true` 의 SSE 를 스트림이 끝난 뒤 문자열 하나로 돌려줘 실시간 토큰 스트리밍(UI)이 안 되고, `serve` 는 broker URL·게이트웨이 토큰 파일을 추가로 요구하며 세션 단위 계정 핀 유지 여부도 확인하지 못했다(`unverified`). 게이트웨이는 로컬 `models.yml` 오버라이드를 무시하고 broker 카탈로그만 쓴다(문서). 사이드카가 broker 스냅샷을 직접 읽는 §A 로 이 제약이 사라졌다.
 
-omp 런타임 대비 잃은 것: 검증된 steer/follow-up 큐와 RPC 계약 테스트 자산, 서브에이전트 구독 프로토콜(BLOCKED-1 로 현재 서브에이전트 없음), compaction 튜닝, 공식 Rust SDK. 얻은 것: 보류 도구의 프로토콜 수준 지원, Python 생태계(평가, durable execution, 관측, MCP, guardrails), 에이전트 로직을 코드로 직접 제어.
+omp 런타임 대비 잃은 것: 검증된 steer/follow-up 큐와 RPC 계약 테스트 자산, 서브에이전트 구독 프로토콜(사이드카 자체 어댑터(ADR-020)로 대체), compaction 튜닝, 공식 Rust SDK. 얻은 것: 보류 도구의 프로토콜 수준 지원, Python 생태계(평가, durable execution, 관측, MCP, guardrails), 에이전트 로직을 코드로 직접 제어.

@@ -338,6 +338,154 @@
         "title": "AttachmentUpload",
         "type": "object"
       },
+      "BrowserActionState": {
+        "description": "The tool call that produced a browser state.",
+        "properties": {
+          "phrase": {
+            "description": "Human phrase such as \"Clicking\" or \"Opening example.com\".",
+            "type": "string"
+          },
+          "target": {
+            "description": "Accessible label of the target element, read from the page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool": {
+            "description": "Tool name.",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "description": "Runtime call identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "tool_call_id",
+          "phrase"
+        ],
+        "type": "object"
+      },
+      "BrowserPhase": {
+        "description": "Agent activity in a tab.",
+        "oneOf": [
+          {
+            "const": "loading",
+            "description": "Navigating or waiting for the page to load.",
+            "type": "string"
+          },
+          {
+            "const": "reading",
+            "description": "Reading the page (snapshot, screenshot).",
+            "type": "string"
+          },
+          {
+            "const": "acting",
+            "description": "Clicking, typing or otherwise interacting.",
+            "type": "string"
+          },
+          {
+            "const": "waiting_human",
+            "description": "Waiting for a person (login, code, choice, approval).",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "The Task finished with this tab.",
+            "type": "string"
+          },
+          {
+            "const": "error",
+            "description": "The last browser action failed.",
+            "type": "string"
+          }
+        ]
+      },
+      "BrowserSpace": {
+        "description": "Where a session's agent tabs browse, fixed at creation.",
+        "oneOf": [
+          {
+            "const": "shared",
+            "description": "The managed browser profile, with the logins and cookies it already holds.",
+            "type": "string"
+          },
+          {
+            "const": "isolated",
+            "description": "An isolated browser context in the same managed browser: own cookies and storage,\nkept in memory and wiped when the session is archived or deleted.",
+            "type": "string"
+          }
+        ]
+      },
+      "BrowserState": {
+        "description": "Typed browser situation for one tab, rendered as a live card per Task.",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserActionState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The tool call behind this state."
+          },
+          "facts": {
+            "$ref": "#/components/schemas/PageFacts",
+            "description": "Facts read from the page."
+          },
+          "host": {
+            "description": "Host of `url`, empty for non-network pages.",
+            "type": "string"
+          },
+          "page_kind": {
+            "$ref": "#/components/schemas/PageKind",
+            "description": "Classification of the page."
+          },
+          "phase": {
+            "$ref": "#/components/schemas/BrowserPhase",
+            "description": "What the agent is doing in the tab."
+          },
+          "tab_id": {
+            "description": "Browser target identifier.",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "Task (background subagent) acting in the tab; absent for the front agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thumbnail": {
+            "description": "Opaque JPEG thumbnail ID, fetched through the authenticated session route.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "Page title.",
+            "type": "string"
+          },
+          "url": {
+            "description": "Current URL with sensitive components redacted.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "url",
+          "host",
+          "title",
+          "phase",
+          "page_kind",
+          "facts"
+        ],
+        "type": "object"
+      },
       "BrowserTab": {
         "description": "Metadata-only browser ledger entry; incognito tabs are never included.",
         "properties": {
@@ -425,12 +573,12 @@
           },
           {
             "const": "approve",
-            "description": "Resolve or reject confirmation and information tickets.",
+            "description": "Resolve or reject confirm, info and choice tickets; positive confirm/choice decisions\nadditionally require a person device.",
             "type": "string"
           },
           {
             "const": "human_step",
-            "description": "Resolve, complete, or reject secret-input, device-approval, and takeover tickets.",
+            "description": "Resolve, complete, or reject secret-input, login, device-approval, and takeover tickets.",
             "type": "string"
           },
           {
@@ -454,6 +602,41 @@
             "type": "string"
           }
         ]
+      },
+      "CloudflareStatus": {
+        "description": "Supervised `cloudflared` state.",
+        "properties": {
+          "last_error": {
+            "description": "Latest failure, without secrets.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "restarts": {
+            "description": "Times the process exited and was started again.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "description": "`starting`, `running`, `restarting` or `failed` (cannot start at all).",
+            "type": "string"
+          },
+          "url": {
+            "description": "Public HTTPS URL once known (quick tunnels change it on every restart).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "restarts"
+        ],
+        "title": "CloudflareStatus",
+        "type": "object"
       },
       "ContentKind": {
         "description": "Broad media class of one content part; the runtime maps it to model input types.",
@@ -519,6 +702,11 @@
         "additionalProperties": false,
         "description": "Create a one-time pairing offer (Unix socket only).",
         "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DeviceKind",
+            "default": "person_device",
+            "description": "Operator-selected identity role, fixed in the offer and not chosen by its redeemer."
+          },
           "name": {
             "description": "Label the paired device will carry.",
             "type": "string"
@@ -529,6 +717,18 @@
               "$ref": "#/components/schemas/CapabilityScope"
             },
             "type": "array"
+          },
+          "via": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PairingTransport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Transport the link should use; default: the first entry of `remote.mode`, or the\nplain `remote.public_url` when no transport is configured."
           }
         },
         "required": [
@@ -623,6 +823,10 @@
         "additionalProperties": false,
         "description": "Session creation request.",
         "properties": {
+          "browser_space": {
+            "$ref": "#/components/schemas/BrowserSpace",
+            "description": "Browse in the shared managed profile (default) or an isolated space; immutable\nafterwards. Incognito sessions already have their own browser and refuse `isolated`."
+          },
           "incognito": {
             "description": "Create a private session; immutable afterwards. Browsing history is not indexed.",
             "type": "boolean"
@@ -777,6 +981,11 @@
             "description": "Revocation identifier (`DELETE /v1/devices/{id}`).",
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/DeviceKind",
+            "default": "person_device",
+            "description": "Pairing-time trust role; legacy devices without recorded source default to person_device."
+          },
           "name": {
             "description": "Label given at pairing; empty for devices paired before labels were stored.",
             "type": "string"
@@ -795,6 +1004,21 @@
           "scopes"
         ],
         "type": "object"
+      },
+      "DeviceKind": {
+        "description": "Trust role fixed at pairing, not selected anew by each authenticated request.",
+        "oneOf": [
+          {
+            "const": "person_device",
+            "description": "A web, phone, extension or channel client that conveys a person's response.",
+            "type": "string"
+          },
+          {
+            "const": "agent_client",
+            "description": "A CLI, MCP or API agent that must wait for a person device's approval.",
+            "type": "string"
+          }
+        ]
       },
       "DeviceList": {
         "description": "Paired devices.",
@@ -1331,6 +1555,10 @@
           {
             "description": "The parent's `delegate` call was admitted and a child agent started.",
             "properties": {
+              "background": {
+                "description": "A Task started by the front agent's `task_start`: it runs in the background and\nreports its result into the conversation instead of blocking the parent call.",
+                "type": "boolean"
+              },
               "kind": {
                 "const": "subagent.started",
                 "type": "string"
@@ -1375,6 +1603,13 @@
               "kind": {
                 "const": "subagent.ended",
                 "type": "string"
+              },
+              "output": {
+                "description": "Redacted final answer of a completed child, truncated for display.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "reason": {
                 "description": "Sanitized detail for failed or cancelled children.",
@@ -1504,8 +1739,30 @@
             "type": "object"
           },
           {
+            "description": "An agent-client identity drove the session and cannot approve its later confirmations.",
+            "properties": {
+              "device_id": {
+                "description": "Paired device id, or `local` for the Unix socket.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "session.driver_recorded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "device_id"
+            ],
+            "type": "object"
+          },
+          {
             "description": "First event in a session log.",
             "properties": {
+              "browser_space": {
+                "$ref": "#/components/schemas/BrowserSpace",
+                "description": "Browser space; historical events are shared."
+              },
               "incognito": {
                 "description": "Private session; historical events are not private.",
                 "type": "boolean"
@@ -1666,6 +1923,27 @@
               "message"
             ],
             "type": "object"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BrowserState"
+              },
+              {
+                "description": "What an agent is doing in a browser tab, derived by the daemon from the tool call and\nthe page itself (labels come from the page, never from the model).",
+                "properties": {
+                  "kind": {
+                    "const": "browser.state",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "What an agent is doing in a browser tab, derived by the daemon from the tool call and\nthe page itself (labels come from the page, never from the model)."
           }
         ],
         "properties": {
@@ -2187,6 +2465,10 @@
           {
             "description": "The parent's `delegate` call was admitted and a child agent started.",
             "properties": {
+              "background": {
+                "description": "A Task started by the front agent's `task_start`: it runs in the background and\nreports its result into the conversation instead of blocking the parent call.",
+                "type": "boolean"
+              },
               "kind": {
                 "const": "subagent.started",
                 "type": "string"
@@ -2231,6 +2513,13 @@
               "kind": {
                 "const": "subagent.ended",
                 "type": "string"
+              },
+              "output": {
+                "description": "Redacted final answer of a completed child, truncated for display.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "reason": {
                 "description": "Sanitized detail for failed or cancelled children.",
@@ -2360,8 +2649,30 @@
             "type": "object"
           },
           {
+            "description": "An agent-client identity drove the session and cannot approve its later confirmations.",
+            "properties": {
+              "device_id": {
+                "description": "Paired device id, or `local` for the Unix socket.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "session.driver_recorded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "device_id"
+            ],
+            "type": "object"
+          },
+          {
             "description": "First event in a session log.",
             "properties": {
+              "browser_space": {
+                "$ref": "#/components/schemas/BrowserSpace",
+                "description": "Browser space; historical events are shared."
+              },
               "incognito": {
                 "description": "Private session; historical events are not private.",
                 "type": "boolean"
@@ -2522,6 +2833,27 @@
               "message"
             ],
             "type": "object"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BrowserState"
+              },
+              {
+                "description": "What an agent is doing in a browser tab, derived by the daemon from the tool call and\nthe page itself (labels come from the page, never from the model).",
+                "properties": {
+                  "kind": {
+                    "const": "browser.state",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "What an agent is doing in a browser tab, derived by the daemon from the tool call and\nthe page itself (labels come from the page, never from the model)."
           }
         ],
         "title": "EventKind"
@@ -2539,6 +2871,58 @@
           "code"
         ],
         "title": "ExchangePairingRequest",
+        "type": "object"
+      },
+      "ExternalAgent": {
+        "description": "An agent CLI openside can install its browser skill for (`openside skills install`).",
+        "properties": {
+          "detected": {
+            "description": "The agent's executable is on the daemon's `PATH` or its configuration directory exists.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Preset name (`claude`, `codex`, `omp`) or an entry of `[skills.agents]`.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Product name for display.",
+            "type": "string"
+          },
+          "skill_installed": {
+            "description": "`openside-browser` is already in the agent's skills directory.",
+            "type": "boolean"
+          },
+          "skills_dir": {
+            "description": "Where the skill would be (or is) installed, written `~/…` when under the daemon user's\nhome; `null` when no directory is known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "detected",
+          "skill_installed"
+        ],
+        "type": "object"
+      },
+      "ExternalAgentList": {
+        "description": "`GET /v1/external-agents`.",
+        "properties": {
+          "agents": {
+            "description": "The three built-in presets first, then configured agents by name.",
+            "items": {
+              "$ref": "#/components/schemas/ExternalAgent"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "agents"
+        ],
+        "title": "ExternalAgentList",
         "type": "object"
       },
       "Health": {
@@ -2559,6 +2943,403 @@
         ],
         "title": "Health",
         "type": "object"
+      },
+      "ImportAvailability": {
+        "description": "Which categories a source profile has files for.",
+        "properties": {
+          "bookmarks": {
+            "description": "A bookmarks file exists.",
+            "type": "boolean"
+          },
+          "cookies": {
+            "description": "A cookie database exists.",
+            "type": "boolean"
+          },
+          "history": {
+            "description": "A history database exists.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "history",
+          "bookmarks",
+          "cookies"
+        ],
+        "type": "object"
+      },
+      "ImportBrowser": {
+        "description": "Browser family of an import source.",
+        "oneOf": [
+          {
+            "const": "chrome",
+            "description": "Google Chrome.",
+            "type": "string"
+          },
+          {
+            "const": "chromium",
+            "description": "Chromium and derivatives.",
+            "type": "string"
+          },
+          {
+            "const": "firefox",
+            "description": "Mozilla Firefox.",
+            "type": "string"
+          }
+        ]
+      },
+      "ImportCategory": {
+        "description": "A data category an import can carry over.",
+        "oneOf": [
+          {
+            "const": "history",
+            "description": "Page visits.",
+            "type": "string"
+          },
+          {
+            "const": "bookmarks",
+            "description": "Bookmarks.",
+            "type": "string"
+          },
+          {
+            "const": "cookies",
+            "description": "Cookies.",
+            "type": "string"
+          }
+        ]
+      },
+      "ImportCategoryReport": {
+        "description": "Outcome of one category.",
+        "properties": {
+          "imported": {
+            "description": "Entries written (dry run: that would be written).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "note": {
+            "description": "Why the category was skipped entirely (its source file is missing).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "read": {
+            "description": "Entries read from the source (cookies: decrypted).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rejected": {
+            "description": "Cookies the target browser refused.",
+            "items": {
+              "$ref": "#/components/schemas/ImportRejectedCookie"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "description": "Entries left out: non-web URLs, bookmarklets, expired or partitioned cookies.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read",
+          "imported",
+          "skipped",
+          "rejected"
+        ],
+        "type": "object"
+      },
+      "ImportProfile": {
+        "description": "A browser profile the daemon found on its computer.",
+        "properties": {
+          "available": {
+            "$ref": "#/components/schemas/ImportAvailability",
+            "description": "Files present in the profile."
+          },
+          "browser": {
+            "$ref": "#/components/schemas/ImportBrowser",
+            "description": "Browser family."
+          },
+          "id": {
+            "description": "Opaque id for `POST /v1/import` (`<browser>:<directory name>`).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name the browser shows for the profile.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "browser",
+          "name",
+          "available"
+        ],
+        "type": "object"
+      },
+      "ImportProfileList": {
+        "description": "`GET /v1/import/profiles`.",
+        "properties": {
+          "cookies_writable": {
+            "description": "A Chromium-compatible browser is available to write imported cookies; without one\nonly history and bookmarks can be imported.",
+            "type": "boolean"
+          },
+          "profiles": {
+            "description": "Profiles of installed browsers, Chrome first, then Chromium, then Firefox.",
+            "items": {
+              "$ref": "#/components/schemas/ImportProfile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles",
+          "cookies_writable"
+        ],
+        "title": "ImportProfileList",
+        "type": "object"
+      },
+      "ImportRejectedCookie": {
+        "description": "A cookie the target browser refused (host and name only).",
+        "properties": {
+          "host": {
+            "description": "Cookie host.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Cookie name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ImportReport": {
+        "description": "What an import read, or wrote.",
+        "properties": {
+          "bookmarks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportCategoryReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bookmarks outcome when requested."
+          },
+          "cookies": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportCategoryReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cookies outcome when requested."
+          },
+          "dry_run": {
+            "description": "Nothing was written.",
+            "type": "boolean"
+          },
+          "history": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportCategoryReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "History outcome when requested."
+          },
+          "profile": {
+            "description": "openside browser profile written to.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ImportBrowser",
+            "description": "Source browser."
+          }
+        },
+        "required": [
+          "dry_run",
+          "source",
+          "profile"
+        ],
+        "title": "ImportReport",
+        "type": "object"
+      },
+      "ImportRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/import` body. Always read-then-write: a dry run reads and decrypts everything\nand writes nothing.",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Report counts without writing anything.",
+            "type": "boolean"
+          },
+          "profile": {
+            "description": "Profile `id` from `GET /v1/import/profiles`.",
+            "type": "string"
+          },
+          "what": {
+            "default": null,
+            "description": "Categories to import; absent means every category the source has.",
+            "items": {
+              "$ref": "#/components/schemas/ImportCategory"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "ImportRequest",
+        "type": "object"
+      },
+      "InstallAgentSkillRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/external-agents/{id}/browser-skill` body.",
+        "properties": {
+          "force": {
+            "default": false,
+            "description": "Replace an `openside-browser` skill that is already installed.",
+            "type": "boolean"
+          }
+        },
+        "title": "InstallAgentSkillRequest",
+        "type": "object"
+      },
+      "InstalledAgentSkill": {
+        "description": "What the install wrote.",
+        "properties": {
+          "agent": {
+            "description": "Agent the skill was installed for.",
+            "type": "string"
+          },
+          "files": {
+            "description": "Files written.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Final location of the skill directory.",
+            "type": "string"
+          },
+          "skill": {
+            "description": "Installed skill name (`openside-browser`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "skill",
+          "path",
+          "files"
+        ],
+        "title": "InstalledAgentSkill",
+        "type": "object"
+      },
+      "LoginAlternativeKind": {
+        "description": "Kind of an alternative sign-in control on the page.",
+        "oneOf": [
+          {
+            "const": "provider",
+            "description": "Sign in with another provider's account.",
+            "type": "string"
+          },
+          {
+            "const": "passkey",
+            "description": "Sign in with a passkey or security key.",
+            "type": "string"
+          },
+          {
+            "const": "qr",
+            "description": "Sign in by scanning a QR code.",
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "Any other sign-in mode the page offers (one-time number, a login-mode tab).",
+            "type": "string"
+          }
+        ]
+      },
+      "LoginFieldKind": {
+        "description": "Kind of a field on a `login` ticket.",
+        "oneOf": [
+          {
+            "const": "identifier",
+            "description": "The account name: user id, email address or phone number.",
+            "type": "string"
+          },
+          {
+            "const": "password",
+            "description": "The password.",
+            "type": "string"
+          },
+          {
+            "const": "text",
+            "description": "Any other text the form asks for.",
+            "type": "string"
+          },
+          {
+            "const": "checkbox",
+            "description": "A tick box such as \"keep me signed in\"; answered with a boolean.",
+            "type": "string"
+          }
+        ]
+      },
+      "LoginProvider": {
+        "description": "Identity provider behind an alternative sign-in control.",
+        "oneOf": [
+          {
+            "const": "google",
+            "description": "Google.",
+            "type": "string"
+          },
+          {
+            "const": "apple",
+            "description": "Apple.",
+            "type": "string"
+          },
+          {
+            "const": "kakao",
+            "description": "Kakao.",
+            "type": "string"
+          },
+          {
+            "const": "naver",
+            "description": "Naver.",
+            "type": "string"
+          },
+          {
+            "const": "facebook",
+            "description": "Facebook.",
+            "type": "string"
+          },
+          {
+            "const": "github",
+            "description": "GitHub.",
+            "type": "string"
+          },
+          {
+            "const": "microsoft",
+            "description": "Microsoft.",
+            "type": "string"
+          }
+        ]
       },
       "Memory": {
         "description": "One stored memory. Content never contains a value matched by secret detection.",
@@ -3014,6 +3795,48 @@
         "title": "MoveMessageRequest",
         "type": "object"
       },
+      "OnboardingState": {
+        "description": "Where the first-run guide stands. `pending` until a person finishes or skips it once;\nthe flag lives on the daemon, so every device and browser agrees.",
+        "oneOf": [
+          {
+            "const": "pending",
+            "description": "Never finished or skipped.",
+            "type": "string"
+          },
+          {
+            "const": "completed",
+            "description": "Walked through to the end.",
+            "type": "string"
+          },
+          {
+            "const": "skipped",
+            "description": "Dismissed before the end.",
+            "type": "string"
+          }
+        ]
+      },
+      "OnboardingStatus": {
+        "description": "`GET /v1/onboarding` and the `PUT` response.",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/OnboardingState",
+            "description": "Current state."
+          },
+          "updated_at": {
+            "description": "When the state last changed; `null` while pending.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "OnboardingStatus",
+        "type": "object"
+      },
       "OtpChannel": {
         "description": "Where the site sends the one-time code a `request_otp` ticket asks for, as the agent read\nit on the page.",
         "oneOf": [
@@ -3096,10 +3919,124 @@
         "title": "OtpIngestResponse",
         "type": "object"
       },
+      "PageFacts": {
+        "description": "Facts extracted from the page, bounded for display.",
+        "properties": {
+          "error_text": {
+            "description": "Error text shown by the page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "description": "Form fields by accessible label (at most 8).",
+            "items": {
+              "$ref": "#/components/schemas/PageField"
+            },
+            "type": "array"
+          },
+          "heading": {
+            "description": "Main heading.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result_count": {
+            "description": "Number of items in the main list or results.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PageField": {
+        "description": "One form field.",
+        "properties": {
+          "kind": {
+            "description": "Input kind: `text`, `email`, `password`, `code`, `checkbox`, `radio`, `select`, `button`, ….",
+            "type": "string"
+          },
+          "label": {
+            "description": "Accessible label.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "PageKind": {
+        "description": "Page classification for card layout.",
+        "oneOf": [
+          {
+            "const": "login",
+            "description": "Sign-in form (password field).",
+            "type": "string"
+          },
+          {
+            "const": "otp",
+            "description": "One-time code entry.",
+            "type": "string"
+          },
+          {
+            "const": "choice",
+            "description": "A set of options to pick from.",
+            "type": "string"
+          },
+          {
+            "const": "captcha",
+            "description": "Human verification challenge.",
+            "type": "string"
+          },
+          {
+            "const": "form",
+            "description": "Other form.",
+            "type": "string"
+          },
+          {
+            "const": "list",
+            "description": "Search results or another list of items.",
+            "type": "string"
+          },
+          {
+            "const": "article",
+            "description": "Reading content.",
+            "type": "string"
+          },
+          {
+            "const": "checkout",
+            "description": "Payment or order confirmation.",
+            "type": "string"
+          },
+          {
+            "const": "error",
+            "description": "Error page.",
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "Nothing more specific.",
+            "type": "string"
+          }
+        ]
+      },
       "PairDeviceRequest": {
         "additionalProperties": false,
         "description": "Administrative device pairing request.",
         "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DeviceKind",
+            "default": "person_device",
+            "description": "Fixed at token creation; agent clients cannot approve their own work."
+          },
           "name": {
             "description": "User-visible device label.",
             "type": "string"
@@ -3125,6 +4062,11 @@
           "device_id": {
             "description": "Stable revocation identifier.",
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DeviceKind",
+            "default": "person_device",
+            "description": "Operator-selected trust role fixed when this token was paired."
           },
           "scopes": {
             "description": "Granted capabilities.",
@@ -3173,8 +4115,13 @@
             "format": "date-time",
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/DeviceKind",
+            "default": "person_device",
+            "description": "Operator-selected role the resulting token will hold."
+          },
           "path": {
-            "description": "Path the phone opens on the daemon's origin; the code is in the fragment, so\nit never reaches server logs or `Referer` headers.",
+            "description": "Pairing path on the daemon's origin, or the relay origin for relay links.\nThe code is a fragment, absent from ordinary HTTP requests and Referer\nheaders but readable by the page's scripts, including relay-served code.",
             "type": "string"
           },
           "scopes": {
@@ -3184,8 +4131,19 @@
             },
             "type": "array"
           },
+          "transport": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PairingTransport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Transport `url` uses; `null` for a plain `remote.public_url` or no URL."
+          },
           "url": {
-            "description": "`remote.public_url` + `path`, when a public URL is configured.",
+            "description": "Link for the QR code: `<base>/pair#<code>` for direct transports, or\n`<relay>/pair#c=<code>&t=relay&d=<daemon id>&k=<daemon key>` for the relay. `null`\nwhen no transport or public URL is configured.",
             "type": [
               "string",
               "null"
@@ -3200,6 +4158,26 @@
         ],
         "title": "PairingOffer",
         "type": "object"
+      },
+      "PairingTransport": {
+        "description": "How a paired device reaches the daemon from outside its network.",
+        "oneOf": [
+          {
+            "const": "tailscale",
+            "description": "Tailscale Serve at `remote.public_url`.",
+            "type": "string"
+          },
+          {
+            "const": "cloudflare",
+            "description": "Cloudflare Tunnel run by the daemon.",
+            "type": "string"
+          },
+          {
+            "const": "relay",
+            "description": "CLI/MCP use Noise with the pairing-pinned daemon key; relay-served PWA code\nstill requires trust in the relay operator.",
+            "type": "string"
+          }
+        ]
       },
       "PinnedTab": {
         "description": "A tab the user pinned; synced between devices when sync is set up.",
@@ -3759,6 +4737,95 @@
         "title": "RejectTicketRequest",
         "type": "object"
       },
+      "RelayStatus": {
+        "description": "Relay registration state.",
+        "properties": {
+          "clients": {
+            "description": "Devices connected through the relay now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "daemon_id": {
+            "description": "Routing id the relay knows this daemon by.",
+            "type": "string"
+          },
+          "daemon_key": {
+            "description": "Daemon X25519 public key (base64url) carried in relay pairing links.",
+            "type": "string"
+          },
+          "last_error": {
+            "description": "Latest failure, without secrets.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`connecting`, `connected` or `backoff`.",
+            "type": "string"
+          },
+          "url": {
+            "description": "Relay origin.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "url",
+          "daemon_id",
+          "daemon_key",
+          "clients"
+        ],
+        "title": "RelayStatus",
+        "type": "object"
+      },
+      "RemoteStatus": {
+        "description": "Remote transports the daemon runs (`GET /v1/remote/status`).",
+        "properties": {
+          "cloudflare": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CloudflareStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The supervised `cloudflared`, when enabled."
+          },
+          "modes": {
+            "description": "Enabled transports in pairing preference order.",
+            "items": {
+              "$ref": "#/components/schemas/PairingTransport"
+            },
+            "type": "array"
+          },
+          "public_url": {
+            "description": "`remote.public_url`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "relay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RelayStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The relay registration, when enabled."
+          }
+        },
+        "required": [
+          "modes"
+        ],
+        "title": "RemoteStatus",
+        "type": "object"
+      },
       "ReplRequest": {
         "additionalProperties": false,
         "description": "Run one Playwright-syntax snippet in a session-owned agent tab (`browser_repl`).",
@@ -3869,7 +4936,7 @@
         "description": "Human response interpreted according to the ticket kind.\n\nSecret-input values are daemon-only and must never be persisted or sent to the model.",
         "properties": {
           "value": {
-            "description": "Confirmation, non-secret information, or transient daemon-only secret input: a string,\nor `{\"totp\": \"<otpauth:// URI or base32 key>\"}` for a `secret_input` ticket whose\n`otp.can_register` is true. A `confirm` ticket carrying `otp_register` takes `true` or\n`false` like any confirmation."
+            "description": "Confirmation, non-secret information, or transient daemon-only secret input: a string,\nor `{\"totp\": \"<otpauth:// URI or base32 key>\"}` for a `secret_input` ticket whose\n`otp.can_register` is true. A `confirm` ticket carrying `otp_register` takes `true` or\n`false` like any confirmation. A `login` ticket takes\n`{\"values\": {<field id>: string | bool}, \"save\": bool}`, `{\"account\": <item_id>}` or\n`{\"alternative\": <id>}`; a `choice` ticket takes `{\"option\": <id>}`."
           }
         },
         "required": [
@@ -4313,6 +5380,11 @@
             "description": "Hidden from the default session list.",
             "type": "boolean"
           },
+          "browser_space": {
+            "$ref": "#/components/schemas/BrowserSpace",
+            "default": "shared",
+            "description": "Browser space fixed at creation; historical sessions are shared."
+          },
           "id": {
             "$ref": "#/components/schemas/SessionId",
             "description": "Stable session identifier."
@@ -4706,6 +5778,10 @@
       "Subagent": {
         "description": "One child agent started by the parent session's `delegate` tool.",
         "properties": {
+          "background": {
+            "description": "A background Task started by the front agent (`task_start`).",
+            "type": "boolean"
+          },
           "ended_at": {
             "description": "When the child reached a terminal state.",
             "format": "date-time",
@@ -4724,6 +5800,13 @@
           "model": {
             "description": "Model selector the child runs on.",
             "type": "string"
+          },
+          "output": {
+            "description": "Final answer of a completed child, truncated for display.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "parent_tool_call_id": {
             "description": "The parent's `delegate` tool call, which stays pending until the child ends.",
@@ -5390,6 +6473,28 @@
       "Ticket": {
         "description": "Durable human-intervention ticket correlated with the same deferred tool call.",
         "properties": {
+          "approval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketApproval"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on `device_approval` tickets that wait for a phone sign-in approval\n(`wait_for_approval`)."
+          },
+          "choice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketChoice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on `choice` tickets."
+          },
           "created_at": {
             "description": "Creation time in RFC 3339 UTC.",
             "format": "date-time",
@@ -5418,6 +6523,17 @@
           "kind": {
             "$ref": "#/components/schemas/TicketKind",
             "description": "Requested human action."
+          },
+          "login": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketLogin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on `login` tickets."
           },
           "options": {
             "description": "Allowed non-secret responses; empty allows free-form information input.",
@@ -5512,6 +6628,111 @@
         ],
         "type": "object"
       },
+      "TicketApproval": {
+        "description": "What a `device_approval` ticket opened by `wait_for_approval` shows: the site asks the\nperson to approve the sign-in on their phone (a push notification in the site's own app).\nNobody answers it in openside: the daemon watches the page and resolves the ticket with\n`{\"status\":\"done\",\"next\":…}` once the page moves on; rejecting it cancels the wait.",
+        "properties": {
+          "icon": {
+            "description": "The site's icon, as on [`TicketLogin::icon`].",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "The page's heading and instruction for the approval (untrusted page text, capped).",
+            "type": "string"
+          },
+          "number": {
+            "description": "The number the page asks the person to tap or type on the phone, when it shows one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "Exact page origin.",
+            "type": "string"
+          },
+          "site_name": {
+            "description": "The site's name as the page gives it (untrusted page text), or its host.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "site_name",
+          "message"
+        ],
+        "type": "object"
+      },
+      "TicketChoice": {
+        "description": "What a `choice` ticket (`request_choice`) shows: a decision the page asks for, such as\nwhich account, which verification method, or whether to trust this device.",
+        "properties": {
+          "icon": {
+            "description": "The site's icon, as on [`TicketLogin::icon`].",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "multiple": {
+            "description": "Always false: one option is picked.",
+            "type": "boolean"
+          },
+          "options": {
+            "description": "Options in page order.",
+            "items": {
+              "$ref": "#/components/schemas/TicketChoiceOption"
+            },
+            "type": "array"
+          },
+          "origin": {
+            "description": "Exact page origin.",
+            "type": "string"
+          },
+          "question": {
+            "description": "The page's heading for the choice.",
+            "type": "string"
+          },
+          "site_name": {
+            "description": "The site's name as the page gives it (untrusted page text), or its host.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "site_name",
+          "question",
+          "options",
+          "multiple"
+        ],
+        "type": "object"
+      },
+      "TicketChoiceOption": {
+        "description": "One option of a `choice` ticket.",
+        "properties": {
+          "description": {
+            "description": "Secondary page text of the option, when it has some.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Daemon-assigned id; answer with `{\"option\": id}`.",
+            "type": "string"
+          },
+          "label": {
+            "description": "The control's accessible name on the page (untrusted page text), never the model's.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "type": "object"
+      },
       "TicketDeferral": {
         "description": "Resumption semantics for the suspended tool call.",
         "oneOf": [
@@ -5525,8 +6746,7 @@
             "description": "An external action supplies the original tool call's result.",
             "type": "string"
           }
-        ],
-        "title": "TicketDeferral"
+        ]
       },
       "TicketId": {
         "description": "Identifies a durable human-intervention ticket.",
@@ -5559,6 +6779,16 @@
             "const": "takeover",
             "description": "Perform an action directly in the browser.",
             "type": "string"
+          },
+          {
+            "const": "login",
+            "description": "Sign in to a site through a form the daemon built from the page's own login form\n(`request_login`); the values go straight into the page, never to the model.",
+            "type": "string"
+          },
+          {
+            "const": "choice",
+            "description": "Pick one of the choices a page offers (`request_choice`); the daemon clicks the page's\nown control.",
+            "type": "string"
           }
         ],
         "title": "TicketKind"
@@ -5578,6 +6808,174 @@
           "tickets"
         ],
         "title": "TicketList",
+        "type": "object"
+      },
+      "TicketLogin": {
+        "description": "What a `login` ticket (`request_login`) shows: the page's login form, rebuilt by the\ndaemon. Answer with `{\"values\": {<field id>: string | bool}, \"save\": bool}`,\n`{\"account\": <item_id>}` or `{\"alternative\": <id>}`.",
+        "properties": {
+          "accounts": {
+            "description": "Logins saved for this origin, when there are several to pick from.",
+            "items": {
+              "$ref": "#/components/schemas/TicketLoginAccount"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "alternatives": {
+            "description": "Other ways to sign in the page offers.",
+            "items": {
+              "$ref": "#/components/schemas/TicketLoginAlternative"
+            },
+            "type": "array"
+          },
+          "can_save": {
+            "description": "Whether `save: true` may keep the identifier and password in the vault for this\norigin (it also needs the `approve` scope and a person device).",
+            "type": "boolean"
+          },
+          "error_text": {
+            "description": "The page's own error message next to the form (e.g. a wrong password on the previous\nattempt; untrusted page text, redacted and capped), when it shows one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "description": "Fields in page order.",
+            "items": {
+              "$ref": "#/components/schemas/TicketLoginField"
+            },
+            "type": "array"
+          },
+          "icon": {
+            "description": "The site's icon as a `data:image/...;base64,` URL (at most 8 KiB, fetched by the\ndaemon from the page's own origin), when it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "Exact page origin the values go to.",
+            "type": "string"
+          },
+          "site_name": {
+            "description": "The site's name as the page gives it (untrusted page text), or its host.",
+            "type": "string"
+          },
+          "submit_label": {
+            "description": "The page's own text for its sign-in button.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "site_name",
+          "fields",
+          "alternatives",
+          "submit_label",
+          "can_save"
+        ],
+        "type": "object"
+      },
+      "TicketLoginAccount": {
+        "description": "A login saved in the vault for the ticket's origin, offered instead of typing.",
+        "properties": {
+          "item_id": {
+            "description": "Vault item id; answer with `{\"account\": item_id}`.",
+            "type": "string"
+          },
+          "username_hint": {
+            "description": "Masked account name, e.g. `j***@naver.com`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "username_hint"
+        ],
+        "type": "object"
+      },
+      "TicketLoginAlternative": {
+        "description": "An alternative sign-in control on the page; answering with its id clicks it.",
+        "properties": {
+          "id": {
+            "description": "Daemon-assigned id.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LoginAlternativeKind",
+            "description": "What kind of sign-in it starts."
+          },
+          "label": {
+            "description": "The control's accessible name on the page (untrusted page text).",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoginProvider"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The provider, for `provider` controls the daemon recognized."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "TicketLoginField": {
+        "description": "One field of the page's login form, in page order.",
+        "properties": {
+          "autocomplete": {
+            "description": "Autocomplete token for the card's input (`username`, `email`, `tel`,\n`current-password`, `one-time-code`), so the person's own password manager can fill it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Daemon-assigned id the answer's `values` are keyed by.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LoginFieldKind",
+            "description": "What the field holds."
+          },
+          "label": {
+            "description": "The page's own label for the field (untrusted page text, trimmed and capped).",
+            "type": "string"
+          },
+          "masked": {
+            "description": "Whether the input hides what is typed (passwords).",
+            "type": "boolean"
+          },
+          "placeholder": {
+            "description": "The page's placeholder, when it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required": {
+            "description": "Whether the page requires a value.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "masked",
+          "required"
+        ],
         "type": "object"
       },
       "TicketOption": {
@@ -5602,6 +7000,20 @@
       "TicketOrigin": {
         "description": "Identity of the agent that requested human intervention.",
         "properties": {
+          "device_id": {
+            "description": "Device behind a direct API tool call; `local` identifies the Unix socket.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "driver_ids": {
+            "description": "Agent-client identities that drove this session before the ticket opened.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "subagent_id": {
             "description": "Absent for the parent agent, otherwise the originating subagent.",
             "type": [
@@ -5617,7 +7029,7 @@
         "description": "One-time-code details of a `secret_input` ticket opened by `request_otp`.",
         "properties": {
           "can_register": {
-            "description": "Besides a code (a string `value`), the person may resolve with\n`{\"totp\": \"<otpauth:// URI or base32 setup key>\"}`: the daemon stores the authenticator\nin the vault for the ticket's origin and fills the code it generates, now and on later\n`request_otp` calls for that origin.",
+            "description": "Besides a code (a string `value`), the person may resolve with\n`{\"totp\": \"<otpauth:// URI or base32 setup key>\"}`: the daemon stores the authenticator\nin the vault for the ticket's origin and fills the code it generates, now and on later\n`request_otp` calls for that origin. Registration requires `approve` and a person device.",
             "type": "boolean"
           },
           "channel": {
@@ -5735,6 +7147,168 @@
         "title": "TicketTool",
         "type": "object"
       },
+      "ToolCallRequest": {
+        "additionalProperties": false,
+        "description": "Run one daemon tool in a session through the same host pipeline as an agent call.",
+        "properties": {
+          "approval_ticket": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Approved `confirm` ticket from an earlier `deferred` response with deferral\n`approval`; the identical `args` run again under that approval."
+          },
+          "args": {
+            "default": {},
+            "description": "Tool arguments matching the descriptor's `input_schema`."
+          }
+        },
+        "title": "ToolCallRequest",
+        "type": "object"
+      },
+      "ToolCallResponse": {
+        "description": "Result of a [`ToolCallRequest`], recorded as a tool call in the session's events.",
+        "properties": {
+          "artifacts": {
+            "description": "Artifact paths the call saved (a screenshot's PNG), readable through\n`GET /v1/sessions/{id}/artifacts/{path}`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "deferral": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketDeferral"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the pending ticket resumes the call when `status` is `deferred`."
+          },
+          "hint": {
+            "description": "How to proceed after a denial.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Denial reason or failure message.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "Redacted tool result when `status` is `done`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ToolCallStatus",
+            "description": "Outcome category."
+          },
+          "ticket_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pending ticket when `status` is `deferred`."
+          },
+          "tool_call_id": {
+            "description": "Tool call identifier recorded in the session's `tool.started`/`tool.ended` events.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_call_id",
+          "status"
+        ],
+        "title": "ToolCallResponse",
+        "type": "object"
+      },
+      "ToolCallStatus": {
+        "description": "Outcome category of a [`ToolCallRequest`].",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "The tool ran; `result` holds its redacted result.",
+            "type": "string"
+          },
+          {
+            "const": "deferred",
+            "description": "A ticket in `ticket_id` is pending. With deferral `approval`, call again with\n`approval_ticket` once it is approved; with `external`, the ticket's resolution is\nthe tool's result.",
+            "type": "string"
+          },
+          {
+            "const": "denied",
+            "description": "Policy or validation refused the call; see `reason` and `hint`.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The daemon could not run the tool.",
+            "type": "string"
+          }
+        ]
+      },
+      "ToolCatalog": {
+        "description": "`GET /v1/tools` response: every directly callable tool, in name order. A session may\nstill refuse a listed tool (its mode, an incognito session, the configured agent profile).",
+        "properties": {
+          "tools": {
+            "description": "Callable tools.",
+            "items": {
+              "$ref": "#/components/schemas/ToolDescriptor"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tools"
+        ],
+        "title": "ToolCatalog",
+        "type": "object"
+      },
+      "ToolDescriptor": {
+        "description": "One daemon tool an API caller may run directly (`POST /v1/sessions/{id}/tools/{name}`).",
+        "properties": {
+          "description": {
+            "description": "The description the agent's model sees.",
+            "type": "string"
+          },
+          "human": {
+            "description": "Whether the call opens a person-facing ticket and its result arrives on resolution.",
+            "type": "boolean"
+          },
+          "input_schema": {
+            "description": "JSON Schema of `ToolCallRequest.args`."
+          },
+          "name": {
+            "description": "Tool name, identical to the name the in-app agent calls.",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CapabilityScope",
+            "description": "Capability a token needs to call it."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "input_schema",
+          "scope",
+          "human"
+        ],
+        "type": "object"
+      },
       "UpdateMemoryRequest": {
         "additionalProperties": false,
         "description": "`PATCH /v1/memory/{id}` body; absent fields are unchanged.",
@@ -5769,6 +7343,21 @@
           }
         },
         "title": "UpdateMemoryRequest",
+        "type": "object"
+      },
+      "UpdateOnboardingRequest": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/onboarding`: record how the guide ended. Only `completed` and `skipped` are\naccepted; reopening the guide from Settings does not reset the flag.",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/OnboardingState",
+            "description": "`completed` or `skipped`."
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "UpdateOnboardingRequest",
         "type": "object"
       },
       "UpdateRoutineRequest": {
@@ -5982,7 +7571,7 @@
             ]
           },
           "what": {
-            "description": "`fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `get`,\n`policy_update`, `item_add`, `item_delete`, or the lifecycle steps `setup`, `unlock`\nand `lock`.",
+            "description": "`fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `login_save`, `get`,\n`policy_update`, `item_add`, `item_delete`, or the lifecycle steps `setup`, `unlock`\nand `lock`.",
             "type": "string"
           },
           "who": {
@@ -6340,6 +7929,32 @@
         "x-required-capability": "read"
       }
     },
+    "/v1/browser/prewarm": {
+      "post": {
+        "description": "Launch the browser ahead of a new chat's first message. Idempotent; returns before the browser is up.",
+        "responses": {
+          "202": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
     "/v1/browser/tabs": {
       "get": {
         "description": "Metadata-only ledger of explicitly agent-owned targets with a known non-incognito owner. Omits user/external targets and removes URL credentials, query and fragment. Empty before browser launch; never launches or reconnects the browser.",
@@ -6498,6 +8113,92 @@
         "x-required-capability": "admin"
       }
     },
+    "/v1/external-agents": {
+      "get": {
+        "description": "The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any `[skills.agents]` entry. `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalAgentList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/external-agents/{id}/browser-skill": {
+      "post": {
+        "description": "Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallAgentSkillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstalledAgentSkill"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
     "/v1/health": {
       "get": {
         "responses": {
@@ -6528,6 +8229,82 @@
           }
         ],
         "x-required-capability": "read"
+      }
+    },
+    "/v1/import": {
+      "post": {
+        "description": "Import history, bookmarks and cookies of a discovered profile into the daemon's browser profile. `dry_run` reads and decrypts everything and reports counts without writing; a real run reads everything before it writes anything. Cookies encrypted with the OS keyring (`v11`) need the CLI (`openside import --keyring-password-cmd`). One import runs at a time. 400 unknown_profile; 409 import_in_progress, profile_in_use; 422 source_locked, source_unreadable, source_corrupt, source_unsupported, keyring_password_required; 500 import_failed; 503 browser_unavailable.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReport"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/import/profiles": {
+      "get": {
+        "description": "Chrome, Chromium and Firefox profiles found in their standard locations on the daemon's computer, with the data each has. Directory paths are never returned; `POST /v1/import` takes the profile id.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportProfileList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
       }
     },
     "/v1/memory": {
@@ -6840,6 +8617,80 @@
         "x-required-capability": "read"
       }
     },
+    "/v1/onboarding": {
+      "get": {
+        "description": "State of the first-run guide, kept on the daemon so every device agrees: `pending` until someone finishes or skips it once.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingStatus"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "put": {
+        "description": "Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). Reopening the guide from Settings does not reset the flag.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOnboardingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingStatus"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
     "/v1/otp": {
       "post": {
         "description": "Forwarded SMS. 403 sender_not_allowed unless the sender is in otp.senders. A code extracted by an otp.sites pattern fills pending secret_input tickets of that exact origin, or is kept in memory for otp.ttl_secs for a step that opens later. Codes are never returned, logged or persisted.",
@@ -6885,7 +8736,7 @@
     },
     "/v1/pairing": {
       "post": {
-        "description": "Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). Issuing, exchanging and revoking are written to audit.jsonl.",
+        "description": "Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). The operator fixes kind here: person_device for phones/browsers, agent_client for external CLI/MCP agents. Redemption cannot change it. Issuing, exchanging and revoking are written to audit.jsonl.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -6928,7 +8779,7 @@
     },
     "/v1/pairing/exchange": {
       "post": {
-        "description": "No bearer token: the one-time code is the credential. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A code is consumed by its first exchange attempt.",
+        "description": "No bearer token: the one-time code is the credential. The token inherits the operator-selected kind from the offer; sending kind at redemption is rejected as an unknown field. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A valid request consumes the code on its first exchange attempt.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -7364,6 +9215,38 @@
         "x-required-capability": "read"
       }
     },
+    "/v1/remote/status": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteStatus"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
     "/v1/routines": {
       "get": {
         "responses": {
@@ -7748,6 +9631,7 @@
         "x-required-capability": "read"
       },
       "post": {
+        "description": "Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -7864,7 +9748,7 @@
         "x-required-capability": "read"
       },
       "patch": {
-        "description": "Update title/pinned/archived as a durable session.updated event.",
+        "description": "Update title/pinned/archived as a durable session.updated event. Archiving an isolated-space session disposes its browser space.",
         "parameters": [
           {
             "in": "path",
@@ -8140,6 +10024,58 @@
         "x-required-capability": "browse"
       }
     },
+    "/v1/sessions/{id}/browser/thumbnails/{thumbnail_id}": {
+      "get": {
+        "description": "Read a bounded JPEG thumbnail referenced by browser.state. Requires browse; secret-tainted tabs, changed documents, takeover, private/stopped/archived/deleted sessions, expired IDs and IDs from another session are withheld. IDs expire after ten minutes and after daemon restart; responses are never cached.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "thumbnail_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "browse"
+      }
+    },
     "/v1/sessions/{id}/events": {
       "get": {
         "parameters": [
@@ -8236,6 +10172,42 @@
                 }
               }
             },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}/prewarm": {
+      "post": {
+        "description": "Start the session's agent process, launch the browser and open one blank agent tab its next browser_open_tab adopts, so the first reply and browser action skip cold starts. Idempotent; returns before the work finishes.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
             "description": "Success"
           },
           "default": {
@@ -8727,6 +10699,58 @@
           }
         ],
         "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}/tools/{name}": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolCallResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "browse"
       }
     },
     "/v1/sessions/{id}/visuals": {
@@ -9415,7 +11439,7 @@
     },
     "/v1/tickets/{id}/reject": {
       "post": {
-        "description": "The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step. A secret_input answer that registers an authenticator ({\"value\":{\"totp\":…}} on /resolve) also requires approve.",
+        "description": "The daemon checks the ticket kind: confirm/info/choice require approve; secret_input/device_approval/takeover/login require human_step. A secret_input answer that registers an authenticator ({\"value\":{\"totp\":…}} on /resolve) and a login answer that keeps the login ({\"value\":{\"values\":…,\"save\":true}}) also require approve.",
         "parameters": [
           {
             "in": "path",
@@ -9464,9 +11488,11 @@
           }
         ],
         "x-capability-by-ticket-kind": {
+          "choice": "approve",
           "confirm": "approve",
           "device_approval": "human_step",
           "info": "approve",
+          "login": "human_step",
           "secret_input": "human_step",
           "takeover": "human_step"
         },
@@ -9475,7 +11501,7 @@
     },
     "/v1/tickets/{id}/resolve": {
       "post": {
-        "description": "The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step. A secret_input answer that registers an authenticator ({\"value\":{\"totp\":…}} on /resolve) also requires approve.",
+        "description": "The daemon checks the ticket kind: confirm/info/choice require approve; secret_input/device_approval/takeover/login require human_step. A secret_input answer that registers an authenticator ({\"value\":{\"totp\":…}} on /resolve) and a login answer that keeps the login ({\"value\":{\"values\":…,\"save\":true}}) also require approve. Confirm approval, choice answers, TOTP enrollment, and login save:true require a person_device; agent clients and the Unix socket receive 403 person_approval_required and the ticket stays pending. A person device that directly created the ticket, or was recorded as its session driver, receives 403 self_approval_forbidden. Pairing fixes the device kind. Deny/reject and cancel remain allowed with the appropriate scope.",
         "parameters": [
           {
             "in": "path",
@@ -9507,6 +11533,20 @@
             },
             "description": "Success"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "person_approval_required",
+                  "message": "person approval required"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Caller lacks the ticket scope or the required person-device authority, or tries to approve its own ticket"
+          },
           "default": {
             "content": {
               "application/json": {
@@ -9524,9 +11564,11 @@
           }
         ],
         "x-capability-by-ticket-kind": {
+          "choice": "approve",
           "confirm": "approve",
           "device_approval": "human_step",
           "info": "approve",
+          "login": "human_step",
           "secret_input": "human_step",
           "takeover": "human_step"
         },
@@ -9587,6 +11629,38 @@
           }
         ],
         "x-required-capability": "human_step"
+      }
+    },
+    "/v1/tools": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolCatalog"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
       }
     },
     "/v1/vault": {

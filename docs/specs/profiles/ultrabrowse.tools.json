@@ -7,6 +7,9 @@
   "browser_repl",
   "browser_snapshot",
   "browser_tabs",
+  "request_choice",
   "request_human_step",
-  "request_otp"
+  "request_login",
+  "request_otp",
+  "wait_for_approval"
 ]

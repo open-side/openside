@@ -5,7 +5,7 @@
 ## 1. 구조
 - 어댑터는 데몬 공개 API v1 의 클라이언트다. 세션 로직·정책·승인 판단은 모두 데몬에 있고, 어댑터는 채팅 메시지를 API 호출로, 이벤트 스트림을 채팅 메시지로 옮기기만 한다.
 - 어댑터는 `openside_proto::ROUTES` 에 없는 경로를 호출하지 않는다. `DaemonClient` 가 요청마다 이를 검사하고, e2e 테스트는 기록용 프록시로 실제 요청 경로를 모두 대조한다(G-5).
-- 데몬에는 TCP loopback 의 bearer 토큰으로 연결한다. 유닉스 소켓은 관리자 권한이라 쓰지 않는다. 토큰은 `read`·`steer`·`approve` 범위만 있으면 된다. `human_step` 범위가 없으므로 `secret_input`·기기 승인·인수 티켓은 데몬도 거부한다.
+- 데몬에는 TCP loopback 의 bearer 토큰으로 연결한다. 유닉스 소켓은 관리자 권한이라 쓰지 않는다. 토큰은 `read`·`steer`·`approve` 범위만 있으면 된다. `human_step` 범위가 없으므로 `secret_input`·`login`·기기 승인·인수 티켓은 데몬도 거부한다. `choice` 티켓은 `approve` 범위만 요구하므로 봇이 답할 수 있다.
 - 한 번에 `openside-channels run` 하나가 켜진 어댑터를 모두 돌린다. 종료는 SIGINT/SIGTERM.
 
 ```
@@ -41,8 +41,8 @@ Telegram·Discord 는 `/`, Slack 은 `/` 를 플랫폼이 가로채므로 `!` �
 ## 4. 승인 카드
 - 세션에 `ticket.opened` 가 오면 스레드에 카드를 올린다. 카드는 티켓당 한 번만 올린다. 재연결로 지난 티켓이 다시 와도, 이미 처리된 티켓에는 카드를 올리지 않는다.
 - `confirm`: Approve / Reject 버튼(`POST /v1/tickets/{id}/resolve` 또는 `/reject`). `info` 에 선택지가 있으면 선택지마다 버튼과 Dismiss, 선택지가 없으면 `/answer` 안내.
-- 버튼을 누르면 어댑터는 카드가 이 스레드에서 올린 것인지, 티켓이 이 스레드 세션의 것이며 `pending` 인지, 종류가 `confirm`·`info` 인지를 다시 확인한다. 하나라도 어긋나면 데몬을 호출하지 않는다. 처리 후 카드는 버튼을 지우고 `Approved by user <id>` 같은 결과로 고친다. 이미 처리된 카드를 다시 누르면 `Already handled.` 로 답한다.
-- `secret_input`, 기기 승인(`device_approval`), 인수(`takeover`) 티켓은 채팅에서 답할 수 없다. 버튼 없이 안내만 올린다. `secret_input` 안내는 웹 UI 또는 `openside ticket resolve <id> -` 를 가리킨다. 위조된 버튼 데이터나 `/answer` 로도 이 티켓을 처리할 수 없다.
+- 버튼을 누르면 어댑터는 카드가 이 스레드에서 올린 것인지, 티켓이 이 스레드 세션의 것이며 `pending` 인지, 종류가 `confirm`·`info`·`choice` 인지를 다시 확인한다. 하나라도 어긋나면 데몬을 호출하지 않는다. 처리 후 카드는 버튼을 지우고 `Approved by user <id>` 같은 결과로 고친다. 이미 처리된 카드를 다시 누르면 `Already handled.` 로 답한다.
+- `secret_input`, `login`, 기기 승인(`device_approval`), 화면 직접 조작(`takeover`) 티켓은 대화창에서 바로 처리할 수 없다. 카드에 버튼을 두지 않고 안내 문구만 표시한다. `secret_input` 안내는 웹 UI나 `openside ticket resolve <id> -` 명령어를 가리키고, `login` 안내는 웹 UI 대화 화면으로 연결되는 링크만 보여준다. 위조된 버튼 데이터나 `/answer` 명령어로도 이들 티켓은 처리할 수 없다. 반면 `choice` 티켓은 시크릿을 다루지 않고 봇 토큰이 이미 보유한 `approve` 스코프만 요구하므로, 페이지 선택지를 버튼으로 띄우고 취소(Dismiss) 버튼도 함께 제공한다. 버튼을 누르면 `{"option":…}`으로 티켓을 해결한다.
 
 ## 5. 음성 전사(로컬 STT 옵션)
 - `channels.stt_cmd` 에 로컬 명령을 지정하면 음성·오디오 첨부를 전사한다. 어댑터가 오디오를 임시 파일(0600)로 받아 명령의 마지막 인자로 넘기고, stdout 을 전사문으로 쓴다. 셸을 거치지 않으며, 임시 파일은 바로 지운다.
@@ -70,7 +70,7 @@ curl --unix-socket "$SOCKET" -X POST http://localhost/v1/devices/pair \
 공통: 데몬은 `daemon.listen` 으로 TCP 를 열어 두어야 한다. 어댑터는 `api_url`(기본 `http://<daemon.listen>`)로 접속한다.
 
 ### Telegram
-롱폴링(`getUpdates`)이라 공개 주소가 필요 없다. BotFather 로 봇을 만들고 토큰을 `token_env` 가 가리키는 변수에 둔다. `allowed_chats`·`allowed_users` 에 숫자 ID 를 쓴다. 오프셋은 `threads.json` 에 저장하므로 재시작해도 처리한 업데이트를 다시 받지 않는다. 승인 카드의 버튼은 인라인 키보드이고 `callback_data` 는 `a:<티켓>`·`r:<티켓>`·`o:<티켓>:<번호>` 다.
+롱폴링(`getUpdates`)이라 공개 주소가 필요 없다. BotFather 로 봇을 만들고 토큰을 `token_env` 가 가리키는 변수에 둔다. `allowed_chats`·`allowed_users` 에 숫자 ID 를 쓴다. 오프셋은 `threads.json` 에 저장하므로 재시작해도 처리한 업데이트를 다시 받지 않는다. 승인 카드의 버튼은 인라인 키보드이고 `callback_data` 는 `a:<티켓>`·`r:<티켓>`·`o:<티켓>:<번호>`·`c:<티켓>:<번호>` 다.
 
 ### Slack
 - Event Subscriptions 의 Request URL 을 `https://<공개 주소>/slack/events`, Interactivity 의 Request URL 을 `https://<공개 주소>/slack/interactivity` 로 지정한다. 어댑터는 기본적으로 `127.0.0.1:8787` 만 연다. 공개 HTTPS 는 터널이나 리버스 프록시가 맡는다.

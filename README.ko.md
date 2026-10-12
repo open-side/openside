@@ -56,6 +56,13 @@ openside는 기본적으로 설치되어 있는 일반 Chromium이나 Chrome을 
 
 추가 안내 문서: [docs/INSTALL.md](docs/INSTALL.md), [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/REMOTE.md](docs/REMOTE.md)
 
+## 활용 방법
+
+- **원격 접속**: Tailscale Serve, Cloudflare Tunnel 또는 자체 릴레이를 통해 스마트폰이나 다른 컴퓨터에서 데몬에 접속할 수 있으며, `openside remote setup` 명령어로 설정합니다([docs/REMOTE.md](docs/REMOTE.md) 참고).
+- **MCP 및 위임**: `openside mcp`는 브라우저와 에이전트 도구를 다른 에이전트에 제공하고, `openside run`은 openside 브라우저 에이전트에 목표 작업을 위임합니다([docs/specs/mcp.md](docs/specs/mcp.md) 참고).
+- **첫 실행 안내**: 웹 UI를 처음 열면 `/welcome` 화면이 표시되어 설치된 에이전트 감지, 브라우저 프로필 가져오기, 볼트(vault) 설정을 차례로 진행합니다([docs/specs/onboarding.md](docs/specs/onboarding.md) 참고).
+- **스마트폰 앱**: 웹 UI는 공유 대상(share target), 바로가기, 대기 중인 티켓 배지, 오프라인 전송함을 지원하는 PWA로 설치해 쓸 수 있습니다.
+
 ## 보안
 
 에이전트는 사용자를 대신해 웹 브라우징을 하고 폼을 입력하며 셸 명령을 실행할 수 있습니다. 정책 모드와 작업별 승인 절차를 통해 이를 제한할 수 있지만, 에이전트에 작업 영역, 저장된 비밀 정보, 원격 접속 권한을 부여하기 전에 반드시 [docs/specs/threat-model.md](docs/specs/threat-model.md)를 확인하시기 바랍니다. 데몬은 루프백 인터페이스에서만 수신 대기하므로 다른 기기에 노출하려면 앞단에 TLS를 구성해야 합니다([docs/REMOTE.md](docs/REMOTE.md)). 보안 취약점 제보는 [SECURITY.md](SECURITY.md)를 참고하세요.

@@ -26,7 +26,7 @@
 - 손상 입력(너무 긴 줄, JSON 아님, 모르는 `type`, 필수 필드 누락)은 그 줄만 버리고 `error{code:"protocol", fatal:false}`. 프로세스는 죽지 않는다.
 - `error.code`: `protocol`, `bad_request`, `stale_ticket`, `model_error`, `auth_unavailable`(fatal), `tool_gate`(fatal), `internal`.
 - 관측 이벤트(`event.kind`): `turn.*`, `assistant.delta|final`, `thinking.delta`, `usage`. 툴 생명주기(`tool.started/ended`)는 데몬만 기록한다(D6).
-- 비밀(모델 자격증명, Vault 값, `secret_input`, 능력 토큰)은 어떤 프로토콜 메시지에도 실리지 않는다.
+- 데몬은 어떤 비밀값(모델 자격 증명, Vault 값, `secret_input`, 기능 토큰)도 프로토콜 메시지에 담지 않는다. 단, 에이전트가 실행한 페이지 스크립트의 반환값은 도구 결과로 전달되므로 내부 비밀값은 redaction만으로 보호된다(ADR-022).
 - 테스트용 스크립트 모델: `OPENSIDE_AGENT_SCRIPT=<JSON 경로>` 이면 자격증명 소스를 열지 않고 `FunctionModel` 로 응답을 재생한다(프로토콜 §9, `crates/openside-e2e`).
 
 ## 4. 툴 실행 경로

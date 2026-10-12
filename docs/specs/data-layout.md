@@ -28,9 +28,12 @@ Roots follow `Paths::discover` and configured overrides; see `docs/CONFIGURATION
 | data_dir | `push-vapid.key` | Private VAPID signing key |
 | data_dir | `push-subscriptions.json` | Device-bound push subscriptions; atomic replacement companions |
 | data_dir | `crash-reports`/** | panic-<time>-<pid>.json metadata-only redacted reports; no upload |
+| data_dir | `onboarding.json` | First-run guide state (pending, completed or skipped); atomic replacement companions |
 | config_dir | `config.toml` and `.config.toml.<nonce>.tmp` | Configuration and atomic replacement; OPENSIDE_CONFIG can relocate the file |
 | state_dir | `cli/**` | CLI resume cursors; the daemon itself writes no state files |
 | runtime_dir | `opensided.sock`, `sidecar-*/**`, `incognito-browsers/**`, `browser/**` | Private daemon/sidecar/gateway sockets and disposable incognito profiles; explicit socket overrides may relocate the socket |
 | cache | none outside `browser-profile/**` | No openside XDG cache directory; Chromium's disk cache stays in `browser-profile/cache` (`--disk-cache-dir`) and its crash database in `browser-profile/Crash Reports` (`--breakpad-dump-location`). The managed browser keeps the user's XDG directories so native-messaging hosts work, so its NSS store (`pki/nssdb`, shared with the user's other NSS apps), GSettings runtime (`dconf`) and GPU/font library caches are the user's own |
 
 Configured `vault.path`, `skills.dir`, `memory.embedding.model_dir`, sync directory backends and session workspaces may live outside these roots; they are explicit user-owned destinations, not hidden daemon directories. SQLite companions and named atomic replacement files are included in the rows above. Directory rows cover all files delegated to the named component.
+
+Isolated browser-space downloads stay under `browser-profile/space-downloads/<context>` and staged upload copies under `browser-profile/upload-staging/<tab>`, both in private 0700 directories. Disposing a space deletes its downloads; closing a tab or deleting its session deletes its upload copies. A fresh Chromium launch, verified browser death and clean shutdown sweep stale downloads and orphan upload copies; reconnecting to a surviving browser keeps those of live, bound spaces and tabs.

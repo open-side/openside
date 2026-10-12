@@ -11,21 +11,26 @@ Generated from `docs/specs/openapi.json` by `tools/gen-api-docs.py`; do not edit
 | Group | Operations |
 |---|---|
 | accounts | 1 |
-| browser | 1 |
+| browser | 2 |
 | devices | 3 |
+| external-agents | 2 |
 | health | 1 |
+| import | 2 |
 | memory | 7 |
+| onboarding | 2 |
 | otp | 1 |
 | pairing | 2 |
 | pinned-tabs | 3 |
 | policy | 3 |
 | push | 5 |
+| remote | 1 |
 | routines | 8 |
-| sessions | 21 |
+| sessions | 24 |
 | settings | 3 |
 | skills | 5 |
 | sync | 4 |
 | tickets | 6 |
+| tools | 1 |
 | vault | 9 |
 
 ## accounts
@@ -40,6 +45,17 @@ Required capability: `read`
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## browser
+
+### POST /v1/browser/prewarm
+
+Required capability: `steer`
+
+Launch the browser ahead of a new chat's first message. Idempotent; returns before the browser is up.
+
+| Status | Description | Body |
+|---|---|---|
+| 202 | Success |  |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### GET /v1/browser/tabs
 
@@ -92,6 +108,36 @@ Revoke a device token. The next request with it gets 401, its open SSE streams e
 | 204 | Success |  |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+## external-agents
+
+### GET /v1/external-agents
+
+Required capability: `admin`
+
+The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any `[skills.agents]` entry. `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ExternalAgentList](#externalagentlist) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/external-agents/{id}/browser-skill
+
+Required capability: `admin`
+
+Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+Request body (required): `application/json` [InstallAgentSkillRequest](#installagentskillrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 201 | Success | `application/json` [InstalledAgentSkill](#installedagentskill) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ## health
 
 ### GET /v1/health
@@ -101,6 +147,32 @@ Required capability: `read`
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [Health](#health) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+## import
+
+### POST /v1/import
+
+Required capability: `admin`
+
+Import history, bookmarks and cookies of a discovered profile into the daemon's browser profile. `dry_run` reads and decrypts everything and reports counts without writing; a real run reads everything before it writes anything. Cookies encrypted with the OS keyring (`v11`) need the CLI (`openside import --keyring-password-cmd`). One import runs at a time. 400 unknown_profile; 409 import_in_progress, profile_in_use; 422 source_locked, source_unreadable, source_corrupt, source_unsupported, keyring_password_required; 500 import_failed; 503 browser_unavailable.
+
+Request body (required): `application/json` [ImportRequest](#importrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ImportReport](#importreport) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/import/profiles
+
+Required capability: `admin`
+
+Chrome, Chromium and Firefox profiles found in their standard locations on the daemon's computer, with the data each has. Directory paths are never returned; `POST /v1/import` takes the profile id.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ImportProfileList](#importprofilelist) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## memory
@@ -198,6 +270,32 @@ Required capability: `read`
 | 200 | Success | `application/json` [MemoryHistory](#memoryhistory) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+## onboarding
+
+### GET /v1/onboarding
+
+Required capability: `read`
+
+State of the first-run guide, kept on the daemon so every device agrees: `pending` until someone finishes or skips it once.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [OnboardingStatus](#onboardingstatus) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PUT /v1/onboarding
+
+Required capability: `admin`
+
+Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). Reopening the guide from Settings does not reset the flag.
+
+Request body (required): `application/json` [UpdateOnboardingRequest](#updateonboardingrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [OnboardingStatus](#onboardingstatus) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ## otp
 
 ### POST /v1/otp
@@ -219,7 +317,7 @@ Request body (required): `application/json` [OtpIngestRequest](#otpingestrequest
 
 Required capability: `admin`
 
-Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). Issuing, exchanging and revoking are written to audit.jsonl.
+Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). The operator fixes kind here: person_device for phones/browsers, agent_client for external CLI/MCP agents. Redemption cannot change it. Issuing, exchanging and revoking are written to audit.jsonl.
 
 Request body (required): `application/json` [CreatePairingRequest](#createpairingrequest)
 
@@ -232,7 +330,7 @@ Request body (required): `application/json` [CreatePairingRequest](#createpairin
 
 Required capability: `admin`
 
-No bearer token: the one-time code is the credential. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A code is consumed by its first exchange attempt.
+No bearer token: the one-time code is the credential. The token inherits the operator-selected kind from the offer; sending kind at redemption is rejected as an unknown field. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A valid request consumes the code on its first exchange attempt.
 
 `x-public`: `true`
 
@@ -372,6 +470,17 @@ Required capability: `read`
 | 200 | Success | `application/json` [VapidPublicKey](#vapidpublickey) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+## remote
+
+### GET /v1/remote/status
+
+Required capability: `admin`
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [RemoteStatus](#remotestatus) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ## routines
 
 ### GET /v1/routines
@@ -493,6 +602,8 @@ Required capability: `read`
 
 Required capability: `steer`
 
+Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space).
+
 Request body (required): `application/json` [CreateSessionRequest](#createsessionrequest)
 
 | Status | Description | Body |
@@ -517,7 +628,7 @@ Required capability: `read`
 
 Required capability: `steer`
 
-Update title/pinned/archived as a durable session.updated event.
+Update title/pinned/archived as a durable session.updated event. Archiving an isolated-space session disposes its browser space.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -611,6 +722,22 @@ Read-only WebSocket preview of the session's current owned tab. Requires browse 
 | 429 | Too many preview viewers | `application/json` [ApiError](#apierror) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/sessions/{id}/browser/thumbnails/{thumbnail_id}
+
+Required capability: `browse`
+
+Read a bounded JPEG thumbnail referenced by browser.state. Requires browse; secret-tainted tabs, changed documents, takeover, private/stopped/archived/deleted sessions, expired IDs and IDs from another session are withheld. IDs expire after ten minutes and after daemon restart; responses are never cached.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+| `thumbnail_id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `image/jpeg` string (binary) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/sessions/{id}/events
 
 Required capability: `read`
@@ -639,6 +766,21 @@ Request body (required): `application/json` [SubmitMessageRequest](#submitmessag
 | Status | Description | Body |
 |---|---|---|
 | 202 | Success | `application/json` [Message](#message) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/sessions/{id}/prewarm
+
+Required capability: `steer`
+
+Start the session's agent process, launch the browser and open one blank agent tab its next browser_open_tab adopts, so the first reply and browser action skip cold starts. Idempotent; returns before the work finishes.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 202 | Success |  |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### PATCH /v1/sessions/{id}/queue/{mid}
@@ -778,6 +920,21 @@ Request body (required): `application/json` [SteerSubagentRequest](#steersubagen
 | Status | Description | Body |
 |---|---|---|
 | 202 | Success | `application/json` [Subagent](#subagent) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/sessions/{id}/tools/{name}
+
+Required capability: `browse`
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+Request body (required): `application/json` [ToolCallRequest](#toolcallrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ToolCallResponse](#toolcallresponse) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### GET /v1/sessions/{id}/visuals
@@ -1001,9 +1158,9 @@ Complete a device_approval or takeover ticket.
 
 Required capability: `approve`
 
-The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step. A secret_input answer that registers an authenticator ({"value":{"totp":…}} on /resolve) also requires approve.
+The daemon checks the ticket kind: confirm/info/choice require approve; secret_input/device_approval/takeover/login require human_step. A secret_input answer that registers an authenticator ({"value":{"totp":…}} on /resolve) and a login answer that keeps the login ({"value":{"values":…,"save":true}}) also require approve.
 
-`x-capability-by-ticket-kind`: `{"confirm": "approve", "device_approval": "human_step", "info": "approve", "secret_input": "human_step", "takeover": "human_step"}`
+`x-capability-by-ticket-kind`: `{"choice": "approve", "confirm": "approve", "device_approval": "human_step", "info": "approve", "login": "human_step", "secret_input": "human_step", "takeover": "human_step"}`
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1020,9 +1177,9 @@ Request body (required): `application/json` [RejectTicketRequest](#rejectticketr
 
 Required capability: `approve`
 
-The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step. A secret_input answer that registers an authenticator ({"value":{"totp":…}} on /resolve) also requires approve.
+The daemon checks the ticket kind: confirm/info/choice require approve; secret_input/device_approval/takeover/login require human_step. A secret_input answer that registers an authenticator ({"value":{"totp":…}} on /resolve) and a login answer that keeps the login ({"value":{"values":…,"save":true}}) also require approve. Confirm approval, choice answers, TOTP enrollment, and login save:true require a person_device; agent clients and the Unix socket receive 403 person_approval_required and the ticket stays pending. A person device that directly created the ticket, or was recorded as its session driver, receives 403 self_approval_forbidden. Pairing fixes the device kind. Deny/reject and cancel remain allowed with the appropriate scope.
 
-`x-capability-by-ticket-kind`: `{"confirm": "approve", "device_approval": "human_step", "info": "approve", "secret_input": "human_step", "takeover": "human_step"}`
+`x-capability-by-ticket-kind`: `{"choice": "approve", "confirm": "approve", "device_approval": "human_step", "info": "approve", "login": "human_step", "secret_input": "human_step", "takeover": "human_step"}`
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1033,6 +1190,7 @@ Request body (required): `application/json` [ResolveTicketRequest](#resolveticke
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [Ticket](#ticket) |
+| 403 | Caller lacks the ticket scope or the required person-device authority, or tries to approve its own ticket | `application/json` [ApiError](#apierror) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### GET /v1/tickets/{id}/takeover
@@ -1049,6 +1207,17 @@ WebSocket upgrade for a pending takeover ticket whose target has a tab_id. The d
 |---|---|---|
 | 101 | Switching to WebSocket |  |
 | 409 | Another controller is connected | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+## tools
+
+### GET /v1/tools
+
+Required capability: `read`
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ToolCatalog](#toolcatalog) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## vault
@@ -1299,6 +1468,56 @@ One uploaded attachment; the daemon sniffs the type from the bytes.
 
 Unknown fields are rejected.
 
+### BrowserActionState
+
+The tool call that produced a browser state.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `phrase` | string | yes | Human phrase such as "Clicking" or "Opening example.com". |
+| `target` | string \| null | no | Accessible label of the target element, read from the page. |
+| `tool` | string | yes | Tool name. |
+| `tool_call_id` | string | yes | Runtime call identifier. |
+
+### BrowserPhase
+
+Agent activity in a tab.
+
+| Value | Description |
+|---|---|
+| `"loading"` | Navigating or waiting for the page to load. |
+| `"reading"` | Reading the page (snapshot, screenshot). |
+| `"acting"` | Clicking, typing or otherwise interacting. |
+| `"waiting_human"` | Waiting for a person (login, code, choice, approval). |
+| `"done"` | The Task finished with this tab. |
+| `"error"` | The last browser action failed. |
+
+### BrowserSpace
+
+Where a session's agent tabs browse, fixed at creation.
+
+| Value | Description |
+|---|---|
+| `"shared"` | The managed browser profile, with the logins and cookies it already holds. |
+| `"isolated"` | An isolated browser context in the same managed browser: own cookies and storage, kept in memory and wiped when the session is archived or deleted. |
+
+### BrowserState
+
+Typed browser situation for one tab, rendered as a live card per Task.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `action` | [BrowserActionState](#browseractionstate) \| null | no | The tool call behind this state. |
+| `facts` | [PageFacts](#pagefacts) | yes | Facts read from the page. |
+| `host` | string | yes | Host of `url`, empty for non-network pages. |
+| `page_kind` | [PageKind](#pagekind) | yes | Classification of the page. |
+| `phase` | [BrowserPhase](#browserphase) | yes | What the agent is doing in the tab. |
+| `tab_id` | string | yes | Browser target identifier. |
+| `task_id` | string \| null | no | Task (background subagent) acting in the tab; absent for the front agent. |
+| `thumbnail` | string \| null | no | Opaque JPEG thumbnail ID, fetched through the authenticated session route. |
+| `title` | string | yes | Page title. |
+| `url` | string | yes | Current URL with sensitive components redacted. |
+
 ### BrowserTab
 
 Metadata-only browser ledger entry; incognito tabs are never included.
@@ -1337,12 +1556,23 @@ Capability required to access an HTTP operation.
 |---|---|
 | `"read"` | Inspect sessions, events, and tickets. |
 | `"steer"` | Create sessions and modify or deliver messages. |
-| `"approve"` | Resolve or reject confirmation and information tickets. |
-| `"human_step"` | Resolve, complete, or reject secret-input, device-approval, and takeover tickets. |
+| `"approve"` | Resolve or reject confirm, info and choice tickets; positive confirm/choice decisions additionally require a person device. |
+| `"human_step"` | Resolve, complete, or reject secret-input, login, device-approval, and takeover tickets. |
 | `"admin"` | Pair and revoke devices. |
 | `"browse"` | Drive session browser routes (`browser_repl`) without steering the agent; for sandboxed tools, MCP servers and extensions. |
 | `"vault_use"` | Use saved vault credentials through vault routes; never reveals values. |
 | `"otp_ingest"` | Deliver one-time codes to the OTP ingest route. |
+
+### CloudflareStatus
+
+Supervised `cloudflared` state.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `last_error` | string \| null | no | Latest failure, without secrets. |
+| `restarts` | integer (uint32) | yes | Times the process exited and was started again. |
+| `state` | string | yes | `starting`, `running`, `restarting` or `failed` (cannot start at all). |
+| `url` | string \| null | no | Public HTTPS URL once known (quick tunnels change it on every restart). |
 
 ### ContentKind
 
@@ -1373,8 +1603,10 @@ Create a one-time pairing offer (Unix socket only).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `kind` | [DeviceKind](#devicekind) | no | Operator-selected identity role, fixed in the offer and not chosen by its redeemer. Default: `"person_device"`. |
 | `name` | string | yes | Label the paired device will carry. |
 | `scopes` | [CapabilityScope](#capabilityscope)[] | yes | Scopes the device token will hold; at least one. |
+| `via` | [PairingTransport](#pairingtransport) \| null | no | Transport the link should use; default: the first entry of `remote.mode`, or the plain `remote.public_url` when no transport is configured. Default: `null`. |
 
 Unknown fields are rejected.
 
@@ -1418,6 +1650,7 @@ Session creation request.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `browser_space` | [BrowserSpace](#browserspace) | no | Browse in the shared managed profile (default) or an isolated space; immutable afterwards. Incognito sessions already have their own browser and refuse `isolated`. |
 | `incognito` | boolean | no | Create a private session; immutable afterwards. Browsing history is not indexed. |
 | `mode` | [PolicyMode](#policymode) \| null | no | Permission override, or settings default when omitted. |
 | `model` | string \| null | no | Model override, or settings default when omitted. |
@@ -1463,8 +1696,18 @@ A paired device (never its token).
 |---|---|---|---|
 | `created_at` | string (date-time) \| null (date-time) | no | Pairing time, when known. |
 | `device_id` | string | yes | Revocation identifier (`DELETE /v1/devices/{id}`). |
+| `kind` | [DeviceKind](#devicekind) | no | Pairing-time trust role; legacy devices without recorded source default to person_device. Default: `"person_device"`. |
 | `name` | string | yes | Label given at pairing; empty for devices paired before labels were stored. |
 | `scopes` | [CapabilityScope](#capabilityscope)[] | yes | Scopes the token holds. |
+
+### DeviceKind
+
+Trust role fixed at pairing, not selected anew by each authenticated request.
+
+| Value | Description |
+|---|---|
+| `"person_device"` | A web, phone, extension or channel client that conveys a person's response. |
+| `"agent_client"` | A CLI, MCP or API agent that must wait for a person device's approval. |
 
 ### DeviceList
 
@@ -1529,20 +1772,22 @@ Variants:
 - `kind=ticket.resolved`: Pending ticket resolved. Fields: `resolution`: any, `ticket_id`: [TicketId](#ticketid).
 - `kind=ticket.rejected`: Pending ticket rejected. Fields: `reason`: string, `ticket_id`: [TicketId](#ticketid).
 - `kind=ticket.expired`: Pending ticket expired. Fields: `ticket_id`: [TicketId](#ticketid).
-- `kind=subagent.started`: The parent's `delegate` call was admitted and a child agent started. Fields: `model`: string, `parent_tool_call_id`: string, `subagent_id`: string, `task`: string, `tools`: string[].
-- `kind=subagent.ended`: A child agent reached a terminal state; its result went to the parent. Fields: `reason`: string \| null (optional), `status`: [SubagentStatus](#subagentstatus), `subagent_id`: string.
+- `kind=subagent.started`: The parent's `delegate` call was admitted and a child agent started. Fields: `background`: boolean (optional), `model`: string, `parent_tool_call_id`: string, `subagent_id`: string, `task`: string, `tools`: string[].
+- `kind=subagent.ended`: A child agent reached a terminal state; its result went to the parent. Fields: `output`: string \| null (optional), `reason`: string \| null (optional), `status`: [SubagentStatus](#subagentstatus), `subagent_id`: string.
 - `kind=subagent.lifecycle`: Subagent lifecycle transition. Fields: `status`: string, `subagent_id`: string.
 - `kind=subagent.progress`: Subagent progress update. Fields: `progress`: any, `subagent_id`: string.
 - `kind=tab.opened`: Agent-owned browser tab created. Fields: `tab_id`: string, `url`: string.
 - `kind=tab.closed`: Browser tab closed. Fields: `tab_id`: string.
 - `kind=tab.asleep`: Browser tab discarded or unloaded. Fields: `tab_id`: string.
-- `kind=session.created`: First event in a session log. Fields: `incognito`: boolean (optional), `mode`: [PolicyMode](#policymode) (optional), `model`: string, `title`: string, `workspace`: string \| null (optional).
+- `kind=session.driver_recorded`: An agent-client identity drove the session and cannot approve its later confirmations. Fields: `device_id`: string.
+- `kind=session.created`: First event in a session log. Fields: `browser_space`: [BrowserSpace](#browserspace) (optional), `incognito`: boolean (optional), `mode`: [PolicyMode](#policymode) (optional), `model`: string, `title`: string, `workspace`: string \| null (optional).
 - `kind=session.settled`: Runtime has no active turn.
 - `kind=session.stopped`: User explicitly stopped the session; pending messages are retained.
 - `kind=session.deleted`: Session removed by an administrator; the log remains as a tombstone and nothing can be appended after it.
 - `kind=session.updated`: User-visible list metadata changed; omitted fields are unchanged. Fields: `archived`: boolean \| null (optional), `pinned`: boolean \| null (optional), `title`: string \| null (optional).
 - `kind=runtime.started`: Sidecar ready handshake completed with an exact tool-gate match. Fields: `startup_ms`: integer (uint64), `tools`: string[].
 - `kind=runtime.error`: Sanitized runtime failure; credentials and secrets must not appear here. Fields: `code`: string, `message`: string.
+- any What an agent is doing in a browser tab, derived by the daemon from the tool call and the page itself (labels come from the page, never from the model).
 
 ### EventKind
 
@@ -1569,20 +1814,22 @@ Public event payloads with stable `kind` identifiers, dotted except for `usage`.
 - `kind=ticket.resolved`: Pending ticket resolved. Fields: `resolution`: any, `ticket_id`: [TicketId](#ticketid).
 - `kind=ticket.rejected`: Pending ticket rejected. Fields: `reason`: string, `ticket_id`: [TicketId](#ticketid).
 - `kind=ticket.expired`: Pending ticket expired. Fields: `ticket_id`: [TicketId](#ticketid).
-- `kind=subagent.started`: The parent's `delegate` call was admitted and a child agent started. Fields: `model`: string, `parent_tool_call_id`: string, `subagent_id`: string, `task`: string, `tools`: string[].
-- `kind=subagent.ended`: A child agent reached a terminal state; its result went to the parent. Fields: `reason`: string \| null (optional), `status`: [SubagentStatus](#subagentstatus), `subagent_id`: string.
+- `kind=subagent.started`: The parent's `delegate` call was admitted and a child agent started. Fields: `background`: boolean (optional), `model`: string, `parent_tool_call_id`: string, `subagent_id`: string, `task`: string, `tools`: string[].
+- `kind=subagent.ended`: A child agent reached a terminal state; its result went to the parent. Fields: `output`: string \| null (optional), `reason`: string \| null (optional), `status`: [SubagentStatus](#subagentstatus), `subagent_id`: string.
 - `kind=subagent.lifecycle`: Subagent lifecycle transition. Fields: `status`: string, `subagent_id`: string.
 - `kind=subagent.progress`: Subagent progress update. Fields: `progress`: any, `subagent_id`: string.
 - `kind=tab.opened`: Agent-owned browser tab created. Fields: `tab_id`: string, `url`: string.
 - `kind=tab.closed`: Browser tab closed. Fields: `tab_id`: string.
 - `kind=tab.asleep`: Browser tab discarded or unloaded. Fields: `tab_id`: string.
-- `kind=session.created`: First event in a session log. Fields: `incognito`: boolean (optional), `mode`: [PolicyMode](#policymode) (optional), `model`: string, `title`: string, `workspace`: string \| null (optional).
+- `kind=session.driver_recorded`: An agent-client identity drove the session and cannot approve its later confirmations. Fields: `device_id`: string.
+- `kind=session.created`: First event in a session log. Fields: `browser_space`: [BrowserSpace](#browserspace) (optional), `incognito`: boolean (optional), `mode`: [PolicyMode](#policymode) (optional), `model`: string, `title`: string, `workspace`: string \| null (optional).
 - `kind=session.settled`: Runtime has no active turn.
 - `kind=session.stopped`: User explicitly stopped the session; pending messages are retained.
 - `kind=session.deleted`: Session removed by an administrator; the log remains as a tombstone and nothing can be appended after it.
 - `kind=session.updated`: User-visible list metadata changed; omitted fields are unchanged. Fields: `archived`: boolean \| null (optional), `pinned`: boolean \| null (optional), `title`: string \| null (optional).
 - `kind=runtime.started`: Sidecar ready handshake completed with an exact tool-gate match. Fields: `startup_ms`: integer (uint64), `tools`: string[].
 - `kind=runtime.error`: Sanitized runtime failure; credentials and secrets must not appear here. Fields: `code`: string, `message`: string.
+- any What an agent is doing in a browser tab, derived by the daemon from the tool call and the page itself (labels come from the page, never from the model).
 
 ### ExchangePairingRequest
 
@@ -1594,6 +1841,26 @@ Exchange a pairing code for a device token (no bearer token needed).
 
 Unknown fields are rejected.
 
+### ExternalAgent
+
+An agent CLI openside can install its browser skill for (`openside skills install`).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `detected` | boolean | yes | The agent's executable is on the daemon's `PATH` or its configuration directory exists. |
+| `id` | string | yes | Preset name (`claude`, `codex`, `omp`) or an entry of `[skills.agents]`. |
+| `label` | string | yes | Product name for display. |
+| `skill_installed` | boolean | yes | `openside-browser` is already in the agent's skills directory. |
+| `skills_dir` | string \| null | no | Where the skill would be (or is) installed, written `~/…` when under the daemon user's home; `null` when no directory is known. |
+
+### ExternalAgentList
+
+`GET /v1/external-agents`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agents` | [ExternalAgent](#externalagent)[] | yes | The three built-in presets first, then configured agents by name. |
+
 ### Health
 
 Health response without environment or credential details.
@@ -1602,6 +1869,159 @@ Health response without environment or credential details.
 |---|---|---|---|
 | `api_version` | string | yes | Public API version, currently `v1`. |
 | `ok` | boolean | yes | Whether the daemon is ready to serve requests. |
+
+### ImportAvailability
+
+Which categories a source profile has files for.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `bookmarks` | boolean | yes | A bookmarks file exists. |
+| `cookies` | boolean | yes | A cookie database exists. |
+| `history` | boolean | yes | A history database exists. |
+
+### ImportBrowser
+
+Browser family of an import source.
+
+| Value | Description |
+|---|---|
+| `"chrome"` | Google Chrome. |
+| `"chromium"` | Chromium and derivatives. |
+| `"firefox"` | Mozilla Firefox. |
+
+### ImportCategory
+
+A data category an import can carry over.
+
+| Value | Description |
+|---|---|
+| `"history"` | Page visits. |
+| `"bookmarks"` | Bookmarks. |
+| `"cookies"` | Cookies. |
+
+### ImportCategoryReport
+
+Outcome of one category.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `imported` | integer (uint64) | yes | Entries written (dry run: that would be written). |
+| `note` | string \| null | no | Why the category was skipped entirely (its source file is missing). |
+| `read` | integer (uint64) | yes | Entries read from the source (cookies: decrypted). |
+| `rejected` | [ImportRejectedCookie](#importrejectedcookie)[] | yes | Cookies the target browser refused. |
+| `skipped` | integer (uint64) | yes | Entries left out: non-web URLs, bookmarklets, expired or partitioned cookies. |
+
+### ImportProfile
+
+A browser profile the daemon found on its computer.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `available` | [ImportAvailability](#importavailability) | yes | Files present in the profile. |
+| `browser` | [ImportBrowser](#importbrowser) | yes | Browser family. |
+| `id` | string | yes | Opaque id for `POST /v1/import` (`<browser>:<directory name>`). |
+| `name` | string | yes | Name the browser shows for the profile. |
+
+### ImportProfileList
+
+`GET /v1/import/profiles`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `cookies_writable` | boolean | yes | A Chromium-compatible browser is available to write imported cookies; without one only history and bookmarks can be imported. |
+| `profiles` | [ImportProfile](#importprofile)[] | yes | Profiles of installed browsers, Chrome first, then Chromium, then Firefox. |
+
+### ImportRejectedCookie
+
+A cookie the target browser refused (host and name only).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `host` | string | yes | Cookie host. |
+| `name` | string | yes | Cookie name. |
+
+### ImportReport
+
+What an import read, or wrote.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `bookmarks` | [ImportCategoryReport](#importcategoryreport) \| null | no | Bookmarks outcome when requested. |
+| `cookies` | [ImportCategoryReport](#importcategoryreport) \| null | no | Cookies outcome when requested. |
+| `dry_run` | boolean | yes | Nothing was written. |
+| `history` | [ImportCategoryReport](#importcategoryreport) \| null | no | History outcome when requested. |
+| `profile` | string | yes | openside browser profile written to. |
+| `source` | [ImportBrowser](#importbrowser) | yes | Source browser. |
+
+### ImportRequest
+
+`POST /v1/import` body. Always read-then-write: a dry run reads and decrypts everything and writes nothing.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `dry_run` | boolean | no | Report counts without writing anything. Default: `false`. |
+| `profile` | string | yes | Profile `id` from `GET /v1/import/profiles`. |
+| `what` | [ImportCategory](#importcategory)[] \| null | no | Categories to import; absent means every category the source has. Default: `null`. |
+
+Unknown fields are rejected.
+
+### InstallAgentSkillRequest
+
+`POST /v1/external-agents/{id}/browser-skill` body.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `force` | boolean | no | Replace an `openside-browser` skill that is already installed. Default: `false`. |
+
+Unknown fields are rejected.
+
+### InstalledAgentSkill
+
+What the install wrote.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | string | yes | Agent the skill was installed for. |
+| `files` | integer (uint32) | yes | Files written. |
+| `path` | string | yes | Final location of the skill directory. |
+| `skill` | string | yes | Installed skill name (`openside-browser`). |
+
+### LoginAlternativeKind
+
+Kind of an alternative sign-in control on the page.
+
+| Value | Description |
+|---|---|
+| `"provider"` | Sign in with another provider's account. |
+| `"passkey"` | Sign in with a passkey or security key. |
+| `"qr"` | Sign in by scanning a QR code. |
+| `"other"` | Any other sign-in mode the page offers (one-time number, a login-mode tab). |
+
+### LoginFieldKind
+
+Kind of a field on a `login` ticket.
+
+| Value | Description |
+|---|---|
+| `"identifier"` | The account name: user id, email address or phone number. |
+| `"password"` | The password. |
+| `"text"` | Any other text the form asks for. |
+| `"checkbox"` | A tick box such as "keep me signed in"; answered with a boolean. |
+
+### LoginProvider
+
+Identity provider behind an alternative sign-in control.
+
+| Value | Description |
+|---|---|
+| `"google"` | Google. |
+| `"apple"` | Apple. |
+| `"kakao"` | Kakao. |
+| `"naver"` | Naver. |
+| `"facebook"` | Facebook. |
+| `"github"` | GitHub. |
+| `"microsoft"` | Microsoft. |
 
 ### Memory
 
@@ -1770,6 +2190,25 @@ Pending message reorder within its delivery lane.
 
 Unknown fields are rejected.
 
+### OnboardingState
+
+Where the first-run guide stands. `pending` until a person finishes or skips it once; the flag lives on the daemon, so every device and browser agrees.
+
+| Value | Description |
+|---|---|
+| `"pending"` | Never finished or skipped. |
+| `"completed"` | Walked through to the end. |
+| `"skipped"` | Dismissed before the end. |
+
+### OnboardingStatus
+
+`GET /v1/onboarding` and the `PUT` response.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `state` | [OnboardingState](#onboardingstate) | yes | Current state. |
+| `updated_at` | string (date-time) \| null (date-time) | no | When the state last changed; `null` while pending. |
+
 ### OtpChannel
 
 Where the site sends the one-time code a `request_otp` ticket asks for, as the agent read it on the page.
@@ -1803,12 +2242,50 @@ Outcome of an OTP ingest; never echoes the code.
 | `resolved_tickets` | string[] | yes | Pending `secret_input` tickets filled with the code now. |
 | `stored` | integer (uint32) | yes | Codes kept in memory for a step that has not opened yet. |
 
+### PageFacts
+
+Facts extracted from the page, bounded for display.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `error_text` | string \| null | no | Error text shown by the page. |
+| `fields` | [PageField](#pagefield)[] | no | Form fields by accessible label (at most 8). |
+| `heading` | string \| null | no | Main heading. |
+| `result_count` | integer (uint32) \| null (uint32) | no | Number of items in the main list or results. |
+
+### PageField
+
+One form field.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `kind` | string | yes | Input kind: `text`, `email`, `password`, `code`, `checkbox`, `radio`, `select`, `button`, …. |
+| `label` | string | yes | Accessible label. |
+
+### PageKind
+
+Page classification for card layout.
+
+| Value | Description |
+|---|---|
+| `"login"` | Sign-in form (password field). |
+| `"otp"` | One-time code entry. |
+| `"choice"` | A set of options to pick from. |
+| `"captcha"` | Human verification challenge. |
+| `"form"` | Other form. |
+| `"list"` | Search results or another list of items. |
+| `"article"` | Reading content. |
+| `"checkout"` | Payment or order confirmation. |
+| `"error"` | Error page. |
+| `"other"` | Nothing more specific. |
+
 ### PairDeviceRequest
 
 Administrative device pairing request.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `kind` | [DeviceKind](#devicekind) | no | Fixed at token creation; agent clients cannot approve their own work. Default: `"person_device"`. |
 | `name` | string | yes | User-visible device label. |
 | `scopes` | [CapabilityScope](#capabilityscope)[] | yes | Explicit capabilities to grant. |
 
@@ -1821,6 +2298,7 @@ Administrative pairing result; the secret token is returned once.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `device_id` | string | yes | Stable revocation identifier. |
+| `kind` | [DeviceKind](#devicekind) | no | Operator-selected trust role fixed when this token was paired. Default: `"person_device"`. |
 | `scopes` | [CapabilityScope](#capabilityscope)[] | yes | Granted capabilities. |
 | `token` | string | yes | Bearer capability token; never persist in event or application logs. |
 
@@ -1842,9 +2320,21 @@ A one-time pairing offer, valid for [`PAIRING_TTL_SECS`].
 |---|---|---|---|
 | `code` | string | yes | One-time code; exchanged at most once. Show it only to the person pairing. |
 | `expires_at` | string (date-time) | yes | Instant after which the code is refused. |
-| `path` | string | yes | Path the phone opens on the daemon's origin; the code is in the fragment, so it never reaches server logs or `Referer` headers. |
+| `kind` | [DeviceKind](#devicekind) | no | Operator-selected role the resulting token will hold. Default: `"person_device"`. |
+| `path` | string | yes | Pairing path on the daemon's origin, or the relay origin for relay links. The code is a fragment, absent from ordinary HTTP requests and Referer headers but readable by the page's scripts, including relay-served code. |
 | `scopes` | [CapabilityScope](#capabilityscope)[] | yes | Scopes the resulting token will hold. |
-| `url` | string \| null | no | `remote.public_url` + `path`, when a public URL is configured. |
+| `transport` | [PairingTransport](#pairingtransport) \| null | no | Transport `url` uses; `null` for a plain `remote.public_url` or no URL. |
+| `url` | string \| null | no | Link for the QR code: `<base>/pair#<code>` for direct transports, or `<relay>/pair#c=<code>&t=relay&d=<daemon id>&k=<daemon key>` for the relay. `null` when no transport or public URL is configured. |
+
+### PairingTransport
+
+How a paired device reaches the daemon from outside its network.
+
+| Value | Description |
+|---|---|
+| `"tailscale"` | Tailscale Serve at `remote.public_url`. |
+| `"cloudflare"` | Cloudflare Tunnel run by the daemon. |
+| `"relay"` | CLI/MCP use Noise with the pairing-pinned daemon key; relay-served PWA code still requires trust in the relay operator. |
 
 ### PinnedTab
 
@@ -2045,6 +2535,30 @@ Explicit ticket rejection.
 
 Unknown fields are rejected.
 
+### RelayStatus
+
+Relay registration state.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `clients` | integer (uint32) | yes | Devices connected through the relay now. |
+| `daemon_id` | string | yes | Routing id the relay knows this daemon by. |
+| `daemon_key` | string | yes | Daemon X25519 public key (base64url) carried in relay pairing links. |
+| `last_error` | string \| null | no | Latest failure, without secrets. |
+| `state` | string | yes | `connecting`, `connected` or `backoff`. |
+| `url` | string | yes | Relay origin. |
+
+### RemoteStatus
+
+Remote transports the daemon runs (`GET /v1/remote/status`).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `cloudflare` | [CloudflareStatus](#cloudflarestatus) \| null | no | The supervised `cloudflared`, when enabled. |
+| `modes` | [PairingTransport](#pairingtransport)[] | yes | Enabled transports in pairing preference order. |
+| `public_url` | string \| null | no | `remote.public_url`. |
+| `relay` | [RelayStatus](#relaystatus) \| null | no | The relay registration, when enabled. |
+
 ### ReplRequest
 
 Run one Playwright-syntax snippet in a session-owned agent tab (`browser_repl`).
@@ -2087,7 +2601,7 @@ Human response interpreted according to the ticket kind. Secret-input values are
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `value` | any | yes | Confirmation, non-secret information, or transient daemon-only secret input: a string, or `{"totp": "<otpauth:// URI or base32 key>"}` for a `secret_input` ticket whose `otp.can_register` is true. A `confirm` ticket carrying `otp_register` takes `true` or `false` like any confirmation. |
+| `value` | any | yes | Confirmation, non-secret information, or transient daemon-only secret input: a string, or `{"totp": "<otpauth:// URI or base32 key>"}` for a `secret_input` ticket whose `otp.can_register` is true. A `confirm` ticket carrying `otp_register` takes `true` or `false` like any confirmation. A `login` ticket takes `{"values": {<field id>: string \| bool}, "save": bool}`, `{"account": <item_id>}` or `{"alternative": <id>}`; a `choice` ticket takes `{"option": <id>}`. |
 
 Unknown fields are rejected.
 
@@ -2213,6 +2727,7 @@ Session metadata and pending queue, in delivery order.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `archived` | boolean | no | Hidden from the default session list. Default: `false`. |
+| `browser_space` | [BrowserSpace](#browserspace) | no | Browser space fixed at creation; historical sessions are shared. Default: `"shared"`. |
 | `id` | [SessionId](#sessionid) | yes | Stable session identifier. |
 | `incognito` | boolean | no | Private session fixed at creation: its browsing is never written to memory. Default: `false`. |
 | `last_seq` | integer (uint64) | yes | Latest durable sequence, or zero before creation. |
@@ -2363,10 +2878,12 @@ One child agent started by the parent session's `delegate` tool.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `background` | boolean | no | A background Task started by the front agent (`task_start`). |
 | `ended_at` | string (date-time) \| null (date-time) | no | When the child reached a terminal state. |
 | `id` | string | yes | Daemon-assigned subagent identifier, also used as `ticket.origin.subagent_id`. |
 | `last_progress` | any | no | Latest `subagent.progress` payload. |
 | `model` | string | yes | Model selector the child runs on. |
+| `output` | string \| null | no | Final answer of a completed child, truncated for display. |
 | `parent_tool_call_id` | string | yes | The parent's `delegate` tool call, which stays pending until the child ends. |
 | `reason` | string \| null | no | Sanitized detail for failed or cancelled children. |
 | `started_at` | string (date-time) | yes | When the daemon admitted the child. |
@@ -2523,12 +3040,15 @@ Durable human-intervention ticket correlated with the same deferred tool call.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `approval` | [TicketApproval](#ticketapproval) \| null | no | Set on `device_approval` tickets that wait for a phone sign-in approval (`wait_for_approval`). |
+| `choice` | [TicketChoice](#ticketchoice) \| null | no | Set on `choice` tickets. |
 | `created_at` | string (date-time) | yes | Creation time in RFC 3339 UTC. |
 | `deferral` | [TicketDeferral](#ticketdeferral) | yes | Approval or external-result resumption semantics. |
 | `expires_at` | string (date-time) | yes | Deadline in RFC 3339 UTC. |
 | `id` | [TicketId](#ticketid) | yes | Stable ticket identifier. |
 | `instructions` | string \| null | no | Optional redacted instructions for completing the action. |
 | `kind` | [TicketKind](#ticketkind) | yes | Requested human action. |
+| `login` | [TicketLogin](#ticketlogin) \| null | no | Set on `login` tickets. |
 | `options` | [TicketOption](#ticketoption)[] | yes | Allowed non-secret responses; empty allows free-form information input. |
 | `origin` | [TicketOrigin](#ticketorigin) | yes | Originating agent. |
 | `otp` | [TicketOtp](#ticketotp) \| null | no | Set on `secret_input` tickets that ask for a one-time code (`request_otp`). |
@@ -2541,6 +3061,41 @@ Durable human-intervention ticket correlated with the same deferred tool call.
 | `target` | [TicketTarget](#tickettarget) \| null | no | Browser destination, when applicable. |
 | `tool` | [TicketTool](#tickettool) \| null | no | Redacted invocation, required for approval deferrals. |
 | `tool_call_id` | string | yes | Stable model tool-call identifier preserved during resumption. |
+
+### TicketApproval
+
+What a `device_approval` ticket opened by `wait_for_approval` shows: the site asks the person to approve the sign-in on their phone (a push notification in the site's own app). Nobody answers it in openside: the daemon watches the page and resolves the ticket with `{"status":"done","next":…}` once the page moves on; rejecting it cancels the wait.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `icon` | string \| null | no | The site's icon, as on [`TicketLogin::icon`]. |
+| `message` | string | yes | The page's heading and instruction for the approval (untrusted page text, capped). |
+| `number` | string \| null | no | The number the page asks the person to tap or type on the phone, when it shows one. |
+| `origin` | string | yes | Exact page origin. |
+| `site_name` | string | yes | The site's name as the page gives it (untrusted page text), or its host. |
+
+### TicketChoice
+
+What a `choice` ticket (`request_choice`) shows: a decision the page asks for, such as which account, which verification method, or whether to trust this device.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `icon` | string \| null | no | The site's icon, as on [`TicketLogin::icon`]. |
+| `multiple` | boolean | yes | Always false: one option is picked. |
+| `options` | [TicketChoiceOption](#ticketchoiceoption)[] | yes | Options in page order. |
+| `origin` | string | yes | Exact page origin. |
+| `question` | string | yes | The page's heading for the choice. |
+| `site_name` | string | yes | The site's name as the page gives it (untrusted page text), or its host. |
+
+### TicketChoiceOption
+
+One option of a `choice` ticket.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | string \| null | no | Secondary page text of the option, when it has some. |
+| `id` | string | yes | Daemon-assigned id; answer with `{"option": id}`. |
+| `label` | string | yes | The control's accessible name on the page (untrusted page text), never the model's. |
 
 ### TicketDeferral
 
@@ -2568,6 +3123,8 @@ Human action required to resolve a suspended tool call.
 | `"device_approval"` | Complete approval on another device. |
 | `"info"` | Answer a non-secret question. |
 | `"takeover"` | Perform an action directly in the browser. |
+| `"login"` | Sign in to a site through a form the daemon built from the page's own login form (`request_login`); the values go straight into the page, never to the model. |
+| `"choice"` | Pick one of the choices a page offers (`request_choice`); the daemon clicks the page's own control. |
 
 ### TicketList
 
@@ -2576,6 +3133,56 @@ Ticket list, optionally filtered by status.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `tickets` | [Ticket](#ticket)[] | yes | Matching durable tickets. |
+
+### TicketLogin
+
+What a `login` ticket (`request_login`) shows: the page's login form, rebuilt by the daemon. Answer with `{"values": {<field id>: string \| bool}, "save": bool}`, `{"account": <item_id>}` or `{"alternative": <id>}`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `accounts` | [TicketLoginAccount](#ticketloginaccount)[] \| null | no | Logins saved for this origin, when there are several to pick from. |
+| `alternatives` | [TicketLoginAlternative](#ticketloginalternative)[] | yes | Other ways to sign in the page offers. |
+| `can_save` | boolean | yes | Whether `save: true` may keep the identifier and password in the vault for this origin (it also needs the `approve` scope and a person device). |
+| `error_text` | string \| null | no | The page's own error message next to the form (e.g. a wrong password on the previous attempt; untrusted page text, redacted and capped), when it shows one. |
+| `fields` | [TicketLoginField](#ticketloginfield)[] | yes | Fields in page order. |
+| `icon` | string \| null | no | The site's icon as a `data:image/...;base64,` URL (at most 8 KiB, fetched by the daemon from the page's own origin), when it has one. |
+| `origin` | string | yes | Exact page origin the values go to. |
+| `site_name` | string | yes | The site's name as the page gives it (untrusted page text), or its host. |
+| `submit_label` | string | yes | The page's own text for its sign-in button. |
+
+### TicketLoginAccount
+
+A login saved in the vault for the ticket's origin, offered instead of typing.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `item_id` | string | yes | Vault item id; answer with `{"account": item_id}`. |
+| `username_hint` | string | yes | Masked account name, e.g. `j***@naver.com`. |
+
+### TicketLoginAlternative
+
+An alternative sign-in control on the page; answering with its id clicks it.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | Daemon-assigned id. |
+| `kind` | [LoginAlternativeKind](#loginalternativekind) | yes | What kind of sign-in it starts. |
+| `label` | string | yes | The control's accessible name on the page (untrusted page text). |
+| `provider` | [LoginProvider](#loginprovider) \| null | no | The provider, for `provider` controls the daemon recognized. Default: `null`. |
+
+### TicketLoginField
+
+One field of the page's login form, in page order.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `autocomplete` | string \| null | no | Autocomplete token for the card's input (`username`, `email`, `tel`, `current-password`, `one-time-code`), so the person's own password manager can fill it. |
+| `id` | string | yes | Daemon-assigned id the answer's `values` are keyed by. |
+| `kind` | [LoginFieldKind](#loginfieldkind) | yes | What the field holds. |
+| `label` | string | yes | The page's own label for the field (untrusted page text, trimmed and capped). |
+| `masked` | boolean | yes | Whether the input hides what is typed (passwords). |
+| `placeholder` | string \| null | no | The page's placeholder, when it has one. |
+| `required` | boolean | yes | Whether the page requires a value. |
 
 ### TicketOption
 
@@ -2592,6 +3199,8 @@ Identity of the agent that requested human intervention.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `device_id` | string \| null | no | Device behind a direct API tool call; `local` identifies the Unix socket. |
+| `driver_ids` | string[] | no | Agent-client identities that drove this session before the ticket opened. |
 | `subagent_id` | string \| null | no | Absent for the parent agent, otherwise the originating subagent. |
 
 ### TicketOtp
@@ -2600,7 +3209,7 @@ One-time-code details of a `secret_input` ticket opened by `request_otp`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `can_register` | boolean | yes | Besides a code (a string `value`), the person may resolve with `{"totp": "<otpauth:// URI or base32 setup key>"}`: the daemon stores the authenticator in the vault for the ticket's origin and fills the code it generates, now and on later `request_otp` calls for that origin. |
+| `can_register` | boolean | yes | Besides a code (a string `value`), the person may resolve with `{"totp": "<otpauth:// URI or base32 setup key>"}`: the daemon stores the authenticator in the vault for the ticket's origin and fills the code it generates, now and on later `request_otp` calls for that origin. Registration requires `approve` and a person device. |
 | `channel` | [OtpChannel](#otpchannel) | yes | Where the code comes from. |
 
 ### TicketOtpRegister
@@ -2644,6 +3253,63 @@ Redacted invocation displayed for an approval deferral.
 | `args` | any | yes | Invocation arguments with secrets already removed. |
 | `name` | string | yes | Registered tool name. |
 
+### ToolCallRequest
+
+Run one daemon tool in a session through the same host pipeline as an agent call.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `approval_ticket` | [TicketId](#ticketid) \| null | no | Approved `confirm` ticket from an earlier `deferred` response with deferral `approval`; the identical `args` run again under that approval. |
+| `args` | any | no | Tool arguments matching the descriptor's `input_schema`. Default: `{}`. |
+
+Unknown fields are rejected.
+
+### ToolCallResponse
+
+Result of a [`ToolCallRequest`], recorded as a tool call in the session's events.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `artifacts` | string[] | no | Artifact paths the call saved (a screenshot's PNG), readable through `GET /v1/sessions/{id}/artifacts/{path}`. |
+| `deferral` | [TicketDeferral](#ticketdeferral) \| null | no | How the pending ticket resumes the call when `status` is `deferred`. |
+| `hint` | string \| null | no | How to proceed after a denial. |
+| `reason` | string \| null | no | Denial reason or failure message. |
+| `result` | any | no | Redacted tool result when `status` is `done`. |
+| `status` | [ToolCallStatus](#toolcallstatus) | yes | Outcome category. |
+| `ticket_id` | [TicketId](#ticketid) \| null | no | Pending ticket when `status` is `deferred`. |
+| `tool_call_id` | string | yes | Tool call identifier recorded in the session's `tool.started`/`tool.ended` events. |
+
+### ToolCallStatus
+
+Outcome category of a [`ToolCallRequest`].
+
+| Value | Description |
+|---|---|
+| `"done"` | The tool ran; `result` holds its redacted result. |
+| `"deferred"` | A ticket in `ticket_id` is pending. With deferral `approval`, call again with `approval_ticket` once it is approved; with `external`, the ticket's resolution is the tool's result. |
+| `"denied"` | Policy or validation refused the call; see `reason` and `hint`. |
+| `"failed"` | The daemon could not run the tool. |
+
+### ToolCatalog
+
+`GET /v1/tools` response: every directly callable tool, in name order. A session may still refuse a listed tool (its mode, an incognito session, the configured agent profile).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `tools` | [ToolDescriptor](#tooldescriptor)[] | yes | Callable tools. |
+
+### ToolDescriptor
+
+One daemon tool an API caller may run directly (`POST /v1/sessions/{id}/tools/{name}`).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | string | yes | The description the agent's model sees. |
+| `human` | boolean | yes | Whether the call opens a person-facing ticket and its result arrives on resolution. |
+| `input_schema` | any | yes | JSON Schema of `ToolCallRequest.args`. |
+| `name` | string | yes | Tool name, identical to the name the in-app agent calls. |
+| `scope` | [CapabilityScope](#capabilityscope) | yes | Capability a token needs to call it. |
+
 ### UpdateMemoryRequest
 
 `PATCH /v1/memory/{id}` body; absent fields are unchanged.
@@ -2653,6 +3319,16 @@ Redacted invocation displayed for an approval deferral.
 | `content` | string \| null | no | Replacement text. |
 | `retention` | [Retention](#retention) \| null | no | Replacement retention; the purge deadline restarts from this write. |
 | `tags` | string[] \| null | no | Replacement labels. |
+
+Unknown fields are rejected.
+
+### UpdateOnboardingRequest
+
+`PUT /v1/onboarding`: record how the guide ended. Only `completed` and `skipped` are accepted; reopening the guide from Settings does not reset the flag.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `state` | [OnboardingState](#onboardingstate) | yes | `completed` or `skipped`. |
 
 Unknown fields are rejected.
 
@@ -2743,7 +3419,7 @@ One vault audit record. Never contains a secret value.
 | `result` | string | yes | `allowed`, `denied`, `filled`, `fill-failed`, `completed`, `failed`, `updated`, `registered`, `added`, `deleted`, `unlocked` or `locked`. |
 | `session_id` | string \| null | no | Agent session (task) id for tool calls. |
 | `tool_call_id` | string \| null | no | Model tool-call id for tool calls. |
-| `what` | string | yes | `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `get`, `policy_update`, `item_add`, `item_delete`, or the lifecycle steps `setup`, `unlock` and `lock`. |
+| `what` | string | yes | `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `login_save`, `get`, `policy_update`, `item_add`, `item_delete`, or the lifecycle steps `setup`, `unlock` and `lock`. |
 | `who` | string | yes | Caller label: `opensided` for tools and the daemon's own startup unlock, `device:<id>` for a paired device's API call, `local` for the Unix socket. |
 
 ### VaultBackend

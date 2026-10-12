@@ -41,7 +41,7 @@
 | M5 | 완료 (1Password 계정 확인 외) | MV3 확장(Ask 사이드 패널, Agent Tabs), 가져오기, 채널 봇; Bitwarden은 C-7/PP-19 검증 완료; 1Password는 설치 및 로드만 확인(로그인 및 데스크톱 앱 연동 검증에는 벤더 계정 필요) |
 | M6 | 완료 (24시간 연속 운전 진행 중 외) | 종단간 암호화 동기화, 패스키, 하드웨어 잠금 해제, 벤치마크 실행기; 15분 압축 안정성 테스트는 통과, 24시간 연속 운전 테스트(PP-23)는 2026-10-12 11:55 KST경 시작되어 진행 중 |
 | M7 / BR-0…BR-4 | 완료 (Linux) | 패치된 Chromium P1–P11(패치 8종), `tools/patched-smoke.sh` 전 항목 통과; 격리된 sway 환경에서 P7/P9 헤디드 동작(세로 탭, 분할 보기, 북마크 패널) 검증; macOS/Windows 컴파일 확인(msvc는 cargo-xwin 이용, Windows 런타임 미구현, macOS 런타임 실기기 미검증); 네이티브 Ask 사이드 패널 미구현(확장 프로그램 사이드 패널 사용) |
-| AC 자동 통과 | pass 160 / blocked-external 3 / 전체 163행 | `docs/specs/acceptance.csv`, `tools/check-acceptance.py --final`로 검증 완료 |
+| AC 자동 통과 | pass 219 / unverified 19 / blocked-external 3 / 전체 241행 | `docs/specs/acceptance.csv`. 아직 남아 있는 세부 요구사항 목록과 검증 방식은 acceptance.csv의 테스트 경로와 비고란을 통해 확인할 수 있다. |
 
 ### BLOCKED
 초기 차단 요소였던 BLOCKED-1(서브에이전트)과 BLOCKED-2(takeover 프레임 스트림, HS-6)는 해결되었다. 외부 환경 때문에 아직 진행할 수 없는 항목은 [specs/acceptance.csv](specs/acceptance.csv)에서 `blocked-external`로 표시되어 있으며, 각 행의 `사용자 할 일:` 뒤에 필요한 작업이 적혀 있다.
@@ -79,6 +79,14 @@
 - Stage C 패치 시리즈(완전한 비포커스 백그라운드 탭, 뷰포트 고정, 지문/봇 탐지 대응, 세로 탭·분할 보기 등 브라우저 크롬), 자동 rebase CI.
 - macOS/Windows 이식(Vault 플랫폼 백엔드, 샌드박스 대체).
 - 종료 조건: 해당 B-5/B-6/B-8 잔여 AC 통과.
+
+### M8 — 작업 모델과 브라우저 경험 확장 (L)
+- 프론트 에이전트와 Task 분리(A-16), 단일 작업 공간 및 Task별 탭 소유권(B-12), 브라우저 상태와 카드 UI(B-13), 브라우저 드라이버 고도화(B-15), 지연 시간 단축(B-16).
+- 공통 글래스 시각 체계(F-6).
+- 이미 구현된 항목: 스냅샷 뷰포트 범위(B-14), 로그인 폼 도구(C-9, 채널 링크 검증 제외), 격리 브라우저 공간(B-11, 단 기준 ③ 은 검토에서 발견된 결함 세 가지를 고치기 전까지 통과로 보지 않는다).
+- `browser_repl` 내 페이지 JavaScript 허용(ADR-022; B-2 ③, B-15 ⑦) 및 Vault·로그인 명세 내 redaction/노출 관련 문구 반영
+- PWA 네이티브 사용성 개선(F-7), 원격 전송 방식 지원(F-8), 외부 에이전트 CLI/MCP 위임 및 직접 제어(E-6), 원격 CLI/MCP 접속(E-7)
+- 종료 조건: M8 에 속한 모든 요구사항의 AC 행이 `pass`.
 
 ## 2b. 브라우저 트랙 (M2 와 병행)
 - BR-0 ungoogled-chromium 핀 빌드 성공(`docs/spikes/BR-0.md`). 종료: `chrome --version` 실행, 증분 빌드 시간 기록.

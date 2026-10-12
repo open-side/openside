@@ -70,7 +70,7 @@
 ## 4. 공개 API 표면
 `openside_proto::ROUTES` 가 전체 표면이다(18개, OpenAPI 3.1 로 생성):
 - `GET /v1/health`
-- `POST|GET /v1/sessions`(생성 요청 `incognito: true` 면 브라우징 기록을 남기지 않는 비공개 세션, 생성 후 변경 불가; `docs/specs/memory.md` §7), `GET /v1/sessions/{id}`, `POST /v1/sessions/{id}/messages`(`mode`: queue|steer|now), `PATCH|DELETE /v1/sessions/{id}/queue/{mid}`, `POST /v1/sessions/{id}/queue/{mid}/promote`, `POST /v1/sessions/{id}/queue/{mid}/move`, `POST /v1/sessions/{id}/stop`
+- `POST|GET /v1/sessions`(생성 요청 `incognito: true` 면 브라우징 기록을 남기지 않는 비공개 세션, 생성 후 변경 불가; `docs/specs/memory.md` §7; `browser_space: "isolated"` 로 생성하면 공유 브라우저 안에서 자체 쿠키와 스토리지를 갖는 전용 브라우저 공간을 할당한다(`docs/09` §3 참고)), `GET /v1/sessions/{id}`, `POST /v1/sessions/{id}/messages`(`mode`: queue|steer|now), `PATCH|DELETE /v1/sessions/{id}/queue/{mid}`, `POST /v1/sessions/{id}/queue/{mid}/promote`, `POST /v1/sessions/{id}/queue/{mid}/move`, `POST /v1/sessions/{id}/stop`
 - `GET /v1/sessions/{id}/events` (SSE, `Last-Event-ID` 재개)
 - `GET /v1/tickets`, `GET /v1/tickets/{id}`, `POST /v1/tickets/{id}/resolve|done|reject`, `GET /v1/tickets/{id}/takeover`(WebSocket: 탭 JPEG 프레임 + 입력 전달, `docs/specs/human-step.md` §3)
 - `POST /v1/devices/pair`, `DELETE /v1/devices/{id}`
@@ -107,7 +107,7 @@ CEF 기반 자체 셸은 채택하지 않는다: 확장 생태계(비밀번호 �
 ## 7. 보안 모델
 - 신뢰 경계: ① 모델 출력(비신뢰) ② 웹 페이지 내용(비신뢰, 프롬프트 인젝션 가능) ③ 클라이언트 토큰(스코프) ④ 로컬 사용자 ⑤ Python 사이드카(툴 실행권 없음, 비밀 수신 없음).
 - 툴은 데몬만 실행한다. 사이드카는 `open.tools` 로 받은 프록시만 노출하고, 노출 목록이 데몬 목록과 다르면 세션을 거부한다(툴 게이트, ADR-015).
-- Vault 값과 `secret_input` 은 Rust 프로세스 메모리에서만 다루고 CDP 로 입력한 즉시 zeroize. 사이드카·모델·이벤트 로그로 가지 않는다.
+- Vault 입력값과 `secret_input`은 Rust 프로세스 메모리에서만 다루며, CDP 입력 직후 0으로 덮어써 완전히 파기(zeroize)한다. 사이드카나 이벤트 로그로 전달하지 않고 도구 결과에서도 마스킹하지만, 에이전트가 실행한 페이지 스크립트는 페이지 데이터를 직접 읽을 수 있다(ADR-022).
 - 모델 자격증명은 사이드카가 소스에서 직접 읽는다. 데몬은 `[credentials]` 를 해석하지 않고 값을 모른다. 소스 불가는 fail-closed(`auth_unavailable` → 세션 중지).
 - redaction: 모든 공개 이벤트와 툴 결과에 Vault 패턴 redaction, 툴 인자는 툴별 `redact_args`(입력 텍스트는 길이만), 감사 JSONL 은 메타데이터만.
 - 승인: 정책 `Ask` → `confirm` 티켓 → 런 보류. 승인된 티켓은 같은 세션·tool_call_id·툴 이름에만 유효. `Deny` 는 승인으로 뒤집히지 않는다. 만료는 거부.

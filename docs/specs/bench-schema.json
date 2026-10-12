@@ -33,10 +33,11 @@
     },
     "extension": {
       "type": "object",
-      "required": ["suite", "mode", "grader", "steps", "tokens", "browserBytes", "ticketsResolved"],
+      "required": ["suite", "mode", "orchestration", "grader", "steps", "tokens", "browserBytes", "ticketsResolved"],
       "properties": {
         "suite": {"const": "openside-local-web-v1"},
         "mode": {"enum": ["scripted", "live"]},
+        "orchestration": {"enum": ["single", "front"]},
         "grader": {"const": "fixture-state-v1"},
         "steps": {"$ref": "#/$defs/count"},
         "tokens": {

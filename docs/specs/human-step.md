@@ -35,18 +35,20 @@ daemon: 해결 → ticket_resolved → 사이드카가 같은 tool call 의 결�
 | kind | 예 | 사람이 하는 일 | 값의 흐름 | 완료 판정 |
 | --- | --- | --- | --- | --- |
 | `confirm` | 결제/게시/전송 승인 (C-8, D-4) | 승인/거부 (`resolve` 의 `true`\|`false`\|`"approve"`\|`"reject"`) | `{"approved":bool}` 만 데몬에 남고 모델로는 원 호출의 실행 결과 또는 거부 사유만 간다 | 응답 |
-| `secret_input` | SMS/이메일 인증코드, 본인확인 번호 | 코드 입력 (`resolve` 의 문자열 값) | **모델·사이드카로 안 간다.** 데몬이 노드 핸들로 고정된 입력란에 직접 입력 | 입력 성공 |
+| `secret_input` | SMS/이메일 인증코드, 본인확인 번호 | 코드 입력 (`resolve` 의 문자열 값) | **값은 모델이나 사이드카로 전달하지 않는다.** 데몬이 노드 핸들로 지정된 필드에 직접 입력하고 도구 결과에서 마스킹한다. 단, 에이전트가 실행한 페이지 스크립트는 페이지 데이터를 직접 읽을 수 있다(ADR-022). | 입력 성공 |
 | `device_approval` | Apple/Google "다른 기기에서 허용", 앱 푸시 승인 | 자기 기기에서 승인(openside 는 관여 안 함) | 값 없음 | `resume_when` 조건 충족 또는 `done` |
 | `takeover` | CAPTCHA, passkey/보안키, 기타 | 원격 화면(JPEG 프레임)에서 직접 조작 | 입력은 탭으로만 간다. 모델에는 끝난 뒤의 페이지 요약만 간다 | `done` |
 | `info` | 에이전트의 일반 질문 | 텍스트 답 (`options` 가 있으면 그 `value` 중 하나) | `{"answer": …}` 로 모델에 감(비밀 아님) | 응답 |
+| `login` | 사이트 로그인 페이지(아이디/비밀번호 입력 및 Google·Apple·QR·passkey 등 대체 로그인 수단) | 페이지 입력란을 그대로 반영한 카드를 작성하거나, 저장된 계정 또는 대체 로그인 수단을 선택한다. | 입력값은 모델에 전달되지 않고 `status`와 `next`만 전달된다. | 데몬이 폼을 제출하고 다음 페이지 상태를 판별한 뒤 재개한다. |
+| `choice` | 인증 수단 선택, 계정 선택, 이 브라우저 신뢰 여부 확인 | 페이지 자체 선택지 중 하나를 누른다. | 선택한 옵션 ID와 `next`가 전달된다. | 데몬이 해당 선택지를 클릭한 뒤 재개한다. |
 
 `request_human_step` 인자: `kind`, `summary`, `instructions?`, `tab_id?`, `origin?`, `field_ref?`, `resume_when?`, `options?[{value,label}]`. `ask_user` 인자: `question`, `options?[string]`. 두 툴 모두 tier `read`, 정책 capability 없음(항상 Allow).
 
-### secret_input (모델 비노출) — Vault 원칙과 동일
+### secret_input (모델에 값을 전달하지 않음) — Vault와 동일한 원칙
 - 호출 인자: `request_human_step{kind:"secret_input", summary, tab_id, origin:"https://…", field_ref:"e41"}`. 셋(`tab_id`, `origin`, `field_ref`) 모두 필수이고 `origin` 은 자격증명·경로·쿼리·프래그먼트가 없는 HTTP(S) origin 이어야 한다.
 - **티켓을 열 때** `field_ref` 를 해당 탭의 노드 핸들로 고정한다(탭 소유권·origin 일치 확인). 이후 페이지가 바뀌어도 ref 문자열이 아니라 이 핸들로만 입력한다.
 - 사람의 응답 값(`resolve`)은 데몬 메모리에서만 다룬다(`Zeroizing`). 데몬이 현재 탭 origin 이 티켓의 `origin` 과 **정확히 같은지** 다시 검사한 뒤(불일치 `origin_mismatch`) redactor 를 먼저 등록하고, 그 문서를 비밀 문서로 표시한 다음 노드 핸들 기반 `insert_text_node` 로 입력하고 zeroize 한다. 이벤트·DB·감사 로그에는 값도 길이도 남지 않는다.
-- 모델이 받는 결과: `{"status":"filled"}`. 코드 값은 어떤 도구 결과에도 없다. 제출(버튼 클릭)은 에이전트가 이어서 한다(`auto_submit` 옵션은 구현하지 않았다).
+- 모델이 받는 실행 결과는 `{"status":"filled"}`다. 코드값은 어떤 도구 결과에도 담기지 않고 redaction으로 마스킹되지만, 에이전트가 실행한 페이지 스크립트는 이미 채워진 필드를 직접 읽을 수 있다(ADR-022). 폼 제출(버튼 클릭)은 에이전트가 이어서 수행한다(`auto_submit` 옵션은 미구현).
 - 값을 채운 문서에서는 `browser_screenshot` 이 거부된다(`screenshot_unavailable_after_secret_fill`, 힌트 `navigate or take a snapshot instead`). 비밀 문서 표시는 `browser-state.json` 에 저장돼 데몬 재시작 뒤에도 유지된다. 재시작 전에는 redactor 가 스냅샷의 값을 가린다. 데몬 재시작 뒤에는 메모리의 redaction 필터가 없으므로, 비밀 문서로 기록된 문서의 `browser_snapshot`(전체·diff)을 `snapshot_unavailable_after_secret_fill` 로 거부하고 내비게이션 후 다시 허용한다(테스트 `recovered_secret_document_denies_snapshot_until_navigation`). 비밀 문서 표시는 값 입력 전에 디스크에 먼저 기록한다.
 - `resolve` 오류 코드: `409 origin_mismatch`(티켓은 pending 유지), `409 secret_input_failed`(노드·입력 실패), `503 secret_input_unavailable`(브라우저 없음), 입력 싱크가 없으면 `501 secret_input_unavailable`, 값이 문자열이 아니면 `invalid_value`. 입력 전에 값 없는 입력 의도(티켓 id·작업 id)를 먼저 기록하고, 이전 시도가 커밋되지 않은 채 남아 있으면 다시 넣지 않고 `409 secret_input_indeterminate` 로 거절한다(티켓은 pending 유지; 사람이 reject 하거나 에이전트가 새 단계를 연다). 입력은 페이지와 분리된 격리 월드(`Page.createIsolatedWorld`)에서 노드에 묶인 한 번의 `Runtime.callFunctionOn`(최상위 문서·연결 상태·origin·편집 가능 요소 확인 후 격리 월드의 value setter + `input`/`change`)으로 한다. 페이지가 프로토타입 setter·`Object.getOwnPropertyDescriptor`·`dispatchEvent` 를 바꿔도 값을 가로채지 못한다(테스트 `secret_insertion_ignores_page_world_setter_and_builtin_hooks`). 비밀 문서 표시는 탭마다 최근 32개 문서를 보관하고, 티켓의 문서가 탭의 현재 문서일 때만 추가하므로 낡은 티켓이 새 문서의 표시를 덮어쓰지 못한다(`stale_secret_ticket_cannot_displace_newer_document_taint`). 입력은, 커서 위치 추가가 아니라 값 교체다.
 - 같은 대상(`tab_id`+`origin`+`field_ref`)에 대한 `secret_input` 요청은 세션당 3회로 제한한다(`secret input target request limit reached`).
@@ -68,7 +70,7 @@ daemon: 해결 → ticket_resolved → 사이드카가 같은 tool call 의 결�
 - 브라우저 확장: 어느 대화에서 들어온 코드 요청이든 Ask 사이드 패널에 동일한 코드 입력 폼을 표시한다. Chrome에서는 사용자 조작 없이 사이드 패널을 열 수 없으므로, 툴바 배지에 대기 중인 요청 수를 띄우고 요청마다 알림을 한 번씩 보낸다. 알림을 클릭하면 사이드 패널이 열린다. 어떤 화면도 스스로 포커스를 가져가지 않는다.
 - CLI: `openside ticket resolve <id>`처럼 값을 전달하지 않고 실행하면 입력 내용이 화면에 가려지는 비공개 프롬프트로 코드를 묻는다(터미널 환경에서만 동작). `openside ticket resolve <id> -`는 표준 입력(stdin)에서 코드를 읽어 들인다. `--totp` 옵션을 붙이면 동일한 두 가지 방식으로 설정 키를 전달할 수 있다. 그 밖의 다른 형식은 입력을 거부한다.
 - 챗봇: 시크릿 값을 일절 수신하지 않으며 인증기 등록도 승인하지 않는다. 카드에는 `{remote.public_url}/sessions/<session>` 링크(또는 웹 UI 안내)와 CLI 명령어만 표시하고, 등록 티켓의 버튼 입력은 거부한다. 이는 기본 제공 챗 클라이언트에 적용되는 규칙이며, 서버 자체는 `approve` 스코프를 가진 모든 토큰을 정상 수용한다.
-- MCP: `ticket_resolve` 도구는 여전히 `secret_input` 티켓 처리를 거부한다.
+- MCP: `ticket_resolve` 도구는 여전히 `secret_input` 티켓 처리를 거부한다. `login` 티켓도 같은 방식으로 거부한다.
 - SMS 전달: `POST /v1/otp`로 수신된 코드는 해당 origin을 대상으로 열린 일반 `secret_input` 티켓과 동일하게 이 티켓을 자동으로 채운다.
 
 비어 있지 않은 모든 시크릿 값은 길이에 상관없이 출력 결과에 포함될 때마다 부분 문자열 단위로 마스킹된다. 데몬이 자체 생성하는 값(ID, 타임스탬프, 열거형 태그, 상태)은 티켓 및 이벤트의 지정된 스키마 위치에만 보존된다. 티켓의 대상 문자열(`tab_id`, `origin`, `field_ref`)은 데몬이 티켓을 열 때 실제 브라우저와 대조하여 확인을 마친 부분만 원문 그대로 유지한다. 데몬이 고정한 `field_ref`가 있는 대상은 세 항목을 모두 유지한다. `field_ref`가 없는 대상은 현재 세션이 해당 탭을 소유하고 있을 때만 `tab_id`를 유지하고, 탭의 현재 origin과 일치할 때만 `origin`을 유지한다. 브라우저가 실행 중이지 않거나 검증에 실패하면 다른 일반 텍스트와 마찬가지로 마스킹한다. 반면 응답 옵션처럼 모델이 생성한 텍스트는 일반 텍스트와 동일하게 마스킹을 거친다. 시크릿이 입력된 후에는 해당 문서의 `browser_snapshot`에서도 모든 텍스트 필드 값이 `<redacted>`로 가려진다. 이러한 오염(taint) 상태는 URL이 아니라 문서에 귀속된다. 따라서 `history.pushState`나 해시 변경으로 URL이 바뀌더라도 오염 상태가 유지되며, 데몬을 재시작해도 마찬가지로 유지된다.
@@ -79,6 +81,8 @@ daemon: 해결 → ticket_resolved → 사이드카가 같은 tool call 의 결�
 
 다른 작업에 앞서, 추출된 모든 후보 키와 이를 파싱한 각 표현형은 모든 출력에서 즉시 마스킹되며, 해당 탭은 스크린샷과 스크립트 실행이 거부되도록 오염(taint) 처리된다. 페이지에 서로 다른 키가 둘 이상 표시되는 경우에도 동일하게 처리되며 `setup_key_ambiguous`로 요청을 거부한다. 키를 찾지 못하면 `setup_key_not_found`를 반환하고, 볼트 항목에 이미 인증기가 등록된 origin이면 `otp_already_registered`를 반환한다.
 
+설정 페이지의 내용이 `browser_snapshot`, 페이지 기록, 스크린샷으로 전달되기 전에, 데몬이 `otpauth` 링크와 화면에 표시된 base32 설정 키(공백 구분 여부 무관)를 먼저 감지하여 redactor를 설치하고 해당 문서를 오염(`tainted`) 상태로 표시한다. QR 코드만 있는 설정 페이지 역시 오염 상태로 지정된다. 이 과정만으로는 인증기가 등록되지 않으며, 사용자가 등록 카드를 직접 승인해야만 비로소 저장된다. 오염된 탭에서는 `browser_repl` 호출이 거부되며, 표준 스냅샷은 설정 관련 민감 정보를 마스킹하면서도 사용할 수 있는 필드 참조(`field ref`)는 그대로 유지한다.
+
 설정 키는 데몬 메모리에만 임시 보관된다. 키 본문은 제외하고 `otp_register {origin, issuer, account}` 정보만 담은 `confirm` 티켓을 열어 사용자의 승인을 요청하며, 승인에는 `approve` 스코프가 필요하다. 사용자가 승인하면 데몬은 브라우저 게이트(browser gate)를 획득하고, 저장 직전에 탭의 소유 세션이 동일한지, 사용자가 직접 조작(takeover) 중이지 않은지, 탭에 키를 읽어 들였던 동일 문서가 그대로 표시되어 있는지, origin이 변경되지 않았는지를 차례로 검증한다. 이 중 하나라도 실패하면 409를 반환하며 키를 보존한 채 티켓 대기(pending) 상태를 유지한다. 검증을 모두 통과하면 `request_otp`와 동일한 방식으로 키를 저장하고, `field_ref`가 지정되어 있다면 확인 코드를 입력한다. 결과로는 `{"status":"registered","filled":true|false}`를 반환하며, 페이지 URL 이동 등으로 고정된 필드가 무효화(stale)되었을 때는 `filled`가 false가 된다.
 
 거절(declining) 시에는 `{"approved":false,"status":"declined"}`를 반환하고 키를 즉시 폐기한다. 키는 명시적 거절(reject), 만료(expiry), 세션 중지 시에도 폐기되며, 티켓이 열리지 않은 채 24시간이 지나면 다음 등록 시점에 정리(prune)된다. 데몬 재시작 후 승인을 시도하면 `{"status":"setup_key_lost"}`를 반환한다. 키에 적용된 마스킹 필터는 데몬이 종료될 때까지 메모리에 유지되므로, 이후 키가 다시 출력되더라도 가려진 상태를 유지한다. 키를 저장하기 전에 데몬은 새로 발급한 작업 ID(operation id)가 담긴 입력 의도(fill intent)를 기록하며, 볼트는 새 항목을 암호화하여 기록할 때 이 작업 ID를 함께 저장한다(기기 외부로 나가지 않으며 동기화 시에도 내보내지 않는다). 이후 티켓 커밋에 실패하거나 데몬이 종료되더라도, 뒤따르는 모든 종료 경로(응답 반환, 명시적 `reject`, 만료, 세션 중지, 서브에이전트 취소)에서는 정확히 해당 작업 ID로 저장된 인증 수단이 볼트에 존재하는지 확인한다. 인증 수단이 있으면 티켓은 `declined`, `rejected`, `expired`, `setup_key_lost` 대신 `{"status":"registered","filled":false}`로 종료된다. 볼트 확인 결과 해당 작업으로 저장된 내역이 전혀 없다면 일반적인 응답이나 거절로 처리하며, 다른 주체가 동일한 origin에 등록한 인증 수단은 여기에 포함하지 않는다. 볼트가 잠겨 있거나 사용할 수 없는 경우, 또는 입력 의도를 읽을 수 없어 확인이 불가능하다면 티켓은 `{"status":"registration_indeterminate"}`로 종료된다. 등록 기능을 제공하는 `request_otp` 티켓에도 동일한 규칙을 적용한다.
@@ -86,6 +90,57 @@ daemon: 해결 → ticket_resolved → 사이드카가 같은 tool call 의 결�
 락(lock)은 항상 티켓 게이트 → 브라우저 게이트 → 볼트 순서로 획득하며, 볼트 락을 쥔 상태에서 브라우저 게이트를 대기하는 일은 결코 발생하지 않는다. 탭을 전면으로 가져오지 않으며, 코드 입력을 위해 takeover를 열지도 않는다.
 
 알려진 한계: QR 코드는 가장 큰 정사각형 이미지를 뷰포트로 스크롤했을 때 화면에 보여야만 인식할 수 있다. 에이전트가 등록 전에 촬영한 스냅샷에는 텍스트 설정 키가 이미 포함되어 있을 수 있다. 아울러 에이전트 프로필 내 Chromium 세션 히스토리가 뒤로 가기/앞으로 가기 복원을 위해 폼의 POST 바디(코드 포함)를 보관할 수 있으며, openside는 이를 별도로 삭제하지 않는다.
+
+### request_login — 로그인 카드
+
+1. 페이지에서 로그인을 요구하면 에이전트는 자격증명을 직접 입력하지 않고 `request_login(tab_id, reason?)`을 호출한다. 이는 시스템 프롬프트와 도구 설명에 명시되어 있다.
+2. 데몬은 모델이 넘겨준 정보가 아니라 탭 자체에서 로그인 폼을 직접 읽어 들인다. 대상 노드는 티켓을 열 때 문서에 고정하며, 대상 origin 역시 모델이 지정한 값이 아니라 탭의 현재 origin을 사용한다. 수집하는 정보는 다음과 같다.
+   - 입력 필드 목록(`fields`, ID는 `f0`부터 부여되며 종류는 identifier, password, text, checkbox, 라벨은 페이지 자체 텍스트 사용)
+   - 대체 로그인 수단(`alternatives`, ID는 `a0`부터 부여되며 Google, Apple, Kakao, Naver 등 제공자, passkey, QR, 기타 수단 포함)
+   - 제출 버튼 라벨(`submit_label`)
+   - 사이트 이름(`site_name`)
+   - `data:image/…` 형식의 파비콘 아이콘(`icon`)
+3. 볼트 우선 확인: 볼트에 해당 origin과 정확히 일치하는 로그인 정보가 단 하나만 등록되어 있다면, 데몬은 티켓을 열지 않고 볼트 콜백 안에서 값을 입력하고 제출한 뒤 `{"status":"filled_from_vault","item_id","next"}`를 반환한다. 일치하는 계정이 둘 이상이면 어느 것도 임의로 고르지 않고, 티켓의 `accounts` 목록에 마스킹된 사용자 이름(예: `j***@mail.test`)을 담아 전달한다.
+4. 볼트 자동 입력 대상이 아니면 `login` 티켓을 연다. 이때 `can_save` 플래그는 볼트 잠금이 해제되어 있고, 해당 origin의 저장이 정책상 허용되며, 폼에 식별자(identifier)와 비밀번호 필드가 모두 존재할 때만 `true`가 된다. 같은 세션에서 동일 사이트의 사용자명 페이지를 거쳐 비밀번호 페이지로 넘어온 경우, 이전 카드에서 입력한 사용자명(디스크에 저장하지 않고 메모리에 10분간 보관)을 식별자로 인정하므로 이 카드에서도 로그인 정보를 저장할 수 있다.
+5. 사용자는 다음 세 가지 형태 중 정확히 하나로 응답한다.
+   - `{"values":{"f0":…,"f1":…},"save"?:bool}`
+   - `{"account":"<item_id>"}`
+   - `{"alternative":"a1"}`
+   입력값은 데몬 메모리에만 머무른다. 데몬은 먼저 redaction 필터를 등록한 뒤 고정된 노드에 값을 입력하고(체크박스는 클릭으로 설정), 폼을 제출한 즉시 메모리 값을 zeroize한다. 입력값은 이벤트, DB, 감사 로그에 남기지 않고 도구 결과에서 마스킹한다. 에이전트가 실행한 페이지 스크립트는 입력된 필드를 직접 읽을 수 있으며, 값을 변형해 반환하면 redaction을 우회할 수 있다(ADR-022).
+6. 권한 검증: 티켓 응답에는 `human_step` 스코프가 필요하며, `save:true`를 함께 전달할 때는 `approve` 스코프가 추가로 필요하다. 스코프가 부족하면 `403 forbidden`을 반환하고 티켓은 대기(pending) 상태를 유지한다.
+7. 볼트 저장은 폼 제출이 끝난 뒤 다음 페이지가 `error`가 아닐 때만 진행한다(인증에 실패한 비밀번호는 보관하지 않는다). 동일한 origin과 사용자 이름을 가진 기존 항목이 있으면 비밀번호를 갱신하고, 없으면 새 항목을 생성한다. 볼트 감사 로그에는 `login_save` 액션으로 기록한다.
+8. 데몬은 폼 제출 후 페이지가 안정될 때까지 최대 10초 동안 대기한 다음, 다음 단계를 다음과 같이 판별한다.
+   - `otp`: `request_otp` 호출
+   - `choice`: `request_choice` 호출
+   - `captcha`: 사용자에게 알리고 `takeover` 제공
+   - `error`: 페이지 자체 오류 메시지를 200자 이내의 `error_text`로 담아 반환하며, 에이전트가 `request_login`을 다시 호출
+   - `login`: 폼 제출 후 새 페이지에 다른 로그인 폼(사용자명 입력 후 비밀번호 페이지 등)이 나타난 상태다. `request_login`을 다시 호출한다.
+   - `push_approval`: 페이지가 사용자의 휴대폰 승인을 기다리는 상태다. 폴링하지 말고 `wait_for_approval`을 호출한다.
+   - `enroll_totp`: 페이지에서 인증기 등록(QR 코드, otpauth 링크, 설정 키)을 제안하는 상태다. `register_authenticator`를 호출해 볼트 저장 여부를 사용자에게 묻고, 사용자가 거절하면 안내한다.
+   - `done`: 로그인 완료
+   - `unknown`: 스냅샷 촬영
+9. 모델 반환값: `{"status":"submitted"|"filled_from_vault"|"alternative","next",…}`를 반환한다. 다음 단계가 `error`이면 `error_text`를 포함하고, 저장을 요청했을 때만 `saved`를 포함하며, 볼트 자동 입력 시에는 `item_id`를 함께 반환한다.
+10. 해결(resolve) 시 오류: 형식이 잘못되었거나 모르는 필드 ID이면 `invalid_value`, 페이지가 바뀌었거나 고정 노드가 사라졌으면 `409 target_unavailable`(티켓은 대기 상태 유지), origin 불일치 시 `409 origin_mismatch`, 노드 입력 실패 시 `409 secret_input_failed`, 볼트 권한 부족 시 `403 vault_denied`를 반환한다. 이전 시도에서 값을 입력한 뒤 커밋 전에 중단된 적이 있다면 다시 입력하지 않고 `409 secret_input_indeterminate`로 거절한다.
+11. incognito 세션에서는 다른 볼트 진입점과 마찬가지로 `vault_incognito` 이유와 함께 `request_login`을 거부한다.
+12. 챗봇은 입력값을 수신하지 않는다. 카드에는 `{remote.public_url}/sessions/<session>` 링크와 CLI 명령어만 표시한다. MCP `ticket_resolve` 도구 역시 `secret_input`과 마찬가지로 `login` 티켓 처리를 거부한다.
+
+### request_choice — 페이지가 묻는 선택
+
+1. 페이지에서 사용자 선택을 요구할 때(계정 선택, 인증 수단 선택, 브라우저 신뢰 여부 확인 등) 에이전트는 요소를 직접 클릭하지 않고 `request_choice(tab_id, question?, options?)`를 호출한다.
+2. `options` 인자가 없으면 데몬이 페이지 내 선택 요소(라디오 버튼 그룹, 계정 목록, 라벨이 지정된 버튼)를 직접 탐색한다. 최신 스냅샷의 `options[{ref,label?}]`를 전달할 때는 모든 ref가 동일한 문서와 origin에 속해야 하며 화면에 보이고 활성화된 상태여야 한다. 두 경우 모두 사용자에게는 페이지 자체 라벨과 설명을 보여준다(페이지에 자체 라벨이 있으면 모델이 보낸 `label`은 무시한다). 질문 문구는 페이지 제목(heading)을 우선 사용하고, 없으면 모델이 보낸 `question`, 둘 다 없으면 "Choose an option"을 쓴다. 선택지는 `o0`부터 시작해 최대 12개까지 제공한다.
+3. 응답 `{"option":"o1"}`을 처리하려면 `approve` 스코프가 필요하다(선택 동작은 비밀값을 노출하지 않는다). 해결 시점에는 `Browse` 정책을 다시 확인한다. 데몬은 탭을 전면으로 가져오지 않고 신뢰된 입력(trusted input)으로 고정 노드를 클릭한 다음, `request_login`과 동일한 방식으로 다음 단계를 판별한다. 모델에는 `{"status":"chosen","option","next"}`를 반환한다. 페이지가 다른 화면으로 바뀌었다면 `409 target_unavailable`을 반환하고 티켓은 대기(pending) 상태로 남겨 둔다.
+4. `login` 티켓과 달리, 챗봇은 `choice` 티켓의 선택지를 버튼(콜백 데이터 `c:<ticket>:<index>`) 형태로 보여줄 수 있다.
+
+`login`과 `choice` 처리 경로에서도 동일한 락 순서(티켓 게이트 → 브라우저 게이트 → 볼트)를 유지하며, 탭을 전면으로 가져오지 않고 텍스트 입력을 위해 takeover를 열지도 않는다.
+
+### wait_for_approval — 휴대폰 승인 대기
+
+1. 페이지에서 사용자의 휴대폰 승인을 요구할 때(`next`가 `push_approval`인 경우) 에이전트는 주기적으로 확인하거나 버튼을 누르는 대신 `wait_for_approval(tab_id)`를 호출한다.
+2. 데몬이 페이지를 직접 확인해 사이트 이름, 아이콘, 안내 메시지, 화면에 표시된 번호(숫자만 해당)를 읽어온다. 승인 대기 화면이 아니면 `approval_not_found` 오류로 호출을 거부한다.
+3. 데몬은 `{origin, site_name, icon?, message, number?}` 정보가 담긴 `approval` 페이로드로 `device_approval` 티켓을 발행한다. 카드에는 실시간 대기 시계와 함께 "Approve on your phone" 문구가 표시되며, 사용자가 선택할 수 있는 동작은 취소(= 거부)뿐이다.
+4. `Controller::poll`이 2초마다 탭 상태를 다시 확인한다. 페이지 대기가 끝나면 `request_login`과 같은 단계 판별 기준에 따라 `{"status":"done","next","error_text"?}`로 티켓을 자동 완료한다. 승인된 경우 보통 `done`이 되고, 거부되거나 시간이 초과된 경우 페이지의 오류 문구(`[role=alert]`)와 함께 `error`가 된다. 티켓 자체의 만료 시간은 `device_approval_ttl_secs` 설정을 따른다.
+   화면에 실패 경고가 나타나면 휴대전화 승인 안내보다 우선하므로, 휴대전화 관련 거절이나 만료 문구가 표시된 카드가 승인 대기 상태로 계속 남아 있지 않는다.
+5. 푸시 알림 제목에는 "Approve on your phone"을 사용하며, CLI에는 확인 번호와 취소 명령어를 출력한다.
 
 ### device_approval — 가장 쉬운 벽
 Apple/Google 의 "기기에서 허용" 은 openside 가 할 일이 없다. 사람은 자기 기기에서 누르고, 에이전트는 **조건 대기**만 한다.
@@ -117,7 +172,7 @@ Apple/Google 의 "기기에서 허용" 은 openside 가 할 일이 없다. 사�
 - Preview follows the most recent successful browser tool's owned tab, or the sole live owned tab if no current tab is known. It does not launch a browser. JPEG quality is 40 and encoded dimensions are at most 720x450. Chromium has a bounded startup allowance of at most three frames (older binaries ignore `maxFramesInFlight:1`); thereafter one capture credit is released per 500 ms, including replaced frames, enforcing sustained capture at most 2 fps. Each viewer's delivery is at most 2 fps, including startup. Takeover retains its eager replacement ACKs for low latency. A session shares one latest-frame feed among at most eight viewers; additional viewers receive `429 too_many_viewers`.
 - A takeover reservation stops the preview capture before human capture starts. The preview clears its image and reports `paused` while the ticket is pending, then automatically resumes. Secret-tainted tabs report `withheld{screenshot_unavailable_after_secret_fill}`, including after navigation. Before a secret is inserted or takeover begins, capture is stopped and its generation is invalidated. The writer's final synchronous admission rechecks that generation, device revocation and the stream's latched lifetime. Queued stale frames are discarded. At most one frame admitted **before** a takeover/taint/revocation transition may finish sending afterward, within the five-second write deadline; no frame captured after that transition is sent while the exclusion holds. Private sessions refuse the upgrade with `409 private_session`.
 - Each viewer has an eight-message bounded writer queue and reserves four slots for control messages. Revocation closes only that device's sockets. Committed stop/deletion latches an `ended` reason for existing viewers, even if the session immediately resumes; a new viewer can attach to the resumed session. Handshake registration replays terminal events since its initial state read to close the registration race. The last viewer leaving stops capture. Final messages and the close handshake are best-effort within one second, after capture resources are released.
-- The session screen's Browser preview toggle opens a read-only corner PiP; Expand/Minimize changes its size without a new connection. Private sessions hide the toggle. The shared `BrowserFrame` renderer is also used by `TakeoverView`.
+- Once a conversation has used the browser, the session screen shows the live browser card at the top of the conversation (`BrowserPreview`): the read-only screencast, what the agent is doing, "Action needed" while a ticket waits, Minimize (a slim pill) and Cancel task; tapping the picture opens the browser sheet on the same connection. Private sessions never show it. The shared `BrowserFrame` renderer is also used by `TakeoverView`.
 - Evidence: `crates/openside-browser/src/screencast_tests.rs` checks deterministic CDP credits and real animated Chromium frame/ACK counts; `crates/opensided/src/tests/preview.rs` includes stop/immediate-resume, explicit no-frame windows with visible secrets and takeover input, foreign-owned tabs, and before/after writer-admission barriers; `web/src/components/BrowserPreview.test.tsx` and `crates/openside-e2e/tests/web_pip.rs::web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover_ticket` cover the displayed image.
 
 ## 4. 자동화 가능한 보조 경로 (옵트인)
@@ -127,17 +182,25 @@ Apple/Google 의 "기기에서 허용" 은 openside 가 할 일이 없다. 사�
 
 ## 5. API/프로토콜 (구현)
 - 별도 `Ticket` 리소스(수명이 다름: 시간 단위 영속).
-  `Ticket { id, session_id, tool_call_id, deferral(approval|external), kind, summary, instructions?, options[{value,label}], origin{subagent_id?}, tool?{name, args(redacted)}, target?{tab_id?, origin?, field_ref?}, resume_when?, created_at, expires_at, status: pending|resolved|rejected|expired|needs_desktop, resolution? }`. 저장 전에 모든 문자열이 redaction 을 거치고 `resolution` 에 비밀 값은 없다. `origin.subagent_id` 는 서브에이전트가 만든 티켓의 소유자를 표시하는 필드이며 서브에이전트 어댑터가 없는 지금은 항상 비어 있다(BLOCKED-1).
-- 엔드포인트: `GET /v1/tickets[?status=pending|…]`, `GET /v1/tickets/{id}`, `POST /v1/tickets/{id}/resolve`(`confirm`/`info`/`secret_input` 값), `POST /v1/tickets/{id}/done`(`device_approval`·`takeover`; 다른 kind 는 `400 invalid_ticket_kind`), `POST /v1/tickets/{id}/reject`, `GET /v1/tickets/{id}/takeover`(WebSocket, §3). pending 이 아니거나 만료된 티켓은 `409`.
+  `Ticket { id, session_id, tool_call_id, deferral(approval|external), kind, summary, instructions?, options[{value,label}], origin{subagent_id?, device_id?, driver_ids?}, tool?{name, args(redacted)}, target?{tab_id?, origin?, field_ref?}, resume_when?, created_at, expires_at, status: pending|resolved|rejected|expired|needs_desktop, resolution? }`. 저장 전에 모든 문자열이 redaction 을 거치고 `resolution` 에 비밀 값은 없다. `origin.subagent_id` 는 서브에이전트가 생성한 티켓의 소유자를 나타내며, 사이드카의 서브에이전트 어댑터(ADR-020)가 채우고 부모가 연 티켓에는 빈 값으로 남는다.
+- 엔드포인트: `GET /v1/tickets[?status=pending|…]`, `GET /v1/tickets/{id}`, `POST /v1/tickets/{id}/resolve`(`confirm`/`info`/`secret_input`/`login`/`choice` 값), `POST /v1/tickets/{id}/done`(`device_approval`·`takeover`; 다른 kind 는 `400 invalid_ticket_kind`), `POST /v1/tickets/{id}/reject`, `GET /v1/tickets/{id}/takeover`(WebSocket, §3). pending 이 아니거나 만료된 티켓은 `409`.
 - 이벤트: `ticket.opened`, `ticket.resolved`, `ticket.rejected`, `ticket.expired`. 비밀 값은 이벤트에 포함하지 않는다. `takeover.*` 이벤트는 없다.
-- 능력 토큰 스코프: `read`(조회만), `steer`, `approve`(`confirm`·`info` 티켓), `human-step`(`secret_input`·`device_approval`·`takeover` 티켓), `admin`(둘 다 가능, 기기 페어링). `resolve`/`reject` 는 티켓 kind 에 맞는 스코프가 없으면 `403 forbidden`.
+- 능력 토큰 스코프: `read`(조회 전용), `steer`, `approve`(`confirm`·`info`·`choice` 티켓 및 `save:true`를 통한 로그인 정보 저장), `human_step`(`secret_input`·`device_approval`·`takeover`·`login` 티켓), `admin`(전체 권한 및 기기 페어링). 티켓 종류에 맞는 스코프가 없으면 `resolve`/`reject` 요청은 `403 forbidden`으로 거부된다.
 - **승인 재실행 보호.** `confirm` 티켓이 승인되면 같은 `tool_call_id` 의 호출을 `approval_ticket` 과 함께 한 번만 재실행할 수 있다. 티켓은 인자와 정책 action 의 정규화 해시에 묶여 있어서, 다른 인자로 쓰면 `approval_args_mismatch`, 이미 쓴 승인을 다시 쓰면 `approval_already_used`, 그 외 같은 세션·툴·`tool_call_id` 가 아니면 `Approval ticket does not authorize this tool call` 로 `denied` 된다(`host.rs`). 승인은 `Deny` 판정을 뒤집지 못한다.
 - 에이전트 연동: 호스트 툴 `request_human_step`·`ask_user` 는 데몬이 실행하는 툴이고(`docs/09`), 사이드카에는 reverse RPC 프록시로만 있다. 보류/재개 프로토콜은 `docs/specs/sidecar-protocol.md` §6~7. 티켓이 pending 인 세션은 목록·상세에서 `waiting_human` 으로 파생돼 `settled` 와 구분된다.
 - 알림: 티켓이 열리면 데몬이 페어링한 기기의 Web Push 구독으로 알림을 보내고, 누르면 `/sessions/{session}?ticket={id}` 로 열린다([`docs/REMOTE.md`](../REMOTE.md) §3). 채널 봇(A-13)의 deep link 는 채널 어댑터 쪽 기능이다.
 
+### 사람의 판단 및 승인 권한
+
+사람의 판단과 승인 권한은 프롬프트 지침이 아니라 데몬이 직접 강제하는 규칙이다. 기기와 토큰의 역할(`kind`)은 코드를 교환할 때가 아니라 운영자가 오퍼나 토큰을 발급할 때 결정된다. 데몬 호스트에서 일반 `openside pair`를 실행하면 `person_device` 오퍼가 생성되고(웹 UI 선택지 'Pair a phone/browser'), `openside pair --agent`를 실행하면 `agent_client` 오퍼가 생성된다(웹 UI 선택지 'Connect an agent / CLI'). `openside token create`는 기본적으로 `agent_client` 토큰을 발급하며, 로컬 소켓 전용인 `openside token create --person`을 실행하면 확장 프로그램·웹·모바일 기기용 `person_device` 토큰을 명시적으로 발급한다. `openside connect`는 오퍼에 지정된 역할을 그대로 물려받을 뿐 변경할 수 없으므로, `person_device` 오퍼를 교환하면 그대로 `person_device`가 된다. 로컬 Unix 소켓 자체는 식별자가 `local`이며 `agent_client`로 분류된다. `person_device` 토큰을 에이전트에 넘기면 사람의 승인 권한까지 부여되므로 에이전트에는 절대 `person_device` 토큰을 주어서는 안 된다. 로컬 소켓에 접근할 수 있는 동일 UID 프로세스는 의도적으로 `person_device` 토큰을 발급할 수 있으므로, 이 구분은 OS 샌드박스 경계가 아니라 신뢰받는 운영자의 제어 수단이다.
+
+사람의 판단이나 승인이 필요한 작업은 기존 스코프에 더해 반드시 `person_device` 역할이 있어야만 수행할 수 있다. 여기에는 확인(confirm) 티켓 승인(`true` 또는 `"approve"`), 모든 선택지(`choice`) 티켓 응답, `secret_input`의 `{totp}` 영구 등록, `login`의 `save: true` 저장이 포함된다. `agent_client`나 로컬 소켓(`local`)이 이러한 작업을 시도하면 해당 티켓을 직접 생성하거나 세션을 구동한 주체가 아니더라도 `403 person_approval_required` 오류로 거부된다. 거부된 티켓은 승인 대기(pending) 상태를 그대로 유지하며 페이지 조작이나 Vault 등록·저장도 일절 실행되지 않는다. 반면 확인 티켓 거절(`false` 또는 `"reject"`)과 거절·취소 엔드포인트 호출은 필요한 스코프만 있으면 에이전트에서도 허용된다.
+
+세션을 생성하거나 메시지·도구·REPL로 세션을 구동하면 해당 `agent_client` 기기 ID가 `session.driver_recorded`를 통해 누적되어 영구 기록된다. 직접 API 호출로 생성된 티켓에는 `origin.device_id`가 기록되고(내부 에이전트가 만든 티켓에는 생략), 생성 시점의 세션 구동 주체 목록이 `origin.driver_ids`로 복사된다(비어 있으면 생략). `person_device`라 하더라도 자신이 직접 API를 호출해 만든 티켓을 스스로 승인하려 하거나 기록된 구동 주체 목록에 해당하면 별도로 `403 self_approval_forbidden` 오류로 거부된다. 일반적인 대화를 나누는 `person_device`는 구동 주체로 기록되지 않으므로 자신의 세션 사이드카가 발행한 티켓을 정상적으로 승인할 수 있다. 역할이나 페어링 출처 정보가 없는 기존 레거시 기기는 `person_device`로 기본 처리되며 과거 이벤트는 빈 ID로 재생되어 자동 백필되지 않는다(단, 과거 세션이라도 이후 에이전트가 구동하면 ID가 기록되어 보류 중인 티켓에도 배제 규칙이 적용된다). 기존 외부 에이전트 프로필은 `openside pair --agent`로 새 오퍼를 발급받아 다시 페어링해야 한다.
+
 ## 6. 안전 규칙
 1. 에이전트는 인증 벽을 **우회하지 않는다**: 자동 CAPTCHA 풀이, 코드 추측/무차별 대입, 다른 경로 로그인 시도 금지. 현재는 에이전트에게 그런 풀이 도구를 주지 않는 것으로 지킨다(툴은 `docs/09` §3 의 15개뿐). 정책 엔진 `Deny` 규칙화는 아직 없다.
-2. 티켓 기본 만료(`[tickets]`, 초 단위, 최소 1, 환경변수 오버라이드 없음): `confirm_ttl_secs=600`(만료=거부), `secret_input_ttl_secs=300`, `device_approval_ttl_secs=1800`, `info_ttl_secs=86400`, `takeover_ttl_secs=1800`. 만료되면 에이전트에 `{"status":"expired"}`(approval 은 `ToolDenied("expired")`)를 전달해 계속 대기하지 않게 한다. 만료는 데몬이 1초 간격으로 처리한다.
+2. 티켓 기본 만료(`[tickets]`, 초 단위, 최소 1, 환경변수 오버라이드 없음): `confirm_ttl_secs=600`(만료=거부), `secret_input_ttl_secs=300`, `device_approval_ttl_secs=1800`, `info_ttl_secs=86400`, `takeover_ttl_secs=1800`. `login`·`choice` 는 `secret_input_ttl_secs` 를 함께 쓴다(기본 300초). 만료되면 에이전트에 `{"status":"expired"}`(approval 은 `ToolDenied("expired")`)를 전달해 계속 대기하지 않게 한다. 만료는 데몬이 1초 간격으로 처리한다.
 3. 페이지가 요구한 사람 개입이 **피싱**일 수 있다. `secret_input` 은 티켓을 열 때 노드를 고정하고 입력 직전 origin 을 정확 일치로 다시 검사한다. UI 는 어느 사이트/어떤 입력란인지 `target` 으로 항상 표시해야 한다(클라이언트 책임). 페이지 내용을 그대로 `instructions` 로 믿지 않고 에이전트가 쓴 요약과 데몬이 확인한 origin 을 함께 보여준다.
 4. 한 번 해결된 티켓은 재사용할 수 없다(pending 이 아니면 `409`). 같은 입력란에 대한 반복 요청은 3회로 제한한다.
 5. takeover 중에는 그 탭에 대한 에이전트 브라우저 호출을 거부하고(`takeover_active`), 끝나면 그 탭의 스냅샷 캡처를 버린다(§3).
@@ -158,7 +221,7 @@ Apple/Google 의 "기기에서 허용" 은 openside 가 할 일이 없다. 사�
 | `takeover` | 구현. 프레임 WebSocket·입력 전달·에이전트 쓰기 락·종료 후 캡처 폐기. 웹 UI 의 takeover 화면(`TakeoverView`, 읽기 전용 PiP 포함)은 `openside.bearer.<token>` 서브프로토콜로 붙는다(E2E `crates/openside-e2e/tests/web_ui.rs::web_ui_secret_input_and_takeover_screen_resume_the_agent`) |
 | 열린 티켓이 참조하는 탭의 브라우저 | 데몬이 종료할 때 pending 티켓의 탭이 있으면 Chromium 을 종료하지 않고 분리(detach)하고, 기동 시 `browser-state.json`(데이터 디렉터리, 관리 중인 `browser-profile` 프로필만 허용)로 다시 붙어 탭 소유권·노드 핸들·비밀 문서 표시를 복원한다. 붙을 수 없으면 상태 파일을 지운다. pending 티켓도 에이전트 소유 탭도 없으면 재부착하지 않고 브라우저를 종료한다. 재시작 후 브라우저 정책의 세부는 사용자 결정 대기 |
 | Web Push 알림, `otp-ingest` | 구현. `crates/opensided/src/tests/remote.rs`(`push_reaches_unfocused_subscriptions_encrypted_with_deep_links_and_drops_gone_ones`, `otp_ingest_checks_scope_and_sender_fills_matching_secret_input_and_expires_codes`), E2E `crates/openside-e2e/tests/remote.rs` |
-| 서브에이전트가 만든 티켓 | 프로토콜 필드만(`origin.subagent_id`, `tool_call.subagent`), 미사용(BLOCKED-1) |
+| 서브에이전트가 만든 티켓 | 구현. 서브에이전트의 승인 요청과 질의는 `origin.subagent_id` 를 붙여 부모 세션에 티켓을 생성한다. 취소된 서브에이전트는 티켓을 열거나 유지할 수 없으며, 기록이 반쯤 남은 서브에이전트 종료가 남긴 티켓은 재시작 시 닫힌다(`crates/opensided/src/tests/subagents.rs`) |
 
 테스트(`crates/opensided/src/tests*`): `restart_keeps_pending_tickets_and_resolution_resumes_once_hs1`, `restart_reconciles_inflight_once_and_expires_overdue_tickets`, `pending_secret_survives_daemon_restart_and_dead_endpoint_relaunches`, `secret_input_canary_never_reaches_events_database_audit_or_runtime`, `secret_input_without_sink_is_501_and_origin_mismatch_stays_pending`, `ticket_lifecycle_and_scope_by_kind_hs7`, `expiry_emits_event_and_delivers_external_expired_result`, `takeover_without_tab_returns_needs_desktop_and_done_can_finish_it`, `takeover::takeover_streams_frames_forwards_input_locks_agent_and_resumes_with_fresh_page_hs6`, `takeover::takeover_stream_ends_on_ticket_expiry_and_on_token_revocation`, `takeover::takeover_publication_waits_for_the_agent_operation_already_running`, `takeover::queued_input_never_lands_after_done_reject_or_revocation`, `takeover::a_tab_with_secret_fill_history_never_streams_frames_even_after_navigation`, `takeover::a_controller_that_stops_reading_is_dropped_and_the_ticket_can_be_taken_again`, `takeover::revocation_returns_only_after_admitted_input_and_nothing_runs_after_it`, `takeover::one_takeover_opener_ending_keeps_another_openers_reservation`, `takeover::rejected_input_flood_cannot_hold_the_controller_past_its_idle_limit`, `pending_tickets_hold_queue_and_stop_rejects_them`, `browser_tools_sensitive_expiry_vault_secret_device_and_readonly`. E2E: `crates/openside-e2e/tests/takeover.rs`(HS-4, HS-6). 브라우저: `crates/openside-browser/tests/screencast.rs`. takeover·HS-4 테스트 말고는 이 문서를 고치면서 실행하지 않았다(`unverified`).
 
@@ -176,4 +239,4 @@ Apple/Google 의 "기기에서 허용" 은 openside 가 할 일이 없다. 사�
 - 보류된 tool call 이 히스토리에 미해결로 남고 같은 call id 로 결과를 채워 재개한다. 모델이 "pending 결과 + 나중에 온 사용자 메시지" 를 이어서 이해해야 하는 프롬프트 의존이 없다.
 - 대기 중에는 런이 끝나고 상태는 직렬화된 대화(`state_snapshot`)와 데몬의 티켓으로 남는다. 그래서 사이드카가 재시작돼도 `pending_deferred` 로 복구한다.
 - omp `follow_up` 재개 방식(pending 반환 + 재개 메시지 템플릿)과 S-7 전환 스파이크는 omp 런타임 제거로 필요 없어졌다.
-- 서브에이전트가 만든 티켓의 소유권·재개는 아직 어댑터가 없다(BLOCKED-1, `docs/08` §C).
+- 서브에이전트가 생성한 티켓의 소유권 관리와 재개는 harness 가 아니라 사이드카 자체 어댑터(ADR-020, `docs/04-sidecar-integration.md` §10)가 담당한다.

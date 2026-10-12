@@ -79,3 +79,5 @@ openside import --from <chrome|chromium|firefox>:<프로필 디렉터리> --into
 - Safari ZIP 가져오기, Windows 쿠키 복호화, 비밀번호·자동완성·확장 프로그램 가져오기.
 - 가져온 기록을 에이전트가 검색하거나 사용하는 경로. 이 문서는 데이터를 프로필에 옮기는 데까지를 다룬다.
 - 실행 중인 데몬의 브라우저에 대한 쿠키 가져오기(프로필 사용 중으로 거절한다).
+
+**웹 UI 가져오기.** 웹 첫 실행 안내는 데몬 API `GET /v1/import/profiles`와 `POST /v1/import`(`admin` 스코프)를 통해 동일한 가져오기 엔진을 실행한다. 이 방식은 표준 위치에서 탐색된 프로필 id만 지정할 수 있으며 openside 기본 프로필로만 데이터를 가져온다. 네트워크 API로는 키링 비밀번호 실행 명령을 전달받을 수 없으므로 키링 암호화(v11) 쿠키는 가져올 수 없다. 자세한 내용은 `docs/specs/onboarding.md`를 참고한다.

@@ -34,4 +34,4 @@
 ## 구현에 반영한 제약
 - rquickjs 0.14 는 Rust 1.87 이상을 요구한다. `openside-repl` crate 만 `rust-version = "1.87"` 을 선언한다(워크스페이스 기본값은 그대로).
 - 비병렬(기본) rquickjs 런타임은 `Send` 가 아니므로 REPL 한 번 실행마다 전용 OS 스레드와 current-thread Tokio 런타임을 만든다. 데몬 작업 스레드를 JS 계산이 막지 않는다.
-- 브라우저 쪽 동작은 페이지에 스크립트를 넣지 않는다. prelude 는 QuickJS 안에서만 돌고, 페이지에는 `openside_browser::PAGE_COMMANDS` 의 DOM·Accessibility·Input·Page 명령만 간다(`docs/specs/browser-repl.md`).
+- 당시 결정 사항은 '브라우저 동작 시 페이지 스크립트를 주입하지 않고, prelude는 QuickJS 내에서만 실행하며, 페이지에는 `PAGE_COMMANDS`에 포함된 DOM/Accessibility/Input/Page 명령만 전달한다'였으나, 이후 ADR-022를 통해 페이지 스크립트를 허용하도록 변경되었다(`docs/specs/browser-repl.md`). 관련 구현은 `crates/openside-repl/src/driver/script.rs`에 있으며, 본 스파이크에서 결정한 엔진 구성과 제한 수치는 그대로 유지한다.

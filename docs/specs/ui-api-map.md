@@ -4,7 +4,7 @@
 
 Every web UI feature and the public daemon endpoints it calls (PP-16, E-4, G-5). `web/src/api/uiApiMap.test.ts` fails when a feature has no endpoint, when web code opens a network connection outside `web/src/api/`, or when an endpoint is missing from `docs/specs/openapi.json`.
 
-Coverage: 50 features, 62 of 83 endpoints used by the UI, 21 listed below with a reason.
+Coverage: 56 features, 71 of 95 endpoints used by the UI, 24 listed below with a reason.
 
 ## Features
 
@@ -23,20 +23,26 @@ Coverage: 50 features, 62 of 83 endpoints used by the UI, 21 listed below with a
 | `shell` | Sidebar conversation list (pinned group first), re-synced while visible | `GET /v1/sessions` (read) | `listSessions` |
 | `shell` | Search conversations | `GET /v1/sessions` (read) | `listSessions` |
 | `shell` | Row menu: pin / unpin, rename, archive / unarchive; Archived tab | `PATCH /v1/sessions/{id}` (steer)<br>`GET /v1/sessions` (read) | `updateSession`, `listSessions` |
-| `/` | New chat: the first message creates the conversation, with model choice | `POST /v1/sessions` (steer)<br>`POST /v1/sessions/{id}/messages` (steer)<br>`GET /v1/settings` (read) | `createSession`, `submitMessage`, `settings` |
+| `/` | New chat: the first message creates the conversation, with model choice and an opt-in isolated browser space | `POST /v1/sessions` (steer)<br>`POST /v1/sessions/{id}/messages` (steer)<br>`GET /v1/settings` (read)<br>`POST /v1/browser/prewarm` (steer) | `createSession`, `submitMessage`, `settings`, `prewarmBrowser` |
 | `/sessions/:id` | Live event stream; screen rebuilt from the event log on reload | `GET /v1/sessions/{id}/events` (read) | `openSessionStream` |
 | `/sessions/:id` | Session menu (rename, pin, archive, copy link); stop from the composer | `PATCH /v1/sessions/{id}` (steer)<br>`POST /v1/sessions/{id}/stop` (steer) | `updateSession`, `stopSession` |
-| `/sessions/:id` | Send, or queue while a run is active; image attachments | `POST /v1/sessions/{id}/messages` (steer) | `submitMessage` |
+| `/sessions/:id` | Send, or queue while a run is active; image attachments; focusing the box warms the agent and browser | `POST /v1/sessions/{id}/messages` (steer)<br>`POST /v1/sessions/{id}/prewarm` (steer) | `submitMessage`, `prewarmSession` |
 | `/sessions/:id` | `/` skill mention chips | `GET /v1/skills` (read) | `searchSkills` |
 | `/sessions/:id` | Queued messages: edit, cancel, steer instead / send now | `PATCH /v1/sessions/{id}/queue/{mid}` (steer)<br>`DELETE /v1/sessions/{id}/queue/{mid}` (steer)<br>`POST /v1/sessions/{id}/queue/{mid}/promote` (steer) | `editQueued`, `deleteQueued`, `promoteQueued` |
 | `/sessions/:id` | Approval / info / secret_input / device-approval cards | `POST /v1/tickets/{id}/resolve` (approve)<br>`POST /v1/tickets/{id}/reject` (approve)<br>`POST /v1/tickets/{id}/done` (human_step) | `resolveTicket`, `rejectTicket`, `ticketDone` |
 | `/sessions/:id` | Inline code form (OTP) with optional authenticator save; `?ticket=` from a code push opens the full-screen code sheet | `POST /v1/tickets/{id}/resolve` (approve)<br>`POST /v1/tickets/{id}/reject` (approve) | `resolveTicket`, `rejectTicket` |
+| `/sessions/:id` | Secure login card (fields from the page, saved accounts, alternative sign-ins, save to vault) and login-step choice card; `?ticket=` opens them as a sheet | `POST /v1/tickets/{id}/resolve` (approve)<br>`POST /v1/tickets/{id}/reject` (approve) | `resolveTicket`, `rejectTicket` |
 | `/sessions/:id` | Takeover remote screen and PiP preview | `GET /v1/tickets/{id}/takeover` (human_step)<br>`POST /v1/tickets/{id}/done` (human_step)<br>`POST /v1/tickets/{id}/reject` (approve) | `takeover`, `ticketDone`, `rejectTicket` |
-| `/sessions/:id` | Read-only live browser PiP preview, minimize / expand | `GET /v1/sessions/{id}/browser/preview` (browse) | `browserPreview` |
+| `/sessions/:id` | Live browser card docked at the top of the conversation: read-only screencast, agent status, Action needed, click ripple, minimize, cancel task; background Tasks narrate it from browser.state, with authenticated thumbnails and a strip to pick one and cancel per Task | `GET /v1/sessions/{id}/browser/preview` (browse)<br>`GET /v1/sessions/{id}/browser/thumbnails/{thumbnail_id}` (browse)<br>`POST /v1/sessions/{id}/subagents/{sid}/cancel` (steer) | `browserPreview`, `browserThumbnail`, `cancelSubagent` |
 | `/sessions/:id` | Browser sheet: this conversation's agent tabs with titles and URLs, live preview and zoom | `GET /v1/browser/tabs` (read) | `browserTabs` |
 | `/sessions/:id` | Subagent steer / cancel | `POST /v1/sessions/{id}/subagents/{sid}/steer` (steer)<br>`POST /v1/sessions/{id}/subagents/{sid}/cancel` (steer) | `steerSubagent`, `cancelSubagent` |
 | `/sessions/:id` | Files panel: list, sandboxed preview, download | `GET /v1/sessions/{id}/artifacts` (read)<br>`GET /v1/sessions/{id}/artifacts/{path}` (read)<br>`GET /v1/sessions/{id}/artifacts/{path}/preview` (public) | `listArtifacts`, `artifactBlob`, `sandboxPreview` |
 | `/sessions/:id` | Visual blocks: sandboxed preview and source | `GET /v1/sessions/{id}/visuals` (read)<br>`GET /v1/sessions/{id}/artifacts/{path}/preview` (public) | `listVisuals`, `sandboxPreview` |
+| `/welcome` | First-run guide: opens once on a new daemon, can be skipped, and is reopened from Settings; whether it was seen is kept on the daemon | `GET /v1/onboarding` (read)<br>`PUT /v1/onboarding` (admin) | `onboarding`, `setOnboarding` |
+| `/welcome` | Guide step: detect the claude, codex and omp agents and install the openside browser skill for them | `GET /v1/external-agents` (admin)<br>`POST /v1/external-agents/{id}/browser-skill` (admin) | `externalAgents`, `installAgentSkill` |
+| `/welcome` | Guide step: import Chrome, Chromium or Firefox history, bookmarks and cookies, with a dry-run preview of the counts before anything is written | `GET /v1/import/profiles` (admin)<br>`POST /v1/import` (admin) | `importProfiles`, `runImport` |
+| `/welcome` | Guide step: vault status with a link to the Vault setup | `GET /v1/vault` (admin) | `vaultStatus` |
+| `/welcome` | Guide step: pair a phone with `openside pair`; the step notices the new device | `GET /v1/devices` (admin) | `listDevices` |
 | `/skills` | Skill list with rejected folders | `GET /v1/skills` (read) | `listSkills` |
 | `/skills` | Create a skill | `POST /v1/skills` (admin) | `createSkill` |
 | `/skills` | Edit description and instructions | `GET /v1/skills/{name}` (read)<br>`PATCH /v1/skills/{name}` (admin) | `getSkill`, `updateSkill` |
@@ -75,14 +81,17 @@ Coverage: 50 features, 62 of 83 endpoints used by the UI, 21 listed below with a
 | `GET /v1/policy` (read) | Live policy rules are edited with `openside policy show/set`; the Configuration section covers the stored `[policy]` defaults. |
 | `PUT /v1/policy` (admin) | Live policy rules are edited with `openside policy show/set`; the Configuration section covers the stored `[policy]` defaults. |
 | `POST /v1/policy/test` (read) | Policy dry-run is a CLI diagnostic (`openside policy test`). |
+| `GET /v1/remote/status` (admin) | Admin diagnostics for the computer running the daemon: `openside remote status` shows which remote transports are up and their public addresses. |
 | `GET /v1/routines/{id}` (read) | The routine list already carries every field. |
 | `DELETE /v1/sessions/{id}` (admin) | Not offered in the web UI: the conversation list archives instead of deleting permanently; deletion stays an API (admin) action. |
 | `GET /v1/sessions/{id}` (read) | The session screen rebuilds the session from its event stream. |
 | `POST /v1/sessions/{id}/queue/{mid}/move` (steer) | Not offered in the web UI: the queue offers edit, delete and send now; reordering stays an API action. |
 | `POST /v1/sessions/{id}/repl` (browse) | Machine endpoint (`browse` scope) for sandboxed tools, MCP servers and extensions. |
 | `GET /v1/sessions/{id}/subagents` (read) | The subagent panel is built from `subagent.*` events. |
+| `POST /v1/sessions/{id}/tools/{name}` (browse) | Machine endpoint (`browse` scope) for the CLI, MCP servers and scripts driving a session's browser and human-step tools directly; the tickets it opens appear in the web UI as usual. |
 | `GET /v1/sync` (read) | Device sync needs the sync passphrase on the daemon host: `openside sync status/setup/pair/now`. |
 | `POST /v1/sync/pair` (admin) | Device sync needs the sync passphrase on the daemon host: `openside sync status/setup/pair/now`. |
 | `POST /v1/sync/run` (admin) | Device sync needs the sync passphrase on the daemon host: `openside sync status/setup/pair/now`. |
 | `POST /v1/sync/setup` (admin) | Device sync needs the sync passphrase on the daemon host: `openside sync status/setup/pair/now`. |
 | `GET /v1/tickets/{id}` (read) | Ticket cards come from `ticket.*` events of the open session. |
+| `GET /v1/tools` (read) | Machine endpoint: the catalog `openside mcp` and `openside browser tools` build their direct browser tools from. |
