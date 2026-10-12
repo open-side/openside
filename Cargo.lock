@@ -2135,7 +2135,9 @@ dependencies = [
  "nix 0.29.0",
  "openside-config",
  "parking_lot",
+ "rand 0.8.8",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
@@ -2156,6 +2158,7 @@ dependencies = [
  "openside-config",
  "openside-policy",
  "openside-proto",
+ "parking_lot",
  "reqwest",
  "serde",
  "serde_json",
@@ -2171,6 +2174,7 @@ name = "openside-cli"
 version = "0.0.1"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "bytes",
  "clap",
  "fs2",
@@ -2178,12 +2182,14 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "keyring",
  "nix 0.29.0",
  "openside-config",
  "openside-import",
  "openside-memory",
  "openside-policy",
  "openside-proto",
+ "openside-relay",
  "openside-skills",
  "openside-vault",
  "parking_lot",
@@ -2195,6 +2201,8 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "toml",
+ "toml_edit 0.22.27",
  "url",
 ]
 
@@ -2241,11 +2249,13 @@ dependencies = [
  "openside-policy",
  "openside-proto",
  "openside-push",
+ "openside-relay",
  "openside-sessions",
  "openside-sync",
  "openside-vault",
  "opensided",
  "parking_lot",
+ "qrcode",
  "reqwest",
  "ring",
  "rmcp",
@@ -2337,17 +2347,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "openside-relay"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "clap",
+ "curve25519-dalek",
+ "futures-util",
+ "http",
+ "parking_lot",
+ "rand_core 0.6.4",
+ "rustls",
+ "serde_json",
+ "sha2",
+ "snow",
+ "subtle",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite 0.26.2",
+ "url",
+ "webpki-roots",
+ "zeroize",
+]
+
+[[package]]
 name = "openside-repl"
 version = "0.0.1"
 dependencies = [
  "axum",
+ "futures-util",
  "openside-browser",
  "openside-config",
+ "parking_lot",
  "regex",
  "rquickjs",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -2456,10 +2498,12 @@ dependencies = [
  "openside-browser",
  "openside-config",
  "openside-core",
+ "openside-import",
  "openside-memory",
  "openside-policy",
  "openside-proto",
  "openside-push",
+ "openside-relay",
  "openside-repl",
  "openside-sched",
  "openside-sessions",
@@ -2481,6 +2525,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "tokio-util",
  "toml",
  "tower",
  "url",
@@ -3540,6 +3585,23 @@ name = "smallvec"
 version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
+
+[[package]]
+name = "snow"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "599b506ccc4aff8cf7844bc42cf783009a434c1e26c964432560fb6d6ad02d82"
+dependencies = [
+ "aes-gcm",
+ "blake2",
+ "chacha20poly1305",
+ "curve25519-dalek",
+ "getrandom 0.3.4",
+ "ring",
+ "rustc_version",
+ "sha2",
+ "subtle",
+]
 
 [[package]]
 name = "socket2"

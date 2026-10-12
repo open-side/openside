@@ -20,6 +20,7 @@ members = [
     "crates/openside-import",
     "crates/openside-sync",
     "crates/openside-push",
+    "crates/openside-relay",
 ]
 
 [workspace.package]
@@ -30,7 +31,7 @@ rust-version = "1.80"
 repository = "https://github.com/open-side/openside"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [workspace.lints.clippy]
