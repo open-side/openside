@@ -7,7 +7,12 @@ const notify = bindStatus(status);
 mountIcons();
 const urlInput = document.querySelector<HTMLInputElement>("#url")!;
 const tokenInput = document.querySelector<HTMLInputElement>("#token")!;
-void chrome.storage.session.get("pairing").then(value => { if (value.pairing) urlInput.value = value.pairing.url; });
+const pairingState = document.querySelector<HTMLElement>("#pairing-state")!;
+function showPairing(url: string | undefined): void {
+  pairingState.textContent = url ? `Paired with ${url}` : "Not paired";
+  pairingState.dataset.paired = String(url !== undefined);
+}
+void chrome.storage.session.get("pairing").then(value => { if (value.pairing) urlInput.value = value.pairing.url; showPairing(value.pairing?.url); });
 document.querySelector<HTMLFormElement>("#pairing")!.addEventListener("submit", event => {
   event.preventDefault();
   let url: string;
@@ -21,6 +26,7 @@ document.querySelector<HTMLFormElement>("#pairing")!.addEventListener("submit", 
     try {
       await client({ url, token }).listSessions();
       await chrome.storage.session.set({ pairing: { url, token } });
+      showPairing(url);
       notify("Paired for this browser session.");
     } catch {
       notify("Pairing failed. Check the daemon URL and device token.", "error");
@@ -35,6 +41,7 @@ document.querySelector("#forget")!.addEventListener("click", () => {
     tokenInput.value = "";
     groupsEnabled = false;
     agentTabs.textContent = "Enable Agent Tabs";
+    showPairing(undefined);
     notify("Pairing forgotten.");
   });
 });

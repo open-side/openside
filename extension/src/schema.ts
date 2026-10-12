@@ -48,6 +48,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/browser/prewarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Launch the browser ahead of a new chat's first message. Idempotent; returns before the browser is up. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/browser/tabs": {
         parameters: {
             query?: never;
@@ -246,6 +289,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/external-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any `[skills.agents]` entry. `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ExternalAgentList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external-agents/{id}/browser-skill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InstallAgentSkillRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InstalledAgentSkill"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -269,6 +408,100 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Health"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Import history, bookmarks and cookies of a discovered profile into the daemon's browser profile. `dry_run` reads and decrypts everything and reports counts without writing; a real run reads everything before it writes anything. Cookies encrypted with the OS keyring (`v11`) need the CLI (`openside import --keyring-password-cmd`). One import runs at a time. 400 unknown_profile; 409 import_in_progress, profile_in_use; 422 source_locked, source_unreadable, source_corrupt, source_unsupported, keyring_password_required; 500 import_failed; 503 browser_unavailable. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ImportRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImportReport"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Chrome, Chromium and Firefox profiles found in their standard locations on the daemon's computer, with the data each has. Directory paths are never returned; `POST /v1/import` takes the profile id. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImportProfileList"];
                     };
                 };
                 /** @description Sanitized error */
@@ -575,6 +808,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/onboarding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description State of the first-run guide, kept on the daemon so every device agrees: `pending` until someone finishes or skips it once. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OnboardingStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        /** @description Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). Reopening the guide from Settings does not reset the flag. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateOnboardingRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OnboardingStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/otp": {
         parameters: {
             query?: never;
@@ -633,7 +944,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). Issuing, exchanging and revoking are written to audit.jsonl. */
+        /** @description Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). The operator fixes kind here: person_device for phones/browsers, agent_client for external CLI/MCP agents. Redemption cannot change it. Issuing, exchanging and revoking are written to audit.jsonl. */
         post: {
             parameters: {
                 query?: never;
@@ -682,7 +993,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description No bearer token: the one-time code is the credential. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A code is consumed by its first exchange attempt. */
+        /** @description No bearer token: the one-time code is the credential. The token inherits the operator-selected kind from the offer; sending kind at redemption is rejected as an unknown field. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A valid request consumes the code on its first exchange attempt. */
         post: {
             parameters: {
                 query?: never;
@@ -1179,6 +1490,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/remote/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RemoteStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/routines": {
         parameters: {
             query?: never;
@@ -1547,6 +1902,7 @@ export interface paths {
             };
         };
         put?: never;
+        /** @description Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). */
         post: {
             parameters: {
                 query?: never;
@@ -1658,7 +2014,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** @description Update title/pinned/archived as a durable session.updated event. */
+        /** @description Update title/pinned/archived as a durable session.updated event. Archiving an isolated-space session disposes its browser space. */
         patch: {
             parameters: {
                 query?: never;
@@ -1912,6 +2268,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{id}/browser/thumbnails/{thumbnail_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read a bounded JPEG thumbnail referenced by browser.state. Requires browse; secret-tainted tabs, changed documents, takeover, private/stopped/archived/deleted sessions, expired IDs and IDs from another session are withheld. IDs expire after ten minutes and after daemon restart; responses are never cached. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                    thumbnail_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "image/jpeg": string;
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions/{id}/events": {
         parameters: {
             query?: never;
@@ -1996,6 +2400,51 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["Message"];
                     };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/prewarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Start the session's agent process, launch the browser and open one blank agent tab its next browser_open_tab adopts, so the first reply and browser action skip cold starts. Idempotent; returns before the work finishes. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
                 /** @description Sanitized error */
                 default: {
@@ -2420,6 +2869,56 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Subagent"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/tools/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ToolCallRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ToolCallResponse"];
                     };
                 };
                 /** @description Sanitized error */
@@ -3148,7 +3647,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step. A secret_input answer that registers an authenticator ({"value":{"totp":…}} on /resolve) also requires approve. */
+        /** @description The daemon checks the ticket kind: confirm/info/choice require approve; secret_input/device_approval/takeover/login require human_step. A secret_input answer that registers an authenticator ({"value":{"totp":…}} on /resolve) and a login answer that keeps the login ({"value":{"values":…,"save":true}}) also require approve. */
         post: {
             parameters: {
                 query?: never;
@@ -3199,7 +3698,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step. A secret_input answer that registers an authenticator ({"value":{"totp":…}} on /resolve) also requires approve. */
+        /** @description The daemon checks the ticket kind: confirm/info/choice require approve; secret_input/device_approval/takeover/login require human_step. A secret_input answer that registers an authenticator ({"value":{"totp":…}} on /resolve) and a login answer that keeps the login ({"value":{"values":…,"save":true}}) also require approve. Confirm approval, choice answers, TOTP enrollment, and login save:true require a person_device; agent clients and the Unix socket receive 403 person_approval_required and the ticket stays pending. A person device that directly created the ticket, or was recorded as its session driver, receives 403 self_approval_forbidden. Pairing fixes the device kind. Deny/reject and cancel remain allowed with the appropriate scope. */
         post: {
             parameters: {
                 query?: never;
@@ -3222,6 +3721,21 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Ticket"];
+                    };
+                };
+                /** @description Caller lacks the ticket scope or the required person-device authority, or tries to approve its own ticket */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_approval_required",
+                         *       "message": "person approval required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
                 /** @description Sanitized error */
@@ -3280,6 +3794,50 @@ export interface paths {
                          *     }
                          */
                         "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ToolCatalog"];
                     };
                 };
                 /** @description Sanitized error */
@@ -3875,6 +4433,44 @@ export interface components {
             /** @description Display file name; directories are stripped. */
             name?: string | null;
         };
+        /** @description The tool call that produced a browser state. */
+        BrowserActionState: {
+            /** @description Human phrase such as "Clicking" or "Opening example.com". */
+            phrase: string;
+            /** @description Accessible label of the target element, read from the page. */
+            target?: string | null;
+            /** @description Tool name. */
+            tool: string;
+            /** @description Runtime call identifier. */
+            tool_call_id: string;
+        };
+        /** @description Agent activity in a tab. */
+        BrowserPhase: "loading" | "reading" | "acting" | "waiting_human" | "done" | "error";
+        /** @description Where a session's agent tabs browse, fixed at creation. */
+        BrowserSpace: "shared" | "isolated";
+        /** @description Typed browser situation for one tab, rendered as a live card per Task. */
+        BrowserState: {
+            /** @description The tool call behind this state. */
+            action?: components["schemas"]["BrowserActionState"] | null;
+            /** @description Facts read from the page. */
+            facts: components["schemas"]["PageFacts"];
+            /** @description Host of `url`, empty for non-network pages. */
+            host: string;
+            /** @description Classification of the page. */
+            page_kind: components["schemas"]["PageKind"];
+            /** @description What the agent is doing in the tab. */
+            phase: components["schemas"]["BrowserPhase"];
+            /** @description Browser target identifier. */
+            tab_id: string;
+            /** @description Task (background subagent) acting in the tab; absent for the front agent. */
+            task_id?: string | null;
+            /** @description Opaque JPEG thumbnail ID, fetched through the authenticated session route. */
+            thumbnail?: string | null;
+            /** @description Page title. */
+            title: string;
+            /** @description Current URL with sensitive components redacted. */
+            url: string;
+        };
         /** @description Metadata-only browser ledger entry; incognito tabs are never included. */
         BrowserTab: {
             /** @description Explicit provenance, independent of URL matching. */
@@ -3901,6 +4497,23 @@ export interface components {
         /** @description Capability required to access an HTTP operation. */
         CapabilityScope: "read" | "steer" | "approve" | "human_step" | "admin" | "browse" | "vault_use" | "otp_ingest";
         /**
+         * CloudflareStatus
+         * @description Supervised `cloudflared` state.
+         */
+        CloudflareStatus: {
+            /** @description Latest failure, without secrets. */
+            last_error?: string | null;
+            /**
+             * Format: uint32
+             * @description Times the process exited and was started again.
+             */
+            restarts: number;
+            /** @description `starting`, `running`, `restarting` or `failed` (cannot start at all). */
+            state: string;
+            /** @description Public HTTPS URL once known (quick tunnels change it on every restart). */
+            url?: string | null;
+        };
+        /**
          * ContentKind
          * @description Broad media class of one content part; the runtime maps it to model input types.
          */
@@ -3925,10 +4538,21 @@ export interface components {
          * @description Create a one-time pairing offer (Unix socket only).
          */
         CreatePairingRequest: {
+            /**
+             * @description Operator-selected identity role, fixed in the offer and not chosen by its redeemer.
+             * @default person_device
+             */
+            kind: components["schemas"]["DeviceKind"];
             /** @description Label the paired device will carry. */
             name: string;
             /** @description Scopes the device token will hold; at least one. */
             scopes: components["schemas"]["CapabilityScope"][];
+            /**
+             * @description Transport the link should use; default: the first entry of `remote.mode`, or the
+             *     plain `remote.public_url` when no transport is configured.
+             * @default null
+             */
+            via: components["schemas"]["PairingTransport"] | null;
         };
         /**
          * CreatePinnedTabRequest
@@ -3974,6 +4598,11 @@ export interface components {
          * @description Session creation request.
          */
         CreateSessionRequest: {
+            /**
+             * @description Browse in the shared managed profile (default) or an isolated space; immutable
+             *     afterwards. Incognito sessions already have their own browser and refuse `isolated`.
+             */
+            browser_space?: components["schemas"]["BrowserSpace"];
             /** @description Create a private session; immutable afterwards. Browsing history is not indexed. */
             incognito?: boolean;
             /** @description Permission override, or settings default when omitted. */
@@ -4049,11 +4678,18 @@ export interface components {
             created_at?: string | null;
             /** @description Revocation identifier (`DELETE /v1/devices/{id}`). */
             device_id: string;
+            /**
+             * @description Pairing-time trust role; legacy devices without recorded source default to person_device.
+             * @default person_device
+             */
+            kind: components["schemas"]["DeviceKind"];
             /** @description Label given at pairing; empty for devices paired before labels were stored. */
             name: string;
             /** @description Scopes the token holds. */
             scopes: components["schemas"]["CapabilityScope"][];
         };
+        /** @description Trust role fixed at pairing, not selected anew by each authenticated request. */
+        DeviceKind: "person_device" | "agent_client";
         /**
          * DeviceList
          * @description Paired devices.
@@ -4250,6 +4886,11 @@ export interface components {
             /** @description Ticket identifier. */
             ticket_id: components["schemas"]["TicketId"];
         } | {
+            /**
+             * @description A Task started by the front agent's `task_start`: it runs in the background and
+             *     reports its result into the conversation instead of blocking the parent call.
+             */
+            background?: boolean;
             /** @constant */
             kind: "subagent.started";
             /** @description Model selector the child runs on. */
@@ -4265,6 +4906,8 @@ export interface components {
         } | {
             /** @constant */
             kind: "subagent.ended";
+            /** @description Redacted final answer of a completed child, truncated for display. */
+            output?: string | null;
             /** @description Sanitized detail for failed or cancelled children. */
             reason?: string | null;
             /** @description Terminal state. */
@@ -4303,6 +4946,13 @@ export interface components {
             /** @description Browser target identifier. */
             tab_id: string;
         } | {
+            /** @description Paired device id, or `local` for the Unix socket. */
+            device_id: string;
+            /** @constant */
+            kind: "session.driver_recorded";
+        } | {
+            /** @description Browser space; historical events are shared. */
+            browser_space?: components["schemas"]["BrowserSpace"];
             /** @description Private session; historical events are not private. */
             incognito?: boolean;
             /** @constant */
@@ -4356,7 +5006,10 @@ export interface components {
             kind: "runtime.error";
             /** @description Redacted failure detail. */
             message: string;
-        });
+        } | (components["schemas"]["BrowserState"] & {
+            /** @constant */
+            kind: "browser.state";
+        }));
         /**
          * EventKind
          * @description Public event payloads with stable `kind` identifiers, dotted except for `usage`.
@@ -4517,6 +5170,11 @@ export interface components {
             /** @description Ticket identifier. */
             ticket_id: components["schemas"]["TicketId"];
         } | {
+            /**
+             * @description A Task started by the front agent's `task_start`: it runs in the background and
+             *     reports its result into the conversation instead of blocking the parent call.
+             */
+            background?: boolean;
             /** @constant */
             kind: "subagent.started";
             /** @description Model selector the child runs on. */
@@ -4532,6 +5190,8 @@ export interface components {
         } | {
             /** @constant */
             kind: "subagent.ended";
+            /** @description Redacted final answer of a completed child, truncated for display. */
+            output?: string | null;
             /** @description Sanitized detail for failed or cancelled children. */
             reason?: string | null;
             /** @description Terminal state. */
@@ -4570,6 +5230,13 @@ export interface components {
             /** @description Browser target identifier. */
             tab_id: string;
         } | {
+            /** @description Paired device id, or `local` for the Unix socket. */
+            device_id: string;
+            /** @constant */
+            kind: "session.driver_recorded";
+        } | {
+            /** @description Browser space; historical events are shared. */
+            browser_space?: components["schemas"]["BrowserSpace"];
             /** @description Private session; historical events are not private. */
             incognito?: boolean;
             /** @constant */
@@ -4623,7 +5290,10 @@ export interface components {
             kind: "runtime.error";
             /** @description Redacted failure detail. */
             message: string;
-        };
+        } | (components["schemas"]["BrowserState"] & {
+            /** @constant */
+            kind: "browser.state";
+        });
         /**
          * ExchangePairingRequest
          * @description Exchange a pairing code for a device token (no bearer token needed).
@@ -4631,6 +5301,30 @@ export interface components {
         ExchangePairingRequest: {
             /** @description Code from the pairing offer. */
             code: string;
+        };
+        /** @description An agent CLI openside can install its browser skill for (`openside skills install`). */
+        ExternalAgent: {
+            /** @description The agent's executable is on the daemon's `PATH` or its configuration directory exists. */
+            detected: boolean;
+            /** @description Preset name (`claude`, `codex`, `omp`) or an entry of `[skills.agents]`. */
+            id: string;
+            /** @description Product name for display. */
+            label: string;
+            /** @description `openside-browser` is already in the agent's skills directory. */
+            skill_installed: boolean;
+            /**
+             * @description Where the skill would be (or is) installed, written `~/…` when under the daemon user's
+             *     home; `null` when no directory is known.
+             */
+            skills_dir?: string | null;
+        };
+        /**
+         * ExternalAgentList
+         * @description `GET /v1/external-agents`.
+         */
+        ExternalAgentList: {
+            /** @description The three built-in presets first, then configured agents by name. */
+            agents: components["schemas"]["ExternalAgent"][];
         };
         /**
          * Health
@@ -4642,6 +5336,143 @@ export interface components {
             /** @description Whether the daemon is ready to serve requests. */
             ok: boolean;
         };
+        /** @description Which categories a source profile has files for. */
+        ImportAvailability: {
+            /** @description A bookmarks file exists. */
+            bookmarks: boolean;
+            /** @description A cookie database exists. */
+            cookies: boolean;
+            /** @description A history database exists. */
+            history: boolean;
+        };
+        /** @description Browser family of an import source. */
+        ImportBrowser: "chrome" | "chromium" | "firefox";
+        /** @description A data category an import can carry over. */
+        ImportCategory: "history" | "bookmarks" | "cookies";
+        /** @description Outcome of one category. */
+        ImportCategoryReport: {
+            /**
+             * Format: uint64
+             * @description Entries written (dry run: that would be written).
+             */
+            imported: number;
+            /** @description Why the category was skipped entirely (its source file is missing). */
+            note?: string | null;
+            /**
+             * Format: uint64
+             * @description Entries read from the source (cookies: decrypted).
+             */
+            read: number;
+            /** @description Cookies the target browser refused. */
+            rejected: components["schemas"]["ImportRejectedCookie"][];
+            /**
+             * Format: uint64
+             * @description Entries left out: non-web URLs, bookmarklets, expired or partitioned cookies.
+             */
+            skipped: number;
+        };
+        /** @description A browser profile the daemon found on its computer. */
+        ImportProfile: {
+            /** @description Files present in the profile. */
+            available: components["schemas"]["ImportAvailability"];
+            /** @description Browser family. */
+            browser: components["schemas"]["ImportBrowser"];
+            /** @description Opaque id for `POST /v1/import` (`<browser>:<directory name>`). */
+            id: string;
+            /** @description Name the browser shows for the profile. */
+            name: string;
+        };
+        /**
+         * ImportProfileList
+         * @description `GET /v1/import/profiles`.
+         */
+        ImportProfileList: {
+            /**
+             * @description A Chromium-compatible browser is available to write imported cookies; without one
+             *     only history and bookmarks can be imported.
+             */
+            cookies_writable: boolean;
+            /** @description Profiles of installed browsers, Chrome first, then Chromium, then Firefox. */
+            profiles: components["schemas"]["ImportProfile"][];
+        };
+        /** @description A cookie the target browser refused (host and name only). */
+        ImportRejectedCookie: {
+            /** @description Cookie host. */
+            host: string;
+            /** @description Cookie name. */
+            name: string;
+        };
+        /**
+         * ImportReport
+         * @description What an import read, or wrote.
+         */
+        ImportReport: {
+            /** @description Bookmarks outcome when requested. */
+            bookmarks?: components["schemas"]["ImportCategoryReport"] | null;
+            /** @description Cookies outcome when requested. */
+            cookies?: components["schemas"]["ImportCategoryReport"] | null;
+            /** @description Nothing was written. */
+            dry_run: boolean;
+            /** @description History outcome when requested. */
+            history?: components["schemas"]["ImportCategoryReport"] | null;
+            /** @description openside browser profile written to. */
+            profile: string;
+            /** @description Source browser. */
+            source: components["schemas"]["ImportBrowser"];
+        };
+        /**
+         * ImportRequest
+         * @description `POST /v1/import` body. Always read-then-write: a dry run reads and decrypts everything
+         *     and writes nothing.
+         */
+        ImportRequest: {
+            /**
+             * @description Report counts without writing anything.
+             * @default false
+             */
+            dry_run: boolean;
+            /** @description Profile `id` from `GET /v1/import/profiles`. */
+            profile: string;
+            /**
+             * @description Categories to import; absent means every category the source has.
+             * @default null
+             */
+            what: components["schemas"]["ImportCategory"][] | null;
+        };
+        /**
+         * InstallAgentSkillRequest
+         * @description `POST /v1/external-agents/{id}/browser-skill` body.
+         */
+        InstallAgentSkillRequest: {
+            /**
+             * @description Replace an `openside-browser` skill that is already installed.
+             * @default false
+             */
+            force: boolean;
+        };
+        /**
+         * InstalledAgentSkill
+         * @description What the install wrote.
+         */
+        InstalledAgentSkill: {
+            /** @description Agent the skill was installed for. */
+            agent: string;
+            /**
+             * Format: uint32
+             * @description Files written.
+             */
+            files: number;
+            /** @description Final location of the skill directory. */
+            path: string;
+            /** @description Installed skill name (`openside-browser`). */
+            skill: string;
+        };
+        /** @description Kind of an alternative sign-in control on the page. */
+        LoginAlternativeKind: "provider" | "passkey" | "qr" | "other";
+        /** @description Kind of a field on a `login` ticket. */
+        LoginFieldKind: "identifier" | "password" | "text" | "checkbox";
+        /** @description Identity provider behind an alternative sign-in control. */
+        LoginProvider: "google" | "apple" | "kakao" | "naver" | "facebook" | "github" | "microsoft";
         /** @description One stored memory. Content never contains a value matched by secret detection. */
         Memory: {
             /** @description Remembered text. */
@@ -4810,6 +5641,24 @@ export interface components {
             position: number;
         };
         /**
+         * @description Where the first-run guide stands. `pending` until a person finishes or skips it once;
+         *     the flag lives on the daemon, so every device and browser agrees.
+         */
+        OnboardingState: "pending" | "completed" | "skipped";
+        /**
+         * OnboardingStatus
+         * @description `GET /v1/onboarding` and the `PUT` response.
+         */
+        OnboardingStatus: {
+            /** @description Current state. */
+            state: components["schemas"]["OnboardingState"];
+            /**
+             * Format: date-time
+             * @description When the state last changed; `null` while pending.
+             */
+            updated_at?: string | null;
+        };
+        /**
          * @description Where the site sends the one-time code a `request_otp` ticket asks for, as the agent read
          *     it on the page.
          */
@@ -4839,11 +5688,39 @@ export interface components {
              */
             stored: number;
         };
+        /** @description Facts extracted from the page, bounded for display. */
+        PageFacts: {
+            /** @description Error text shown by the page. */
+            error_text?: string | null;
+            /** @description Form fields by accessible label (at most 8). */
+            fields?: components["schemas"]["PageField"][];
+            /** @description Main heading. */
+            heading?: string | null;
+            /**
+             * Format: uint32
+             * @description Number of items in the main list or results.
+             */
+            result_count?: number | null;
+        };
+        /** @description One form field. */
+        PageField: {
+            /** @description Input kind: `text`, `email`, `password`, `code`, `checkbox`, `radio`, `select`, `button`, …. */
+            kind: string;
+            /** @description Accessible label. */
+            label: string;
+        };
+        /** @description Page classification for card layout. */
+        PageKind: "login" | "otp" | "choice" | "captcha" | "form" | "list" | "article" | "checkout" | "error" | "other";
         /**
          * PairDeviceRequest
          * @description Administrative device pairing request.
          */
         PairDeviceRequest: {
+            /**
+             * @description Fixed at token creation; agent clients cannot approve their own work.
+             * @default person_device
+             */
+            kind: components["schemas"]["DeviceKind"];
             /** @description User-visible device label. */
             name: string;
             /** @description Explicit capabilities to grant. */
@@ -4856,6 +5733,11 @@ export interface components {
         PairDeviceResponse: {
             /** @description Stable revocation identifier. */
             device_id: string;
+            /**
+             * @description Operator-selected trust role fixed when this token was paired.
+             * @default person_device
+             */
+            kind: components["schemas"]["DeviceKind"];
             /** @description Granted capabilities. */
             scopes: components["schemas"]["CapabilityScope"][];
             /** @description Bearer capability token; never persist in event or application logs. */
@@ -4882,15 +5764,29 @@ export interface components {
              */
             expires_at: string;
             /**
-             * @description Path the phone opens on the daemon's origin; the code is in the fragment, so
-             *     it never reaches server logs or `Referer` headers.
+             * @description Operator-selected role the resulting token will hold.
+             * @default person_device
+             */
+            kind: components["schemas"]["DeviceKind"];
+            /**
+             * @description Pairing path on the daemon's origin, or the relay origin for relay links.
+             *     The code is a fragment, absent from ordinary HTTP requests and Referer
+             *     headers but readable by the page's scripts, including relay-served code.
              */
             path: string;
             /** @description Scopes the resulting token will hold. */
             scopes: components["schemas"]["CapabilityScope"][];
-            /** @description `remote.public_url` + `path`, when a public URL is configured. */
+            /** @description Transport `url` uses; `null` for a plain `remote.public_url` or no URL. */
+            transport?: components["schemas"]["PairingTransport"] | null;
+            /**
+             * @description Link for the QR code: `<base>/pair#<code>` for direct transports, or
+             *     `<relay>/pair#c=<code>&t=relay&d=<daemon id>&k=<daemon key>` for the relay. `null`
+             *     when no transport or public URL is configured.
+             */
             url?: string | null;
         };
+        /** @description How a paired device reaches the daemon from outside its network. */
+        PairingTransport: "tailscale" | "cloudflare" | "relay";
         /** @description A tab the user pinned; synced between devices when sync is set up. */
         PinnedTab: {
             /** @description Stable id derived from the URL, identical on every device. */
@@ -5111,6 +6007,41 @@ export interface components {
             reason?: string | null;
         };
         /**
+         * RelayStatus
+         * @description Relay registration state.
+         */
+        RelayStatus: {
+            /**
+             * Format: uint32
+             * @description Devices connected through the relay now.
+             */
+            clients: number;
+            /** @description Routing id the relay knows this daemon by. */
+            daemon_id: string;
+            /** @description Daemon X25519 public key (base64url) carried in relay pairing links. */
+            daemon_key: string;
+            /** @description Latest failure, without secrets. */
+            last_error?: string | null;
+            /** @description `connecting`, `connected` or `backoff`. */
+            state: string;
+            /** @description Relay origin. */
+            url: string;
+        };
+        /**
+         * RemoteStatus
+         * @description Remote transports the daemon runs (`GET /v1/remote/status`).
+         */
+        RemoteStatus: {
+            /** @description The supervised `cloudflared`, when enabled. */
+            cloudflare?: components["schemas"]["CloudflareStatus"] | null;
+            /** @description Enabled transports in pairing preference order. */
+            modes: components["schemas"]["PairingTransport"][];
+            /** @description `remote.public_url`. */
+            public_url?: string | null;
+            /** @description The relay registration, when enabled. */
+            relay?: components["schemas"]["RelayStatus"] | null;
+        };
+        /**
          * ReplRequest
          * @description Run one Playwright-syntax snippet in a session-owned agent tab (`browser_repl`).
          */
@@ -5162,7 +6093,9 @@ export interface components {
              * @description Confirmation, non-secret information, or transient daemon-only secret input: a string,
              *     or `{"totp": "<otpauth:// URI or base32 key>"}` for a `secret_input` ticket whose
              *     `otp.can_register` is true. A `confirm` ticket carrying `otp_register` takes `true` or
-             *     `false` like any confirmation.
+             *     `false` like any confirmation. A `login` ticket takes
+             *     `{"values": {<field id>: string | bool}, "save": bool}`, `{"account": <item_id>}` or
+             *     `{"alternative": <id>}`; a `choice` ticket takes `{"option": <id>}`.
              */
             value: unknown;
         };
@@ -5329,6 +6262,11 @@ export interface components {
              * @default false
              */
             archived: boolean;
+            /**
+             * @description Browser space fixed at creation; historical sessions are shared.
+             * @default shared
+             */
+            browser_space: components["schemas"]["BrowserSpace"];
             /** @description Stable session identifier. */
             id: components["schemas"]["SessionId"];
             /**
@@ -5496,6 +6434,8 @@ export interface components {
         };
         /** @description One child agent started by the parent session's `delegate` tool. */
         Subagent: {
+            /** @description A background Task started by the front agent (`task_start`). */
+            background?: boolean;
             /**
              * Format: date-time
              * @description When the child reached a terminal state.
@@ -5507,6 +6447,8 @@ export interface components {
             last_progress?: unknown;
             /** @description Model selector the child runs on. */
             model: string;
+            /** @description Final answer of a completed child, truncated for display. */
+            output?: string | null;
             /** @description The parent's `delegate` tool call, which stays pending until the child ends. */
             parent_tool_call_id: string;
             /** @description Sanitized detail for failed or cancelled children. */
@@ -5784,6 +6726,13 @@ export interface components {
         /** @description Durable human-intervention ticket correlated with the same deferred tool call. */
         Ticket: {
             /**
+             * @description Set on `device_approval` tickets that wait for a phone sign-in approval
+             *     (`wait_for_approval`).
+             */
+            approval?: components["schemas"]["TicketApproval"] | null;
+            /** @description Set on `choice` tickets. */
+            choice?: components["schemas"]["TicketChoice"] | null;
+            /**
              * Format: date-time
              * @description Creation time in RFC 3339 UTC.
              */
@@ -5801,6 +6750,8 @@ export interface components {
             instructions?: string | null;
             /** @description Requested human action. */
             kind: components["schemas"]["TicketKind"];
+            /** @description Set on `login` tickets. */
+            login?: components["schemas"]["TicketLogin"] | null;
             /** @description Allowed non-secret responses; empty allows free-form information input. */
             options: components["schemas"]["TicketOption"][];
             /** @description Originating agent. */
@@ -5830,9 +6781,51 @@ export interface components {
             tool_call_id: string;
         };
         /**
-         * TicketDeferral
-         * @description Resumption semantics for the suspended tool call.
+         * @description What a `device_approval` ticket opened by `wait_for_approval` shows: the site asks the
+         *     person to approve the sign-in on their phone (a push notification in the site's own app).
+         *     Nobody answers it in openside: the daemon watches the page and resolves the ticket with
+         *     `{"status":"done","next":…}` once the page moves on; rejecting it cancels the wait.
          */
+        TicketApproval: {
+            /** @description The site's icon, as on [`TicketLogin::icon`]. */
+            icon?: string | null;
+            /** @description The page's heading and instruction for the approval (untrusted page text, capped). */
+            message: string;
+            /** @description The number the page asks the person to tap or type on the phone, when it shows one. */
+            number?: string | null;
+            /** @description Exact page origin. */
+            origin: string;
+            /** @description The site's name as the page gives it (untrusted page text), or its host. */
+            site_name: string;
+        };
+        /**
+         * @description What a `choice` ticket (`request_choice`) shows: a decision the page asks for, such as
+         *     which account, which verification method, or whether to trust this device.
+         */
+        TicketChoice: {
+            /** @description The site's icon, as on [`TicketLogin::icon`]. */
+            icon?: string | null;
+            /** @description Always false: one option is picked. */
+            multiple: boolean;
+            /** @description Options in page order. */
+            options: components["schemas"]["TicketChoiceOption"][];
+            /** @description Exact page origin. */
+            origin: string;
+            /** @description The page's heading for the choice. */
+            question: string;
+            /** @description The site's name as the page gives it (untrusted page text), or its host. */
+            site_name: string;
+        };
+        /** @description One option of a `choice` ticket. */
+        TicketChoiceOption: {
+            /** @description Secondary page text of the option, when it has some. */
+            description?: string | null;
+            /** @description Daemon-assigned id; answer with `{"option": id}`. */
+            id: string;
+            /** @description The control's accessible name on the page (untrusted page text), never the model's. */
+            label: string;
+        };
+        /** @description Resumption semantics for the suspended tool call. */
         TicketDeferral: "approval" | "external";
         /** @description Identifies a durable human-intervention ticket. */
         TicketId: string;
@@ -5840,7 +6833,7 @@ export interface components {
          * TicketKind
          * @description Human action required to resolve a suspended tool call.
          */
-        TicketKind: "confirm" | "secret_input" | "device_approval" | "info" | "takeover";
+        TicketKind: "confirm" | "secret_input" | "device_approval" | "info" | "takeover" | "login" | "choice";
         /**
          * TicketList
          * @description Ticket list, optionally filtered by status.
@@ -5848,6 +6841,81 @@ export interface components {
         TicketList: {
             /** @description Matching durable tickets. */
             tickets: components["schemas"]["Ticket"][];
+        };
+        /**
+         * @description What a `login` ticket (`request_login`) shows: the page's login form, rebuilt by the
+         *     daemon. Answer with `{"values": {<field id>: string | bool}, "save": bool}`,
+         *     `{"account": <item_id>}` or `{"alternative": <id>}`.
+         */
+        TicketLogin: {
+            /** @description Logins saved for this origin, when there are several to pick from. */
+            accounts?: components["schemas"]["TicketLoginAccount"][] | null;
+            /** @description Other ways to sign in the page offers. */
+            alternatives: components["schemas"]["TicketLoginAlternative"][];
+            /**
+             * @description Whether `save: true` may keep the identifier and password in the vault for this
+             *     origin (it also needs the `approve` scope and a person device).
+             */
+            can_save: boolean;
+            /**
+             * @description The page's own error message next to the form (e.g. a wrong password on the previous
+             *     attempt; untrusted page text, redacted and capped), when it shows one.
+             */
+            error_text?: string | null;
+            /** @description Fields in page order. */
+            fields: components["schemas"]["TicketLoginField"][];
+            /**
+             * @description The site's icon as a `data:image/...;base64,` URL (at most 8 KiB, fetched by the
+             *     daemon from the page's own origin), when it has one.
+             */
+            icon?: string | null;
+            /** @description Exact page origin the values go to. */
+            origin: string;
+            /** @description The site's name as the page gives it (untrusted page text), or its host. */
+            site_name: string;
+            /** @description The page's own text for its sign-in button. */
+            submit_label: string;
+        };
+        /** @description A login saved in the vault for the ticket's origin, offered instead of typing. */
+        TicketLoginAccount: {
+            /** @description Vault item id; answer with `{"account": item_id}`. */
+            item_id: string;
+            /** @description Masked account name, e.g. `j***@naver.com`. */
+            username_hint: string;
+        };
+        /** @description An alternative sign-in control on the page; answering with its id clicks it. */
+        TicketLoginAlternative: {
+            /** @description Daemon-assigned id. */
+            id: string;
+            /** @description What kind of sign-in it starts. */
+            kind: components["schemas"]["LoginAlternativeKind"];
+            /** @description The control's accessible name on the page (untrusted page text). */
+            label: string;
+            /**
+             * @description The provider, for `provider` controls the daemon recognized.
+             * @default null
+             */
+            provider: components["schemas"]["LoginProvider"] | null;
+        };
+        /** @description One field of the page's login form, in page order. */
+        TicketLoginField: {
+            /**
+             * @description Autocomplete token for the card's input (`username`, `email`, `tel`,
+             *     `current-password`, `one-time-code`), so the person's own password manager can fill it.
+             */
+            autocomplete?: string | null;
+            /** @description Daemon-assigned id the answer's `values` are keyed by. */
+            id: string;
+            /** @description What the field holds. */
+            kind: components["schemas"]["LoginFieldKind"];
+            /** @description The page's own label for the field (untrusted page text, trimmed and capped). */
+            label: string;
+            /** @description Whether the input hides what is typed (passwords). */
+            masked: boolean;
+            /** @description The page's placeholder, when it has one. */
+            placeholder?: string | null;
+            /** @description Whether the page requires a value. */
+            required: boolean;
         };
         /**
          * TicketOption
@@ -5864,6 +6932,10 @@ export interface components {
          * @description Identity of the agent that requested human intervention.
          */
         TicketOrigin: {
+            /** @description Device behind a direct API tool call; `local` identifies the Unix socket. */
+            device_id?: string | null;
+            /** @description Agent-client identities that drove this session before the ticket opened. */
+            driver_ids?: string[];
             /** @description Absent for the parent agent, otherwise the originating subagent. */
             subagent_id?: string | null;
         };
@@ -5873,7 +6945,7 @@ export interface components {
              * @description Besides a code (a string `value`), the person may resolve with
              *     `{"totp": "<otpauth:// URI or base32 setup key>"}`: the daemon stores the authenticator
              *     in the vault for the ticket's origin and fills the code it generates, now and on later
-             *     `request_otp` calls for that origin.
+             *     `request_otp` calls for that origin. Registration requires `approve` and a person device.
              */
             can_register: boolean;
             /** @description Where the code comes from. */
@@ -5922,6 +6994,71 @@ export interface components {
             name: string;
         };
         /**
+         * ToolCallRequest
+         * @description Run one daemon tool in a session through the same host pipeline as an agent call.
+         */
+        ToolCallRequest: {
+            /**
+             * @description Approved `confirm` ticket from an earlier `deferred` response with deferral
+             *     `approval`; the identical `args` run again under that approval.
+             */
+            approval_ticket?: components["schemas"]["TicketId"] | null;
+            /**
+             * @description Tool arguments matching the descriptor's `input_schema`.
+             * @default {}
+             */
+            args: unknown;
+        };
+        /**
+         * ToolCallResponse
+         * @description Result of a [`ToolCallRequest`], recorded as a tool call in the session's events.
+         */
+        ToolCallResponse: {
+            /**
+             * @description Artifact paths the call saved (a screenshot's PNG), readable through
+             *     `GET /v1/sessions/{id}/artifacts/{path}`.
+             */
+            artifacts?: string[];
+            /** @description How the pending ticket resumes the call when `status` is `deferred`. */
+            deferral?: components["schemas"]["TicketDeferral"] | null;
+            /** @description How to proceed after a denial. */
+            hint?: string | null;
+            /** @description Denial reason or failure message. */
+            reason?: string | null;
+            /** @description Redacted tool result when `status` is `done`. */
+            result?: unknown;
+            /** @description Outcome category. */
+            status: components["schemas"]["ToolCallStatus"];
+            /** @description Pending ticket when `status` is `deferred`. */
+            ticket_id?: components["schemas"]["TicketId"] | null;
+            /** @description Tool call identifier recorded in the session's `tool.started`/`tool.ended` events. */
+            tool_call_id: string;
+        };
+        /** @description Outcome category of a [`ToolCallRequest`]. */
+        ToolCallStatus: "done" | "deferred" | "denied" | "failed";
+        /**
+         * ToolCatalog
+         * @description `GET /v1/tools` response: every directly callable tool, in name order. A session may
+         *     still refuse a listed tool (its mode, an incognito session, the configured agent profile).
+         */
+        ToolCatalog: {
+            /** @description Callable tools. */
+            tools: components["schemas"]["ToolDescriptor"][];
+        };
+        /** @description One daemon tool an API caller may run directly (`POST /v1/sessions/{id}/tools/{name}`). */
+        ToolDescriptor: {
+            /** @description The description the agent's model sees. */
+            description: string;
+            /** @description Whether the call opens a person-facing ticket and its result arrives on resolution. */
+            human: boolean;
+            /** @description JSON Schema of `ToolCallRequest.args`. */
+            input_schema: unknown;
+            /** @description Tool name, identical to the name the in-app agent calls. */
+            name: string;
+            /** @description Capability a token needs to call it. */
+            scope: components["schemas"]["CapabilityScope"];
+        };
+        /**
          * UpdateMemoryRequest
          * @description `PATCH /v1/memory/{id}` body; absent fields are unchanged.
          */
@@ -5932,6 +7069,15 @@ export interface components {
             retention?: components["schemas"]["Retention"] | null;
             /** @description Replacement labels. */
             tags?: string[] | null;
+        };
+        /**
+         * UpdateOnboardingRequest
+         * @description `PUT /v1/onboarding`: record how the guide ended. Only `completed` and `skipped` are
+         *     accepted; reopening the guide from Settings does not reset the flag.
+         */
+        UpdateOnboardingRequest: {
+            /** @description `completed` or `skipped`. */
+            state: components["schemas"]["OnboardingState"];
         };
         /**
          * UpdateRoutineRequest
@@ -6030,7 +7176,7 @@ export interface components {
             /** @description Model tool-call id for tool calls. */
             tool_call_id?: string | null;
             /**
-             * @description `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `get`,
+             * @description `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `login_save`, `get`,
              *     `policy_update`, `item_add`, `item_delete`, or the lifecycle steps `setup`, `unlock`
              *     and `lock`.
              */

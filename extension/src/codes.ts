@@ -1,11 +1,13 @@
+import { isApprovalTicket, isChoiceTicket, isLoginTicket } from "../../web/src/otp/loginForm";
 import { codeHelp, isOtpTicket, otpRegistrationOf, registrationQuestion } from "../../web/src/otp/otpForm";
+import { siteOf } from "../../web/src/otp/authCard";
 import type { Ticket } from "./api";
 export const CODE_NOTIFICATION = "code:";
-// Chrome opens a side panel only inside a user gesture, so a code request cannot open it by
-// itself: the toolbar badge counts waiting requests and each new one is announced once with a
-// notification whose click opens the panel. Nothing takes focus on its own.
+// Chrome opens a side panel only inside a user gesture, so a code, login or choice request
+// cannot open it by itself: the toolbar badge counts waiting requests and each new one is
+// announced once with a notification whose click opens the panel. Nothing takes focus on its own.
 export async function announceCodes(tickets: Ticket[]): Promise<void> {
-  const waiting = tickets.filter(ticket => isOtpTicket(ticket) || otpRegistrationOf(ticket));
+  const waiting = tickets.filter(ticket => isOtpTicket(ticket) || otpRegistrationOf(ticket) || isLoginTicket(ticket) || isChoiceTicket(ticket) || isApprovalTicket(ticket));
   await chrome.action.setBadgeBackgroundColor({ color: "#2f6fed" });
   await chrome.action.setBadgeText({ text: waiting.length ? String(waiting.length) : "" });
   const stored: unknown = (await chrome.storage.session.get("codesNotified")).codesNotified;
@@ -17,8 +19,16 @@ export async function announceCodes(tickets: Ticket[]): Promise<void> {
     const registration = otpRegistrationOf(ticket);
     chrome.notifications.create(`${CODE_NOTIFICATION}${ticket.id}`, {
       type: "basic", iconUrl: "icon.png",
-      title: registration ? "Save authenticator?" : "Code needed",
-      message: registration ? registrationQuestion(registration) : isOtpTicket(ticket) ? codeHelp(ticket) : ticket.summary,
+      title: registration ? "Save authenticator?" : isLoginTicket(ticket) ? "Login needed" : isChoiceTicket(ticket) ? "Choice needed" : isApprovalTicket(ticket) ? "Approve on your phone" : "Code needed",
+      message: registration
+        ? registrationQuestion(registration)
+        : isOtpTicket(ticket)
+          ? codeHelp(ticket)
+          : isLoginTicket(ticket)
+            ? `Log in to ${siteOf(ticket.login.origin)}`
+            : isChoiceTicket(ticket)
+              ? ticket.choice.question
+              : ticket.summary,
       contextMessage: "Click to answer in the openside side panel",
     });
   }

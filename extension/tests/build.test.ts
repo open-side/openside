@@ -25,6 +25,9 @@ describe("production extension artifact", () => {
       expect(manifest.omnibox.keyword).toBe("os");
       for (const font of ["fonts/wanted-sans/WantedSansVariable.css", "fonts/wanted-sans/OFL.txt", "fonts/wanted-sans/woff2/WantedSansVariable.split.0.woff2", "fonts/d2coding/D2Coding-Regular.woff2", "fonts/d2coding/OFL.txt"]) expect((await readFile(join(directory, font))).length).toBeGreaterThan(0);
       for (const page of ["panel.html", "options.html", "style.css"]) expect(await readFile(join(directory, page), "utf8")).not.toMatch(/(?:src|href)=["']https?:|url\(\s*["']?https?:/);
+      const options = await readFile(join(directory, "options.html"), "utf8");
+      expect(options).toContain("openside token create --person --scope read --scope steer --scope approve");
+      expect(options).toContain("never give it to an agent");
       for (const entry of ["background.js", "content.js", "panel.js", "options.js"]) expect((await readFile(join(directory, entry), "utf8")).length).toBeGreaterThan(0);
       await run("pnpm", ["build"], { cwd: process.cwd(), env: { ...env, OPENSIDE_EXTENSION_TEST_MATCHES: "1" } });
       const testManifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8"));

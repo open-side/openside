@@ -8,8 +8,8 @@ await build({ entryPoints: ["src/background.ts", "src/content.ts", "src/panel.ts
 for (const file of ["panel.html", "options.html", "style.css"]) await copyFile(`static/${file}`, `${outdir}/${file}`);
 // icon-16 is drawn with a wider ring-to-slab gap so the two stay apart at toolbar size.
 await cp("static/icons", `${outdir}/icons`, { recursive: true });
-// The code form and its stylesheet are shared with the web app; the notification icon is the app icon.
-await copyFile("../web/src/otp/otp.css", `${outdir}/otp.css`);
+// The code, login and choice cards and their stylesheet are shared with the web app; the notification icon is the app icon.
+await copyFile("../web/src/otp/auth.css", `${outdir}/auth.css`);
 await copyFile("../web/public/icons/icon-192.png", `${outdir}/icon.png`);
 // Fonts are shared with the web app (OFL-1.1, texts included) and bundled so extension pages never load remote fonts. D2Coding Bold is not used here.
 const fonts = resolve("../web/src/assets/fonts");

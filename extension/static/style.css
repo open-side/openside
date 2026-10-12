@@ -2,6 +2,7 @@
  * Ask side panel and options page. Tokens and component language follow the web app
  * (web/src/styles.css, web/src/ui/ui.css, web/DESIGN.md), which adopts mym0404/aside-relay (MIT).
  * The theme follows the browser (prefers-color-scheme); there is no in-extension picker.
+ * The glass block below is a copy of the web glass tokens; web/src/styles.css is the source of truth.
  */
 
 @font-face {
@@ -26,9 +27,7 @@
   --toast-danger: #ff9b91;
   --glass: rgb(255 255 255 / 0.72);
   --glass-border: rgb(0 0 0 / 0.08);
-  --composer-bg: rgb(255 255 255 / 0.86);
   --shadow-glass: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px rgb(0 0 0 / 0.06);
-  --shadow-composer: 0 2px 6px rgb(0 0 0 / 0.04), 0 10px 32px rgb(0 0 0 / 0.08);
   --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.06);
   --primary: #2f6fed;
   --primary-foreground: #ffffff;
@@ -50,13 +49,74 @@
     --hover: #303030;
     --control-border: #414141;
     --danger: #ff9b91;
-    --glass: rgb(28 28 28 / 0.72);
-    --glass-border: rgb(255 255 255 / 0.1);
-    --composer-bg: rgb(24 24 24 / 0.88);
+    /* Navy-tinted so frosted chrome belongs to the deep gradient backdrop. */
+    --glass: rgb(34 40 66 / 0.62);
+    --glass-border: rgb(255 255 255 / 0.12);
     --shadow-glass: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 16px rgb(0 0 0 / 0.4);
-    --shadow-composer: 0 2px 6px rgb(0 0 0 / 0.4), 0 10px 32px rgb(0 0 0 / 0.5);
     --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4);
   }
+}
+
+/* Glass-on-gradient: mirrors the token block in web/src/styles.css. Strong glass stays dark in both themes. */
+:root {
+  --backdrop:
+    radial-gradient(120% 60% at 50% 110%, rgb(255 214 196 / 0.9), transparent 70%),
+    linear-gradient(180deg, #e3eaf6 0%, #dcdcf3 48%, #efe0e6 82%, #f6e2d6 100%);
+  --glass-strong-bg: rgb(28 34 58 / 0.86);
+  --glass-strong-fg: #f5f6fb;
+  --glass-strong-muted: rgb(245 246 251 / 0.66);
+  --glass-strong-border: rgb(255 255 255 / 0.1);
+  --glass-input-bg: rgb(255 255 255 / 0.08);
+  --glass-inset-bg: rgb(255 255 255 / 0.55);
+  --glass-inset-border: rgb(23 26 36 / 0.08);
+  --bubble-user-bg: rgb(255 255 255 / 0.62);
+  --bubble-user-fg: #171a24;
+  --pill-primary-bg: #ffffff;
+  --pill-primary-fg: #111318;
+  --status-pill-bg: rgb(255 255 255 / 0.18);
+  --status-pill-border: rgb(23 26 36 / 0.14);
+  --radius-glass: 24px;
+  --blur-glass: blur(24px) saturate(1.5);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --backdrop:
+      radial-gradient(120% 55% at 50% 112%, rgb(214 134 104 / 0.75), transparent 70%),
+      linear-gradient(180deg, #1c2747 0%, #2c3a6e 42%, #59629a 74%, #9b7f98 100%);
+    --bubble-user-bg: rgb(255 255 255 / 0.14);
+    --bubble-user-fg: #f5f6fb;
+    --glass-inset-bg: rgb(255 255 255 / 0.06);
+    --glass-inset-border: rgb(255 255 255 / 0.1);
+    --status-pill-bg: rgb(255 255 255 / 0.06);
+    --status-pill-border: rgb(255 255 255 / 0.16);
+  }
+}
+/* Inside strong glass the page tokens point at light-on-navy values (as in web), so Markdown, buttons and inputs stay readable. */
+.bubble.assistant,
+.ticket:not(.ticket-auth),
+.composer {
+  color-scheme: dark;
+  --text: var(--glass-strong-fg);
+  --muted: var(--glass-strong-muted);
+  --border: rgb(255 255 255 / 0.14);
+  --control-border: rgb(255 255 255 / 0.18);
+  --hover: rgb(255 255 255 / 0.1);
+  --canvas: rgb(255 255 255 / 0.06);
+  --surface: rgb(8 11 24 / 0.32);
+  --bubble: rgb(255 255 255 / 0.12);
+  --primary: var(--pill-primary-bg);
+  --primary-foreground: var(--pill-primary-fg);
+  --primary-hover: #e4e7ef;
+  --link: #a9c7ff;
+  --danger: #ff9b91;
+  border: 1px solid var(--glass-strong-border);
+  background: var(--glass-strong-bg);
+  color: var(--text);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .bubble.assistant, .ticket:not(.ticket-auth), .composer { background: rgb(28 34 58 / 0.97); }
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -73,7 +133,7 @@ body {
 h1, h2, p { margin: 0; }
 svg { flex: none; }
 kbd, code { font-family: var(--font-code); font-size: 0.875em; }
-kbd { padding: 1px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: 6px; background: var(--glass); }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--primary) 28%, transparent); }
 .sr-only {
@@ -133,6 +193,11 @@ kbd { padding: 1px 6px; border: 1px solid var(--border); border-radius: 6px; bac
 .button.primary:hover:not(:disabled) { background: var(--primary-hover); }
 .button.danger { color: var(--danger); }
 .button.compact { min-height: 36px; padding: 0 14px; border-radius: 12px; font-size: 0.875rem; }
+.button.ghost { border-color: transparent; background: transparent; }
+.icon-button.small { width: 32px; height: 32px; color: var(--muted); }
+.icon-button.small:hover:not(:disabled) { color: var(--text); }
+/* web/src/ui/clipboard.ts parks its fallback textarea with this class. */
+.ui-offscreen { position: fixed; top: 0; left: -9999px; opacity: 0; }
 
 input, select, textarea { font: inherit; color: var(--text); }
 input {
@@ -190,51 +255,176 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 
 /* Ask side panel */
 
-body.panel { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+body.panel { position: relative; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; background: var(--backdrop); background-color: var(--canvas); }
+/*
+ * The side panel already sits under the browser's own "openside" title, so the bar carries only the
+ * conversation switcher, the connection note and settings. Like the web header it floats over the
+ * conversation as frosted pills, so text scrolls under the glass.
+ */
 .bar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 56px;
+  padding: 8px 10px;
+  pointer-events: none;
+}
+.bar > * { pointer-events: auto; }
+.session-picker select,
+.bar .icon-button,
+.connection {
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  box-shadow: var(--shadow-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+}
+.session-picker { position: relative; display: flex; flex: 0 1 auto; align-items: center; min-width: 0; }
+/* Settings stays at the trailing edge even while the picker is hidden (not paired). */
+.bar #pair { margin-left: auto; }
+.session-picker select {
+  min-width: 0;
+  max-width: 100%;
+  height: 40px;
+  padding: 0 34px 0 16px;
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  appearance: none;
+  cursor: pointer;
+  transition: background-color var(--fast) var(--ease);
+}
+.session-picker select:hover { background: color-mix(in srgb, var(--glass) 70%, var(--hover)); }
+.session-picker select option { background: var(--canvas); color: var(--text); font-weight: 400; }
+.session-picker-chevron { position: absolute; right: 12px; color: var(--muted); pointer-events: none; }
+.bar .icon-button:hover:not(:disabled) { background: color-mix(in srgb, var(--glass) 70%, var(--hover)); }
+/* Same quiet outlined pill as the web status line. */
+.connection {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
-  padding: 12px 14px 8px 18px;
-}
-.bar h1 { margin-right: auto; font-size: 1.0625rem; font-weight: 650; letter-spacing: -0.01em; }
-.pill-select { position: relative; display: flex; align-items: center; min-width: 0; max-width: 62%; }
-.pill-select select {
-  min-width: 0;
-  width: 100%;
-  height: 40px;
-  padding: 0 34px 0 16px;
-  border: 1px solid var(--glass-border);
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px 0 10px;
+  border-color: var(--status-pill-border);
   border-radius: 999px;
-  background: var(--glass);
-  box-shadow: var(--shadow-glass);
-  font-size: 0.875rem;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  appearance: none;
-  cursor: pointer;
-  -webkit-backdrop-filter: blur(16px) saturate(1.6);
-  backdrop-filter: blur(16px) saturate(1.6);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  white-space: nowrap;
 }
-.pill-select select:hover { background: var(--hover); }
-.pill-select select option { background: var(--canvas); color: var(--text); }
-.pill-select-chevron { position: absolute; right: 12px; color: var(--muted); pointer-events: none; }
+.connection::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; animation: breathe 1.2s var(--ease) infinite; }
+.connection:empty { display: none; }
 
-.scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--control-border) transparent; }
-.column { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-height: 100%; padding: 8px 16px 24px; align-content: start; }
-.timeline, .tickets { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+/* Never scroll sideways: text wraps, labels truncate, and code blocks and tables scroll inside their own box. */
+/* The top fade lets text scrolling under the floating bar dissolve instead of colliding with its pills. */
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--control-border) transparent;
+  overflow-wrap: anywhere;
+  -webkit-mask-image: linear-gradient(transparent 0 16px, #000 64px);
+  mask-image: linear-gradient(transparent 0 16px, #000 64px);
+}
+.column { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-height: 100%; padding: 64px 14px 20px; align-content: start; }
+.timeline { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+/* A new prompt opens a new turn: more air above it than between a turn's own parts. */
+.timeline > .bubble.user:not(:first-child) { margin-top: 12px; }
+.tickets { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .timeline:empty, .tickets:empty { display: none; }
 
-.bubble { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.bubble { margin: 0; overflow-wrap: anywhere; }
 .bubble.user {
   justify-self: end;
-  max-width: 88%;
+  max-width: 85%;
   padding: 10px 16px;
+  border: 1px solid var(--glass-border);
   border-radius: 22px;
-  background: var(--bubble);
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-fg);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+  white-space: pre-wrap;
 }
-.bubble.assistant { min-width: 0; line-height: 1.65; }
+/* Strong glass (see the token block); the bubble hugs short replies and caps long ones. */
+.bubble.assistant {
+  justify-self: start;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  padding: 12px 16px;
+  border-radius: 22px;
+  box-shadow: 0 1px 2px rgb(10 14 30 / 0.12), 0 8px 24px rgb(10 14 30 / 0.12);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+/* A reply still being written ends in a breathing dot; alone, it reads as "thinking". */
+.bubble.assistant.streaming::after {
+  content: "";
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--muted);
+  animation: breathe 1.2s var(--ease) infinite;
+}
+.bubble.assistant.streaming:empty::after { margin: 4px 2px; }
+@keyframes breathe { 50% { opacity: 0.25; scale: 0.7; } }
+
+/* Markdown: mirrors web/src/styles.css ".markdown" so a reply reads the same in both. */
+.bubble.assistant > :first-child { margin-top: 0; }
+.bubble.assistant > :last-child { margin-bottom: 0; }
+.bubble.assistant :is(p, ul, ol, blockquote, .code-block, .table-scroll) { margin: 0 0 14px; }
+.bubble.assistant p { white-space: pre-wrap; }
+.bubble.assistant :is(h1, h2, h3, h4) { margin: 22px 0 10px; font-weight: 650; line-height: 1.35; }
+.bubble.assistant h1 { font-size: 1.25rem; }
+.bubble.assistant h2 { font-size: 1.125rem; }
+.bubble.assistant h3 { font-size: 1.0625rem; }
+.bubble.assistant h4 { font-size: 1rem; }
+.bubble.assistant :is(ul, ol) { padding-left: 1.4em; }
+.bubble.assistant li + li { margin-top: 4px; }
+.bubble.assistant li > p { margin: 0; }
+.bubble.assistant li > :is(ul, ol) { margin: 4px 0 0; }
+.bubble.assistant blockquote { padding: 2px 0 2px 14px; border-left: 3px solid var(--border); color: var(--muted); }
+.bubble.assistant hr { margin: 20px 0; border: 0; border-top: 1px solid var(--border); }
+.bubble.assistant :not(pre) > code { padding: 1px 6px; border-radius: 6px; background: var(--bubble); font-size: 0.875em; }
+.bubble.assistant a { color: var(--link); text-underline-offset: 2px; }
+.md-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-decoration: none;
+  vertical-align: middle;
+}
+.bubble.assistant a.md-image { color: var(--text); }
+.table-scroll { overflow-x: auto; }
+.bubble.assistant table { border-collapse: collapse; font-size: 0.9375rem; }
+.bubble.assistant :is(th, td) { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.bubble.assistant th { color: var(--muted); font-size: 0.8125rem; font-weight: 600; }
+.bubble.assistant :is(th, td)[align="right"] { text-align: right; }
+.bubble.assistant :is(th, td)[align="center"] { text-align: center; }
+.code-block { overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+.code-block-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 0 14px; color: var(--muted); font-size: 0.75rem; font-weight: 600; }
+.code-block pre { margin: 0; padding: 6px 14px 14px; overflow-x: auto; font-family: var(--font-code); font-size: 0.8125rem; line-height: 1.4; }
+.code-block pre code { font-size: inherit; }
+.code-block pre:focus-visible { outline-offset: -2px; }
 
 .empty {
   display: grid;
@@ -245,85 +435,100 @@ body.panel { display: flex; flex-direction: column; height: 100dvh; overflow: hi
   padding: 0 20px 56px;
   text-align: center;
 }
+.empty-unpaired { display: none; }
+.empty .button { margin-top: 6px; }
 .column:has(#transcript:not(:empty), #tickets:not(:empty)) .empty { display: none; }
 /* With only the empty state visible, give it the whole column so it centers in the panel. */
 .column:not(:has(#transcript:not(:empty), #tickets:not(:empty))) { grid-template-rows: minmax(0, 1fr); }
+body[data-paired="false"] .empty-unpaired { display: grid; }
+body[data-paired="false"] :is(.empty-paired, .session-picker, .dock) { display: none; }
 .empty-icon {
-  width: 48px;
-  height: 48px;
-  border: 1px solid var(--border);
+  width: 52px;
+  height: 52px;
+  border: 1px solid var(--glass-border);
   border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
+  background: var(--glass);
+  box-shadow: var(--shadow-glass);
+  color: var(--text);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
 }
-.empty h2 { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.015em; }
-.empty p { max-width: 30ch; color: var(--muted); font-size: 0.9375rem; line-height: 1.55; }
+.empty h2 { font-size: 1.125rem; font-weight: 650; letter-spacing: -0.01em; }
+.empty p { max-width: 30ch; color: color-mix(in srgb, var(--text) 68%, transparent); font-size: 0.9375rem; line-height: 1.55; }
 
+/* Cards follow web/src/components/TicketCard.tsx: strong glass (see the token block), white primary pill, ghost secondary actions. */
 .ticket {
   display: grid;
   gap: 10px;
-  padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--primary) 55%, var(--border));
-  border-radius: 22px;
-  background: var(--surface);
+  padding: 16px 18px 18px;
+  border-radius: var(--radius-glass);
+  box-shadow: 0 1px 2px rgb(10 14 30 / 0.12), 0 8px 24px rgb(10 14 30 / 0.14);
+  font-size: 0.9375rem;
 }
-.ticket-head { display: flex; align-items: center; gap: 10px; color: var(--primary); }
-.ticket-head strong { color: var(--text); font-size: 0.9375rem; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+.ticket-head { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 0.9375rem; font-weight: 650; }
+.ticket-icon { color: var(--text); }
+.ticket-summary { display: block; font-size: 0.9375rem; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .ticket-note { color: var(--muted); font-size: 0.875rem; line-height: 1.45; overflow-wrap: anywhere; }
-.ticket-note:empty { display: none; }
-.ticket input { background: var(--canvas); }
-.ticket-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ticket-site { color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.ticket input { min-height: 44px; margin-top: 2px; border-color: rgb(255 255 255 / 0.14); border-radius: 14px; background: var(--glass-input-bg); font-size: 0.9375rem; }
+.ticket-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.ticket .button.compact { min-height: 40px; padding: 0 18px; border-radius: 999px; }
+.ticket .button.primary { order: 1; }
+.ticket .button.ghost { color: var(--muted); }
+.ticket .button.ghost:hover:not(:disabled) { color: var(--text); }
+/* The shared code form draws six 44px cells; below ~380px they would overflow the card. */
+@media (max-width: 380px) { .ticket-otp .otp-digits { --cell: 36px; --gap: 6px; } }
 
-.dock { position: relative; flex: none; padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); }
-.dock::before {
-  content: "";
-  position: absolute;
-  inset: -20px 0 auto;
-  height: 20px;
-  background: linear-gradient(transparent, var(--canvas));
-  pointer-events: none;
-}
+/* Anchored to the dock, so it sits right above the composer however tall the draft grows. */
+body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); animation-name: toast-rise; }
+@keyframes toast-rise { from { opacity: 0; translate: -50% 8px; } }
+
+.dock { position: relative; flex: none; padding: 6px 12px calc(12px + env(safe-area-inset-bottom)); }
+/* Strong glass pill floating on the gradient (see the token block). */
 .composer {
   display: grid;
   gap: 4px;
-  padding: 8px;
-  border: 1px solid var(--glass-border);
+  padding: 6px;
   border-radius: 28px;
-  background: var(--composer-bg);
-  box-shadow: var(--shadow-composer);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow: 0 2px 6px rgb(10 14 30 / 0.12), 0 12px 32px rgb(10 14 30 / 0.2);
   transition: border-color var(--fast) var(--ease);
 }
-.composer:focus-within { border-color: var(--control-border); }
+.composer:focus-within { border-color: rgb(255 255 255 / 0.24); }
 .composer-row { display: flex; align-items: flex-end; gap: 2px; }
 .composer-field { display: flex; flex: 1; min-width: 0; }
 .composer-field textarea {
   width: 100%;
   min-height: 40px;
   max-height: 200px;
-  padding: 9px 4px 9px 12px;
+  padding: 8px 4px 8px 12px;
   border: 0;
   background: transparent;
   font-size: 1rem;
-  line-height: 1.4;
-  overflow-y: hidden;
+  line-height: 24px;
+  field-sizing: content;
+  overflow-y: auto;
   resize: none;
   outline: none;
   scrollbar-width: thin;
 }
-.composer:has(#message:placeholder-shown) .icon-button.primary { opacity: 0.3; }
+.composer .icon-button { color: var(--muted); }
+.composer .icon-button:hover:not(:disabled) { color: var(--text); }
+/* Send is the white circle once there is something to send. */
+.composer .icon-button.primary { width: 40px; height: 40px; background: var(--pill-primary-bg); color: var(--pill-primary-fg); }
+.composer .icon-button.primary:hover:not(:disabled) { background: var(--primary-hover); }
+.composer:has(#message:placeholder-shown) .icon-button.primary { background: var(--hover); color: var(--muted); }
 .context-chip {
   display: block;
   max-width: 100%;
   margin: 2px 4px 0;
   padding: 5px 12px;
   overflow: hidden;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--primary) 14%, transparent);
-  color: var(--primary);
+  background: var(--bubble);
+  color: var(--text);
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -331,11 +536,28 @@ body.panel { display: flex; flex-direction: column; height: 100dvh; overflow: hi
 
 /* Options page */
 
-body.options { overflow-y: auto; }
+body.options { overflow-y: auto; background: var(--backdrop); background-color: var(--canvas); }
 /* Compact on purpose: every action must sit inside a ~780x490 headless viewport without scrolling, because the e2e clicks at unscrolled coordinates. */
-.page { display: grid; gap: 12px; width: min(520px, 100%); margin: 0 auto; padding: 14px 20px 24px; }
+.page { display: grid; gap: 12px; width: min(520px, 100%); margin: 0 auto; padding: 14px 20px 24px; overflow-wrap: anywhere; }
+.page-head { display: grid; gap: 2px; }
+.pairing-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.875rem; font-weight: 550; }
+.pairing-state::before { content: ""; flex: none; width: 8px; height: 8px; border: 1.5px solid currentColor; border-radius: 999px; }
+.pairing-state[data-paired="true"] { color: var(--text); }
+.pairing-state[data-paired="true"]::before { border-color: var(--primary); background: var(--primary); }
 .page-head h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.015em; }
-.card { display: grid; gap: 12px; padding: 16px 20px; border: 1px solid var(--border); border-radius: 24px; background: var(--surface); }
+/* Frosted, theme-aware sheets on the gradient, like the web manage pages; fields and quiet buttons sit on inset glass. */
+.card {
+  display: grid;
+  gap: 12px;
+  padding: 16px 20px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-glass);
+  background: var(--glass);
+  box-shadow: var(--shadow-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+}
+.card :is(input, .button:not(.primary, .ghost)) { border-color: var(--glass-inset-border); background: var(--glass-inset-bg); }
 .card-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .card h2 { display: flex; align-items: center; gap: 8px; font-size: 1.0625rem; font-weight: 650; }
 .field { display: grid; gap: 4px; }
@@ -348,4 +570,6 @@ body.options .toast { top: 16px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
   .icon-button:active:not(:disabled), .button:active:not(:disabled) { transform: none; }
+  /* Infinite loops at 1ms would flicker; hold the indicator still instead. */
+  .connection::before, .bubble.assistant.streaming::after { animation: none !important; opacity: 0.6; }
 }

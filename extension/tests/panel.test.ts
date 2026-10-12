@@ -90,11 +90,46 @@ describe("Ask visible behavior", () => {
     expect(document.querySelectorAll("svg[stroke-width='1.8']").length).toBeGreaterThan(0);
     expect(document.querySelector("[data-icon] svg")).not.toBeNull();
   });
-  it("reports connection progress and daemon failures in the status toast without stale connection notes", async () => {
+  it("renders replies as markdown like the web app, keeps user text literal and shows a writing indicator until the turn ends", () => {
+    state.onEvent!({ kind: "message.queued", text: "1. **not** markdown", seq: 1 } as DaemonEvent);
+    expect(document.querySelector("#transcript .bubble.user")?.textContent).toBe("1. **not** markdown");
+    state.onEvent!({ kind: "turn.started", seq: 2 } as DaemonEvent);
+    const reply = document.querySelector<HTMLElement>("#transcript .bubble.assistant")!;
+    expect(reply.classList.contains("streaming")).toBe(true);
+    state.onEvent!({ kind: "assistant.delta", text: "Steps:\n\n1. **Open** the [page](https://site.example.test)\n2. Click [here](javascript:alert(1))\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n```ts\nconst x = 1;\n```\n\n![chart](https://img.example.test/c.png)", seq: 3 } as DaemonEvent);
+    expect([...reply.querySelectorAll("ol > li")].map(item => item.textContent)).toEqual(["Open the page", "Click here"]);
+    expect(reply.querySelector("ol strong")?.textContent).toBe("Open");
+    const links = [...reply.querySelectorAll<HTMLAnchorElement>("ol a")];
+    expect(links[0].getAttribute("href")).toBe("https://site.example.test");
+    expect(links[0].rel).toBe("noopener noreferrer");
+    expect(links[1].getAttribute("href")).toBe("");
+    expect(reply.querySelector(".table-scroll > table td")?.textContent).toBe("1");
+    expect(reply.querySelector(".code-block-head span")?.textContent).toBe("ts");
+    expect(reply.querySelector(".code-block pre code")?.textContent).toBe("const x = 1;\n");
+    expect(reply.querySelector("img")).toBeNull();
+    expect(reply.querySelector("a.md-image")?.textContent).toBe("chart");
+    expect(reply.classList.contains("streaming")).toBe(true);
+    state.onEvent!({ kind: "turn.ended", seq: 4 } as DaemonEvent);
+    expect(reply.classList.contains("streaming")).toBe(false);
+  });
+  it("shows how to pair instead of an error when the pairing is gone", async () => {
+    vi.mocked(chrome.storage.session.get).mockImplementation((async () => ({})) as never);
+    for (const listener of state.storageListeners) listener({ pairing: { oldValue: {} } }, "session");
+    await vi.waitFor(() => expect(document.body.dataset.paired).toBe("false"));
+    expect(state.close).toHaveBeenCalled();
+    expect(document.querySelector("#transcript")?.children.length).toBe(0);
+    expect(document.querySelector("#status")?.textContent).toBe("");
+    expect(document.querySelector(".empty-unpaired")?.textContent).toContain("Pair openside first");
+    document.querySelector<HTMLButtonElement>("#pair-start")!.click();
+    expect(chrome.runtime.openOptionsPage).toHaveBeenCalled();
+  });
+  it("reports connection progress in the bar and daemon failures in the status toast", async () => {
     const status = document.querySelector<HTMLElement>("#status")!;
+    const connection = document.querySelector<HTMLElement>("#connection")!;
     state.onStatus!("reconnecting");
-    expect(status.textContent).toBe("Reconnecting…");
+    expect(connection.textContent).toBe("Reconnecting…");
     state.onStatus!("open");
+    expect(connection.textContent).toBe("");
     expect(status.textContent).toBe("");
     state.api.resolveTicket.mockRejectedValueOnce(new Error("offline"));
     await vi.waitFor(() => expect(document.querySelector("#tickets")?.textContent).toContain("Allow this operation?"));
@@ -114,6 +149,7 @@ describe("Ask visible behavior", () => {
     const input = await vi.waitFor(() => { const found = document.querySelector<HTMLInputElement>("#tickets input[autocomplete='one-time-code']"); expect(found).not.toBeNull(); return found!; });
     expect(input.getAttribute("inputmode")).toBe("numeric");
     expect(document.querySelector("#tickets")?.textContent).toContain("Code from a text message for shop.example");
+    expect(document.querySelector("#tickets .ticket-auth > .action-chip")?.textContent).toBe("Action needed");
     input.value = "48";
     const before = state.api.listTickets.mock.calls.length;
     state.onEvent!({ kind: "ticket.opened", seq: 2 } as DaemonEvent);
@@ -135,9 +171,9 @@ describe("Ask visible behavior", () => {
     state.onEvent!({ kind: "ticket.opened", seq: 1 } as DaemonEvent);
     await vi.waitFor(() => expect(document.querySelector("#tickets")?.textContent).toContain("Save the authenticator for shop.example (Shop · me) to your vault?"));
     const buttons = [...document.querySelectorAll<HTMLButtonElement>("#tickets button")];
-    buttons.find(button => button.textContent === "Approve")!.click();
+    buttons.find(button => button.textContent === "Save to vault")!.click();
     await vi.waitFor(() => expect(state.api.resolveTicket).toHaveBeenCalledWith("reg", true));
-    buttons.find(button => button.textContent === "Decline")!.click();
+    buttons.find(button => button.textContent === "Not now")!.click();
     await vi.waitFor(() => expect(state.api.resolveTicket).toHaveBeenCalledWith("reg", false));
     state.api.listTickets.mockImplementation(original);
   });
@@ -159,6 +195,53 @@ describe("Ask visible behavior", () => {
     const fill = [...document.querySelectorAll<HTMLButtonElement>("#tickets button")].find(button => button.textContent === "Fill this code")!;
     fill.click();
     await vi.waitFor(() => expect(state.api.resolveTicket).toHaveBeenLastCalledWith("otp", expect.stringMatching(/^\d{6}$/)));
+    state.api.listTickets.mockImplementation(original);
+  });
+  it("shows another conversation's login as the shared login card and sends the values once, cleared first", async () => {
+    const login = {
+      id: "login", session_id: "other", kind: "login", summary: "Log in", instructions: null, options: [], origin: {}, status: "pending",
+      target: { origin: "http://127.0.0.1:8123", tab_id: "t", field_ref: null }, otp: null,
+      login: {
+        origin: "http://127.0.0.1:8123", site_name: "Naver",
+        fields: [
+          { id: "f0", kind: "identifier", label: "ID or phone number", masked: false, required: true },
+          { id: "f1", kind: "password", label: "Password", masked: true, required: true },
+        ],
+        alternatives: [{ id: "a0", label: "QR code login", kind: "qr", provider: null }],
+        submit_label: "Log in", can_save: true,
+      },
+    };
+    const original = state.api.listTickets.getMockImplementation()!;
+    state.api.listTickets.mockResolvedValue({ tickets: [login] } as never);
+    state.onEvent!({ kind: "ticket.opened", seq: 1 } as DaemonEvent);
+    const id = await vi.waitFor(() => { const found = document.querySelector<HTMLInputElement>("#tickets input[autocomplete='username']"); expect(found).not.toBeNull(); return found!; });
+    const password = document.querySelector<HTMLInputElement>("#tickets input[autocomplete='current-password']")!;
+    // The page named itself "Naver"; the daemon-verified origin stays on screen and the name reads as the page's claim.
+    expect(document.querySelector("#tickets .auth-origin")?.textContent).toBe("http://127.0.0.1:8123");
+    expect(document.querySelector("#tickets .auth-page-name")?.textContent).toBe("Page calls itself “Naver”");
+    expect(document.querySelector("#tickets .auth-title")?.textContent).toBe("Log in");
+    expect(document.querySelector("#tickets")?.textContent).toContain("Handled by");
+    id.value = "jane";
+    password.value = "pw-secret";
+    id.form!.requestSubmit();
+    expect(id.value).toBe("");
+    expect(password.value).toBe("");
+    await vi.waitFor(() => expect(state.api.resolveTicket).toHaveBeenCalledWith("login", { values: { f0: "jane", f1: "pw-secret" }, save: true }));
+    state.api.listTickets.mockImplementation(original);
+  });
+  it("shows a login-step choice and sends the picked option", async () => {
+    const choice = {
+      id: "choice", session_id: "other", kind: "choice", summary: "Verify", instructions: null, options: [], origin: {}, status: "pending",
+      target: { origin: "https://nid.naver.com", tab_id: "t", field_ref: null }, otp: null,
+      choice: { origin: "https://nid.naver.com", site_name: "Naver", question: "How would you like to verify?", options: [{ id: "o0", label: "Text me a code" }, { id: "o1", label: "Email me a code" }], multiple: false },
+    };
+    const original = state.api.listTickets.getMockImplementation()!;
+    state.api.listTickets.mockResolvedValue({ tickets: [choice] } as never);
+    state.onEvent!({ kind: "ticket.opened", seq: 1 } as DaemonEvent);
+    const radios = await vi.waitFor(() => { const found = [...document.querySelectorAll<HTMLInputElement>("#tickets input[type='radio']")]; expect(found).toHaveLength(2); return found; });
+    radios[1]!.click();
+    radios[1]!.form!.requestSubmit();
+    await vi.waitFor(() => expect(state.api.resolveTicket).toHaveBeenCalledWith("choice", { option: "o1" }));
     state.api.listTickets.mockImplementation(original);
   });
 });
