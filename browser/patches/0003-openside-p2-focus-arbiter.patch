@@ -1,0 +1,172 @@
+diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -20,6 +20,7 @@
+ #include "chrome/browser/file_select_helper.h"
+ #include "chrome/browser/headless/headless_mode_util.h"
+ #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
++#include "chrome/browser/openside/agent_gateway.h"
+ #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+ #include "chrome/browser/preloading/preloading_prefs.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -575,6 +576,22 @@
+   if (params.user_gesture) {
+     nav_params.window_action = NavigateParams::WindowAction::kShowWindow;
+   }
++#if BUILDFLAG(IS_LINUX)
++  // Links that open new tabs or windows from agent-originated contents stay
++  // in the background, like their popups.
++  if (source &&
++      (nav_params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
++       nav_params.disposition == WindowOpenDisposition::NEW_POPUP ||
++       nav_params.disposition == WindowOpenDisposition::NEW_WINDOW) &&
++      !openside::MayActivateTab(source)) {
++    if (nav_params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
++      nav_params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
++    } else {
++      nav_params.window_action =
++          NavigateParams::WindowAction::kShowWindowInactive;
++    }
++  }
++#endif
+   bool is_popup =
+       source && blocked_content::ConsiderForPopupBlocking(params.disposition);
+   auto popup_delegate =
+@@ -603,6 +620,9 @@
+ 
+   content::WebContents* navigated_or_inserted_contents =
+       popup_delegate->nav_params()->navigated_or_inserted_contents;
++#if BUILDFLAG(IS_LINUX)
++  openside::NoteOpenedContents(source, navigated_or_inserted_contents);
++#endif
+   if (is_popup && navigated_or_inserted_contents) {
+     auto* tracker = blocked_content::PopupTracker::CreateForWebContents(
+         navigated_or_inserted_contents, source, params.disposition);
+@@ -674,6 +694,9 @@
+     bool* was_blocked) {
+   FullscreenController* fullscreen_controller =
+       exclusive_access_manager_->fullscreen_controller();
++#if BUILDFLAG(IS_LINUX)
++  openside::NoteOpenedContents(source, new_contents.get());
++#endif
+ #if BUILDFLAG(IS_MAC)
+   // On the Mac, the convention is to turn popups into new tabs when in browser
+   // fullscreen mode. Only worry about user-initiated fullscreen as showing a
+@@ -738,6 +761,22 @@
+     }
+   }
+ 
++#if BUILDFLAG(IS_LINUX)
++  // Popups opened by agent tabs or their descendants never take the
++  // foreground.
++  if (source &&
++      (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
++       disposition == WindowOpenDisposition::NEW_POPUP ||
++       disposition == WindowOpenDisposition::NEW_WINDOW) &&
++      !openside::MayActivateTab(source)) {
++    if (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
++      disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
++    } else {
++      window_action = NavigateParams::WindowAction::kShowWindowInactive;
++    }
++  }
++#endif
++
+   return chrome::AddWebContents(&*browser_, source, std::move(new_contents),
+                                 target_url, disposition, window_features,
+                                 window_action, user_gesture);
+@@ -751,6 +790,13 @@
+   if (index == TabStripModel::kNoTab) {
+     return;
+   }
++#if BUILDFLAG(IS_LINUX)
++  // window.focus(), CDP Target.activateTarget and Page.bringToFront from
++  // agent tabs or their popups must not select the tab or raise its window.
++  if (!openside::MayActivateTab(contents)) {
++    return;
++  }
++#endif
+   browser_->GetTabStripModel()->ActivateTabAt(index);
+   window_->Activate();
+ }
+@@ -1192,6 +1238,13 @@
+   if (!browser_->GetTabStripModel()->delegate()->IsTabStripEditable()) {
+     return false;
+   }
++#if BUILDFLAG(IS_LINUX)
++  // Fullscreen raises and takes over the window; agent pages never get it.
++  if (!openside::MayActivateTab(
++          content::WebContents::FromRenderFrameHost(requesting_frame))) {
++    return false;
++  }
++#endif
+ 
+   return exclusive_access_manager_->fullscreen_controller()
+       ->CanEnterFullscreenModeForTab(requesting_frame);
+diff --git a/content/browser/devtools/protocol/page_handler.cc b/content/browser/devtools/protocol/page_handler.cc
+--- a/content/browser/devtools/protocol/page_handler.cc
++++ b/content/browser/devtools/protocol/page_handler.cc
+@@ -13,6 +13,7 @@
+ #include <vector>
+ 
+ #include "base/check_op.h"
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/memory/ref_counted.h"
+@@ -1769,7 +1770,13 @@
+   WebContentsImpl* web_contents =
+       static_cast<WebContentsImpl*>(WebContents::FromRenderFrameHost(host_));
+   web_contents->Activate();
+-  web_contents->GetOutermostWebContents()->Focus();
++  // openside: in a daemon-owned agent browser, CDP never moves native focus.
++  // Activate() above already asked the embedder, whose focus arbiter refuses
++  // agent tabs; focusing the view directly would bypass that decision.
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "openside-agent-session-id")) {
++    web_contents->GetOutermostWebContents()->Focus();
++  }
+   return Response::Success();
+ }
+ 
+diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
+--- a/chrome/browser/devtools/protocol/browser_handler.cc
++++ b/chrome/browser/devtools/protocol/browser_handler.cc
+@@ -9,9 +9,11 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/memory/ref_counted_memory.h"
++#include "build/build_config.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+ #include "chrome/browser/devtools/devtools_dock_tile.h"
++#include "chrome/browser/openside/agent_gateway.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/profiles/profile_manager.h"
+ #include "chrome/browser/ui/browser_commands.h"
+@@ -150,6 +152,12 @@
+   if (!window) {
+     return Response::ServerError("Browser window not found");
+   }
++#if BUILDFLAG(IS_LINUX)
++  if (!openside::MayChangeWindowsOverProtocol()) {
++    return Response::ServerError(
++        "openside: the agent never resizes or changes browser windows");
++  }
++#endif
+   gfx::Rect bounds = window->GetBounds();
+   const bool set_bounds = window_bounds->HasLeft() || window_bounds->HasTop() ||
+                           window_bounds->HasWidth() ||
+@@ -213,6 +221,12 @@
+   if (!window) {
+     return Response::ServerError("Browser window not found");
+   }
++#if BUILDFLAG(IS_LINUX)
++  if (!openside::MayChangeWindowsOverProtocol()) {
++    return Response::ServerError(
++        "openside: the agent never resizes or changes browser windows");
++  }
++#endif
+ 
+   gfx::Size contents_size = window->GetContentsSize();
+   if (contents_size.IsEmpty()) {

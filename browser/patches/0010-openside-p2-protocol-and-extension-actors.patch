@@ -1,0 +1,117 @@
+diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -289,6 +289,8 @@
+     "notification_event_dispatcher.h",
+     "notification_resource_data.h",
+     "observed_service_remote.h",
++    "openside_protocol_activation.cc",
++    "openside_protocol_activation.h",
+     "origin_trial_status_change_details.cc",
+     "origin_trial_status_change_details.h",
+     "origin_trials_controller_delegate.h",
+diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -36,6 +36,7 @@
+ #include "content/public/browser/devtools_agent_host_client.h"
+ #include "content/public/browser/devtools_manager_delegate.h"
+ #include "content/public/browser/navigation_throttle.h"
++#include "content/public/browser/openside_protocol_activation.h"
+ #include "content/public/common/content_client.h"
+ #include "content/public/common/url_constants.h"
+ #include "url/url_constants.h"
+@@ -1288,7 +1289,11 @@
+   if (!agent_host) {
+     return Response::InvalidParams(kTargetNotFound);
+   }
+-  agent_host->Activate();
++  {
++    // openside: lets the embedder judge this as a protocol client's request.
++    ScopedProtocolActivation protocol_activation;
++    agent_host->Activate();
++  }
+   return Response::Success();
+ }
+ 
+diff --git a/content/browser/devtools/protocol/page_handler.cc b/content/browser/devtools/protocol/page_handler.cc
+--- a/content/browser/devtools/protocol/page_handler.cc
++++ b/content/browser/devtools/protocol/page_handler.cc
+@@ -58,6 +58,7 @@
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/openside_protocol_activation.h"
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_delegate.h"
+@@ -1769,7 +1770,11 @@
+ 
+   WebContentsImpl* web_contents =
+       static_cast<WebContentsImpl*>(WebContents::FromRenderFrameHost(host_));
+-  web_contents->Activate();
++  {
++    // openside: lets the embedder judge this as a protocol client's request.
++    ScopedProtocolActivation protocol_activation;
++    web_contents->Activate();
++  }
+   // openside: in a daemon-owned agent browser, CDP never moves native focus.
+   // Activate() above already asked the embedder, whose focus arbiter refuses
+   // agent tabs; focusing the view directly would bypass that decision.
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -19,6 +19,7 @@
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
+ #include "chrome/browser/extensions/api/tabs/windows_util.h"
++#include "chrome/browser/openside/agent_gateway.h"
+ #include "chrome/browser/extensions/browser_extension_window_controller.h"
+ #include "chrome/browser/extensions/browser_window_util.h"
+ #include "chrome/browser/extensions/chrome_extension_function_details.h"
+@@ -1622,6 +1623,20 @@
+   }
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++  // openside: extensions act for the user on windows that hold a user tab,
++  // but a window of agent tabs is never raised, resized, put into another
++  // state, or flashed by them; refused before any part of the update runs.
++  if ((show_state != ui::mojom::WindowShowState::kDefault ||
++       set_window_bounds || params->update_info.focused.value_or(false) ||
++       params->update_info.draw_attention.value_or(false)) &&
++      !openside::MayActivateBrowserWindow(browser)) {
++    return RespondNow(
++        Error("openside: windows of agent tabs are not raised, resized or "
++              "flashed by extensions"));
++  }
++#endif
++
+   // Parameters are valid. Now to perform the actual updates.
+ #if BUILDFLAG(IS_CHROMEOS)
+   if (base::expected<void, std::string> result =
+diff --git a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
+--- a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
++++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
+@@ -25,6 +25,9 @@
+ #include "chrome/browser/devtools/protocol/target_handler.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
+ #include "chrome/browser/lifetime/application_lifetime.h"
++#if BUILDFLAG(IS_LINUX)
++#include "chrome/browser/openside/agent_gateway.h"
++#endif
+ #include "chrome/browser/policy/developer_tools_policy_handler.h"
+ #include "chrome/browser/policy/profile_policy_connector.h"
+ #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+@@ -430,6 +433,11 @@
+ void ChromeDevToolsManagerDelegate::ClientDetached(
+     content::DevToolsAgentHostClientChannel* channel) {
+   sessions_.erase(channel);
++#if BUILDFLAG(IS_LINUX)
++  // Runs for every session, after its handlers were disabled; the host's
++  // own detach notification only fires when its last session leaves.
++  openside::OnDevToolsClientDetached(channel->GetAgentHost());
++#endif
+ }
+ 
+ scoped_refptr<DevToolsAgentHost> ChromeDevToolsManagerDelegate::CreateNewTarget(

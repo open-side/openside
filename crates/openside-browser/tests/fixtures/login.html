@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock login</title></head>
+<body><main><h1>Login</h1>
+<form id="login" action="/welcome" onsubmit="event.preventDefault(); location.assign('/welcome')">
+<label for="username">Username</label><input id="username" name="username" autocomplete="off">
+<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="off">
+<button id="submit" type="submit" onmouseenter="this.dataset.hovered='true'">Log in</button>
+</form></main></body></html>

@@ -1,0 +1,84 @@
+diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.cc
+--- a/content/child/runtime_features.cc
++++ b/content/child/runtime_features.cc
+@@ -337,9 +337,11 @@
+       {wrf::EnableTimerThrottlingForBackgroundTabs,
+        switches::kDisableBackgroundTimerThrottling, false},
+       // End of Stable Features
++      // openside: navigator.webdriver reflects only an explicit
++      // --enable-automation (WebDriver sessions). Headless mode, a debugging
++      // pipe, or an ephemeral debugging port alone do not mark the page as
++      // automated.
+       {wrf::EnableAutomationControlled, switches::kEnableAutomation, true},
+-      {wrf::EnableAutomationControlled, switches::kHeadless, true},
+-      {wrf::EnableAutomationControlled, switches::kRemoteDebuggingPipe, true},
+       {wrf::EnableFileSystem, switches::kDisableFileSystem, false},
+       {wrf::EnableNetInfoDownlinkMax,
+        switches::kEnableNetworkInformationDownlinkMax, true},
+@@ -383,23 +385,6 @@
+   for (const auto& mapping : switch_to_feature_mapping) {
+     if (command_line.HasSwitch(mapping.switch_name)) {
+       mapping.feature_enabler(mapping.target_enabled_state);
+-    }
+-  }
+-
+-  // Set EnableAutomationControlled if the caller passes
+-  // --remote-debugging-port=0 on the command line. This means
+-  // the caller has requested an ephemeral port which is how ChromeDriver
+-  // launches the browser by default.
+-  // If the caller provides a specific port number, this is
+-  // more likely for attaching a debugger, so we should leave
+-  // EnableAutomationControlled unset to ensure the browser behaves as it does
+-  // when not under automation control.
+-  if (command_line.HasSwitch(switches::kRemoteDebuggingPort)) {
+-    std::string port_str =
+-        command_line.GetSwitchValueASCII(::switches::kRemoteDebuggingPort);
+-    int port;
+-    if (base::StringToInt(port_str, &port) && port == 0) {
+-      WebRuntimeFeatures::EnableAutomationControlled(true);
+     }
+   }
+ }
+diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
+--- a/components/embedder_support/user_agent_utils.cc
++++ b/components/embedder_support/user_agent_utils.cc
+@@ -217,9 +217,8 @@
+ // depending on the Reduce User-Agent reduction phase features.
+ std::string GetUserAgentInternal() {
+   std::string product = GetProductAndVersion();
+-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(kHeadless)) {
+-    product.insert(0, "Headless");
+-  }
++  // openside: headless mode keeps the regular product token, so the
++  // User-Agent never advertises "HeadlessChrome".
+ 
+ #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(kUseMobileUserAgent)) {
+diff --git a/chrome/browser/ui/startup/infobar_utils.cc b/chrome/browser/ui/startup/infobar_utils.cc
+--- a/chrome/browser/ui/startup/infobar_utils.cc
++++ b/chrome/browser/ui/startup/infobar_utils.cc
+@@ -20,6 +20,7 @@
+ #include "chrome/browser/infobars/browser_infobar_manager.h"
+ #include "chrome/browser/infobars/infobar_features.h"
+ #include "chrome/browser/obsolete_system/obsolete_system.h"
++#include "chrome/browser/openside/agent_gateway.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/session_crashed_bubble.h"
+@@ -94,8 +95,14 @@
+ // This is a separate function to avoid accidentally reading the switch from
+ // `startup_command_line`.
+ bool IsAutomationEnabled() {
+-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+-      switches::kEnableAutomation);
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  // openside: a daemon-owned agent browser never shows the "controlled by
++  // automated test software" infobar, which would also shrink the viewport.
++  if (command_line->HasSwitch(openside::kAgentSessionSwitch)) {
++    return false;
++  }
++  return command_line->HasSwitch(switches::kEnableAutomation);
+ }
+ 
+ // This is a separate function to avoid accidentally reading the switch from

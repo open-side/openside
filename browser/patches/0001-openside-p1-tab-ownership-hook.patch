@@ -1,0 +1,84 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -2028,6 +2028,7 @@ source_set("browser") {
+     "//chrome/browser/interstitials",
+     "//chrome/browser/ntp_tiles",
+     "//chrome/browser/obsolete_system",
++    "//chrome/browser/openside",
+     "//chrome/browser/privacy_sandbox:headers",
+     "//chrome/browser/tab_contents",
+   ]
+diff --git a/chrome/browser/devtools/BUILD.gn b/chrome/browser/devtools/BUILD.gn
+--- a/chrome/browser/devtools/BUILD.gn
++++ b/chrome/browser/devtools/BUILD.gn
+@@ -125,6 +125,7 @@ static_library("devtools") {
+     "//chrome/browser/infobars",
+     "//chrome/browser/lifetime",
+     "//chrome/browser/net",
++    "//chrome/browser/openside",
+     "//chrome/browser/search",
+     "//chrome/browser/search_engines",
+     "//chrome/browser/sync",
+diff --git a/chrome/browser/devtools/protocol/target_handler.cc b/chrome/browser/devtools/protocol/target_handler.cc
+--- a/chrome/browser/devtools/protocol/target_handler.cc
++++ b/chrome/browser/devtools/protocol/target_handler.cc
+@@ -6,10 +6,13 @@
+ 
+ #include <ranges>
+ #include <string_view>
++#include <utility>
+ 
++#include "base/command_line.h"
+ #include "base/notreached.h"
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+ #include "chrome/browser/devtools/devtools_browser_context_manager.h"
++#include "chrome/browser/openside/tab_ownership.h"
+ #include "chrome/browser/profiles/profile_manager.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -102,6 +105,25 @@ protocol::Response TargetHandler::CreateTarget(
+     std::optional<bool> hidden,
+     std::optional<bool> focus,
+     std::string* out_target_id) {
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  std::string agent_session_id =
++      command_line->GetSwitchValueASCII("openside-agent-session-id");
++  const bool agent_path = !agent_session_id.empty();
++  // The launch marker is only for a daemon-owned, dedicated browser process.
++  if (agent_path) {
++    if (hidden.value_or(false)) {
++      return protocol::Response::InvalidParams(
++          "openside agent targets cannot use the untagged hidden path");
++    }
++    if (window_state.has_value() &&
++        *window_state != protocol::Target::WindowStateEnum::Normal) {
++      return protocol::Response::InvalidParams(
++          "openside agent targets cannot change window state");
++    }
++    background = true;
++    focus = false;
++  }
++
+   if (hidden.value_or(false)) {
+     // Rely on web contents implementation.
+     return protocol::Response::FallThrough();
+@@ -215,6 +237,18 @@ protocol::Response TargetHandler::CreateTarget(
+     return protocol::Response::ServerError("Failed to open a new tab");
+   }
+ 
++  if (agent_path) {
++    openside::TabMetadata metadata;
++    metadata.owner = openside::TabOwner::kAgent;
++    metadata.session_id = std::move(agent_session_id);
++    metadata.subagent_id =
++        command_line->GetSwitchValueASCII("openside-agent-subagent-id");
++    metadata.background = true;
++    metadata.opened_by = openside::OpenedBy::kAgent;
++    openside::TabOwnership::CreateForWebContents(
++        params.navigated_or_inserted_contents, std::move(metadata));
++  }
++
+   if (set_window_position) {
+     ui::BaseWindow* browser_window = params.browser->GetWindow();
+     CHECK(browser_window);

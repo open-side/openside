@@ -1,0 +1,76 @@
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -54,6 +54,7 @@
+ #include "chrome/browser/feature_engagement/tracker_factory.h"
+ #include "chrome/browser/glic/public/features.h"
+ #include "chrome/browser/headless/headless_mode_util.h"
++#include "chrome/browser/openside/agent_gateway.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+ #include "chrome/browser/platform_util.h"
+@@ -1613,6 +1614,15 @@
+     return;
+   }
+ 
++#if BUILDFLAG(IS_LINUX)
++  // openside: a window holding only agent tabs is shown without taking
++  // activation, whichever path asked for it.
++  if (!openside::MayActivateBrowserWindow(browser())) {
++    ShowInactive();
++    return;
++  }
++#endif
++
+   if (auto* manager = InitialWebUIManager::From(browser())) {
+     if (manager->RequestDeferShow(base::BindOnce(
+             &BrowserView::Show, weak_ptr_factory_.GetWeakPtr()))) {
+@@ -1718,6 +1728,14 @@
+     return;
+   }
+ 
++#if BUILDFLAG(IS_LINUX)
++  // openside: a window holding only agent tabs is never raised by a request;
++  // on Wayland this would send an xdg-activation request to the compositor.
++  if (!openside::MayActivateBrowserWindow(browser())) {
++    return;
++  }
++#endif
++
+   if (auto* manager = InitialWebUIManager::From(browser())) {
+     if (manager->RequestDeferShow(base::BindOnce(
+             &BrowserView::Activate, weak_ptr_factory_.GetWeakPtr()))) {
+diff --git a/chrome/browser/download/bubble/download_bubble_ui_controller.cc b/chrome/browser/download/bubble/download_bubble_ui_controller.cc
+--- a/chrome/browser/download/bubble/download_bubble_ui_controller.cc
++++ b/chrome/browser/download/bubble/download_bubble_ui_controller.cc
+@@ -10,6 +10,7 @@
+ #include "base/notreached.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/content_index/content_index_provider_impl.h"
+ #include "chrome/browser/download/bubble/download_bubble_prefs.h"
+@@ -30,6 +31,7 @@
+ #include "chrome/browser/download/offline_item_utils.h"
+ #include "chrome/browser/feature_engagement/tracker_factory.h"
+ #include "chrome/browser/offline_items_collection/offline_content_aggregator_factory.h"
++#include "chrome/browser/openside/agent_gateway.h"
+ #include "chrome/browser/profiles/profile_key.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+@@ -198,6 +200,14 @@
+       model.ShouldShowInBubble() &&
+       (browser_ == ProfileBrowserCollection::GetForProfile(profile_.get())
+                        ->GetLastActiveBrowser());
++#if BUILDFLAG(IS_LINUX)
++  // openside: a download started by an agent page never opens the details
++  // bubble, which would take keyboard focus from the page the user is on.
++  if (!openside::MayShowDownloadUi(
++          content::DownloadItemUtils::GetWebContents(item))) {
++    may_show_details = false;
++  }
++#endif
+   // Consider dangerous in-progress downloads to be completed.
+   bool is_done = item->IsDone() ||
+                  (item->GetState() == download::DownloadItem::IN_PROGRESS &&

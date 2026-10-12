@@ -1,0 +1,42 @@
+diff --git a/components/javascript_dialogs/BUILD.gn b/components/javascript_dialogs/BUILD.gn
+--- a/components/javascript_dialogs/BUILD.gn
++++ b/components/javascript_dialogs/BUILD.gn
+@@ -15,6 +15,8 @@
+     "app_modal_dialog_queue.h",
+     "app_modal_dialog_view.h",
+     "extensions_client.h",
++    "openside_dialog_hook.cc",
++    "openside_dialog_hook.h",
+     "tab_modal_dialog_manager.cc",
+     "tab_modal_dialog_manager.h",
+     "tab_modal_dialog_manager_delegate.h",
+diff --git a/components/javascript_dialogs/tab_modal_dialog_manager.cc b/components/javascript_dialogs/tab_modal_dialog_manager.cc
+--- a/components/javascript_dialogs/tab_modal_dialog_manager.cc
++++ b/components/javascript_dialogs/tab_modal_dialog_manager.cc
+@@ -12,6 +12,7 @@
+ #include "base/memory/ptr_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "components/javascript_dialogs/app_modal_dialog_manager.h"
++#include "components/javascript_dialogs/openside_dialog_hook.h"
+ #include "components/javascript_dialogs/tab_modal_dialog_view.h"
+ #include "components/navigation_metrics/navigation_metrics.h"
+ #include "content/public/browser/devtools_agent_host.h"
+@@ -199,6 +200,7 @@
+   }
+ 
+   delegate_->WillRunDialog();
++  NotifyOpensideDialogOpened(alerting_web_contents, dialog_type);
+ 
+   // Message suppression is something that we don't give the user a checkbox
+   // for any more. It was useful back in the day when dialogs were app-modal
+@@ -366,6 +368,10 @@
+   pending_dialog_.Reset();
+   dialog_callback_.Reset();
+ 
++  if (content::WebContents* contents = WebContentsObserver::web_contents()) {
++    NotifyOpensideDialogClosed(contents, success);
++  }
++
+   delegate_->DidCloseDialog();
+ }
+ 

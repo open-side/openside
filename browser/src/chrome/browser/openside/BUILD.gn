@@ -1,0 +1,47 @@
+# Copyright 2026 The openside authors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+source_set("openside") {
+  # Ownership, the focus decision, and the gateway header (switch names and
+  # declarations) are portable. The gateway itself uses Linux-only socket
+  # APIs (accept4, SO_PEERCRED), so it is compiled only on Linux and every
+  # call site is guarded by BUILDFLAG(IS_LINUX).
+  sources = [
+    "agent_gateway.h",
+    "focus_arbiter.cc",
+    "focus_arbiter.h",
+    "tab_ownership.cc",
+    "tab_ownership.h",
+  ]
+
+  public_deps = [ "//content/public/browser" ]
+  deps = [ "//base" ]
+
+  if (is_linux) {
+    sources += [ "agent_gateway.cc" ]
+
+    # The gateway reads tab strips and windows owned by //chrome/browser/ui,
+    # which depends on this target; the browser_public_dependencies group is
+    # Chromium's documented way to keep that circular include graph complete.
+    public_deps += [ "//chrome/browser:browser_public_dependencies" ]
+    deps += [
+      "//components/password_manager/content/browser",
+      "//components/download/content/public",
+      "//components/download/public/common:public",
+      "//components/infobars/content",
+      "//components/infobars/core",
+      "//components/prefs",
+      "//components/search_engines",
+      "//components/javascript_dialogs",
+      "//components/sessions",
+      "//components/tab_groups",
+      "//components/tabs:public",
+      "//components/viz/common",
+      "//skia",
+      "//ui/base",
+      "//ui/gfx",
+      "//ui/gfx/codec",
+      "//url",
+    ]
+  }
+}

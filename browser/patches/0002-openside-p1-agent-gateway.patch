@@ -1,0 +1,60 @@
+diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
+--- a/chrome/browser/chrome_browser_main.cc
++++ b/chrome/browser/chrome_browser_main.cc
+@@ -53,6 +53,7 @@
+ #include "chrome/browser/metrics/expired_histograms_array.h"
+ #include "chrome/browser/metrics/shutdown_watcher_helper.h"
+ #include "chrome/browser/net/system_network_context_manager.h"
++#include "chrome/browser/openside/agent_gateway.h"
+ #include "chrome/browser/performance_manager/public/chrome_browser_main_extra_parts_performance_manager.h"
+ #include "chrome/browser/performance_monitor/chrome_browser_main_extra_parts_performance_monitor.h"
+ #include "chrome/browser/policy/chrome_browser_policy_connector.h"
+@@ -1956,6 +1957,13 @@
+   page_info::SetPageInfoClient(new ChromePageInfoClient());
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++  // Publishes gateway discovery before the DevTools endpoint exists, so a
++  // controller that sees the endpoint without discovery knows this browser
++  // has no gateway.
++  openside::StartAgentGateway();
++#endif
++
+   // Needs to be done before PostProfileInit, to allow connecting DevTools
+   // before WebUI for the CrOS login that can be called inside PostProfileInit
+   g_browser_process->CreateDevToolsProtocolHandler();
+@@ -2218,6 +2226,10 @@
+   // Android specific MessageLoop
+   NOTREACHED();
+ #else
++#if BUILDFLAG(IS_LINUX)
++  // Removes the gateway socket, token, and discovery file on normal exit.
++  openside::ShutdownAgentGateway();
++#endif
+   // Shutdown the UpgradeDetector here before `ChromeBrowserMainPartsAsh`
+   // disconnects DBus services in its PostDestroyThreads.
+   UpgradeDetector::GetInstance()->Shutdown();
+diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
+--- a/chrome/browser/ui/tab_helpers.cc
++++ b/chrome/browser/ui/tab_helpers.cc
+@@ -46,6 +46,7 @@
+ #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_observer.h"
+ #include "chrome/browser/navigation_predictor/navigation_predictor_preconnect_client.h"
+ #include "chrome/browser/net/net_error_tab_helper.h"
++#include "chrome/browser/openside/agent_gateway.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
+@@ -323,6 +324,12 @@
+   web_contents->SetUserData(&kTabContentsAttachedTabHelpersUserDataKey,
+                             std::make_unique<base::SupportsUserData::Data>());
+ 
++#if BUILDFLAG(IS_LINUX)
++  // Gives every tab a stable gateway identity; reporting is deferred until
++  // the creating task (for example a CDP hook) has tagged ownership.
++  openside::OnTabCreated(web_contents);
++#endif
++
+   // Create all the tab helpers.
+ 
+   // SessionTabHelper comes first because it sets up the tab ID, and other

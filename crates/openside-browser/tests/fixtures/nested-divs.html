@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock nested wrappers</title></head>
+<body><h1>Nested wrapper fixture</h1><div id="content"></div><script>
+const content = document.getElementById('content');
+for (let i = 1; i <= 60; i++) {
+  let outer = document.createElement('div');
+  content.append(outer);
+  for (let depth = 0; depth < 20; depth++) {
+    const wrapper = document.createElement('div');
+    outer.append(wrapper);
+    outer = wrapper;
+  }
+  const button = document.createElement('button');
+  button.textContent = `Nested action ${i}`;
+  outer.append(button);
+}
+</script></body></html>

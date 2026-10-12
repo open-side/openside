@@ -1,0 +1,189 @@
+--- a/components/autofill/content/common/mojom/autofill_agent.mojom
++++ b/components/autofill/content/common/mojom/autofill_agent.mojom
+@@ -7,5 +7,7 @@
+ import "components/autofill/core/common/mojom/autofill_types.mojom";
+ import "mojo/public/mojom/base/string16.mojom";
++import "third_party/blink/public/mojom/tokens/tokens.mojom";
++import "url/mojom/origin.mojom";
+ 
+ // There is one instance of this interface per render frame in the render
+ // process. All methods are called by browser on renderer.
+@@ -224,6 +226,15 @@
+             mojo_base.mojom.String16 value,
+             uint32 field_properties) => (bool success);
+ 
++  // Process-global node IDs are not proof of document ownership.
++  ExtractFieldForOpenside(FieldRendererId field_id)
++      => (FormData? form, blink.mojom.DocumentToken? document_token,
++          url.mojom.Origin origin);
++  FillFieldForOpenside(FieldRendererId field_id,
++                       mojo_base.mojom.String16 value,
++                       blink.mojom.DocumentToken document_token,
++                       url.mojom.Origin expected_origin) => (bool success);
++
+   // Fills a given change password form, specifically `password_element_id` with
+   // `old_password` and `new_password_element_id`, `confirm_password_element_id`
+   // with `new_password`. Upon completion asynchronously returns `form_data`
+--- a/components/autofill/content/common/mojom/BUILD.gn
++++ b/components/autofill/content/common/mojom/BUILD.gn
+@@ -13,7 +13,9 @@
+   public_deps = [
+     "//components/autofill/core/common/mojom:mojo_types",
+     "//mojo/public/mojom/base",
++    "//third_party/blink/public/mojom/tokens",
+     "//ui/gfx/geometry/mojom",
+     "//url/mojom:url_mojom_gurl",
++    "//url/mojom:url_mojom_origin",
+   ]
+ }
+--- a/components/autofill/content/renderer/password_autofill_agent.h
++++ b/components/autofill/content/renderer/password_autofill_agent.h
+@@ -137,6 +137,15 @@
+                  const std::u16string& value,
+                  FieldPropertiesMask field_properties,
+                  base::OnceCallback<void(bool)> success_callback) override;
++  void ExtractFieldForOpenside(
++      FieldRendererId field_id,
++      ExtractFieldForOpensideCallback callback) override;
++  void FillFieldForOpenside(
++      FieldRendererId field_id,
++      const std::u16string& value,
++      const blink::DocumentToken& document_token,
++      const url::Origin& expected_origin,
++      FillFieldForOpensideCallback callback) override;
+   void FillChangePasswordForm(FieldRendererId password_element_id,
+                               FieldRendererId new_password_element_id,
+                               FieldRendererId confirm_password_element_id,
+--- a/components/autofill/content/renderer/password_autofill_agent.cc
++++ b/components/autofill/content/renderer/password_autofill_agent.cc
+@@ -1000,5 +1000,8 @@
+   WebInputElement input_element = form_control.DynamicTo<WebInputElement>();
++  auto* render_frame = unsafe_render_frame();
++  WebLocalFrame* frame = render_frame ? render_frame->GetWebFrame() : nullptr;
+-  if (!input_element || input_element.IsReadOnly()) {
++  if (!input_element || input_element.IsReadOnly() || !frame ||
++      form_control.GetDocument() != frame->GetDocument()) {
+     std::move(success_callback).Run(false);
+     // Early return for non-input fields such as textarea.
+     return;
+@@ -1012,4 +1015,56 @@
+   std::move(success_callback).Run(true);
++}
++
++void PasswordAutofillAgent::ExtractFieldForOpenside(
++    FieldRendererId field_id,
++    ExtractFieldForOpensideCallback callback) {
++  auto* render_frame = unsafe_render_frame();
++  WebLocalFrame* frame = render_frame ? render_frame->GetWebFrame() : nullptr;
++  WebDocument document = frame ? frame->GetDocument() : WebDocument();
++  WebFormControlElement field = form_util::GetFormControlByRendererId(field_id);
++  if (!frame || frame->Parent() || !document || !field ||
++      field.GetDocument() != document ||
++      frame->DispatchedPagehideAndStillHidden()) {
++    std::move(callback).Run(std::nullopt, std::nullopt, url::Origin());
++    return;
++  }
++  const url::Origin origin = document.GetSecurityOrigin();
++  if (origin.opaque()) {
++    std::move(callback).Run(std::nullopt, std::nullopt, url::Origin());
++    return;
++  }
++  autofill_agent_->ExtractFormWithField(
++      field_id,
++      base::BindOnce(
++          [](ExtractFieldForOpensideCallback callback,
++             blink::DocumentToken token, url::Origin origin,
++             const std::optional<FormData>& form) {
++            std::move(callback).Run(form, token, origin);
++          },
++          std::move(callback), document.Token(), origin));
++}
++
++void PasswordAutofillAgent::FillFieldForOpenside(
++    FieldRendererId field_id,
++    const std::u16string& value,
++    const blink::DocumentToken& document_token,
++    const url::Origin& expected_origin,
++    FillFieldForOpensideCallback callback) {
++  auto* render_frame = unsafe_render_frame();
++  WebLocalFrame* frame = render_frame ? render_frame->GetWebFrame() : nullptr;
++  WebDocument document = frame ? frame->GetDocument() : WebDocument();
++  WebFormControlElement field = form_util::GetFormControlByRendererId(field_id);
++  const url::Origin actual_origin = document ? url::Origin(document.GetSecurityOrigin())
++                                              : url::Origin();
++  if (!frame || frame->Parent() || !document || !field ||
++      field.GetDocument() != document || document.Token() != document_token ||
++      expected_origin.opaque() || actual_origin != expected_origin ||
++      frame->DispatchedPagehideAndStillHidden()) {
++    std::move(callback).Run(false);
++    return;
++  }
++  FillField(field_id, value, FieldPropertiesFlags::kAutofilledOnUserTrigger,
++            std::move(callback));
+ }
+ 
+ void PasswordAutofillAgent::FillChangePasswordForm(
+--- a/components/autofill/content/renderer/autofill_agent.cc
++++ b/components/autofill/content/renderer/autofill_agent.cc
+@@ -1853,6 +1853,10 @@
+   }
+   if (WebFormControlElement form_control =
+           form_util::GetFormControlByRendererId(field_id)) {
++    if (form_control.GetDocument() != document) {
++      std::move(callback).Run(std::nullopt);
++      return;
++    }
+     if (std::optional<FormData> form = form_util::ExtractFormData(
+             document, form_control.GetOwningFormForAutofill(),
+             field_data_manager(), GetCallTimerState(kExtractForm),
+--- a/components/password_manager/content/browser/content_password_manager_driver.h
++++ b/components/password_manager/content/browser/content_password_manager_driver.h
+@@ -56,6 +56,17 @@
+           pending_receiver);
+   void DidNavigate();
+ 
++  void ExtractFieldForOpenside(
++      autofill::FieldRendererId field_id,
++      autofill::mojom::PasswordAutofillAgent::ExtractFieldForOpensideCallback
++          callback);
++  void FillFieldForOpenside(
++      autofill::FieldRendererId field_id,
++      const std::u16string& value,
++      const blink::DocumentToken& document_token,
++      const url::Origin& expected_origin,
++      base::OnceCallback<void(bool)> callback);
++
+   // PasswordManagerDriver implementation.
+   DriverId GetId() const override;
+   gfx::RectF TransformToRootCoordinates(
+--- a/components/password_manager/content/browser/content_password_manager_driver.cc
++++ b/components/password_manager/content/browser/content_password_manager_driver.cc
+@@ -277,3 +277,28 @@
++}
++
++void ContentPasswordManagerDriver::ExtractFieldForOpenside(
++    autofill::FieldRendererId field_id,
++    autofill::mojom::PasswordAutofillAgent::ExtractFieldForOpensideCallback
++        callback) {
++  if (const auto& agent = GetPasswordAutofillAgent()) {
++    agent->ExtractFieldForOpenside(field_id, std::move(callback));
++  } else {
++    std::move(callback).Run(std::nullopt, std::nullopt, url::Origin());
++  }
++}
++
++void ContentPasswordManagerDriver::FillFieldForOpenside(
++    autofill::FieldRendererId field_id,
++    const std::u16string& value,
++    const blink::DocumentToken& document_token,
++    const url::Origin& expected_origin,
++    base::OnceCallback<void(bool)> callback) {
++  if (const auto& agent = GetPasswordAutofillAgent()) {
++    agent->FillFieldForOpenside(field_id, value, document_token, expected_origin,
++                                std::move(callback));
++  } else {
++    std::move(callback).Run(false);
++  }
+ }
+ 
+ void ContentPasswordManagerDriver::TriggerPasswordRecoverySuggestions(
