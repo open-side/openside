@@ -355,6 +355,17 @@ async fn sync_routes_report_missing_configuration_and_validate_pins() {
         (status, body["code"].as_str()),
         (StatusCode::BAD_REQUEST, Some("invalid_url"))
     );
+    let (status, body) = api(
+        &daemon,
+        "POST",
+        "/v1/pinned-tabs",
+        json!({"url": "https://user:secret@example.test/x"}),
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("invalid_url"))
+    );
     let (status, first) = api(
         &daemon,
         "POST",

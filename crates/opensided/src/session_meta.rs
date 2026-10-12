@@ -6,7 +6,7 @@ use axum::{
     Json,
 };
 use openside_proto::{
-    EventKind, Session, SessionId, SessionList, Settings, UpdateSessionRequest,
+    normalize_title, EventKind, Session, SessionId, SessionList, Settings, UpdateSessionRequest,
     MAX_SESSION_TITLE_CHARS,
 };
 use serde::Deserialize;
@@ -29,26 +29,43 @@ pub(crate) async fn list(
         .map(|q| q.trim().to_lowercase())
         .filter(|q| !q.is_empty());
     let archived = query.archived;
-    let mut sessions: Vec<Session> =
+    let sessions: Vec<Session> =
         s.db.store(move |db| {
-            Ok(db
+            let mut listed: Vec<_> = db
                 .list_sessions()
                 .into_iter()
                 .filter(|session| session.archived == archived)
-                .filter(|session| {
-                    let Some(needle) = &needle else { return true };
-                    session.title.to_lowercase().contains(needle)
-                        || db
-                            .session(&session.id)
-                            .and_then(|state| state.first_message.as_deref())
-                            .is_some_and(|text| text.to_lowercase().contains(needle))
+                .filter_map(|session| {
+                    let state = db.session(&session.id)?;
+                    if let Some(needle) = &needle {
+                        let matches = session.title.to_lowercase().contains(needle)
+                            || state
+                                .first_message
+                                .as_deref()
+                                .is_some_and(|text| text.to_lowercase().contains(needle));
+                        if !matches {
+                            return None;
+                        }
+                    }
+                    Some((state.last_activity, session))
                 })
-                .collect())
+                .collect();
+            // Pinned first, then the most recently active; the store's identifier order is random,
+            // so without this the list would reshuffle with every restart.
+            listed.sort_by(|(a_at, a), (b_at, b)| {
+                b.pinned.cmp(&a.pinned).then_with(|| b_at.cmp(a_at))
+            });
+            Ok(listed.into_iter().map(|(_, session)| session).collect())
         })
         .await?;
-    // Stable sort keeps the store's identifier order within each group.
-    sessions.sort_by_key(|session| !session.pinned);
     Ok(Json(SessionList { sessions }))
+}
+
+/// Display form of a client-supplied title, or `invalid_title` when none remains or it is too long.
+pub(crate) fn valid_title(raw: &str) -> Result<String, HttpError> {
+    normalize_title(raw)
+        .filter(|title| title.chars().count() <= MAX_SESSION_TITLE_CHARS)
+        .ok_or(HttpError(StatusCode::BAD_REQUEST, "invalid_title"))
 }
 
 pub(crate) async fn update(
@@ -62,13 +79,7 @@ pub(crate) async fn update(
         return Err(HttpError::invalid_value());
     }
     let title = match request.title {
-        Some(title) => {
-            let title = title.trim();
-            if title.is_empty() || title.chars().count() > MAX_SESSION_TITLE_CHARS {
-                return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_title"));
-            }
-            Some(title.to_owned())
-        }
+        Some(title) => Some(valid_title(&title)?),
         None => None,
     };
     // Unchanged fields are dropped so the log only records real transitions.
@@ -88,6 +99,13 @@ pub(crate) async fn update(
             },
         )
         .await?;
+    }
+    if archived == Some(true) {
+        s.registry.browser.cleanup_warm(&s, &id, None).await;
+    }
+    // Archiving ends an isolated space: its tabs close and its cookies and storage are wiped.
+    if archived == Some(true) && current.browser_space == openside_proto::BrowserSpace::Isolated {
+        s.registry.browser.close_space(&s, &id).await;
     }
     Ok(Json(s.db.state(&id).await?.session()))
 }

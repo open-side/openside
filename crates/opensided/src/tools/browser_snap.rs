@@ -6,7 +6,7 @@
 //! the sidecar compacts that conversation the daemon bumps its context epoch, which retires
 //! every earlier capture as a diff base. A diff can therefore never refer to text the caller
 //! did not receive or no longer holds (a page, a scope, another conversation's capture, a
-//! summarized-away tree). Paging (`from_line`, `from_char`) and scoping (`ref`) with
+//! summarized-away tree). Paging (`from_line`, `from_char`) and subtree reads (`ref`) with
 //! `snapshot_id` read the same immutable capture and are refused once its document is gone, so
 //! pages never mix captures. Results are budgeted as serialized JSON below the host output
 //! limit, so the host never cuts them.
@@ -40,6 +40,8 @@ struct Capture {
     tab: String,
     document: Option<String>,
     snapshot: Snapshot,
+    /// The capture holds only what overlapped the viewport (`scope: "viewport"`).
+    viewport: bool,
     /// The whole tree reached the caller in one result (or as a diff onto such a result).
     delivered_whole: bool,
     seq: u64,
@@ -79,23 +81,44 @@ pub(super) fn forget_tab(tab: &str) {
 // gets a full capture, which is always safe.
 static STORE: LazyLock<Mutex<Store>> = LazyLock::new(Mutex::default);
 
+/// Which part of the page a new capture covers.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Scope {
+    /// The whole document (default).
+    Page,
+    /// Only nodes that overlap the viewport as it is now, with their ancestors; far smaller on
+    /// a long page. The capture is partial: it is never a `since` base and `since` is ignored
+    /// with it. Its refs and snapshot_id work as usual (paging, ref); take another one after
+    /// scrolling.
+    Viewport,
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SnapshotArgs {
     pub(super) tab_id: String,
-    /// snapshot_id of the last complete snapshot of this tab you received; the result is then
-    /// only the line diff against it (when the document is the same).
+    /// Page (default) or viewport; only for a new capture, not with snapshot_id.
+    scope: Option<Scope>,
+    /// snapshot_id of the last complete page snapshot of this tab you received; the result is
+    /// then only the line diff against it (when the document is the same).
     since: Option<String>,
     /// Read from an existing capture (with from_line or ref) instead of taking a new one.
     snapshot_id: Option<String>,
     /// Only the subtree under this eN ref.
     #[serde(rename = "ref")]
-    scope: Option<String>,
+    subtree: Option<String>,
     /// 1-based line to start from, as given by a previous warning's next_from_line.
     from_line: Option<usize>,
     /// Characters of that line already received, as given by a previous warning's
     /// next_from_char; continues a single line that is longer than one result.
     from_char: Option<usize>,
+}
+
+impl SnapshotArgs {
+    pub(super) fn viewport(&self) -> bool {
+        self.scope == Some(Scope::Viewport)
+    }
 }
 
 fn stale() -> ToolError {
@@ -114,14 +137,24 @@ pub(super) async fn from_capture(
     let Some(id) = &args.snapshot_id else {
         return Ok(None);
     };
-    let (snapshot, document) = {
+    if args.viewport() {
+        return Err(ToolError(
+            "scope applies to a new capture; a snapshot_id read keeps the scope it was taken with"
+                .into(),
+        ));
+    }
+    let (snapshot, document, viewport) = {
         let store = STORE.lock();
         let capture = store
             .captures
             .get(id)
             .filter(|capture| &capture.session == session && capture.tab == args.tab_id)
             .ok_or_else(stale)?;
-        (capture.snapshot.clone(), capture.document.clone())
+        (
+            capture.snapshot.clone(),
+            capture.document.clone(),
+            capture.viewport,
+        )
     };
     let current = browser
         .document_id(&args.tab_id)
@@ -130,10 +163,11 @@ pub(super) async fn from_capture(
     if document.as_deref() != Some(current.as_str()) {
         return Err(stale());
     }
-    view(id, &snapshot, args).map(|(value, _)| Some(value))
+    view(id, &snapshot, args, viewport).map(|(value, _)| Some(value))
 }
 
-/// Result for a new capture: a diff against `since` when allowed, otherwise a (paged) view.
+/// Result for a new capture: a diff against `since` when allowed (never for a viewport
+/// capture), otherwise a (paged) view.
 pub(super) fn output(
     session: &SessionId,
     subagent: Option<&str>,
@@ -147,7 +181,12 @@ pub(super) fn output(
     let base = args
         .since
         .as_ref()
-        .filter(|_| args.scope.is_none() && args.from_line.is_none() && args.from_char.is_none())
+        .filter(|_| {
+            !args.viewport()
+                && args.subtree.is_none()
+                && args.from_line.is_none()
+                && args.from_char.is_none()
+        })
         .and_then(|since| store.captures.get(since))
         .filter(|base| {
             &base.session == session
@@ -170,7 +209,7 @@ pub(super) fn output(
     }
     let (value, whole) = match result {
         Some(result) => result,
-        None => view(&id, snapshot, args)?,
+        None => view(&id, snapshot, args, args.viewport())?,
     };
     store.seq += 1;
     let seq = store.seq;
@@ -183,6 +222,7 @@ pub(super) fn output(
             tab: args.tab_id.clone(),
             document: document.map(str::to_owned),
             snapshot: snapshot.clone(),
+            viewport: args.viewport(),
             delivered_whole: whole,
             seq,
         },
@@ -205,13 +245,19 @@ fn serialized(value: &Value) -> usize {
 }
 
 /// A view of `snapshot` whose whole serialized result fits [`RESULT_BUDGET`]; the flag says
-/// whether it holds the entire tree.
-fn view(id: &str, snapshot: &Snapshot, args: &SnapshotArgs) -> Result<(Value, bool), ToolError> {
+/// whether it holds the entire tree. `viewport` marks a capture that was partial from the
+/// start, so the result says so and is never taken for a whole tree.
+fn view(
+    id: &str,
+    snapshot: &Snapshot,
+    args: &SnapshotArgs,
+    viewport: bool,
+) -> Result<(Value, bool), ToolError> {
     let mut budget = RESULT_BUDGET - 1024;
     loop {
         let view = snapshot
             .view(
-                args.scope.as_deref(),
+                args.subtree.as_deref(),
                 args.from_line.unwrap_or(1),
                 args.from_char.unwrap_or(0),
                 budget,
@@ -222,9 +268,10 @@ fn view(id: &str, snapshot: &Snapshot, args: &SnapshotArgs) -> Result<(Value, bo
                 }
                 other => ToolError(other.to_string()),
             })?;
-        let whole = view.omission.is_none() && args.scope.is_none();
+        let whole = view.omission.is_none() && args.subtree.is_none() && !viewport;
         let value = match view.omission {
             // Complete results stay plain text; the first line carries the id for `since`.
+            None if viewport => json!(format!("[snapshot_id {id} viewport]\n{}", view.text)),
             None => json!(format!("[snapshot_id {id}]\n{}", view.text)),
             Some(mut omission) => {
                 for hint in &mut omission.scopes {
@@ -232,7 +279,11 @@ fn view(id: &str, snapshot: &Snapshot, args: &SnapshotArgs) -> Result<(Value, bo
                         hint.name = hint.name.chars().take(HINT_NAME).collect::<String>() + "…";
                     }
                 }
-                json!({"snapshot_id": id, "snapshot": view.text, "warning": omission})
+                if viewport {
+                    json!({"snapshot_id": id, "scope": "viewport", "snapshot": view.text, "warning": omission})
+                } else {
+                    json!({"snapshot_id": id, "snapshot": view.text, "warning": omission})
+                }
             }
         };
         let size = serialized(&value);

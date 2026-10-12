@@ -56,7 +56,7 @@ impl Drop for Fixture {
 async fn fixture(takeover_ttl_secs: u32) -> Option<Fixture> {
     let root = tempfile::tempdir().unwrap();
     let mut config = resolved_config(root.path());
-    match test_browser(root.path()) {
+    match test_browser() {
         Ok(executable) => config.loaded.config.browser.executable = Some(executable),
         Err(error) => {
             eprintln!("SKIP takeover browser tests: {error}");

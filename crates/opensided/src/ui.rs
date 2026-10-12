@@ -19,7 +19,7 @@ use crate::api::HttpError;
 const CSP: &str =
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; \
 connect-src 'self'; manifest-src 'self'; worker-src 'self'; font-src 'self'; object-src 'none'; \
-base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+base-uri 'none'; form-action 'self'; frame-src 'self' blob:; frame-ancestors 'none'";
 
 struct Root(PathBuf);
 

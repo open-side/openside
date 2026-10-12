@@ -179,6 +179,294 @@ async fn session_metadata_is_durable_and_drives_list_search_pin_and_archive() {
     second.shutdown().await;
 }
 
+async fn queue_text(daemon: &Daemon, id: &str, message: &str, text: &str) {
+    daemon
+        .shared
+        .emit(
+            &SessionId::new(id),
+            None,
+            EventKind::MessageQueued {
+                message_id: MessageId::new(message),
+                text: text.into(),
+                mode: QueueMode::Queue,
+                attachments: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn session_list_is_ordered_by_recent_activity_with_pinned_first_across_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let first = daemon(root.path(), &TestRuntime::default()).await;
+    // Identifier order (alpha < bravo < charlie) must not decide the list order.
+    for name in ["charlie", "alpha", "bravo"] {
+        create_session(&first, name, PolicyMode::Guard, None).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    queue_text(&first, "charlie", "m1", "newest message").await;
+    let router = api::router(first.shared.clone(), true);
+    let order = |list: &Value| -> Vec<String> {
+        list["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (_, list) = send(&router, "GET", "/v1/sessions", json!({})).await;
+    assert_eq!(order(&list), ["charlie", "bravo", "alpha"]);
+    // Renaming is not activity; pinning moves a session to the front group only.
+    send(
+        &router,
+        "PATCH",
+        "/v1/sessions/alpha",
+        json!({"title":"Renamed"}),
+    )
+    .await;
+    send(
+        &router,
+        "PATCH",
+        "/v1/sessions/bravo",
+        json!({"pinned":true}),
+    )
+    .await;
+    let (_, list) = send(&router, "GET", "/v1/sessions", json!({})).await;
+    assert_eq!(order(&list), ["bravo", "charlie", "alpha"]);
+    first.shutdown().await;
+    drop(first);
+    let second = daemon(root.path(), &TestRuntime::default()).await;
+    let router = api::router(second.shared.clone(), true);
+    let (_, list) = send(&router, "GET", "/v1/sessions", json!({})).await;
+    assert_eq!(order(&list), ["bravo", "charlie", "alpha"]);
+    second.shutdown().await;
+}
+
+#[tokio::test]
+async fn titles_are_single_line_and_untitled_sessions_take_their_first_message() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon(root.path(), &TestRuntime::default()).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let (status, created) = send(
+        &router,
+        "POST",
+        "/v1/sessions",
+        json!({"title":"  two\nlines\u{202e} ","model":"m"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["title"], "two lines");
+    for title in [json!(""), json!("   "), Value::Null] {
+        let (status, created) = send(
+            &router,
+            "POST",
+            "/v1/sessions",
+            json!({"title":title,"model":"m"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(created["title"], "New session");
+        let id = created["id"].as_str().unwrap();
+        queue_text(&daemon, id, "m1", "\n  Plan the trip\nto Busan ").await;
+        let mut live = daemon.shared.events.subscribe();
+        queue_text(&daemon, id, "m1b", "second message must not retitle").await;
+        assert!(live
+            .try_recv()
+            .is_ok_and(|event| matches!(event.kind, EventKind::MessageQueued { .. })));
+        assert!(
+            live.try_recv().is_err(),
+            "only the first message names the session"
+        );
+        let (_, session) = send(&router, "GET", &format!("/v1/sessions/{id}"), json!({})).await;
+        assert_eq!(session["title"], "Plan the trip");
+        // Clients see the title as an event, not by deriving it themselves.
+        let titled: Vec<_> = daemon
+            .shared
+            .db
+            .events(&SessionId::new(id), 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                EventKind::SessionUpdated { title, .. } => title,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(titled, ["Plan the trip"]);
+    }
+    // An explicit title is never replaced by the first message.
+    let id = created["id"].as_str().unwrap();
+    queue_text(&daemon, id, "m2", "something else").await;
+    let (_, session) = send(&router, "GET", &format!("/v1/sessions/{id}"), json!({})).await;
+    assert_eq!(session["title"], "two lines");
+    for title in ["x".repeat(201), "\u{202e}\u{0}".into()] {
+        let (status, body) = send(
+            &router,
+            "POST",
+            "/v1/sessions",
+            json!({"title":title,"model":"m"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "invalid_title");
+    }
+    let (_, session) = send(
+        &router,
+        "PATCH",
+        &format!("/v1/sessions/{id}"),
+        json!({"title":"a\tb\0c"}),
+    )
+    .await;
+    assert_eq!(session["title"], "a b c");
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn empty_messages_are_rejected_and_body_rejections_are_json() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon(root.path(), &TestRuntime::default()).await;
+    create_session(&daemon, "s", PolicyMode::Guard, None).await;
+    queue_text(&daemon, "s", "pending", "words").await;
+    let router = api::router(daemon.shared.clone(), true);
+    for text in ["", "  \n\t"] {
+        let (status, body) = send(
+            &router,
+            "POST",
+            "/v1/sessions/s/messages",
+            json!({"text":text,"mode":"queue"}),
+        )
+        .await;
+        assert_eq!(
+            (status, &body["code"]),
+            (StatusCode::BAD_REQUEST, &json!("empty_message"))
+        );
+        let (status, body) = send(
+            &router,
+            "PATCH",
+            "/v1/sessions/s/queue/pending",
+            json!({"text":text}),
+        )
+        .await;
+        assert_eq!(
+            (status, &body["code"]),
+            (StatusCode::BAD_REQUEST, &json!("empty_message"))
+        );
+    }
+    let (status, _) = send(
+        &router,
+        "PATCH",
+        "/v1/sessions/s/queue/pending",
+        json!({"text":"edited"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // A malformed body gets the same `{code, message}` shape as every other failure.
+    let (status, body) = send(
+        &router,
+        "POST",
+        "/v1/sessions/s/messages",
+        json!({"text":"hi"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["code"], "invalid_request");
+    assert!(body["message"].as_str().unwrap().contains("mode"));
+    let oversized = "A".repeat(crate::artifacts::SUBMIT_BODY_LIMIT + 1);
+    let (status, body) = send(
+        &router,
+        "POST",
+        "/v1/sessions/s/messages",
+        json!({"text":"hi","mode":"queue","attachments":[{"data_base64":oversized}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body["code"], "attachments_too_large");
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn remote_session_creation_cannot_widen_mode_or_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon(root.path(), &TestRuntime::default()).await;
+    let (_, steer) = daemon
+        .shared
+        .db
+        .pair(vec![CapabilityScope::Steer])
+        .await
+        .unwrap();
+    let remote = api::router(daemon.shared.clone(), false);
+    let local = api::router(daemon.shared.clone(), true);
+    let create = |router: axum::Router, token: Option<String>, body: Value| async move {
+        let response = router
+            .oneshot(request("POST", "/v1/sessions", body, token.as_deref()))
+            .await
+            .unwrap();
+        let status = response.status();
+        (status, json_body(response).await)
+    };
+    let model = std::any::type_name::<TestRuntime>();
+    for body in [
+        json!({"model":model,"mode":"full"}),
+        json!({"model":model,"workspace":root.path()}),
+    ] {
+        let (status, error) = create(remote.clone(), Some(steer.clone()), body.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(error["code"], "local_socket_required");
+        // The same request over the local socket is the owner's own choice.
+        let (status, _) = create(local.clone(), None, body).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    // Staying within the daemon default is fine for a remote device.
+    for body in [
+        json!({"model":model}),
+        json!({"model":model,"mode":"read-only"}),
+    ] {
+        let (status, _) = create(remote.clone(), Some(steer.clone()), body).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn bearer_scheme_is_case_insensitive() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon(root.path(), &TestRuntime::default()).await;
+    let (_, token) = daemon
+        .shared
+        .db
+        .pair(vec![CapabilityScope::Read])
+        .await
+        .unwrap();
+    let router = api::router(daemon.shared.clone(), false);
+    for scheme in ["Bearer", "bearer", "BEARER"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/sessions")
+                    .header("authorization", format!("{scheme} {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{scheme}");
+    }
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sessions")
+                .header("authorization", format!("Basic {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    daemon.shutdown().await;
+}
+
 #[tokio::test]
 async fn session_metadata_update_requires_steer_capability() {
     let root = tempfile::tempdir().unwrap();

@@ -155,7 +155,7 @@ async fn site() -> (String, tokio::task::JoinHandle<()>) {
 }
 
 /// Chromium and a passphrase vault holding `entries`.
-fn otp_config(root: &Path, entries: Vec<Entry>) -> Option<Resolved> {
+pub(super) fn otp_config(root: &Path, entries: Vec<Entry>) -> Option<Resolved> {
     let mut config = browser_config(root)?;
     let path = root.join("vault.db");
     let mut vault = Vault::create(
@@ -202,7 +202,7 @@ fn saved_authenticator(origin: &str, site: &str, seed: &str) -> Entry {
     .unwrap()
 }
 
-async fn live(daemon: &Daemon) -> Arc<openside_browser::Browser> {
+pub(super) async fn live(daemon: &Daemon) -> Arc<openside_browser::Browser> {
     daemon
         .shared
         .registry
@@ -225,7 +225,7 @@ async fn code_value(daemon: &Daemon, tab: &str) -> String {
         .to_owned()
 }
 
-async fn title(daemon: &Daemon, tab: &str) -> String {
+pub(super) async fn title(daemon: &Daemon, tab: &str) -> String {
     live(daemon)
         .await
         .evaluate(tab, "document.title")
@@ -268,7 +268,7 @@ async fn verify(daemon: &Daemon, session: &SessionId, tab: &str, label: &str) ->
 
 /// A deferring browser tool must never wait on the browser gate it already holds (opening
 /// its ticket pins the field under that gate), so a hang fails here instead of stalling.
-async fn bounded(
+pub(super) async fn bounded(
     daemon: &Daemon,
     session: &SessionId,
     name: &str,
@@ -287,7 +287,7 @@ async fn request_otp(daemon: &Daemon, session: &SessionId, args: Value, id: &str
     bounded(daemon, session, "request_otp", args, id).await
 }
 
-async fn ticket(daemon: &Daemon, id: &TicketId) -> Value {
+pub(super) async fn ticket(daemon: &Daemon, id: &TicketId) -> Value {
     let response = api::router(daemon.shared.clone(), true)
         .oneshot(request(
             "GET",
@@ -301,7 +301,7 @@ async fn ticket(daemon: &Daemon, id: &TicketId) -> Value {
 }
 
 /// Every string the agent was handed back, ticket resumptions included.
-fn agent_saw(runtime: &TestRuntime) -> String {
+pub(super) fn agent_saw(runtime: &TestRuntime) -> String {
     format!("{:?}", runtime.0.lock().resolved)
 }
 
@@ -518,7 +518,7 @@ async fn request_otp_types_an_emailed_code_into_split_boxes_without_the_agent_se
     fixture.abort();
 }
 
-async fn resolve_as(
+pub(super) async fn resolve_as(
     daemon: &Daemon,
     token: &str,
     id: &TicketId,
@@ -537,7 +537,7 @@ async fn resolve_as(
     (status, json_body(response).await)
 }
 
-async fn vault_audit(daemon: &Daemon) -> Value {
+pub(super) async fn vault_audit(daemon: &Daemon) -> Value {
     let response = api::router(daemon.shared.clone(), true)
         .oneshot(request("GET", "/v1/vault/audit", json!({}), None))
         .await
@@ -1550,7 +1550,7 @@ async fn an_approval_whose_commit_failed_is_reported_as_registered_after_a_resta
     {
         let mut guard = daemon.shared.registry.vault.vault.lock().await;
         let vault = guard.as_mut().unwrap();
-        assert!(vault.totp_registered_by(&operation).unwrap());
+        assert!(vault.registered_by(&operation).unwrap());
         // Another device changes only the item's policy and sync replaces the item here; the
         // local evidence of this operation must survive the import.
         let audit = openside_vault::AuditContext {
@@ -1570,7 +1570,7 @@ async fn an_approval_whose_commit_failed_is_reported_as_registered_after_a_resta
         let synced = serde_json::to_vec(&synced).unwrap();
         let prepared = openside_vault::PreparedImport::parse(&site, &synced).unwrap();
         vault.commit_import(&audit, prepared).unwrap();
-        assert!(vault.totp_registered_by(&operation).unwrap());
+        assert!(vault.registered_by(&operation).unwrap());
     }
     assert_eq!(ticket(&daemon, &id).await["status"], "pending");
     daemon.shutdown().await;

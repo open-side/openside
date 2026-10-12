@@ -31,21 +31,27 @@ use crate::{
 mod artifacts;
 mod browser;
 mod browser_snap;
+mod browser_space;
 mod browser_tabs;
 mod core_gaps;
 mod credential_paths;
+mod login;
 mod memory;
+mod onboarding;
 mod otp;
 mod policy;
 mod preview;
 mod profiles;
 mod remote;
+mod remote_transport;
 mod repl;
 mod routines;
 mod skills;
 mod subagents;
 mod sync;
 mod takeover;
+mod tasks;
+mod tools_api;
 mod vault;
 mod web;
 
@@ -177,6 +183,7 @@ impl TestRuntime {
 fn resolved_config(root: &Path) -> Resolved {
     let mut product = openside_config::Config::default();
     product.agent.command = Some(vec!["unused-test-command".into()]);
+    product.agent.orchestration = openside_config::Orchestration::Single;
     product.browser.executable = Some(root.join("missing-browser"));
     let loaded = openside_config::Loaded {
         config: product,
@@ -194,39 +201,15 @@ fn resolved_config(root: &Path) -> Resolved {
     config.bwrap = None;
     config
 }
-/// Chromium for in-process daemon tests. The daemon launches its browser detached so that it
-/// survives a daemon restart, which also means nothing stops it if the test process dies
-/// without unwinding (abort, SIGKILL, a harness timeout): every browser of the tests running
-/// at that moment used to be left behind. On Linux the executable is wrapped with
-/// `setpriv --pdeathsig KILL` so the kernel kills Chromium when the test thread that
-/// launched it exits, however it exits; a daemon restart inside one test is unaffected.
-fn test_browser(root: &Path) -> std::result::Result<std::path::PathBuf, String> {
-    let executable = openside_config::discover_browser(&openside_config::Config::default())
-        .map_err(|error| error.to_string())?;
-    #[cfg(target_os = "linux")]
-    if let Some(setpriv) = openside_config::find_on_path("setpriv") {
-        use std::os::unix::fs::PermissionsExt;
-        let quote =
-            |path: &Path| format!("'{}'", path.display().to_string().replace('\'', r"'\''"));
-        let wrapper = root.join("chromium-pdeathsig");
-        std::fs::write(
-            &wrapper,
-            format!(
-                "#!/bin/sh\nexec {} --pdeathsig KILL -- {} \"$@\"\n",
-                quote(&setpriv),
-                quote(&executable)
-            ),
-        )
-        .map_err(|error| error.to_string())?;
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
-            .map_err(|error| error.to_string())?;
-        return Ok(wrapper);
-    }
-    #[cfg(target_os = "linux")]
-    eprintln!(
-        "note: setpriv not on PATH; a test process killed mid-test can leave Chromium running"
-    );
-    Ok(executable)
+/// Chromium for in-process daemon tests. The daemon's browser is detached (it survives a
+/// daemon restart), which used to mean a test process killed mid-test — abort, SIGKILL, a
+/// harness timeout — orphaned Chromium under the init process. `launch_config` therefore
+/// sets `die_with_spawner` under cfg(test), asking the launcher for kernel parent-death
+/// supervision (PR_SET_PDEATHSIG) tied to the spawning thread; a daemon restart inside one
+/// test is unaffected.
+fn test_browser() -> std::result::Result<std::path::PathBuf, String> {
+    openside_config::discover_browser(&openside_config::Config::default())
+        .map_err(|error| error.to_string())
 }
 async fn daemon(root: &Path, runtime: &TestRuntime) -> Daemon {
     Daemon::open_runtime(resolved_config(root), runtime.clone())
@@ -295,7 +278,11 @@ async fn opened(
         summary: "Human step".into(),
         instructions: None,
         options: Vec::new(),
-        origin: TicketOrigin { subagent_id: None },
+        origin: TicketOrigin {
+            subagent_id: None,
+            device_id: None,
+            driver_ids: Vec::new(),
+        },
         tool: None,
         target: (kind == TicketKind::SecretInput).then(|| TicketTarget {
             tab_id: Some("tab".into()),
@@ -309,6 +296,9 @@ async fn opened(
         resolution: None,
         otp: None,
         otp_register: None,
+        login: None,
+        choice: None,
+        approval: None,
     };
     daemon
         .shared
@@ -335,6 +325,28 @@ fn request(method: &str, path: &str, body: Value, token: Option<&str>) -> Reques
 }
 async fn json_body(response: Response) -> Value {
     serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+async fn person_resolve(daemon: &Daemon, id: &TicketId, value: Value) -> Response {
+    let (_, token) = daemon
+        .shared
+        .db
+        .pair(vec![
+            CapabilityScope::Read,
+            CapabilityScope::Approve,
+            CapabilityScope::HumanStep,
+        ])
+        .await
+        .unwrap();
+    api::router(daemon.shared.clone(), false)
+        .oneshot(request(
+            "POST",
+            &format!("/v1/tickets/{id}/resolve"),
+            json!({"value":value}),
+            Some(&token),
+        ))
+        .await
+        .unwrap()
 }
 async fn until(mut condition: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -397,6 +409,7 @@ async fn every_protocol_method_and_path_is_routed() {
                 task: "routed".into(),
                 model: "test/model".into(),
                 tools: Vec::new(),
+                background: false,
             },
         )
         .await
@@ -478,6 +491,7 @@ async fn every_protocol_method_and_path_is_routed() {
         let path = route
             .path
             .replace("{mid}", "message")
+            .replace("{thumbnail_id}", "thumbnail")
             .replace("{sid}", "child")
             .replace("{name}", "skill")
             .replace("{path}", "transcript.jsonl")
@@ -1267,18 +1281,8 @@ async fn approval_recall_requires_session_call_tool_and_resolved_approval() {
         host.call(invocation.clone()).await,
         ToolOutcome::Denied { .. }
     ));
-    let router = api::router(daemon.shared.clone(), true);
     assert_eq!(
-        router
-            .oneshot(request(
-                "POST",
-                &format!("/v1/tickets/{ticket}/resolve"),
-                json!({"value":true}),
-                None
-            ))
-            .await
-            .unwrap()
-            .status(),
+        person_resolve(&daemon, &ticket, json!(true)).await.status(),
         StatusCode::OK
     );
     let mut wrong = invocation.clone();

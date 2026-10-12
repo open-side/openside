@@ -742,6 +742,9 @@ fn changed_value(path: &str, schema: &Value, current: &Value) -> Value {
         ("daemon.listen", json!("127.0.0.1:9")),
         ("remote.public_url", json!("https://desk.example.test")),
         ("remote.push_contact", json!("mailto:me@example.test")),
+        ("remote.mode", json!(["cloudflare"])),
+        ("remote.relay.url", json!("https://relay.example.test")),
+        ("remote.cloudflare.hostname", json!("desk.example.test")),
         (
             "otp.sites",
             json!({"https://login.example.test": r"(\d{6})"}),
@@ -826,6 +829,7 @@ fn companions(path: &str) -> Vec<(&'static str, Value)> {
         "sync.webdav_username" => vec![("sync.webdav_password_cmd", json!(["pass"]))],
         "sync.webdav_password_cmd" => vec![("sync.webdav_username", json!("me"))],
         "channels.discord.enabled" => vec![("channels.discord.allowed_users", json!(["1"]))],
+        "remote.mode" => vec![("daemon.listen", json!("127.0.0.1:9"))],
         _ => Vec::new(),
     }
 }
@@ -1041,6 +1045,8 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
             .replace("{id}", "unknown")
             .replace("{mid}", "unknown")
             .replace("{sid}", "unknown")
+            .replace("{thumbnail_id}", "unknown")
+            .replace("{path}", "transcript.jsonl")
             .replace("{name}", "unknown");
         let body = if route.request_schema.is_some() {
             json!({})
@@ -1080,25 +1086,44 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
         );
     }
 
-    let session = create_session(&daemon, "full", PolicyMode::Full, None).await;
-    let visible: Vec<String> = host(&daemon, &session)
-        .await
-        .specs()
-        .into_iter()
-        .map(|spec| spec.name)
-        .collect();
-    for name in daemon.shared.registry.names() {
-        let needs_absent_resource = name.starts_with("browser_") || name.starts_with("vault_") || name.starts_with("tab")
-                // Needs a browser and a vault, as the vault_* tools do.
+    daemon.shutdown().await;
+    for orchestration in [
+        openside_config::Orchestration::Single,
+        openside_config::Orchestration::Front,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = resolved_config(root.path());
+        config.loaded.config.agent.orchestration = orchestration;
+        let daemon = Daemon::open_runtime(config, runtime.clone()).await.unwrap();
+        let session = create_session(&daemon, "full", PolicyMode::Full, None).await;
+        let visible: Vec<String> = host(&daemon, &session)
+            .await
+            .specs()
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect();
+        for name in daemon.shared.registry.names() {
+            let shown = visible.iter().any(|v| v == name);
+            if crate::tasks::is_task_tool(name) || name == "delegate" {
+                let expected = if name == "delegate" {
+                    orchestration == openside_config::Orchestration::Single
+                } else {
+                    orchestration == openside_config::Orchestration::Front
+                };
+                assert_eq!(shown, expected, "{name} visibility in {orchestration:?}");
+                continue;
+            }
+            let needs_absent_resource = name.starts_with("browser_")
+                || name.starts_with("vault_")
+                || name.starts_with("tab")
                 || name == "register_authenticator";
-        if !visible.iter().any(|v| v == name) {
             assert!(
-                needs_absent_resource || name == "bash",
-                "{name} is hidden in full access without a missing resource"
+                shown || needs_absent_resource || name == "bash",
+                "{name} is hidden in full access without a missing resource in {orchestration:?}"
             );
         }
+        daemon.shutdown().await;
     }
-    daemon.shutdown().await;
 }
 
 fn alive(pid: i32) -> bool {

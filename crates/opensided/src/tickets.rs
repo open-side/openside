@@ -15,13 +15,17 @@ use crate::{
 pub(crate) fn lifetime(kind: TicketKind, config: &openside_config::TicketsConfig) -> Duration {
     Duration::seconds(i64::from(match kind {
         TicketKind::Confirm => config.confirm_ttl_secs,
-        TicketKind::SecretInput => config.secret_input_ttl_secs,
+        // A sign-in form and a page's choice are bound to one page like a secret field.
+        TicketKind::SecretInput | TicketKind::Login | TicketKind::Choice => {
+            config.secret_input_ttl_secs
+        }
         TicketKind::DeviceApproval => config.device_approval_ttl_secs,
         TicketKind::Takeover => config.takeover_ttl_secs,
         TicketKind::Info => config.info_ttl_secs,
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open(
     shared: &Shared,
     session: &SessionId,
@@ -30,6 +34,7 @@ pub(crate) async fn open(
     request: TicketRequest,
     tool: Option<TicketTool>,
     approval_binding: Option<[u8; 32]>,
+    device_id: Option<&str>,
 ) -> Result<TicketId> {
     let _gate = shared.ticket_gate.lock().await;
     if let Some(subagent) = &call.subagent {
@@ -79,7 +84,7 @@ pub(crate) async fn open(
             shared
                 .registry
                 .browser
-                .capture_ticket(shared, &id, session, target, otp_boxes)
+                .capture_ticket(shared, &id, session, target, otp_boxes, request.pins)
                 .await?
         }
         None => Default::default(),
@@ -96,6 +101,8 @@ pub(crate) async fn open(
         options: request.options,
         origin: TicketOrigin {
             subagent_id: call.subagent.clone(),
+            device_id: device_id.map(str::to_owned),
+            driver_ids: state.driver_ids.iter().cloned().collect(),
         },
         tool,
         target: request.target,
@@ -106,6 +113,9 @@ pub(crate) async fn open(
         resolution: None,
         otp: request.otp,
         otp_register: request.otp_register,
+        login: request.login,
+        choice: request.choice,
+        approval: request.approval,
     };
     // Target strings are kept verbatim only when the daemon checked them against the live
     // browser; a caller-supplied tab id, origin or field ref is redacted like any other text.
@@ -317,7 +327,9 @@ pub(crate) async fn close_unanswered(
         0,
     )
     .await?;
-    if ticket.kind == TicketKind::SecretInput || ticket.otp_register.is_some() {
+    if matches!(ticket.kind, TicketKind::SecretInput | TicketKind::Login)
+        || ticket.otp_register.is_some()
+    {
         // The ticket is no longer pending, so a stale intent can never block anything.
         let _ = shared
             .registry

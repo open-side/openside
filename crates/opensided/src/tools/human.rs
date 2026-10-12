@@ -8,10 +8,39 @@ use serde_json::Value;
 
 use super::{parse, spec, DaemonTool, TicketRequest, ToolEnv, ToolError, ToolExec};
 
+/// The ticket kinds `request_human_step` opens. `login` and `choice` tickets carry a form the
+/// daemon built from the page, so only `request_login` and `request_choice` open them.
+#[derive(Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum HumanKind {
+    /// Authorize or reject a sensitive operation.
+    Confirm,
+    /// Provide a secret directly to the daemon, never to the model or event log.
+    SecretInput,
+    /// Complete approval on another device.
+    DeviceApproval,
+    /// Answer a non-secret question.
+    Info,
+    /// Perform an action directly in the browser.
+    Takeover,
+}
+
+impl From<HumanKind> for TicketKind {
+    fn from(kind: HumanKind) -> Self {
+        match kind {
+            HumanKind::Confirm => Self::Confirm,
+            HumanKind::SecretInput => Self::SecretInput,
+            HumanKind::DeviceApproval => Self::DeviceApproval,
+            HumanKind::Info => Self::Info,
+            HumanKind::Takeover => Self::Takeover,
+        }
+    }
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct HumanArgs {
-    kind: TicketKind,
+    kind: HumanKind,
     summary: String,
     instructions: Option<String>,
     tab_id: Option<String>,
@@ -43,7 +72,7 @@ impl DaemonTool for RequestHumanStep {
                 return Err(ToolError("summary must not be empty".into()));
             }
             let mut actions = Vec::new();
-            if args.kind == TicketKind::SecretInput {
+            if args.kind == HumanKind::SecretInput {
                 if [
                     args.tab_id.as_deref(),
                     args.origin.as_deref(),
@@ -80,7 +109,7 @@ impl DaemonTool for RequestHumanStep {
             if let Some(condition) = &args.resume_when {
                 condition.validate()?;
             }
-            if args.kind == TicketKind::DeviceApproval {
+            if args.kind == HumanKind::DeviceApproval {
                 let condition = args
                     .resume_when
                     .as_ref()
@@ -132,8 +161,8 @@ impl DaemonTool for RequestHumanStep {
                     } else {
                         None
                     };
-                    ToolExec::Defer(TicketRequest {
-                        kind: args.kind,
+                    ToolExec::Defer(Box::new(TicketRequest {
+                        kind: args.kind.into(),
                         summary: args.summary,
                         instructions: args.instructions,
                         options: args.options.unwrap_or_default(),
@@ -143,7 +172,11 @@ impl DaemonTool for RequestHumanStep {
                             .map(|condition| serde_json::json!(condition)),
                         otp: None,
                         otp_register: None,
-                    })
+                        login: None,
+                        choice: None,
+                        approval: None,
+                        pins: Vec::new(),
+                    }))
                 }
                 Err(error) => ToolExec::Denied {
                     reason: error.0,
@@ -191,7 +224,7 @@ impl DaemonTool for AskUser {
     fn call<'a>(&'a self, args: Value, _: &'a ToolEnv) -> BoxFuture<'a, ToolExec> {
         Box::pin(async move {
             match parse::<AskArgs>(&args) {
-                Ok(args) => ToolExec::Defer(TicketRequest {
+                Ok(args) => ToolExec::Defer(Box::new(TicketRequest {
                     kind: TicketKind::Info,
                     summary: args.question,
                     instructions: None,
@@ -208,7 +241,11 @@ impl DaemonTool for AskUser {
                     resume_when: None,
                     otp: None,
                     otp_register: None,
-                }),
+                    login: None,
+                    choice: None,
+                    approval: None,
+                    pins: Vec::new(),
+                })),
                 Err(error) => ToolExec::Denied {
                     reason: error.0,
                     hint: None,

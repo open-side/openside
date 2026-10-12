@@ -92,7 +92,12 @@ fn save_bytes(path: &Path, bytes: &[u8]) -> Result<(), ()> {
 /// devices is one record rather than a duplicate.
 fn normalize(url: &str) -> Option<(String, String)> {
     let parsed = url::Url::parse(url).ok()?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
+    // Pins sync to every device and show in the UI, so a URL's embedded credentials must not.
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
         return None;
     }
     let url = parsed.to_string();

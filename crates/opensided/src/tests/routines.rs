@@ -867,6 +867,99 @@ async fn deleting_an_active_session_races_cleanly_with_queued_work_and_heartbeat
 }
 
 #[tokio::test]
+async fn a_remote_admin_cannot_widen_the_agent_through_policy_or_routines() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let unix = api::router(daemon.shared.clone(), true);
+    let remote = api::router(daemon.shared.clone(), false);
+    let (_, admin) = daemon
+        .shared
+        .db
+        .pair(vec![CapabilityScope::Admin])
+        .await
+        .unwrap();
+    let call = |method: &'static str, path: String, body: Value| {
+        let remote = remote.clone();
+        let admin = admin.clone();
+        async move {
+            let response = remote
+                .oneshot(request(method, &path, body, Some(&admin)))
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            (
+                status,
+                serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+            )
+        }
+    };
+
+    let policy = json!({"default_mode":"full","allow_origins":[],"deny_origins":[],"rules":[]});
+    let (status, error) = call("PUT", "/v1/policy".into(), policy).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["code"], "local_socket_required");
+    let (_, live) = send(&unix, "GET", "/v1/policy", json!({})).await;
+    assert_ne!(live["default_mode"], "full", "the live policy is untouched");
+    let guard = json!({"default_mode":"guard","allow_origins":[],"deny_origins":[],"rules":[]});
+    let (status, _) = send(&unix, "PUT", "/v1/policy", guard).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the local socket may still change it"
+    );
+
+    for action in [
+        json!({"type":"new_session","prompt":"p","mode":"full"}),
+        json!({"type":"new_session","prompt":"p","workspace":root.path()}),
+    ] {
+        let (status, error) = call(
+            "POST",
+            "/v1/routines".into(),
+            interval_routine(action.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{action}");
+        assert_eq!(error["code"], "local_socket_required");
+    }
+    let (status, created) = call(
+        "POST",
+        "/v1/routines".into(),
+        interval_routine(json!({"type":"new_session","prompt":"p","mode":"read-only"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let (status, error) = call(
+        "PATCH",
+        format!("/v1/routines/{id}"),
+        json!({"action":{"type":"new_session","prompt":"p","workspace":root.path()}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["code"], "local_socket_required");
+    let (status, _) = call(
+        "PATCH",
+        format!("/v1/routines/{id}"),
+        json!({"enabled":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        &unix,
+        "POST",
+        "/v1/routines",
+        interval_routine(json!({"type":"new_session","prompt":"p","mode":"full"})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the local socket may choose any mode"
+    );
+}
+
+#[tokio::test]
 async fn deleting_a_session_or_routine_with_a_remote_token_needs_admin() {
     let root = tempfile::tempdir().unwrap();
     let daemon = daemon_with_model(root.path(), &TestRuntime::default()).await;

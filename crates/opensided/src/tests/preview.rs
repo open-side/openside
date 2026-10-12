@@ -37,7 +37,7 @@ impl Drop for Fixture {
 async fn fixture() -> Option<Fixture> {
     let root = tempfile::tempdir().unwrap();
     let mut config = resolved_config(root.path());
-    match test_browser(root.path()) {
+    match test_browser() {
         Ok(browser) => config.loaded.config.browser.executable = Some(browser),
         Err(reason) => {
             eprintln!("SKIP preview browser tests: {reason}");

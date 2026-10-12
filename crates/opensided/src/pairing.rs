@@ -44,6 +44,7 @@ const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 struct Offer {
     name: String,
     scopes: Vec<CapabilityScope>,
+    kind: openside_proto::DeviceKind,
     deadline: Instant,
 }
 
@@ -170,9 +171,11 @@ pub(crate) async fn create(
     if !valid(&request.name, &scopes) {
         return Err(HttpError::invalid_value());
     }
+    let code = format!("{}{}", random_id(), random_id());
+    // Resolve the link first: an unavailable transport must not leave a live code behind.
+    let (url, transport) = crate::remote::pairing_link(&s, request.via, &code)?;
     let now = s.remote.instant();
     let expires_at = s.remote.wall() + chrono::Duration::seconds(PAIRING_TTL_SECS);
-    let code = format!("{}{}", random_id(), random_id());
     {
         let mut offers = s.remote.offers.lock();
         offers.retain(|_, offer| offer.deadline > now);
@@ -181,6 +184,7 @@ pub(crate) async fn create(
             Offer {
                 name: request.name.clone(),
                 scopes: scopes.clone(),
+                kind: request.kind,
                 deadline: now + Duration::from_secs(PAIRING_TTL_SECS.unsigned_abs()),
             },
         );
@@ -189,18 +193,10 @@ pub(crate) async fn create(
         &s,
         "device",
         "pairing_issued",
-        json!({"name": request.name, "scopes": scopes, "expires_at": expires_at}),
+        json!({"name": request.name, "scopes": scopes, "kind": request.kind, "expires_at": expires_at, "transport": transport}),
     )
     .await;
     let path = format!("/pair#{code}");
-    let url = s
-        .config
-        .loaded
-        .config
-        .remote
-        .public_url
-        .as_deref()
-        .map(|base| format!("{}{path}", base.trim_end_matches('/')));
     Ok((
         StatusCode::CREATED,
         Json(PairingOffer {
@@ -209,6 +205,8 @@ pub(crate) async fn create(
             url,
             scopes,
             expires_at,
+            transport,
+            kind: request.kind,
         }),
     ))
 }
@@ -261,14 +259,14 @@ pub(crate) async fn exchange(
         return Err(HttpError(StatusCode::GONE, "pairing_expired"));
     }
     let (device_id, token) =
-        s.db.pair_named(offer.name.clone(), offer.scopes.clone())
+        s.db.pair_as(offer.name.clone(), offer.scopes.clone(), offer.kind)
             .await
             .map_err(|_| HttpError::internal())?;
     audit(
         &s,
         "device",
         "paired",
-        json!({"device_id": device_id, "name": offer.name, "scopes": offer.scopes, "via": "pairing"}),
+        json!({"device_id": device_id, "name": offer.name, "scopes": offer.scopes, "kind": offer.kind, "via": "pairing"}),
     )
     .await;
     Ok((
@@ -277,6 +275,7 @@ pub(crate) async fn exchange(
             device_id,
             token,
             scopes: offer.scopes,
+            kind: offer.kind,
         }),
     ))
 }

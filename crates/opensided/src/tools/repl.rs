@@ -15,14 +15,14 @@ use std::sync::Arc;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use futures_util::future::BoxFuture;
 use openside_browser::OpenedBy;
 use openside_core::{ApprovalTier, HostToolHandler, ToolCall, ToolOutcome};
 use openside_policy::{Action, Capability, Effect, Policy};
 use openside_proto::{ReplRequest, ReplResponse, ReplStatus, SessionId};
-use openside_repl::{Gate, Guard, Limits, Stop, Target, Verdict};
+use openside_repl::{Frame, Gate, Guard, Limits, Stop, Target, Verdict};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -31,11 +31,15 @@ use super::{
     browser::{browser_error, sensitive, url_origin, Controller},
     parse, spec, DaemonTool, ToolEnv, ToolError, ToolExec,
 };
-use crate::{api::HttpError, engine::Shared, host::Host, persistence::random_id};
+use crate::{
+    api::{Caller, HttpError},
+    engine::Shared,
+    host::Host,
+    persistence::random_id,
+};
 
-/// Tool call ids of API-initiated runs; their approval tickets are claimed by the API
-/// caller's rerun, never delivered to the agent runtime.
-pub(crate) const API_CALL_PREFIX: &str = "api-repl-";
+/// Tool call ids of `/repl` runs, a subset of [`super::API_CALL_PREFIX`].
+const API_CALL_PREFIX: &str = "api-repl-";
 const NAME: &str = "browser_repl";
 const APPROVAL_REQUIRED: &str = "approval_required";
 // The hint ends with the exact `approvals` value to send back; the API route parses it.
@@ -149,6 +153,10 @@ struct PolicyGuard {
     /// removed as they are used, so each permits one operation.
     approved: parking_lot::Mutex<Vec<Action>>,
     requested: parking_lot::Mutex<Option<Action>>,
+    /// Canonical folders a page may receive files from.
+    upload_roots: Vec<std::path::PathBuf>,
+    /// The session's download folder; `None` when the session cannot receive downloads.
+    downloads: Option<std::path::PathBuf>,
 }
 
 impl PolicyGuard {
@@ -178,6 +186,20 @@ impl PolicyGuard {
         }
     }
 
+    /// Opaque origins (about:blank) hold nothing to protect. A frame is judged on its own origin
+    /// as well as its top frame's, and denied if either is.
+    fn browse_all(&self, origin: &str, frame: Option<Frame<'_>>) -> Verdict {
+        for checked in std::iter::once(origin).chain(frame.map(|frame| frame.origin)) {
+            if checked != "null" {
+                let browse = self.browse(checked);
+                if !matches!(browse, Verdict::Allow) {
+                    return browse;
+                }
+            }
+        }
+        Verdict::Allow
+    }
+
     fn browse(&self, origin: &str) -> Verdict {
         let action = Action::new(Capability::Browse, origin);
         self.decide(action.clone(), action)
@@ -190,6 +212,65 @@ impl PolicyGuard {
             "{} {} \"{}\" on {origin} in tab {}",
             target.action, target.role, target.name, self.tab
         )
+    }
+}
+
+impl PolicyGuard {
+    /// A file may be handed to a page only from the session's own folders: the workspace,
+    /// message attachments and what the session downloaded. FullAccess does not widen this,
+    /// because the page, not the user, would choose what leaves the machine. A Deny rule still
+    /// wins inside the allow-list.
+    fn upload(&self, path: &str, origin: &str, frame: Option<Frame<'_>>) -> Verdict {
+        let browse = self.browse_all(origin, frame);
+        if !matches!(browse, Verdict::Allow) {
+            return browse;
+        }
+        let target = std::path::Path::new(path);
+        if !self
+            .upload_roots
+            .iter()
+            .any(|root| openside_policy::path_within(root, target))
+        {
+            return Verdict::Deny(format!(
+                "{path} is outside the session workspace and attachments; uploads are limited to those folders"
+            ));
+        }
+        match self
+            .policy
+            .decide(&Action::new(Capability::FsRead, path))
+            .effect
+        {
+            Effect::Deny => Verdict::Deny(format!("policy denies reading {path}")),
+            _ => Verdict::Allow,
+        }
+    }
+
+    /// A download is saved into the session's download folder, so it needs the page's origin
+    /// and the file's origin to be browsable and the mode to allow writing there.
+    fn download(&self, url: &str, origin: &str) -> Verdict {
+        let browse = self.browse_all(origin, None);
+        if !matches!(browse, Verdict::Allow) {
+            return browse;
+        }
+        // blob: and data: downloads come from the page itself, which was just judged.
+        if let Ok(source) = url_origin(url) {
+            let browse = self.browse_all(&source, None);
+            if !matches!(browse, Verdict::Allow) {
+                return browse;
+            }
+        }
+        let Some(folder) = &self.downloads else {
+            return Verdict::Deny("this session has no download folder".into());
+        };
+        let folder = folder.to_string_lossy();
+        match self
+            .policy
+            .decide(&Action::new(Capability::FsWrite, folder.as_ref()))
+            .effect
+        {
+            Effect::Deny => Verdict::Deny(format!("policy denies writing downloads to {folder}")),
+            _ => Verdict::Allow,
+        }
     }
 }
 
@@ -213,22 +294,37 @@ impl Guard for PolicyGuard {
                     Err(error) => Verdict::Deny(error.0),
                 }
             }
-            Gate::Page { origin, target } => {
-                // Opaque origins (about:blank) hold nothing to protect.
-                if *origin != "null" {
-                    let browse = self.browse(origin);
-                    if !matches!(browse, Verdict::Allow) {
-                        return browse;
-                    }
+            Gate::Page {
+                origin,
+                frame,
+                target,
+            } => {
+                let browse = self.browse_all(origin, *frame);
+                if !matches!(browse, Verdict::Allow) {
+                    return browse;
                 }
+                let frame_origin = frame.map(|frame| frame.origin);
+                let acted_on = frame_origin.unwrap_or(origin);
                 match target {
                     Some(target) if sensitive(target.name, target.role) => self.decide(
-                        Action::new(Capability::Sensitive, *origin),
-                        Action::new(Capability::Sensitive, self.descriptor(target, origin)),
+                        Action::new(Capability::Sensitive, acted_on),
+                        Action::new(Capability::Sensitive, self.descriptor(target, acted_on)),
                     ),
                     _ => Verdict::Allow,
                 }
             }
+            // Page script is judged on the origins it runs in; there is no per-call approval.
+            Gate::Script { origin, frame, .. } => self.browse_all(origin, *frame),
+            Gate::Upload {
+                path,
+                origin,
+                frame,
+            } => self.upload(path, origin, *frame),
+            Gate::Download {
+                url,
+                suggested_name: _,
+                origin,
+            } => self.download(url, origin),
         }
     }
 }
@@ -240,7 +336,7 @@ impl DaemonTool for BrowserRepl {
     fn spec(&self) -> openside_core::ToolSpec {
         spec::<ReplArgs>(
             NAME,
-            "Run Playwright-syntax JavaScript (page.goto, page.getByRole(...).click(), locator.fill, expect(...).toHaveText, ...) in a session-owned tab and return {return_value, console, error?, tab_id}. Executed through the browser's DevTools protocol without injecting page scripts: page.evaluate, routes, mouse coordinates, frames and file uploads throw NotSupported. Each call starts a fresh JavaScript context. Operations whose target looks sensitive (the same keyword heuristic as browser_act, e.g. pay, purchase, checkout, delete) need human approval: the call stops before that operation with approval_required and a hint carrying an `approvals` value; call again with that value added to request approval. Once approved, the whole snippet reruns from the start and each approved entry permits one operation.",
+            "Run Playwright-syntax JavaScript (page.goto, page.getByRole(...).click(), locator.fill, expect(...).toHaveText, ...) in a session-owned tab and return {return_value, console, error?, tab_id}. Page script is allowed once the page's origin passes policy: page.evaluate/evaluateHandle, page.$eval/$$eval, locator.evaluate/evaluateAll, page.addInitScript (removed when the call ends) and raw page.cdp(method, params); what page script does inside the page is not checked step by step. Frames (frameLocator), page.mouse/keyboard, dialogs, popups, downloads and setInputFiles (absolute paths inside the workspace or session attachments) work; network routes (page.route) and page.request throw NotSupported. Each call starts a fresh JavaScript context. Operations whose target looks sensitive (the same keyword heuristic as browser_act, e.g. pay, purchase, checkout, delete) need human approval: the call stops before that operation with approval_required and a hint carrying an `approvals` value; call again with that value added to request approval. Once approved, the whole snippet reruns from the start and each approved entry permits one operation.",
             ApprovalTier::Write,
             true,
         )
@@ -289,21 +385,50 @@ impl BrowserRepl {
         let controller = &ctx.shared.registry.browser;
         controller.lost_tab(&ctx.session, &args).await?;
         let browser = controller.for_session(&ctx.shared, &ctx.session).await?;
+        if ctx.cancellation.is_cancelled() {
+            return Err(ToolError("Task tool cancelled".into()));
+        }
         let tab = match select_tab(&browser, ctx, parsed.tab_id.as_deref()).await? {
             Some(tab) => tab,
             None => {
                 let tab = browser
-                    .create_agent_tab(ctx.session.as_str(), "about:blank")
+                    .create_agent_tab_cancellable(
+                        ctx.session.as_str(),
+                        "about:blank",
+                        ctx.cancellation.cancelled(),
+                    )
                     .await
                     .map_err(browser_error)?;
                 tab.id
             }
         };
+        let selected = openside_core::ToolCall {
+            tool_call_id: ctx.tool_call_id.clone(),
+            name: NAME.into(),
+            arguments_json: json!({"tab_id":tab}).to_string(),
+            subagent: ctx.subagent.clone(),
+            approval_ticket: None,
+        };
+        if let Some((reason, hint)) =
+            crate::browser_state::tab_denial(&ctx.shared, &ctx.session, &selected)
+                .await
+                .map_err(|_| ToolError("Task tab state is unavailable".into()))?
+        {
+            return Ok(ToolExec::Denied {
+                reason: reason.into(),
+                hint: Some(hint.into()),
+            });
+        }
+        if let Some(binding) = &ctx.browser_probe {
+            let stamp = crate::browser_state::before(&ctx.shared, &ctx.session, &selected).await;
+            *binding.lock() = stamp;
+        }
+        super::otp::protect_setup_page(&ctx.shared, &browser, ctx.session.as_str(), &tab).await?;
         if controller.tab_tainted(&tab).await {
             return Ok(ToolExec::Denied {
                 reason: "repl_unavailable_after_secret_fill".into(),
                 hint: Some(
-                    "a secret was filled in this tab; open a new tab with browser_open and use the REPL there".into(),
+                    "a secret was filled in this tab; open a new tab with browser_open_tab and use the REPL there".into(),
                 ),
             });
         }
@@ -315,21 +440,39 @@ impl BrowserRepl {
             .filter(|approval| ctx.approved_actions.contains(&approval.action()))
             .map(Approval::descriptor)
             .collect();
+        let mut upload_roots = ctx.policy.approved_roots.clone();
+        upload_roots
+            .push(crate::artifacts::session_dir(&ctx.shared, &ctx.session).join("attachments"));
+        let downloads = browser.session_downloads(ctx.session.as_str()).await.ok();
+        upload_roots.extend(downloads.clone());
         let guard = Arc::new(PolicyGuard {
             policy: ctx.policy.clone(),
             tab: tab.clone(),
             approved: parking_lot::Mutex::new(approved),
             requested: parking_lot::Mutex::new(None),
+            upload_roots,
+            downloads,
         });
-        let output = openside_repl::run(
+        let output = openside_repl::run_cancellable(
             Arc::clone(&browser),
             ctx.session.as_str().to_owned(),
             tab.clone(),
             parsed.code,
             guard.clone(),
             Limits::default(),
+            ctx.cancellation.cancelled(),
         )
         .await;
+        if output.stop.is_none() && browser.tabs().await.iter().any(|known| known.id == tab) {
+            super::otp::protect_setup_page(&ctx.shared, &browser, ctx.session.as_str(), &tab)
+                .await?;
+            if controller.tab_tainted(&tab).await {
+                return Ok(ToolExec::Denied {
+                    reason: "repl_unavailable_after_secret_fill".into(),
+                    hint: Some("The snippet reached an authenticator setup page. Use register_authenticator and browser_snapshot instead.".into()),
+                });
+            }
+        }
         controller
             .persist(&ctx.shared)
             .await
@@ -350,7 +493,9 @@ impl BrowserRepl {
                     .map_err(|_| ToolError("approval descriptor could not be encoded".into()))?;
                 Ok(ToolExec::Denied {
                     reason: format!("{APPROVAL_REQUIRED}: {description}"),
-                    hint: Some(format!("Nothing past that step ran. To request human approval, call browser_repl again with the same code and tab_id plus this argument; once approved, the whole snippet reruns from the start, so keep earlier steps safe to repeat. {APPROVALS_MARKER}{approvals}")),
+                    hint: Some(format!(
+                        "Nothing past that step ran. To request human approval, call browser_repl again with the same code and tab_id plus this argument; once approved, the whole snippet reruns from the start, so keep earlier steps safe to repeat. {APPROVALS_MARKER}{approvals}"
+                    )),
                 })
             }
             Some(Stop::Denied(reason)) => Ok(ToolExec::Denied {
@@ -391,6 +536,7 @@ fn requested_approvals(hint: Option<&str>) -> Option<Value> {
 /// (policy, approval tickets, redaction, tool events, audit) as an agent call.
 pub(crate) async fn route(
     State(shared): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
     Json(request): Json<ReplRequest>,
 ) -> Result<Json<ReplResponse>, HttpError> {
@@ -400,6 +546,7 @@ pub(crate) async fn route(
         .state(&session)
         .await
         .map_err(|_| HttpError::not_found())?;
+    caller.record_driver(&shared, &session).await?;
     let mut args = json!({"code": request.code});
     if let Some(tab) = &request.tab_id {
         args["tab_id"] = json!(tab);
@@ -424,7 +571,7 @@ pub(crate) async fn route(
         }
         None => format!("{API_CALL_PREFIX}{}", random_id()),
     };
-    let host = Host::new(shared.clone(), &state);
+    let host = Host::for_api(shared.clone(), &state, &caller);
     let call = |tool_call_id: String, args: &Value, approval_ticket| ToolCall {
         tool_call_id,
         name: NAME.into(),
@@ -480,4 +627,101 @@ pub(crate) async fn route(
         ToolOutcome::Failed { message } => response.reason = Some(message),
     }
     Ok(Json(response))
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use std::path::PathBuf;
+
+    use openside_policy::Mode;
+
+    use super::*;
+
+    fn guard(mode: Mode, downloads: Option<&str>) -> PolicyGuard {
+        let roots = vec![PathBuf::from("/work/space")];
+        PolicyGuard {
+            policy: Policy {
+                mode,
+                approved_roots: roots.clone(),
+                ..Policy::default()
+            },
+            tab: "t1".into(),
+            approved: parking_lot::Mutex::new(Vec::new()),
+            requested: parking_lot::Mutex::new(None),
+            upload_roots: roots
+                .into_iter()
+                .chain([PathBuf::from("/data/artifacts/s1/attachments")])
+                .collect(),
+            downloads: downloads.map(PathBuf::from),
+        }
+    }
+
+    fn upload(guard: &PolicyGuard, path: &str) -> Verdict {
+        guard.check(&Gate::Upload {
+            path,
+            origin: "https://app.example",
+            frame: None,
+        })
+    }
+
+    fn download(guard: &PolicyGuard, url: &str) -> Verdict {
+        guard.check(&Gate::Download {
+            url,
+            suggested_name: "report.csv",
+            origin: "https://app.example",
+        })
+    }
+
+    #[test]
+    fn uploads_are_limited_to_workspace_and_attachments() {
+        for mode in [Mode::ReadOnly, Mode::Guard, Mode::FullAccess] {
+            let guard = guard(mode, None);
+            assert!(matches!(
+                upload(&guard, "/work/space/a/b.txt"),
+                Verdict::Allow
+            ));
+            assert!(matches!(
+                upload(&guard, "/data/artifacts/s1/attachments/m1/0-a.png"),
+                Verdict::Allow
+            ));
+            for outside in [
+                "/etc/passwd",
+                "/work/spacex/a",
+                "/work/space/../../etc/passwd",
+                "relative.txt",
+            ] {
+                assert!(
+                    matches!(upload(&guard, outside), Verdict::Deny(_)),
+                    "{mode:?} must refuse {outside}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn downloads_need_a_folder_and_a_writable_mode() {
+        let guard_with_folder = guard(Mode::Guard, Some("/data/downloads/s1"));
+        assert!(matches!(
+            download(&guard_with_folder, "https://files.example/report.csv"),
+            Verdict::Allow
+        ));
+        assert!(matches!(
+            download(&guard_with_folder, "blob:https://app.example/1234"),
+            Verdict::Allow
+        ));
+        assert!(matches!(
+            download(
+                &guard(Mode::Guard, None),
+                "https://files.example/report.csv"
+            ),
+            Verdict::Deny(_)
+        ));
+        assert!(matches!(
+            download(
+                &guard(Mode::ReadOnly, Some("/data/downloads/s1")),
+                "https://files.example/report.csv"
+            ),
+            Verdict::Deny(_)
+        ));
+    }
 }

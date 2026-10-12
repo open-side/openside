@@ -29,7 +29,7 @@ async fn site() -> (String, tokio::task::JoinHandle<()>) {
 
 fn browser_config(root: &Path) -> Option<Resolved> {
     let mut config = resolved_config(root);
-    match test_browser(root) {
+    match test_browser() {
         Ok(executable) => {
             config.loaded.config.browser.executable = Some(executable);
             Some(config)
@@ -415,6 +415,9 @@ async fn incognito_sessions_use_a_deleted_temporary_profile_and_cannot_use_the_v
     let mut leftover = BrowserConfig::new(executable);
     leftover.profile_dir = Some(crashed.join("profile"));
     leftover.detached = true;
+    // Detached only tests outliving a dropped controller; it must not outlive the test
+    // process if that process is killed without unwinding.
+    leftover.die_with_spawner = true;
     let (browser, _events) = Browser::launch(leftover).await.unwrap();
     std::fs::write(
         crashed.join("endpoint.json"),
@@ -429,7 +432,7 @@ async fn incognito_sessions_use_a_deleted_temporary_profile_and_cannot_use_the_v
         "a detached browser outlives its controller"
     );
     let mut config = resolved_config(root.path());
-    config.loaded.config.browser.executable = Some(test_browser(root.path()).unwrap());
+    config.loaded.config.browser.executable = Some(test_browser().unwrap());
     let restarted = Daemon::open_runtime(config, TestRuntime::default())
         .await
         .unwrap();
@@ -842,15 +845,11 @@ async fn incognito_sweep_never_follows_planted_endpoints_or_symlinks() {
 }
 
 /// The daemon's browser is detached so it survives a daemon restart; a test process that dies
-/// without unwinding must still not leave it running. `test_browser` ties it to the launching
+/// without unwinding must still not leave it running. `launch_config` ties it to the launching
 /// test thread: with no Drop run at all (daemon and runtime leaked), Chromium still exits.
 #[cfg(target_os = "linux")]
 #[test]
 fn detached_test_browser_dies_with_the_thread_that_launched_it() {
-    if openside_config::find_on_path("setpriv").is_none() {
-        eprintln!("SKIP: setpriv not on PATH");
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let path = root.path().to_owned();
     let pid = std::thread::spawn(move || {
@@ -889,4 +888,29 @@ fn detached_test_browser_dies_with_the_thread_that_launched_it() {
         !alive(pid),
         "the detached test browser outlived its test thread"
     );
+}
+
+/// Shutdown cannot wait out every stray `Arc<Browser>` clone — an ungated state probe or a
+/// closing session task may still hold one. A straggler must not keep Chromium alive: the
+/// daemon is going down, so the browser goes down through the shared handle.
+#[tokio::test]
+async fn shutdown_kills_the_browser_even_with_a_straggler_handle() {
+    let root = tempfile::tempdir().unwrap();
+    let Some(config) = browser_config(root.path()) else {
+        return;
+    };
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let session = create_session(&daemon, "agent", PolicyMode::Full, None).await;
+    let (origin, fixture) = site().await;
+    open_tab(&daemon, &session, &format!("{origin}/"), "open").await;
+    let held = shared_browser(&daemon).await;
+    let pid = held.process_id();
+    let _kill = Kill(vec![pid]);
+    daemon.shutdown().await;
+    exits(pid).await;
+    drop(held);
+    drop(daemon);
+    drop(fixture);
 }

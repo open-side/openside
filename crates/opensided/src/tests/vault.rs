@@ -76,7 +76,7 @@ impl Drop for Killer {
 /// Daemon with a real Chromium and a passphrase vault holding canary credentials.
 async fn vault_daemon(root: &Path, origin: &str) -> Option<(Daemon, TestRuntime)> {
     let mut config = resolved_config(root);
-    match test_browser(root) {
+    match test_browser() {
         Ok(executable) => config.loaded.config.browser.executable = Some(executable),
         Err(error) => {
             eprintln!("SKIP vault daemon tests need Chromium: {error}");

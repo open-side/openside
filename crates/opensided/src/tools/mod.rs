@@ -17,14 +17,21 @@ use zeroize::Zeroizing;
 
 use crate::{engine::Shared, persistence::Result};
 
+pub(crate) mod api_call;
 pub(crate) mod browser;
 mod files;
 mod human;
+pub(crate) mod login;
 pub(crate) mod memory;
 pub(crate) mod otp;
 pub(crate) mod repl;
 mod shell;
 pub(crate) mod vault;
+
+/// Tool call id prefix of calls an API client made directly (`/repl`, `/tools/{name}`). Their
+/// tickets are claimed by the API caller, never delivered to the agent runtime, and the front
+/// agent's acting restriction does not apply to them.
+pub(crate) const API_CALL_PREFIX: &str = "api-";
 
 pub(crate) struct ToolEnv {
     pub(crate) shared: Shared,
@@ -36,6 +43,8 @@ pub(crate) struct ToolEnv {
     pub(crate) approved_actions: Vec<Action>,
     /// The subagent running this call; `None` for the session's parent agent.
     pub(crate) subagent: Option<String>,
+    pub(crate) cancellation: tokio_util::sync::CancellationToken,
+    pub(crate) browser_probe: Option<crate::browser_state::ProbeBinding>,
 }
 
 impl ToolEnv {
@@ -57,6 +66,8 @@ impl ToolEnv {
             approved_actions: Vec::new(),
             tool_call_id: String::new(),
             subagent: None,
+            cancellation: Default::default(),
+            browser_probe: None,
         }
     }
     pub(crate) fn target(&self, capability: Capability) -> std::result::Result<&Path, ToolError> {
@@ -101,7 +112,7 @@ pub(crate) enum ToolExec {
         for_app: Option<Value>,
         parts: Vec<openside_core::ContentPart>,
     },
-    Defer(TicketRequest),
+    Defer(Box<TicketRequest>),
     Denied {
         reason: String,
         hint: Option<String>,
@@ -118,6 +129,12 @@ pub(crate) struct TicketRequest {
     pub(crate) resume_when: Option<Value>,
     pub(crate) otp: Option<openside_proto::TicketOtp>,
     pub(crate) otp_register: Option<openside_proto::TicketOtpRegister>,
+    pub(crate) login: Option<openside_proto::TicketLogin>,
+    pub(crate) choice: Option<openside_proto::TicketChoice>,
+    pub(crate) approval: Option<openside_proto::TicketApproval>,
+    /// Page nodes a `login` or `choice` tool found and pinned, by the ids its ticket shows;
+    /// `tickets::open` keeps them only for the document they came from.
+    pub(crate) pins: Vec<(String, openside_browser::NodeHandle)>,
 }
 
 /// Trusted browser insertion boundary: implementations must validate session ownership
@@ -177,12 +194,19 @@ impl Registry {
             Arc::new(vault::Otp),
             Arc::new(otp::RequestOtp),
             Arc::new(otp::RegisterAuthenticator),
+            Arc::new(login::RequestLogin),
+            Arc::new(login::RequestChoice),
+            Arc::new(login::WaitForApproval),
             Arc::new(vault::Passkey),
             Arc::new(memory::MemorySearch),
             Arc::new(memory::MemoryWrite),
             Arc::new(crate::skills::SkillTool),
             Arc::new(repl::BrowserRepl),
             Arc::new(crate::subagents::Delegate),
+            Arc::new(crate::tasks::TaskTool::Start),
+            Arc::new(crate::tasks::TaskTool::Steer),
+            Arc::new(crate::tasks::TaskTool::Cancel),
+            Arc::new(crate::tasks::TaskTool::Status),
         ];
         let redactors = Arc::new(RwLock::new(Vec::new()));
         let browser = Arc::new(browser::Controller::new(
@@ -299,9 +323,28 @@ pub(crate) const TICKET_KEEP: &[&[&str]] = &[
     &["expires_at"],
     &["status"],
     &["origin", "subagent_id"],
+    &["origin", "device_id"],
+    &["origin", "driver_ids", "*"],
     &["tool", "name"],
     &["otp", "channel"],
     &["otp_register", "origin"],
+    // Login and choice tickets: the origin and icon come from the tab, ids and enum tags are
+    // daemon-assigned, autocomplete tokens are picked from a fixed list. The page's labels and
+    // the masked account names stay subject to redaction.
+    &["login", "origin"],
+    &["login", "icon"],
+    &["login", "fields", "*", "id"],
+    &["login", "fields", "*", "kind"],
+    &["login", "fields", "*", "autocomplete"],
+    &["login", "alternatives", "*", "id"],
+    &["login", "alternatives", "*", "kind"],
+    &["login", "alternatives", "*", "provider"],
+    &["login", "accounts", "*", "item_id"],
+    &["choice", "origin"],
+    &["choice", "icon"],
+    &["choice", "options", "*", "id"],
+    &["approval", "origin"],
+    &["approval", "icon"],
     // Resolution statuses are daemon-chosen constants; free answers stay redacted.
     &["resolution", "status"],
 ];
@@ -348,6 +391,7 @@ pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
         "subagent.progress" => &[&["subagent_id"]],
         "tab.opened" | "tab.closed" | "tab.asleep" => &[&["tab_id"]],
         "session.created" => &[&["model"], &["mode"], &["workspace"]],
+        "session.driver_recorded" => &[&["device_id"]],
         "runtime.started" => &[&["tools", "*"]],
         "runtime.error" => &[&["code"]],
         _ => &[],
@@ -378,7 +422,14 @@ pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
 pub(crate) fn touches_browser(name: &str) -> bool {
     name.starts_with("browser_")
         || name.starts_with("vault_")
-        || matches!(name, "request_otp" | "register_authenticator")
+        || matches!(
+            name,
+            "request_otp"
+                | "register_authenticator"
+                | "request_login"
+                | "request_choice"
+                | "wait_for_approval"
+        )
 }
 
 pub(crate) fn visible(tool: &dyn DaemonTool, ctx: &ToolEnv) -> bool {

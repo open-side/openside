@@ -73,18 +73,26 @@ async fn remove(directory: &Path) {
 impl Controller {
     /// The browser a session's tools act in: incognito sessions get their own temporary
     /// profile; unknown sessions are treated as incognito (fail closed, like memory indexing).
+    /// Isolated sessions use the shared browser with their space open (`browser_space.rs`).
     pub(crate) async fn for_session(
         &self,
         shared: &Shared,
         session: &SessionId,
     ) -> std::result::Result<Arc<Browser>, ToolError> {
-        let incognito = shared
-            .db
-            .state(session)
-            .await
-            .map_or(true, |state| state.incognito);
-        if !incognito {
-            return self.get(shared).await;
+        let state = shared.db.state(session).await.ok();
+        if let Some(state) = state.filter(|state| !state.incognito) {
+            let browser = self.get(shared).await?;
+            if state.browser_space == openside_proto::BrowserSpace::Isolated {
+                // Archiving wiped the space; nothing may bring it back until unarchive. Checked
+                // under the browser gate, which `close_space` also takes after the archive event.
+                if state.archived {
+                    return Err(ToolError(
+                        "session_archived: this archived session's isolated browser space was wiped; unarchive the session to browse again".into(),
+                    ));
+                }
+                self.ensure_space(shared, &browser, session).await?;
+            }
+            return Ok(browser);
         }
         let mut browsers = self.incognito.browsers.lock().await;
         if self.stopped.load(Ordering::Acquire) {
@@ -134,7 +142,7 @@ impl Controller {
             .map_err(|_| ToolError("Incognito browser state could not be saved".into()))?;
         let browser = Arc::new(browser);
         browsers.insert(session.as_str().to_owned(), browser.clone());
-        self.forward_incognito(shared, session, events);
+        self.forward_incognito(shared, session, Arc::downgrade(&browser), events);
         Ok(browser)
     }
 
@@ -159,6 +167,9 @@ impl Controller {
         &self,
         shared: &Shared,
         session: &SessionId,
+        // Weak: the forwarder must not keep the browser alive, since `terminate` shuts it down
+        // gracefully only as the last owner.
+        browser: std::sync::Weak<Browser>,
         mut events: tokio::sync::mpsc::UnboundedReceiver<BrowserEvent>,
     ) {
         let shared = shared.clone();
@@ -171,6 +182,13 @@ impl Controller {
                     event = events.recv() => match event { Some(event) => event, None => break },
                 };
                 // Every tab of this browser belongs to the one incognito session.
+                if let BrowserEvent::DialogOpened { tab_id, kind, .. } = &event {
+                    if let Some(browser) = browser.upgrade() {
+                        let _ = browser
+                            .handle_dialog(tab_id, crate::browser::accepts_dialog(kind), None)
+                            .await;
+                    }
+                }
                 if !matches!(event, BrowserEvent::TooManyTabs { .. }) {
                     let notice = crate::browser::steer_text(&event);
                     let _ = shared.emit(&owner, None, crate::browser_event(event)).await;

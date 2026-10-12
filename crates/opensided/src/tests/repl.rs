@@ -6,6 +6,7 @@ const PAGE: &str = r#"<!doctype html><html lang="en"><head><title>Shop</title></
 <button onclick="document.getElementById('bought').textContent = 'bought'">Buy now</button>
 <button onclick="document.getElementById('deleted').textContent = 'deleted'">Delete item</button>
 <span id="bought">not bought</span> <span id="deleted">kept</span>
+<label>Note<input id="note"></label>
 </body></html>"#;
 
 async fn fixture() -> (String, tokio::task::JoinHandle<()>) {
@@ -25,7 +26,7 @@ async fn fixture() -> (String, tokio::task::JoinHandle<()>) {
 
 fn browser_config(root: &Path) -> Option<Resolved> {
     let mut config = resolved_config(root);
-    match test_browser(root) {
+    match test_browser() {
         Ok(executable) => {
             config.loaded.config.browser.executable = Some(executable);
             Some(config)
@@ -79,15 +80,7 @@ async fn repl(daemon: &Daemon, session: &SessionId, tab: &str, code: &str, id: &
 }
 
 async fn approve(daemon: &Daemon, ticket: &TicketId) {
-    let response = api::router(daemon.shared.clone(), true)
-        .oneshot(request(
-            "POST",
-            &format!("/v1/tickets/{ticket}/resolve"),
-            json!({"value": true}),
-            None,
-        ))
-        .await
-        .unwrap();
+    let response = person_resolve(daemon, ticket, json!(true)).await;
     assert_eq!(response.status(), StatusCode::OK);
 }
 
@@ -186,6 +179,15 @@ async fn browser_repl_shares_snapshot_refs_and_reruns_sensitive_steps_after_appr
     assert_eq!(parity["tab_id"], json!(tab));
     // Structured page URL for citation checks, never scraped from page text.
     assert_eq!(parity["url"], json!(format!("{origin}/")), "{parity}");
+    let internal_reads = repl(
+        &daemon,
+        &session,
+        &tab,
+        r#"await page.locator('#note').fill('note'); await page.locator('xpath=//input[@id="note"]').getAttribute('id')"#,
+        "internal-readers",
+    )
+    .await;
+    assert_eq!(internal_reads["return_value"], "note");
 
     // A sensitive click stops before it happens and reports a descriptor bound to the
     // operation, target, origin and tab; sending it back asks for approval.
@@ -465,17 +467,75 @@ async fn browser_repl_shares_snapshot_refs_and_reruns_sensitive_steps_after_appr
     .await;
     assert_eq!(untouched["return_value"], "not bought");
 
+    // Internal reads are fixed isolated-world primitives, never the caller's REPL source.
     log.extend(browser.take_protocol_log());
     browser.record_protocol(false);
-    for (method, _) in &log {
+    let mut readers = std::collections::HashSet::new();
+    for (index, (method, params)) in log.iter().enumerate() {
+        if matches!(
+            method.as_str(),
+            "Runtime.evaluate" | "Runtime.callFunctionOn"
+        ) {
+            let expression = method == "Runtime.evaluate";
+            let source = &params[if expression {
+                "expression"
+            } else {
+                "functionDeclaration"
+            }];
+            let primitive = openside_repl::INTERNAL_PRIMITIVES
+                .iter()
+                .find(|primitive| primitive.method == method && source == primitive.source)
+                .unwrap_or_else(|| panic!("unexpected page script {method}: {params}"));
+            assert_eq!(
+                params["returnByValue"].as_bool().unwrap_or(false),
+                primitive.return_by_value
+            );
+            assert_eq!(
+                params["awaitPromise"].as_bool().unwrap_or(false),
+                primitive.await_promise
+            );
+            let world_index = if expression {
+                assert!(params["contextId"].as_i64().is_some_and(|id| id > 0));
+                index.checked_sub(1).unwrap()
+            } else {
+                assert!(params["objectId"].as_str().is_some_and(|id| !id.is_empty()));
+                let (resolved, node) = &log[index.checked_sub(1).unwrap()];
+                assert_eq!(resolved, "DOM.resolveNode");
+                assert!(node["executionContextId"].as_i64().is_some_and(|id| id > 0));
+                if let Some(group) = primitive.object_group {
+                    assert_eq!(node["objectGroup"], group);
+                    if !primitive.return_by_value {
+                        assert!(log[index + 1..].iter().any(|(method, params)| {
+                            method == "Runtime.releaseObjectGroup" && params["objectGroup"] == group
+                        }));
+                    }
+                }
+                index.checked_sub(2).unwrap()
+            };
+            let (created, world) = &log[world_index];
+            assert_eq!(created, "Page.createIsolatedWorld");
+            assert_eq!(world["worldName"], primitive.world);
+            assert_ne!(world["grantUniveralAccess"], true);
+            readers.insert(primitive.name);
+        } else {
+            assert!(
+                !matches!(
+                    method.as_str(),
+                    "Page.addScriptToEvaluateOnNewDocument"
+                        | "Page.addScriptToEvaluateOnLoad"
+                        | "Runtime.runScript"
+                        | "Runtime.compileScript"
+                        | "Debugger.evaluateOnCallFrame"
+                ),
+                "browser_repl issued {method}: {params}"
+            );
+        }
+    }
+    for primitive in openside_repl::INTERNAL_PRIMITIVES {
         assert!(
-            !matches!(
-                method.as_str(),
-                "Runtime.evaluate"
-                    | "Runtime.callFunctionOn"
-                    | "Page.addScriptToEvaluateOnNewDocument"
-            ),
-            "browser_repl issued {method}"
+            readers.contains(primitive.name),
+            "{} was not audited",
+            primitive.name
         );
     }
     drop(browser);

@@ -450,7 +450,7 @@ const PAGE: &str = "<!doctype html><html><head><title>Fixture Garden</title></he
 #[tokio::test]
 async fn browsing_history_is_indexed_except_incognito_sessions_and_secret_filled_documents() {
     let root = tempfile::tempdir().unwrap();
-    let executable = match test_browser(root.path()) {
+    let executable = match test_browser() {
         Ok(executable) => executable,
         Err(error) => {
             eprintln!("SKIP browsing history indexing test: {error}");

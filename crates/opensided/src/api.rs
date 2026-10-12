@@ -32,6 +32,14 @@ impl HttpError {
     pub(crate) fn not_found() -> Self {
         Self(StatusCode::NOT_FOUND, "not_found")
     }
+    /// A failed file write: a full volume is the caller's cue to free space, anything else is ours.
+    pub(crate) fn write_failed(error: &std::io::Error) -> Self {
+        if storage_full(error) {
+            Self(StatusCode::INSUFFICIENT_STORAGE, "storage_full")
+        } else {
+            Self::internal()
+        }
+    }
     fn conflict() -> Self {
         Self(StatusCode::CONFLICT, "invalid_transition")
     }
@@ -51,8 +59,40 @@ impl IntoResponse for HttpError {
             .into_response()
     }
 }
+/// SQLite reports a full volume as `SQLITE_FULL`; plain file writes (artifacts, sidecar state
+/// files) surface `ENOSPC` or a quota error. Either way retrying is pointless until space is
+/// freed, so it must not read as a state conflict.
+fn storage_full(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if let Some(rusqlite::Error::SqliteFailure(failure, _)) =
+            error.downcast_ref::<rusqlite::Error>()
+        {
+            if failure.code == rusqlite::ErrorCode::DiskFull {
+                return true;
+            }
+        }
+        // `ErrorKind::StorageFull`/`QuotaExceeded` need a newer Rust than the workspace MSRV.
+        #[cfg(unix)]
+        if let Some(errno) = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::raw_os_error)
+        {
+            if errno == rustix::io::Errno::NOSPC.raw_os_error()
+                || errno == rustix::io::Errno::DQUOT.raw_os_error()
+            {
+                return true;
+            }
+        }
+        current = error.source();
+    }
+    false
+}
 impl From<Error> for HttpError {
-    fn from(_: Error) -> Self {
+    fn from(error: Error) -> Self {
+        if storage_full(error.as_ref()) {
+            return Self(StatusCode::INSUFFICIENT_STORAGE, "storage_full");
+        }
         Self::conflict()
     }
 }
@@ -66,10 +106,11 @@ impl Access {
     }
     fn ticket(&self, ticket: &Ticket) -> Result<()> {
         let scope = match ticket.kind {
-            TicketKind::Confirm | TicketKind::Info => CapabilityScope::Approve,
-            TicketKind::SecretInput | TicketKind::DeviceApproval | TicketKind::Takeover => {
-                CapabilityScope::HumanStep
-            }
+            TicketKind::Confirm | TicketKind::Info | TicketKind::Choice => CapabilityScope::Approve,
+            TicketKind::SecretInput
+            | TicketKind::DeviceApproval
+            | TicketKind::Takeover
+            | TicketKind::Login => CapabilityScope::HumanStep,
         };
         if self.has(scope) {
             Ok(())
@@ -81,7 +122,85 @@ impl Access {
 
 /// Device id behind the request's token; `None` for the local Unix socket.
 #[derive(Clone)]
-pub(crate) struct Caller(pub(crate) Option<String>);
+pub(crate) struct Caller(pub(crate) Option<String>, pub(crate) DeviceKind);
+
+impl Caller {
+    pub(crate) fn id(&self) -> &str {
+        self.0.as_deref().unwrap_or("local")
+    }
+
+    pub(crate) async fn record_driver(&self, shared: &Shared, session: &SessionId) -> Result<()> {
+        if self.1 != DeviceKind::AgentClient {
+            return Ok(());
+        }
+        // Serialize driver registration with ticket creation and approval commits.
+        let _gate = shared.ticket_gate.lock().await;
+        let session = session.clone();
+        let device_id = self.id().to_owned();
+        let event = shared
+            .db
+            .store(move |store| {
+                let state = store.session(&session).ok_or("unknown session")?;
+                if state.driver_ids.contains(&device_id) {
+                    return Ok(None);
+                }
+                Ok(Some(store.append(
+                    &session,
+                    None,
+                    EventKind::SessionDriverRecorded { device_id },
+                )?))
+            })
+            .await?;
+        if let Some(event) = event {
+            let _ = shared.events.send(event);
+        }
+        Ok(())
+    }
+    async fn person_approval(&self, shared: &Shared, ticket: &Ticket) -> Result<()> {
+        if self.1 != DeviceKind::PersonDevice {
+            return Err(HttpError(StatusCode::FORBIDDEN, "person_approval_required"));
+        }
+        if ticket.origin.device_id.as_deref() == Some(self.id())
+            || ticket.origin.driver_ids.iter().any(|id| id == self.id())
+        {
+            return Err(HttpError(StatusCode::FORBIDDEN, "self_approval_forbidden"));
+        }
+        let session = ticket.session_id.clone();
+        let device = self.id().to_owned();
+        if shared
+            .db
+            .store(move |store| {
+                Ok(store
+                    .session(&session)
+                    .ok_or("unknown session")?
+                    .driver_ids
+                    .contains(&device))
+            })
+            .await?
+        {
+            return Err(HttpError(StatusCode::FORBIDDEN, "self_approval_forbidden"));
+        }
+        Ok(())
+    }
+
+    /// A paired device must not widen what the agent may do: choosing a mode looser than the
+    /// daemon default or a workspace outside the default sandbox is for the local socket only.
+    pub(crate) fn widens(
+        &self,
+        shared: &Shared,
+        mode: Option<PolicyMode>,
+        workspace: Option<&str>,
+    ) -> bool {
+        let rank = |mode: PolicyMode| match mode {
+            PolicyMode::ReadOnly => 0,
+            PolicyMode::Guard => 1,
+            PolicyMode::Full => 2,
+        };
+        self.0.is_some()
+            && (workspace.is_some()
+                || mode.is_some_and(|mode| rank(mode) > rank(shared.policy.default_mode())))
+    }
+}
 
 pub(crate) fn router(shared: Shared, unix: bool) -> Router {
     let ui = shared.config.loaded.config.ui.dir.clone();
@@ -117,8 +236,15 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
         .route("/v1/sessions/{id}/queue/{mid}/promote", post(promote))
         .route("/v1/sessions/{id}/queue/{mid}/move", post(reorder))
         .route("/v1/sessions/{id}/stop", post(stop))
+        .route("/v1/sessions/{id}/prewarm", post(prewarm_session))
+        .route("/v1/browser/prewarm", post(prewarm_browser))
         .route("/v1/sessions/{id}/events", get(events))
         .route("/v1/sessions/{id}/repl", post(crate::tools::repl::route))
+        .route("/v1/tools", get(crate::tools::api_call::catalog))
+        .route(
+            "/v1/sessions/{id}/tools/{name}",
+            post(crate::tools::api_call::route),
+        )
         .route(
             "/v1/sessions/{id}/subagents",
             get(crate::subagents::list_route),
@@ -140,6 +266,10 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
         .route(
             "/v1/sessions/{id}/browser/preview",
             get(crate::preview::stream),
+        )
+        .route(
+            "/v1/sessions/{id}/browser/thumbnails/{thumbnail_id}",
+            get(crate::preview::thumbnail),
         )
         .route("/v1/devices/pair", post(pair))
         .route("/v1/devices/{id}", delete(revoke))
@@ -182,6 +312,17 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
                 .delete(crate::skills::delete),
         )
         .route(
+            "/v1/onboarding",
+            get(crate::onboarding::get).put(crate::onboarding::put),
+        )
+        .route("/v1/external-agents", get(crate::onboarding::agents))
+        .route(
+            "/v1/external-agents/{id}/browser-skill",
+            post(crate::onboarding::install_skill),
+        )
+        .route("/v1/import/profiles", get(crate::import_api::profiles))
+        .route("/v1/import", post(crate::import_api::run))
+        .route(
             "/v1/policy",
             get(crate::policy_api::get).put(crate::policy_api::put),
         )
@@ -214,6 +355,7 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
         .route("/v1/pairing", post(crate::pairing::create))
         .route("/v1/pairing/exchange", post(crate::pairing::exchange))
         .route("/v1/devices", get(crate::pairing::list))
+        .route("/v1/remote/status", get(crate::remote::status))
         .route("/v1/push/vapid", get(crate::push::vapid))
         .route(
             "/v1/push/subscriptions",
@@ -230,8 +372,54 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             (shared.clone(), unix),
             authorize,
         ))
+        .layer(middleware::from_fn(json_rejections))
         .with_state(shared);
     crate::ui::attach(api, ui.as_deref())
+}
+
+/// Axum rejects malformed bodies and queries with a bare text response; clients of this API parse
+/// `{code, message}` for every failure, so rewrite those into the same shape.
+async fn json_rejections(request: axum::extract::Request, next: Next) -> Response {
+    let upload =
+        request.method() == axum::http::Method::POST && request.uri().path().ends_with("/messages");
+    let response = next.run(request).await;
+    let status = response.status();
+    let plain = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/plain"));
+    if !(status.is_client_error() && plain) {
+        return response;
+    }
+    let code = match status {
+        StatusCode::PAYLOAD_TOO_LARGE if upload => "attachments_too_large",
+        StatusCode::PAYLOAD_TOO_LARGE => "payload_too_large",
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => "unsupported_media_type",
+        _ => "invalid_request",
+    };
+    let detail = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok());
+    let message = match (code, detail) {
+        ("invalid_request", Some(detail)) => detail,
+        _ => code.replace('_', " "),
+    };
+    (
+        status,
+        Json(ApiError {
+            code: code.into(),
+            message,
+        }),
+    )
+        .into_response()
+}
+
+/// Token of an `Authorization: Bearer <token>` value; the scheme is case-insensitive (RFC 7235).
+fn bearer_token(value: &str) -> Option<&str> {
+    let (scheme, token) = value.split_once(' ')?;
+    scheme.eq_ignore_ascii_case("bearer").then_some(token)
 }
 
 /// Routes only Unix-socket callers may use, whatever scopes a TCP token holds.
@@ -293,7 +481,9 @@ pub(crate) async fn authorize(
         request
             .extensions_mut()
             .insert(Access(vec![CapabilityScope::Admin]));
-        request.extensions_mut().insert(Caller(None));
+        request
+            .extensions_mut()
+            .insert(Caller(None, DeviceKind::AgentClient));
         return next.run(request).await;
     }
     let template = request
@@ -315,14 +505,14 @@ pub(crate) async fn authorize(
     let mut revoked = shared.remote.revoked.subscribe();
     // A present Authorization header is the only credential considered, even if malformed.
     let token = match request.headers().get(axum::http::header::AUTHORIZATION) {
-        Some(value) => value.to_str().ok().and_then(|v| v.strip_prefix("Bearer ")),
+        Some(value) => value.to_str().ok().and_then(bearer_token),
         None => websocket_bearer(&request, route.path),
     };
     let Some(token) = token else {
         return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     };
-    let (device, access) = match shared.db.device(token.to_owned()).await {
-        Ok(Some((device, scopes))) => (device, Access(scopes)),
+    let (device, access, kind) = match shared.db.device(token.to_owned()).await {
+        Ok(Some((device, scopes, kind))) => (device, Access(scopes), kind),
         Ok(None) => return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
         Err(_) => return HttpError::internal().into_response(),
     };
@@ -349,7 +539,7 @@ pub(crate) async fn authorize(
     request.extensions_mut().insert(access);
     request
         .extensions_mut()
-        .insert(Caller(Some(device.clone())));
+        .insert(Caller(Some(device.clone()), kind));
     // Never admit a device-controlled, unfinished body into a commit gate.
     let body_limit = if route.path == "/v1/sessions/{id}/messages" {
         crate::artifacts::SUBMIT_BODY_LIMIT
@@ -417,11 +607,18 @@ async fn health() -> Json<Health> {
 }
 async fn create(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<Session>)> {
+    if caller.widens(&s, request.mode, request.workspace.as_deref()) {
+        return Err(HttpError(StatusCode::FORBIDDEN, "local_socket_required"));
+    }
     let id = SessionId::new(random_id());
     let stored_id = id.clone();
-    let title = request.title.unwrap_or_else(|| "New session".into());
+    let title = match request.title.as_deref().map(str::trim) {
+        None | Some("") => DEFAULT_SESSION_TITLE.to_owned(),
+        Some(title) => crate::session_meta::valid_title(title)?,
+    };
     let model = request
         .model
         .or_else(|| s.config.loaded.config.models.default.clone())
@@ -444,13 +641,38 @@ async fn create(
         None => None,
     };
     let incognito = request.incognito;
+    let browser_space = request.browser_space;
+    // An incognito session already browses in its own Chromium; "isolated" would be a second,
+    // contradictory answer to where it browses.
+    if incognito && browser_space == openside_proto::BrowserSpace::Isolated {
+        return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_browser_space"));
+    }
     let event =
         s.db.store(move |db| {
-            Ok(db
-                .create_session_with_privacy(stored_id, title, model, mode, workspace, incognito)?)
+            Ok(db.append(
+                &stored_id,
+                None,
+                EventKind::SessionCreated {
+                    title,
+                    model,
+                    mode,
+                    workspace,
+                    incognito,
+                    browser_space,
+                },
+            )?)
         })
         .await?;
     let _ = s.events.send(event);
+    caller.record_driver(&s, &id).await?;
+    if crate::tasks::front(&s)
+        && !(std::env::var_os("OPENSIDE_AGENT_SCRIPT").is_some()
+            && std::env::var_os("OPENSIDE_TEST_DISABLE_PREWARM").is_some())
+    {
+        let shared = s.clone();
+        let session = id.clone();
+        tokio::spawn(async move { crate::browser_state::prewarm_session(&shared, &session).await });
+    }
     Ok((StatusCode::CREATED, Json(s.db.state(&id).await?.session())))
 }
 async fn session(State(s): State<Shared>, Path(id): Path<String>) -> Result<Json<Session>> {
@@ -463,6 +685,7 @@ async fn session(State(s): State<Shared>, Path(id): Path<String>) -> Result<Json
 }
 async fn submit(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
     Json(request): Json<SubmitMessageRequest>,
 ) -> Result<(StatusCode, Json<Message>)> {
@@ -472,12 +695,16 @@ async fn submit(
             "message_too_large",
         ));
     }
+    if request.text.trim().is_empty() && request.attachments.is_empty() {
+        return Err(HttpError(StatusCode::BAD_REQUEST, "empty_message"));
+    }
     let id = SessionId::new(id);
     // Existence check, attachment publication and the append are one step per session:
     // concurrent retries of one message id cannot both publish, and a deleted session
     // cannot gain uploads.
     let gate = crate::artifacts::lifecycle(&s, &id).await;
     let state = s.db.state(&id).await.map_err(|_| HttpError::not_found())?;
+    caller.record_driver(&s, &id).await?;
     if s.auth_failed(&id).await? {
         return Err(HttpError::conflict());
     }
@@ -507,6 +734,7 @@ async fn submit(
 }
 async fn edit(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Path((id, mid)): Path<(String, String)>,
     Json(request): Json<EditMessageRequest>,
 ) -> Result<Json<Message>> {
@@ -518,6 +746,14 @@ async fn edit(
     }
     let id = SessionId::new(id);
     let mid = MessageId::new(mid);
+    if request.text.trim().is_empty() {
+        let state = s.db.state(&id).await.map_err(|_| HttpError::not_found())?;
+        // Only a message that carries files may be left without words.
+        if state.attachments.get(&mid).map_or(true, Vec::is_empty) {
+            return Err(HttpError(StatusCode::BAD_REQUEST, "empty_message"));
+        }
+    }
+    caller.record_driver(&s, &id).await?;
     s.command(&id, Action::Edit(mid.clone(), request.text))
         .await?;
     Ok(Json(s.message(&id, &mid).await?))
@@ -533,20 +769,24 @@ async fn remove(
 }
 async fn promote(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Path((id, mid)): Path<(String, String)>,
 ) -> Result<Json<Message>> {
     let id = SessionId::new(id);
     let mid = MessageId::new(mid);
+    caller.record_driver(&s, &id).await?;
     s.command(&id, Action::Promote(mid.clone())).await?;
     Ok(Json(s.message(&id, &mid).await?))
 }
 async fn reorder(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Path((id, mid)): Path<(String, String)>,
     Json(request): Json<MoveMessageRequest>,
 ) -> Result<Json<Message>> {
     let id = SessionId::new(id);
     let mid = MessageId::new(mid);
+    caller.record_driver(&s, &id).await?;
     s.command(&id, Action::Move(mid.clone(), request.position))
         .await?;
     Ok(Json(s.message(&id, &mid).await?))
@@ -555,6 +795,20 @@ async fn stop(State(s): State<Shared>, Path(id): Path<String>) -> Result<Json<Se
     let id = SessionId::new(id);
     s.command(&id, Action::Stop).await?;
     Ok(Json(s.db.state(&id).await?.session()))
+}
+/// Returns at once; the warm-up runs in the background and its failures stay silent, since
+/// the next message reports any real problem.
+async fn prewarm_session(State(s): State<Shared>, Path(id): Path<String>) -> Result<StatusCode> {
+    let id = SessionId::new(id);
+    let state = s.db.state(&id).await?;
+    if !state.deleted {
+        tokio::spawn(async move { crate::browser_state::prewarm_session(&s, &id).await });
+    }
+    Ok(StatusCode::ACCEPTED)
+}
+async fn prewarm_browser(State(s): State<Shared>) -> StatusCode {
+    tokio::spawn(async move { crate::browser_state::prewarm_browser(&s).await });
+    StatusCode::ACCEPTED
 }
 #[derive(Deserialize)]
 struct EventsQuery {
@@ -673,17 +927,31 @@ enum SecretAnswer {
 /// since then (origin list, rule, read-only session) refuses releasing a code or key into
 /// `origin`, and the human's answer cannot override it.
 async fn release_denied(s: &Shared, ticket: &Ticket, origin: &str) -> Result<()> {
+    denied_on(
+        s,
+        ticket,
+        origin,
+        &[
+            openside_policy::Capability::Browse,
+            openside_policy::Capability::VaultUse,
+        ],
+    )
+    .await
+}
+
+/// [`release_denied`] for any capabilities: a `choice` answer only clicks the page (Browse).
+async fn denied_on(
+    s: &Shared,
+    ticket: &Ticket,
+    origin: &str,
+    capabilities: &[openside_policy::Capability],
+) -> Result<()> {
     let state = s.db.state(&ticket.session_id).await?;
     let policy =
         crate::policy_api::effective(s, &crate::tools::ToolEnv::new(s.clone(), &state).policy);
-    if [
-        openside_policy::Capability::Browse,
-        openside_policy::Capability::VaultUse,
-    ]
-    .into_iter()
-    .any(|capability| {
+    if capabilities.iter().any(|capability| {
         policy
-            .decide(&openside_policy::Action::new(capability, origin))
+            .decide(&openside_policy::Action::new(*capability, origin))
             .effect
             == openside_policy::Effect::Deny
     }) {
@@ -692,7 +960,7 @@ async fn release_denied(s: &Shared, ticket: &Ticket, origin: &str) -> Result<()>
     Ok(())
 }
 
-fn refused(code: &str) -> HttpError {
+pub(crate) fn refused(code: &str) -> HttpError {
     match code {
         "origin_mismatch" => HttpError(StatusCode::CONFLICT, "origin_mismatch"),
         "otp_already_registered" => HttpError(StatusCode::CONFLICT, "otp_already_registered"),
@@ -727,6 +995,9 @@ async fn resolve(
                     return Err(HttpError::invalid_value());
                 }
                 let approved = crate::tickets::approved(&request.value);
+                if approved {
+                    caller.person_approval(&s, &ticket).await?;
+                }
                 match &ticket.otp_register {
                     None => json!({"approved":approved}),
                     Some(register) => {
@@ -775,6 +1046,7 @@ async fn resolve(
                         if !access.has(CapabilityScope::Approve) {
                             return Err(HttpError(StatusCode::FORBIDDEN, "forbidden"));
                         }
+                        caller.person_approval(&s, &ticket).await?;
                         let Some(Value::String(text)) = object.remove("totp") else {
                             return Err(HttpError::invalid_value());
                         };
@@ -876,12 +1148,58 @@ async fn resolve(
                     value
                 }
             }
+            TicketKind::Login => {
+                if request.value.get("save").and_then(Value::as_bool) == Some(true) {
+                    if !access.has(CapabilityScope::Approve) {
+                        return Err(HttpError(StatusCode::FORBIDDEN, "forbidden"));
+                    }
+                    caller.person_approval(&s, &ticket).await?;
+                }
+                // Authorized values get redactors before any page work or value-bearing error.
+                let answer = crate::tools::login::parse_login_answer(&s, &ticket, request.value)?;
+                if let Some(outcome) = crate::tools::login::interrupted(&s, &ticket).await {
+                    // An earlier answer submitted the page and kept the login, and its
+                    // commit never happened; this answer is not applied over it.
+                    outcome
+                } else {
+                    if s.registry
+                        .browser
+                        .fill_intent_pending(&s, &ticket.id)
+                        .await?
+                    {
+                        return Err(HttpError(
+                            StatusCode::CONFLICT,
+                            "secret_input_indeterminate",
+                        ));
+                    }
+                    let origin = ticket
+                        .login
+                        .as_ref()
+                        .map(|login| login.origin.clone())
+                        .ok_or_else(HttpError::invalid_value)?;
+                    release_denied(&s, &ticket, &origin).await?;
+                    crate::tools::login::resolve_login(&s, &ticket, answer, &who).await?
+                }
+            }
+            TicketKind::Choice => {
+                caller.person_approval(&s, &ticket).await?;
+                let origin = ticket
+                    .choice
+                    .as_ref()
+                    .map(|choice| choice.origin.clone())
+                    .ok_or_else(HttpError::invalid_value)?;
+                denied_on(&s, &ticket, &origin, &[openside_policy::Capability::Browse]).await?;
+                crate::tools::login::resolve_choice(&s, &ticket, request.value).await?
+            }
             TicketKind::DeviceApproval | TicketKind::Takeover => {
                 return Err(HttpError(StatusCode::BAD_REQUEST, "use_done"))
             }
         };
-        // Statuses are daemon constants; a free-text answer is scrubbed.
-        let value = s.registry.redact_except(value, &[&["status"]])?;
+        // Statuses, next steps and ids are daemon constants; free text (an answer, a page's
+        // error message) is scrubbed.
+        let value = s
+            .registry
+            .redact_except(value, &[&["status"], &["next"], &["option"], &["item_id"]])?;
         crate::tickets::audit(
             &s,
             &ticket.session_id,
@@ -900,7 +1218,9 @@ async fn resolve(
             },
         )
         .await?;
-        if ticket.kind == TicketKind::SecretInput || ticket.otp_register.is_some() {
+        if matches!(ticket.kind, TicketKind::SecretInput | TicketKind::Login)
+            || ticket.otp_register.is_some()
+        {
             // The ticket is no longer pending, so a stale intent can never block anything.
             let _ = s.registry.browser.clear_fill_intent(&s, &ticket.id).await;
         }
@@ -990,7 +1310,7 @@ async fn pair(
     Json(request): Json<PairDeviceRequest>,
 ) -> Result<(StatusCode, Json<PairDeviceResponse>)> {
     let (device_id, token) =
-        s.db.pair_named(request.name.clone(), request.scopes.clone())
+        s.db.pair_as(request.name.clone(), request.scopes.clone(), request.kind)
             .await?;
     crate::pairing::audit(
         &s,
@@ -1005,6 +1325,7 @@ async fn pair(
             device_id,
             token,
             scopes: request.scopes,
+            kind: request.kind,
         }),
     ))
 }
@@ -1024,11 +1345,48 @@ pub(crate) async fn resolve_as_human_step(
         State(s.clone()),
         Extension(Access(vec![CapabilityScope::HumanStep])),
         // A plain code only: nothing is registered, so no approver is recorded.
-        Extension(Caller(None)),
+        Extension(Caller(None, DeviceKind::AgentClient)),
         Path(id.to_owned()),
         Json(ResolveTicketRequest {
             value: Value::String(value.as_str().to_owned()),
         }),
     )
     .await
+}
+
+#[cfg(test)]
+mod storage_full_tests {
+    use super::*;
+
+    #[test]
+    fn a_full_volume_is_507_storage_full_and_other_failures_stay_conflicts() {
+        let full = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            None,
+        );
+        let sqlite: Error = Box::new(openside_sessions::Error::Sqlite(full));
+        let error = HttpError::from(sqlite);
+        assert_eq!(
+            (error.0, error.1),
+            (StatusCode::INSUFFICIENT_STORAGE, "storage_full")
+        );
+
+        let io: Error = Box::new(std::io::Error::from_raw_os_error(28));
+        let error = HttpError::from(io);
+        assert_eq!(
+            (error.0, error.1),
+            (StatusCode::INSUFFICIENT_STORAGE, "storage_full")
+        );
+
+        let busy = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            None,
+        );
+        let other: Error = Box::new(openside_sessions::Error::Sqlite(busy));
+        assert_eq!(HttpError::from(other).0, StatusCode::CONFLICT);
+        assert_eq!(
+            HttpError::from(Error::from("session actor closed")).0,
+            StatusCode::CONFLICT
+        );
+    }
 }

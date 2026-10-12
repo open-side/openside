@@ -15,19 +15,39 @@ use crate::{
 
 pub(crate) struct Host {
     pub(crate) env: ToolEnv,
+    caller: Option<String>,
 }
 impl Host {
     pub(crate) fn new(shared: Shared, state: &SessionState) -> Self {
         Self {
             env: ToolEnv::new(shared, state),
+            caller: None,
+        }
+    }
+    pub(crate) fn for_api(
+        shared: Shared,
+        state: &SessionState,
+        caller: &crate::api::Caller,
+    ) -> Self {
+        Self {
+            env: ToolEnv::new(shared, state),
+            caller: Some(caller.id().to_owned()),
         }
     }
     pub(crate) fn specs(&self) -> Vec<ToolSpec> {
         self.env.shared.registry.specs(&self.env)
     }
 
-    async fn execute(&self, call: &ToolCall) -> Result<(ToolOutcome, Option<Value>)> {
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        cancellation: &tokio_util::sync::CancellationToken,
+        browser_probe: &Option<crate::browser_state::ProbeBinding>,
+    ) -> Result<(ToolOutcome, Option<Value>)> {
         let shared = &self.env.shared;
+        if cancellation.is_cancelled() {
+            return Ok((denied("subagent_finished", "The subagent has ended"), None));
+        }
         let Some(tool) = shared.registry.get(&call.name) else {
             return Ok((
                 denied("Unknown tool", "Use a tool from the exposed allowlist"),
@@ -43,6 +63,9 @@ impl Host {
                 None,
             ));
         }
+        if let Some((reason, hint)) = crate::tasks::front_denial(shared, call) {
+            return Ok((denied(reason, hint), None));
+        }
         if let Some(subagent) = &call.subagent {
             if let Some(reason) =
                 crate::subagents::guard(shared, &self.env.session, subagent, &call.name).await?
@@ -53,9 +76,12 @@ impl Host {
         // B-10: incognito sessions never reach the Vault (unknown state counts as incognito).
         // A secret_input human step is the Vault's other entry point (policy treats it as
         // `VaultUse`): the secret is filled through the same sink, so it is refused too, as are
-        // the one-time-code tools, which read or store vault authenticators.
+        // the one-time-code tools and request_login, which read or store vault items.
         let vault_entry = call.name.starts_with("vault_")
-            || matches!(call.name.as_str(), "request_otp" | "register_authenticator")
+            || matches!(
+                call.name.as_str(),
+                "request_otp" | "register_authenticator" | "request_login"
+            )
             || (call.name == "request_human_step"
                 && serde_json::from_str::<Value>(&call.arguments_json)
                     .is_ok_and(|args| args["kind"] == "secret_input"));
@@ -87,11 +113,18 @@ impl Host {
             }
         };
         // HS-6: opening a takeover first waits out the agent's in-flight browser operation.
-        let _takeover =
-            crate::takeover::reserve(shared, &self.env.session, &call.name, &args).await;
+        let _takeover = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Ok((denied("subagent_finished", "The subagent has ended"), None)),
+            takeover = crate::takeover::reserve(shared, &self.env.session, &call.name, &args) => takeover,
+        };
         // Keep daemon navigation/fill operations serialized through policy and execution.
         let mut browser_gate = if tools::touches_browser(&call.name) {
-            Some(shared.registry.browser.gate.lock().await)
+            Some(tokio::select! {
+                biased;
+                () = cancellation.cancelled() => return Ok((denied("subagent_finished", "The subagent has ended"), None)),
+                gate = shared.registry.browser.gate.lock() => gate,
+            })
         } else {
             None
         };
@@ -101,7 +134,12 @@ impl Host {
         {
             return Ok((denied(reason, &hint), None));
         }
-        let actions = match tool.actions(&args, &self.env).await {
+        let admission = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Ok((denied("subagent_finished", "The subagent has ended"), None)),
+            actions = tool.actions(&args, &self.env) => actions,
+        };
+        let actions = match admission {
             Ok(actions) => actions,
             Err(error) => {
                 return Ok((
@@ -219,12 +257,17 @@ impl Host {
                     resume_when: None,
                     otp: None,
                     otp_register: None,
+                    login: None,
+                    choice: None,
+                    approval: None,
+                    pins: Vec::new(),
                 },
                 Some(TicketTool {
                     name: call.name.clone(),
                     args: safe,
                 }),
                 Some(approval_binding(&args, &actions)?),
+                self.caller.as_deref(),
             )
             .await?;
             return Ok((
@@ -236,9 +279,19 @@ impl Host {
             ));
         }
         // Policy and the browser gate may have waited; a child cancelled meanwhile must not act.
+        if cancellation.is_cancelled() {
+            return Ok((denied("subagent_finished", "The subagent has ended"), None));
+        }
         if let Some(subagent) = &call.subagent {
             if !crate::subagents::is_live(shared, &self.env.session, subagent).await? {
                 return Ok((denied("subagent_finished", "The subagent has ended"), None));
+            }
+            // A newly opened tab can acquire its creator while this call waits for the
+            // browser gate; never act on an earlier reservation without rechecking it.
+            if let Some((reason, hint)) =
+                crate::browser_state::tab_denial(shared, &self.env.session, call).await?
+            {
+                return Ok((denied(reason, hint), None));
             }
         }
         let env = ToolEnv {
@@ -250,13 +303,23 @@ impl Host {
             approved_actions: actions,
             tool_call_id: call.tool_call_id.clone(),
             subagent: call.subagent.clone(),
+            cancellation: cancellation.clone(),
+            browser_probe: browser_probe.clone(),
         };
         let tracker = crate::artifacts::Tracker::before(&env, &call.name).await;
         let used_tab = args
             .get("tab_id")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        match tool.call(args, &env).await {
+        // Dropping a future does not cancel an issued CDP command or blocking filesystem I/O.
+        // Cooperative tools stop themselves; all others settle before terminal publication.
+        let executed = tool.call(args, &env).await;
+        let result = if cancellation.is_cancelled() {
+            ToolExec::Failed("Task tool cancelled".into())
+        } else {
+            executed
+        };
+        match result {
             ToolExec::Done { for_model, for_app } => {
                 if call.name.starts_with("browser_") {
                     if let Some(tab) = for_model
@@ -316,9 +379,10 @@ impl Host {
                     &self.env.session,
                     call,
                     TicketDeferral::External,
-                    request,
+                    *request,
                     None,
                     None,
+                    self.caller.as_deref(),
                 )
                 .await?;
                 Ok((
@@ -358,14 +422,30 @@ impl Host {
                 },
             )
             .await?;
-        let (mut outcome, for_app) = self.execute(&call).await.unwrap_or_else(|_| {
-            (
-                ToolOutcome::Failed {
-                    message: "Tool execution or durable recording failed".into(),
-                },
-                None,
-            )
-        });
+        let active = call
+            .subagent
+            .as_ref()
+            .map(|task| shared.host_calls.enter(&self.env.session, task));
+        let cancellation = active
+            .as_ref()
+            .map(|active| active.token())
+            .unwrap_or_default();
+        let mut stamp = crate::browser_state::before(shared, &self.env.session, &call).await;
+        let browser_probe = (call.name == "browser_repl"
+            && serde_json::from_str::<Value>(&call.arguments_json)
+                .is_ok_and(|args| args["tab_id"].as_str().is_none()))
+        .then(|| std::sync::Arc::new(parking_lot::Mutex::new(stamp.take())));
+        let (mut outcome, for_app) = self
+            .execute(&call, &cancellation, &browser_probe)
+            .await
+            .unwrap_or_else(|_| {
+                (
+                    ToolOutcome::Failed {
+                        message: "Tool execution or durable recording failed".into(),
+                    },
+                    None,
+                )
+            });
         match &mut outcome {
             ToolOutcome::Denied { reason, hint } => {
                 *reason = shared
@@ -429,6 +509,10 @@ impl Host {
                 },
             )
             .await?;
+        if let Some(binding) = browser_probe {
+            stamp = binding.lock().take();
+        }
+        crate::browser_state::after(shared, &self.env.session, &call, &outcome, stamp);
         crate::tickets::audit(
             shared,
             &self.env.session,

@@ -10,8 +10,10 @@ use openside_core::{
     SessionSpec, SubagentControl, TicketId,
 };
 use openside_proto::{
-    Event, EventKind, Message, MessageOutcome, SessionId, SessionStatus, Ticket, TicketStatus,
+    title_from_message, Event, EventKind, Message, MessageOutcome, SessionId, SessionStatus,
+    Ticket, TicketStatus, DEFAULT_SESSION_TITLE,
 };
+use openside_sessions::SessionState;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
 use crate::{
@@ -37,9 +39,11 @@ pub(crate) struct Shared {
     pub(crate) policy: Arc<crate::policy_api::LivePolicy>,
     pub(crate) sync: Arc<crate::sync::Service>,
     pub(crate) remote: Arc<crate::pairing::Remote>,
+    pub(crate) transports: Arc<crate::remote::Transports>,
     pub(crate) previews: Arc<crate::preview::Registry>,
     pub(crate) accounts: Arc<crate::accounts::Service>,
     pub(crate) credential_paths: Arc<crate::credential_paths::ProtectedPaths>,
+    pub(crate) host_calls: Arc<crate::host_calls::Calls>,
 }
 
 pub(crate) enum Action {
@@ -53,7 +57,8 @@ pub(crate) enum Action {
     Tombstone,
     Resume(TicketId),
     Subagent(String, SubagentControl),
-    /// Open the runtime so restored children are reconciled with the sidecar snapshot.
+    /// Open the runtime: restored children are reconciled with the sidecar snapshot, and a
+    /// prewarmed session answers its next message without a sidecar cold start.
     Recover,
     Shutdown,
     /// Queue a browser notice on the steer lane, only while a run is in flight; an idle
@@ -161,9 +166,11 @@ impl Daemon {
             policy,
             sync: Default::default(),
             remote: Default::default(),
+            transports: Default::default(),
             previews: Default::default(),
             accounts: Default::default(),
             credential_paths,
+            host_calls: Default::default(),
         };
         shared.registry.vault.unlock(&shared).await;
         shared.registry.browser.recover(&shared).await?;
@@ -185,6 +192,8 @@ impl Daemon {
             .await?;
             crate::subagents::interrupt_running(&daemon.shared, &session.id).await?;
             crate::subagents::repair(&daemon.shared, &session.id).await?;
+            // A crash between a Task's end and its report leaves the report to queue now.
+            crate::tasks::report_ended(&daemon.shared, &session.id).await?;
             if session.status == SessionStatus::Running {
                 daemon
                     .shared
@@ -240,11 +249,7 @@ impl Daemon {
                 continue;
             }
             // Pending human steps survive restart and hold all queue lanes.
-            if !state
-                .tickets
-                .values()
-                .any(|t| t.status == TicketStatus::Pending)
-            {
+            if !holds_queue(&daemon.shared, &session.id, &state).await? {
                 let _ = daemon.shared.command(&session.id, Action::Deliver).await;
             }
         }
@@ -299,6 +304,8 @@ impl Daemon {
         } else {
             None
         };
+        let listen = tcp.as_ref().and_then(|listener| listener.local_addr().ok());
+        crate::remote::start(&self.shared, listen);
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let unix_router = crate::api::router(self.shared.clone(), true);
         let unix_task = tokio::spawn(async move { axum::serve(unix, unix_router).await });
@@ -417,11 +424,61 @@ impl Shared {
         let kind = serde_json::to_value(kind)?;
         let keep = crate::tools::event_keep(kind["kind"].as_str().unwrap_or_default());
         let keep: Vec<&[&str]> = keep.iter().map(Vec::as_slice).collect();
-        let kind = serde_json::from_value(self.registry.redact_except(kind, &keep)?)?;
+        let kind: EventKind = serde_json::from_value(self.registry.redact_except(kind, &keep)?)?;
+        // The daemon is the only place that names an untitled session after its first message;
+        // clients (web, extension, CLI) show whatever `session.updated` says.
+        let derived = match &kind {
+            EventKind::MessageQueued {
+                text, attachments, ..
+            } => self.first_message_title(id, text, attachments).await?,
+            _ => None,
+        };
         let event = self.db.append(id, run, kind).await?;
         crate::preview::committed(self, &event);
         let _ = self.events.send(event.clone());
+        if let Some(title) = derived {
+            let titled = self
+                .db
+                .append(
+                    id,
+                    None,
+                    EventKind::SessionUpdated {
+                        title: Some(title),
+                        pinned: None,
+                        archived: None,
+                    },
+                )
+                .await?;
+            let _ = self.events.send(titled);
+        }
         Ok(event)
+    }
+    /// Title for a session still called "New session" from its first message: the first non-blank
+    /// line, or the first file's name when the message is only files.
+    async fn first_message_title(
+        &self,
+        id: &SessionId,
+        text: &str,
+        attachments: &[openside_proto::Attachment],
+    ) -> Result<Option<String>> {
+        let id = id.clone();
+        let untitled = self
+            .db
+            .store(move |s| {
+                Ok(s.session(&id).is_some_and(|state| {
+                    state.first_message.is_none() && state.title == DEFAULT_SESSION_TITLE
+                }))
+            })
+            .await?;
+        Ok(untitled
+            .then(|| {
+                title_from_message(text).or_else(|| {
+                    attachments
+                        .iter()
+                        .find_map(|a| a.name.as_deref().and_then(title_from_message))
+                })
+            })
+            .flatten())
     }
     pub(crate) async fn auth_failed(&self, id: &SessionId) -> Result<bool> {
         let mut after = 0;
@@ -469,6 +526,7 @@ impl Shared {
         result.await.map_err(|_| "session actor closed")?
     }
     async fn shutdown(&self) {
+        self.transports.stop().await;
         let senders: Vec<_> = self
             .actors
             .lock()
@@ -513,6 +571,15 @@ impl Shared {
     }
 }
 
+/// What the actor still owes the log after a write failed (a full disk, typically).
+#[derive(Clone, Copy, PartialEq)]
+enum Owed {
+    /// The runtime died or was closed, but its interruption was never recorded.
+    Interruption,
+    /// The run finished, but the `session.settled` marker was never recorded.
+    Settled,
+}
+
 #[derive(Default)]
 struct Live {
     session: Option<Box<dyn Session>>,
@@ -520,12 +587,14 @@ struct Live {
     stopped: bool,
     resolutions: HashSet<TicketId>,
     deleted: bool,
+    owed: Option<Owed>,
 }
 
 async fn actor(shared: Shared, id: SessionId, mut commands: mpsc::Receiver<Command>) {
     let mut live = Live::default();
     let mut shutdown = shared.shutdown.subscribe();
     loop {
+        let owed = live.owed.is_some();
         tokio::select! {
             biased;
             _ = shutdown.recv() => break,
@@ -545,17 +614,57 @@ async fn actor(shared: Shared, id: SessionId, mut commands: mpsc::Receiver<Comma
                     Some(RuntimeEvent::Settled) => {
                         live.running = false;
                         if !live.stopped {
-                            let _ = shared.emit(&id, None, EventKind::SessionSettled {}).await;
+                            // The front agent is free, but a running Task still has work (and
+                            // its report) to come: the session is not settled yet.
+                            if !crate::tasks::any_running(&shared, &id).await.unwrap_or(false)
+                                && shared.emit(&id, None, EventKind::SessionSettled {}).await.is_err()
+                            {
+                                live.owed = Some(Owed::Settled);
+                            }
                             let _ = dispatch(&shared, &id, &mut live).await;
                         }
                     }
-                    Some(RuntimeEvent::Error { error }) => { let _ = fail(&shared, &id, &mut live, error).await; }
-                    Some(event) => {
-                        if record(&shared, &id, event).await.is_err() {
-                            let _ = fail(&shared, &id, &mut live, RuntimeError::Unavailable("event persistence failed".into())).await;
+                    Some(RuntimeEvent::Error { error }) => {
+                        if fail(&shared, &id, &mut live, error).await.is_err() {
+                            live.owed = Some(Owed::Interruption);
                         }
                     }
-                    None => { let _ = interrupted(&shared, &id, &mut live).await; }
+                    Some(event) => {
+                        let lifecycle = match &event {
+                            RuntimeEvent::SubagentLifecycle { subagent_id, .. } => Some(subagent_id.clone()),
+                            _ => None,
+                        };
+                        if record(&shared, &id, event).await.is_err() {
+                            let failed = RuntimeError::Unavailable("event persistence failed".into());
+                            if fail(&shared, &id, &mut live, failed).await.is_err() {
+                                live.owed = Some(Owed::Interruption);
+                            }
+                        } else if let Some(child) = lifecycle.filter(|_| !live.stopped) {
+                            if crate::tasks::report_ended(&shared, &id).await.unwrap_or(false) {
+                                let _ = dispatch(&shared, &id, &mut live).await;
+                            } else if !live.running {
+                                // The sidecar does not settle for an ended Task (its report
+                                // usually follows); one without a report settles here.
+                                let _ = crate::tasks::settle_unreported(&shared, &id, &child).await;
+                            }
+                        }
+                    }
+                    None => {
+                        if interrupted(&shared, &id, &mut live).await.is_err() {
+                            live.owed = Some(Owed::Interruption);
+                        }
+                    }
+                }
+            }
+            _ = async {
+                if owed {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                if recover_owed(&shared, &id, &mut live).await.is_ok() {
+                    live.owed = None;
                 }
             }
         }
@@ -644,6 +753,7 @@ async fn handle(shared: &Shared, id: &SessionId, live: &mut Live, action: Action
             complete_inflight(shared, id, MessageOutcome::Aborted, "stopped").await?;
             settle_deferred(shared, id, MessageOutcome::Aborted, "stopped").await?;
             shared.emit(id, None, EventKind::SessionStopped {}).await?;
+            shared.registry.browser.cleanup_warm(shared, id, None).await;
         }
         Action::Tombstone => {
             // Everything Stop does, then the tombstone, inside the actor: no queued Deliver can
@@ -658,6 +768,7 @@ async fn handle(shared: &Shared, id: &SessionId, live: &mut Live, action: Action
             complete_inflight(shared, id, MessageOutcome::Aborted, "deleted").await?;
             settle_deferred(shared, id, MessageOutcome::Aborted, "deleted").await?;
             shared.emit(id, None, EventKind::SessionDeleted {}).await?;
+            shared.registry.browser.cleanup_warm(shared, id, None).await;
             live.deleted = true;
         }
         Action::Resume(ticket) => {
@@ -675,7 +786,7 @@ async fn handle(shared: &Shared, id: &SessionId, live: &mut Live, action: Action
                 .is_some_and(|ticket| {
                     ticket
                         .tool_call_id
-                        .starts_with(crate::tools::repl::API_CALL_PREFIX)
+                        .starts_with(crate::tools::API_CALL_PREFIX)
                 })
             {
                 return Ok(());
@@ -705,30 +816,45 @@ async fn handle(shared: &Shared, id: &SessionId, live: &mut Live, action: Action
         }
         Action::Subagent(subagent, control) => {
             let Some(child) = crate::subagents::get(shared, id, &subagent).await? else {
-                return Ok(());
+                return Err("subagent_finished".into());
             };
             if child.status.is_terminal() {
-                return Ok(());
+                return Err("subagent_finished".into());
             }
-            if control == SubagentControl::Cancel {
+            let cancel = control == SubagentControl::Cancel;
+            if cancel {
                 crate::subagents::cancel(shared, id, &subagent).await?;
             }
             open_runtime(shared, id, live).await?;
             if let Some(session) = live.session.as_mut() {
                 if let Err(error) = session.control(subagent, control).await {
+                    if matches!(&error, RuntimeError::Rejected(reason) if reason == "subagent_finished")
+                    {
+                        return Err("subagent_finished".into());
+                    }
                     fail(shared, id, live, error).await?;
                     return Err("subagent control failed".into());
                 }
             }
+            if cancel && !live.stopped && crate::tasks::report_ended(shared, id).await? {
+                dispatch(shared, id, live).await?;
+            }
         }
         Action::Recover => {
-            open_runtime(shared, id, live).await?;
+            if !shared.db.state(id).await?.archived && !live.stopped {
+                open_runtime(shared, id, live).await?;
+            }
         }
         Action::Shutdown => {
             close_runtime(shared, id, live).await;
         }
     }
     Ok(())
+}
+
+/// Start the session's sidecar ahead of its next message.
+pub(crate) async fn prewarm_runtime(shared: &Shared, id: &SessionId) {
+    let _ = shared.command(id, Action::Recover).await;
 }
 
 async fn close_runtime(shared: &Shared, id: &SessionId, live: &mut Live) {
@@ -759,6 +885,13 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
         .await?;
     let system_prompt_parts =
         crate::profiles::system_prompt_parts(shared, state.workspace.as_deref()).await;
+    let mut agent_json = agent_options(&shared.config.loaded.config);
+    if crate::tasks::front(shared) {
+        agent_json["front_tools"] = serde_json::json!(crate::tasks::front_tools(&tools));
+        if let Some(front) = &shared.config.loaded.config.models.front {
+            agent_json["front_model"] = serde_json::json!(front);
+        }
+    }
     let spec = SessionSpec {
         session: id.clone(),
         model: state.model,
@@ -767,7 +900,7 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
         tools,
         resume_state,
         credentials_json: shared.config.loaded.config.credentials.to_string(),
-        agent_json: agent_options(&shared.config.loaded.config).to_string(),
+        agent_json: agent_json.to_string(),
     };
     let mut session = match shared.runtime.open(spec, Arc::new(host)).await {
         Ok(session) => session,
@@ -867,14 +1000,36 @@ async fn child_ended(shared: &Shared, id: &SessionId, ticket: &Ticket) -> Result
         .map_or(true, |child| child.status.is_terminal()))
 }
 
+/// A pending ticket holds every queue lane, except one opened by a background Task: the
+/// front agent keeps talking while that Task waits for its person.
+async fn holds_queue(shared: &Shared, id: &SessionId, state: &SessionState) -> Result<bool> {
+    let pending: Vec<_> = state
+        .tickets
+        .values()
+        .filter(|t| t.status == TicketStatus::Pending)
+        .collect();
+    if pending.is_empty() {
+        return Ok(false);
+    }
+    let tasks: HashSet<String> = crate::subagents::list(shared, id)
+        .await?
+        .into_iter()
+        .filter(|child| child.background)
+        .map(|child| child.id)
+        .collect();
+    Ok(pending.iter().any(|ticket| {
+        ticket
+            .origin
+            .subagent_id
+            .as_ref()
+            .map_or(true, |child| !tasks.contains(child))
+    }))
+}
+
 async fn dispatch(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()> {
     loop {
         let state = shared.db.state(id).await?;
-        if state
-            .tickets
-            .values()
-            .any(|t| t.status == TicketStatus::Pending)
-        {
+        if holds_queue(shared, id, &state).await? {
             return Ok(());
         }
         let Some(mid) = state.queue.pending_ids().next() else {
@@ -945,12 +1100,65 @@ async fn complete_inflight(
     Ok(())
 }
 
+/// Redoes what a failed write left undone, so a session does not read "running" forever after the
+/// disk filled mid-run. Every step checks the log's tail first, so a retry after a partial
+/// success never records the interruption or the settle marker twice.
+async fn recover_owed(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()> {
+    let Some(owed) = live.owed else {
+        return Ok(());
+    };
+    if live.running || live.session.is_some() {
+        // A newer run took over; its own events settle the session.
+        return Ok(());
+    }
+    if owed == Owed::Interruption {
+        complete_inflight(shared, id, MessageOutcome::Failed, "interrupted").await?;
+        crate::subagents::interrupt_running(shared, id).await?;
+        crate::tasks::report_ended(shared, id).await?;
+    }
+    let last_seq = shared.db.state(id).await?.last_seq;
+    let tail = shared
+        .db
+        .events(id, last_seq.saturating_sub(1))
+        .await?
+        .pop()
+        .map(|event| event.kind);
+    if matches!(
+        tail,
+        Some(EventKind::SessionSettled {} | EventKind::SessionStopped {})
+    ) {
+        if !live.stopped {
+            dispatch(shared, id, live).await?;
+        }
+        return Ok(());
+    }
+    if owed == Owed::Interruption && !matches!(tail, Some(EventKind::RuntimeError { .. })) {
+        shared
+            .emit(
+                id,
+                None,
+                EventKind::RuntimeError {
+                    code: "interrupted".into(),
+                    message: "Agent process interrupted; dispatched messages will not be resent."
+                        .into(),
+                },
+            )
+            .await?;
+    }
+    if !live.stopped {
+        shared.emit(id, None, EventKind::SessionSettled {}).await?;
+        dispatch(shared, id, live).await?;
+    }
+    Ok(())
+}
+
 async fn interrupted(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()> {
     live.session = None;
     live.running = false;
     live.resolutions.clear();
     complete_inflight(shared, id, MessageOutcome::Failed, "interrupted").await?;
     crate::subagents::interrupt_running(shared, id).await?;
+    crate::tasks::report_ended(shared, id).await?;
     shared
         .emit(
             id,
@@ -975,6 +1183,7 @@ async fn fail(shared: &Shared, id: &SessionId, live: &mut Live, error: RuntimeEr
     let auth = matches!(error, RuntimeError::AuthUnavailable(_));
     close_runtime(shared, id, live).await;
     crate::subagents::interrupt_running(shared, id).await?;
+    crate::tasks::report_ended(shared, id).await?;
     complete_inflight(
         shared,
         id,
@@ -1106,7 +1315,8 @@ async fn record(shared: &Shared, id: &SessionId, event: RuntimeEvent) -> Result<
         RuntimeEvent::SubagentLifecycle {
             subagent_id,
             status,
-        } => match crate::subagents::lifecycle(shared, id, subagent_id, status).await? {
+            output,
+        } => match crate::subagents::lifecycle(shared, id, subagent_id, status, output).await? {
             Some(kind) => kind,
             None => return Ok(()),
         },

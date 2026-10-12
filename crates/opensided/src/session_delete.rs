@@ -44,6 +44,7 @@ pub(crate) async fn on_session_deleted(shared: &Shared, id: &SessionId) {
         }
     }
     shared.registry.browser.close_incognito(shared, id).await;
+    shared.registry.browser.close_space(shared, id).await;
     shared.registry.browser.forget_lost_tabs(id).await;
     crate::artifacts::remove_session(shared, id).await;
 }

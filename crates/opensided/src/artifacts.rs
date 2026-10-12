@@ -509,7 +509,7 @@ pub(crate) async fn store_attachments(
                     _ => return Err(HttpError(StatusCode::CONFLICT, "attachment_conflict")),
                 }
             }
-            Err(_) => return Err(HttpError::internal()),
+            Err(error) => return Err(HttpError::write_failed(&error)),
         };
         stored.push(Attachment {
             path,
@@ -1068,7 +1068,7 @@ async fn index(shared: &Shared, session: &SessionId) -> Result<Index, HttpError>
             match store(shared, session, &path, source.clone().into_bytes(), true).await {
                 Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(_) => return Err(HttpError::internal()),
+                Err(error) => return Err(HttpError::write_failed(&error)),
             }
         }
     }

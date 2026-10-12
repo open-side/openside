@@ -692,15 +692,7 @@ async fn browser_pointer_clicks_canvas_from_screenshot_and_gates_sensitive_targe
         browser.evaluate(&tab, "window.bought").await.unwrap(),
         false
     );
-    let response = api::router(daemon.shared.clone(), true)
-        .oneshot(request(
-            "POST",
-            &format!("/v1/tickets/{ticket}/resolve"),
-            json!({"value": true}),
-            None,
-        ))
-        .await
-        .unwrap();
+    let response = person_resolve(&daemon, &ticket, json!(true)).await;
     assert_eq!(response.status(), StatusCode::OK);
     let mut approved = call("browser_pointer", args, "buy");
     approved.approval_ticket = Some(ticket);
@@ -1228,6 +1220,143 @@ async fn browser_pointer_binds_to_the_child_document_and_never_acts_inside_a_cro
         .pointer(owner, &tab, click, &replaced)
         .await
         .is_err());
+
+    drop(browser);
+    daemon.shutdown().await;
+    server.abort();
+}
+
+/// `(snapshot_id, body)` of a complete viewport result: `[snapshot_id <id> viewport]` + tree.
+fn viewport_parts(result: &Value) -> (String, String) {
+    let text = result
+        .as_str()
+        .unwrap_or_else(|| panic!("expected plain text: {result}"));
+    let (header, body) = text.split_once('\n').unwrap();
+    let id = header
+        .strip_prefix("[snapshot_id ")
+        .and_then(|rest| rest.strip_suffix(" viewport]"))
+        .unwrap_or_else(|| panic!("{header}"));
+    (id.to_owned(), body.to_owned())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn browser_snapshot_scope_viewport_is_partial_never_a_diff_base_and_keeps_refs() {
+    let root = tempfile::tempdir().unwrap();
+    let Some(config) = browser_config(root.path()) else {
+        return;
+    };
+    let (origin, server) = fixture().await;
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let session = create_session(&daemon, "viewport", PolicyMode::Guard, None).await;
+    let (tab, browser, _cleanup) = start(&daemon, &session, &origin).await;
+    let owner = session.as_str().to_owned();
+
+    // A page that fits the screen: the viewport capture is the whole tree, but it says it is
+    // a viewport capture and `since` never turns it into a diff.
+    let (full_id, full) = split(&snapshot(&daemon, &session, json!({"tab_id":tab}), "v1").await);
+    let result = snapshot(
+        &daemon,
+        &session,
+        json!({"tab_id":tab,"scope":"viewport","since":full_id}),
+        "v2",
+    )
+    .await;
+    let (viewport_id, viewport) = viewport_parts(&result);
+    assert_eq!(viewport, full);
+    // Partial by definition, so never the base of a later diff: the caller gets a whole tree.
+    let (_, again) = split(
+        &snapshot(
+            &daemon,
+            &session,
+            json!({"tab_id":tab,"since":viewport_id}),
+            "v3",
+        )
+        .await,
+    );
+    assert_eq!(again, full);
+    // The capture is paged and scoped by ref like any other, and says it is a viewport capture.
+    let add = viewport
+        .lines()
+        .find(|line| line.contains("Add row"))
+        .and_then(|line| line.trim().strip_prefix('['))
+        .and_then(|line| line.split(']').next())
+        .unwrap()
+        .to_owned();
+    let subtree = snapshot(
+        &daemon,
+        &session,
+        json!({"tab_id":tab,"snapshot_id":viewport_id,"ref":add}),
+        "v4",
+    )
+    .await;
+    assert!(subtree.as_str().unwrap().contains("Add row"), "{subtree}");
+    // `scope` belongs to a new capture; a read keeps the scope it was taken with.
+    let refused = tool(
+        &daemon,
+        &session,
+        "browser_snapshot",
+        json!({"tab_id":tab,"snapshot_id":viewport_id,"scope":"viewport"}),
+        "v5",
+    )
+    .await;
+    assert!(
+        matches!(&refused, ToolOutcome::Denied { reason, .. } if reason.contains("new capture")),
+        "{refused:?}"
+    );
+    // Refs of a viewport capture act as usual.
+    model(
+        tool(
+            &daemon,
+            &session,
+            "browser_act",
+            json!({"tab_id":tab,"target":add,"action":"click"}),
+            "v6",
+        )
+        .await,
+    );
+
+    // A long page: the whole tree needs paging, the viewport capture is one small result, and
+    // after scrolling it is a different part of the page.
+    browser
+        .navigate(&owner, &tab, &format!("{origin}/large"))
+        .await
+        .unwrap();
+    let paged = snapshot(&daemon, &session, json!({"tab_id":tab}), "v7").await;
+    assert!(paged["warning"].is_object(), "the full page is over budget");
+    let full_bytes = paged.to_string().len();
+    let (_, top) = viewport_parts(
+        &snapshot(
+            &daemon,
+            &session,
+            json!({"tab_id":tab,"scope":"viewport"}),
+            "v8",
+        )
+        .await,
+    );
+    assert!(
+        top.contains("Entry 0-0") && !top.contains("Entry 19-99"),
+        "{top}"
+    );
+    assert!(top.len() * 10 < full_bytes, "{} vs {full_bytes}", top.len());
+    browser
+        .evaluate(&tab, "window.scrollTo(0, 30000); true")
+        .await
+        .unwrap();
+    let (_, scrolled) = viewport_parts(
+        &snapshot(
+            &daemon,
+            &session,
+            json!({"tab_id":tab,"scope":"viewport"}),
+            "v9",
+        )
+        .await,
+    );
+    assert!(
+        scrolled.contains("Entry ") && !scrolled.contains("Entry 0-0"),
+        "{scrolled}"
+    );
 
     drop(browser);
     daemon.shutdown().await;

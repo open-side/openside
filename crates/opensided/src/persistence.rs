@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use openside_proto::{CapabilityScope, Event, EventKind, SessionId};
+use openside_proto::{CapabilityScope, DeviceKind, Event, EventKind, SessionId};
 use openside_sessions::{SessionState, Store};
 use rand::{rngs::OsRng, RngCore};
 use rusqlite::{params, Connection};
@@ -29,6 +29,8 @@ impl Database {
             let store = Store::open(openside_config::data_layout::DataPath::Events.path(&directory))?;
             let devices = Connection::open(openside_config::data_layout::DataPath::Devices.path(&directory))?;
             devices.execute_batch("PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, hash BLOB NOT NULL UNIQUE, scopes TEXT NOT NULL); CREATE TABLE IF NOT EXISTS device_meta (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);")?;
+            // Old databases did not record pairing source; absent rows remain person devices.
+            devices.execute_batch("CREATE TABLE IF NOT EXISTS device_kind (id TEXT PRIMARY KEY, kind TEXT NOT NULL);")?;
             Ok(Self(
                 Arc::new(Mutex::new(Inner { store, devices })),
                 #[cfg(test)]
@@ -101,10 +103,19 @@ impl Database {
     pub(crate) async fn pair(&self, scopes: Vec<CapabilityScope>) -> Result<(String, String)> {
         self.pair_named(String::new(), scopes).await
     }
+    #[cfg(test)]
     pub(crate) async fn pair_named(
         &self,
         name: String,
         scopes: Vec<CapabilityScope>,
+    ) -> Result<(String, String)> {
+        self.pair_as(name, scopes, DeviceKind::PersonDevice).await
+    }
+    pub(crate) async fn pair_as(
+        &self,
+        name: String,
+        scopes: Vec<CapabilityScope>,
+        kind: DeviceKind,
     ) -> Result<(String, String)> {
         let inner = self.0.clone();
         tokio::task::spawn_blocking(move || {
@@ -121,31 +132,35 @@ impl Database {
                 "INSERT INTO device_meta(id, name, created_at) VALUES (?1, ?2, ?3)",
                 params![id, name, chrono::Utc::now().to_rfc3339()],
             )?;
+            transaction.execute(
+                "INSERT INTO device_kind(id, kind) VALUES (?1, ?2)",
+                params![id, serde_json::to_string(&kind)?],
+            )?;
             transaction.commit()?;
             Ok((id, token))
         })
         .await?
     }
-    /// Device id and scopes of a live token.
+    /// Device id, scopes and pairing-time identity kind of a live token.
     pub(crate) async fn device(
         &self,
         token: String,
-    ) -> Result<Option<(String, Vec<CapabilityScope>)>> {
+    ) -> Result<Option<(String, Vec<CapabilityScope>, DeviceKind)>> {
         let inner = self.0.clone();
         tokio::task::spawn_blocking(move || {
             use rusqlite::OptionalExtension;
             let hash = Sha256::digest(token.as_bytes());
-            let row: Option<(String, String)> = inner
+            let row: Option<(String, String, Option<String>)> = inner
                 .lock()
                 .map_err(|_| "database lock poisoned")?
                 .devices
                 .query_row(
-                    "SELECT id, scopes FROM devices WHERE hash=?1",
+                    "SELECT d.id, d.scopes, k.kind FROM devices d LEFT JOIN device_kind k ON k.id=d.id WHERE d.hash=?1",
                     [hash.as_slice()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()?;
-            row.map(|(id, text)| Ok((id, serde_json::from_str(&text)?)))
+            row.map(|(id, text, kind)| Ok((id, serde_json::from_str(&text)?, kind.map(|text| serde_json::from_str(&text)).transpose()?.unwrap_or_default())))
                 .transpose()
         })
         .await?
@@ -155,7 +170,7 @@ impl Database {
         tokio::task::spawn_blocking(move || {
             let inner = inner.lock().map_err(|_| "database lock poisoned")?;
             let mut statement = inner.devices.prepare(
-                "SELECT d.id, d.scopes, m.name, m.created_at FROM devices d LEFT JOIN device_meta m ON m.id = d.id ORDER BY m.created_at, d.rowid",
+                "SELECT d.id, d.scopes, m.name, m.created_at, k.kind FROM devices d LEFT JOIN device_meta m ON m.id = d.id LEFT JOIN device_kind k ON k.id=d.id ORDER BY m.created_at, d.rowid",
             )?;
             let rows = statement.query_map([], |row| {
                 Ok((
@@ -163,15 +178,17 @@ impl Database {
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             })?;
             let mut devices = Vec::new();
             for row in rows {
-                let (device_id, scopes, name, created_at) = row?;
+                let (device_id, scopes, name, created_at, kind) = row?;
                 devices.push(openside_proto::Device {
                     device_id,
                     name: name.unwrap_or_default(),
                     scopes: serde_json::from_str(&scopes)?,
+                    kind: kind.map(|text| serde_json::from_str(&text)).transpose()?.unwrap_or_default(),
                     created_at: created_at
                         .and_then(|text| chrono::DateTime::parse_from_rfc3339(&text).ok())
                         .map(|time| time.with_timezone(&chrono::Utc)),
@@ -203,6 +220,7 @@ impl Database {
             let transaction = inner.devices.transaction()?;
             let removed = transaction.execute("DELETE FROM devices WHERE id=?1", [&id])?;
             transaction.execute("DELETE FROM device_meta WHERE id=?1", [&id])?;
+            transaction.execute("DELETE FROM device_kind WHERE id=?1", [&id])?;
             transaction.commit()?;
             Ok(removed > 0)
         })

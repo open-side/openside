@@ -23,7 +23,7 @@ async fn fixture() -> (String, tokio::task::JoinHandle<()>) {
 }
 pub(super) fn browser_config(root: &Path) -> Option<Resolved> {
     let mut config = resolved_config(root);
-    match test_browser(root) {
+    match test_browser() {
         Ok(executable) => {
             config.loaded.config.browser.executable = Some(executable);
             config.loaded.config.tickets.confirm_ttl_secs = 2;
@@ -109,15 +109,7 @@ async fn human(daemon: &Daemon, session: &SessionId, args: Value, id: &str) -> T
     ticket
 }
 pub(super) async fn resolve_value(daemon: &Daemon, ticket: &TicketId, value: Value) -> Response {
-    api::router(daemon.shared.clone(), true)
-        .oneshot(request(
-            "POST",
-            &format!("/v1/tickets/{ticket}/resolve"),
-            json!({"value":value}),
-            None,
-        ))
-        .await
-        .unwrap()
+    person_resolve(daemon, ticket, value).await
 }
 async fn finish(daemon: &Daemon, ticket: &TicketId) {
     let response = api::router(daemon.shared.clone(), true)

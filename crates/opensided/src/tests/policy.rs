@@ -47,6 +47,7 @@ fn concrete(path: &str) -> String {
         .replace("{sid}", "child")
         .replace("{name}", "skill")
         .replace("{path}", "transcript.jsonl")
+        .replace("{thumbnail_id}", "thumbnail")
         .replace("{id}", "session");
     assert!(!out.contains('{'), "unsubstituted path parameter in {out}");
     out
@@ -341,10 +342,8 @@ async fn policy_api_validates_persists_and_hot_reloads() {
     );
 }
 
-/// D-4: an approval request is an API object (id, summary, expiry, origin when the action has
-/// one) that a remote client holding `approve` can answer; `read`/`human_step` cannot.
 #[tokio::test]
-async fn approval_ticket_is_an_api_object_any_approve_client_can_answer() {
+async fn approval_ticket_is_an_api_object_person_devices_can_answer() {
     let root = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
@@ -926,7 +925,7 @@ async fn counting_server(
 async fn denied_origin_is_unreachable_through_any_agent_navigation() {
     let root = tempfile::tempdir().unwrap();
     let mut config = resolved_config(root.path());
-    match test_browser(root.path()) {
+    match test_browser() {
         Ok(executable) => config.loaded.config.browser.executable = Some(executable),
         Err(error) => {
             eprintln!("SKIP navigation guard test: {error}");
@@ -1085,7 +1084,7 @@ async fn approved_ask_navigation_does_not_outlive_the_approved_call() {
     use std::sync::atomic::Ordering::SeqCst;
     let root = tempfile::tempdir().unwrap();
     let mut config = resolved_config(root.path());
-    match test_browser(root.path()) {
+    match test_browser() {
         Ok(executable) => config.loaded.config.browser.executable = Some(executable),
         Err(error) => {
             eprintln!("SKIP approval lifetime navigation test: {error}");
@@ -1142,11 +1141,8 @@ async fn approved_ask_navigation_does_not_outlive_the_approved_call() {
         panic!("Ask origin must defer");
     };
     assert_eq!(asked_hits.load(SeqCst), 0);
-    let path = format!("/v1/tickets/{ticket}/resolve");
     assert_eq!(
-        send(&unix, "POST", &path, json!({"value":true}), None)
-            .await
-            .0,
+        person_resolve(&daemon, &ticket, json!(true)).await.status(),
         StatusCode::OK
     );
     let mut approved = call("browser_navigate", navigate, "nav-ask");

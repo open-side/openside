@@ -195,12 +195,23 @@ async fn execute(args: Value, ctx: &ToolEnv) -> ToolExec {
         return failed();
     };
     let operation = async { tokio::join!(process.child.wait(), capture(stdout), capture(stderr)) };
-    match tokio::time::timeout(
-        Duration::from_millis(args.timeout_ms.unwrap_or(30_000)),
-        operation,
-    )
-    .await
-    {
+    let result = tokio::select! {
+        biased;
+        () = ctx.cancellation.cancelled() => None,
+        result = tokio::time::timeout(
+            Duration::from_millis(args.timeout_ms.unwrap_or(30_000)),
+            operation,
+        ) => Some(result),
+    };
+    let Some(result) = result else {
+        if let Some(group) = process.group.take() {
+            let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
+        }
+        let _ = process.child.start_kill();
+        let _ = process.child.wait().await;
+        return ToolExec::Failed("Task tool cancelled".into());
+    };
+    match result {
         Ok((Ok(status), Ok(stdout), Ok(stderr))) => {
             // The trusted wrapper reports readiness only after sandbox setup and
             // before parsing the requested command. Nonzero command exits remain

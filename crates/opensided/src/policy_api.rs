@@ -12,14 +12,19 @@ use std::{
     sync::Arc,
 };
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::State, http::StatusCode, Extension, Json};
 use openside_policy::{Action, Capability, Effect, OriginLists, Policy, Rule, RuleLayer};
 use openside_proto::{
     PolicyCapability, PolicyDecision, PolicyEffect, PolicyMode, PolicySettings, PolicyTestRequest,
 };
 use parking_lot::RwLock;
 
-use crate::{api::HttpError, config::Resolved, engine::Shared, persistence::Result};
+use crate::{
+    api::{Caller, HttpError},
+    config::Resolved,
+    engine::Shared,
+    persistence::Result,
+};
 
 const FILE: &str = openside_config::data_layout::DataPath::Policy.relative();
 const MAX_ENTRIES: usize = 512;
@@ -140,8 +145,14 @@ pub(crate) async fn get(State(shared): State<Shared>) -> Json<PolicySettings> {
 
 pub(crate) async fn put(
     State(shared): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Json(settings): Json<PolicySettings>,
 ) -> std::result::Result<Json<PolicySettings>, HttpError> {
+    // The policy is what keeps a leaked device token from widening the agent, so it can only
+    // be rewritten from the local socket (like the config keys that hold executables).
+    if caller.0.is_some() {
+        return Err(HttpError(StatusCode::FORBIDDEN, "local_socket_required"));
+    }
     let policy = Arc::clone(&shared.policy);
     // The whole persist-then-publish transaction runs in its own task: a client that drops the
     // request cannot release the writer lock while the blocking worker is still renaming, nor

@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 futures-util = "0.3"
 async-stream = "0.3"
 clap = { version = "4", features = ["derive"] }
@@ -37,8 +38,11 @@ openside-browser = { path = "../openside-browser" }
 openside-sched = { path = "../openside-sched" }
 openside-memory = { path = "../openside-memory" }
 openside-skills = { path = "../openside-skills" }
+openside-import = { path = "../openside-import" }
 openside-repl = { path = "../openside-repl" }
 openside-sync = { path = "../openside-sync" }
+# Relay transport: outbound registration and end-to-end encrypted device streams (F-8).
+openside-relay = { path = "../openside-relay" }
 tempfile = "3"
 base64 = "0.22"
 hmac = "0.12"

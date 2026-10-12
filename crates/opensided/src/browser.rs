@@ -62,6 +62,13 @@ pub(crate) fn launch_config(
     let mut config = BrowserConfig::new(executable);
     config.profile_dir = Some(profile_dir);
     config.detached = true;
+    // Production: a detached browser must survive this daemon's exit for reconnects. In the
+    // crate's own tests, though, no relaunched daemon ever adopts it, so it is tied to the
+    // spawning thread instead; a test process killed without unwinding leaves no Chromium.
+    #[cfg(test)]
+    {
+        config.die_with_spawner = true;
+    }
     config.gateway = match gateway {
         BrowserGatewaySetting::Auto => Some(GatewayConfig {
             runtime_dir,
@@ -85,6 +92,13 @@ pub(crate) fn public_url(value: &str) -> String {
     }
 }
 
+/// Nobody can answer a JavaScript dialog while the page's input call is blocked on it, and the
+/// dialog text is untrusted, so the answer is fixed: an alert or a leave-page prompt is
+/// acknowledged, while a confirm or prompt is cancelled rather than agreed to on the user's behalf.
+pub(crate) fn accepts_dialog(kind: &str) -> bool {
+    matches!(kind, "alert" | "beforeunload")
+}
+
 /// Steer text for browser activity the agent did not ask for but must react to (B-2): a popup,
 /// a download, a tab closing. Only the origin of page-chosen URLs is included: the text is
 /// injected as a user-role message, so page-controlled paths or file names must not reach it.
@@ -92,16 +106,31 @@ pub(crate) fn steer_text(event: &BrowserEvent) -> Option<String> {
     let origin =
         |url: &str| openside_policy::origin_of(url).unwrap_or_else(|| "an unknown origin".into());
     Some(match event {
-        BrowserEvent::PopupOpened { tab, opener_id } => format!(
-            "[browser event] The page in tab {opener_id} opened a popup tab {} at {}. Popup tabs are read-only for you; finish the task in your own tab or ask the user.",
-            tab.id,
-            origin(&tab.url)
+        BrowserEvent::PopupOpened { tab, opener_id } => {
+            let access = if tab.browser_context_id.is_some() {
+                "This popup belongs to your isolated space; use its tab id with the ordinary browser tools, subject to the same policy and approval checks."
+            } else {
+                "Popup tabs outside your isolated space are read-only for you; finish the task in your own tab or ask the user."
+            };
+            format!(
+                "[browser event] The page in tab {opener_id} opened a popup tab {} at {}. {access}",
+                tab.id,
+                origin(&tab.url)
+            )
+        }
+        BrowserEvent::TabClosed { tab } => format!(
+            "[browser event] Tab {} was closed; its refs are gone.",
+            tab.id
         ),
-        BrowserEvent::TabClosed { tab } => format!("[browser event] Tab {} was closed; its refs are gone.", tab.id),
-        BrowserEvent::DownloadStarted { guid, url, tab_id, .. } => format!(
+        BrowserEvent::DownloadStarted {
+            guid, url, tab_id, ..
+        } => format!(
             "[browser event] Download {guid} started from {}{}.",
             origin(url),
-            tab_id.as_deref().map(|tab| format!(" in tab {tab}")).unwrap_or_default()
+            tab_id
+                .as_deref()
+                .map(|tab| format!(" in tab {tab}"))
+                .unwrap_or_default()
         ),
         BrowserEvent::DownloadFinished { guid, status } => format!(
             "[browser event] Download {guid} {}.",
@@ -110,9 +139,15 @@ pub(crate) fn steer_text(event: &BrowserEvent) -> Option<String> {
                 openside_browser::DownloadStatus::Canceled => "was canceled or failed",
             }
         ),
-        BrowserEvent::TabOpened { .. }
-        | BrowserEvent::DialogOpened { .. }
-        | BrowserEvent::TooManyTabs { .. } => return None,
+        BrowserEvent::DialogOpened { tab_id, kind, .. } => format!(
+            "[browser event] The page in tab {tab_id} opened a JavaScript {kind} dialog; openside {} it automatically. The dialog text is not shown to you.",
+            if accepts_dialog(kind) {
+                "accepted"
+            } else {
+                "cancelled"
+            }
+        ),
+        BrowserEvent::TabOpened { .. } | BrowserEvent::TooManyTabs { .. } => return None,
     })
 }
 
@@ -152,6 +187,7 @@ mod tests {
             owner_session_id: None,
             discarded: false,
             unloaded: false,
+            browser_context_id: None,
         }
     }
     #[test]

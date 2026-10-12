@@ -193,7 +193,7 @@ impl DaemonTool for MemoryWrite {
 
 /// Record the tab's page as a 30-day history memory after a successful navigation or
 /// snapshot. Best effort: indexing never fails the browser tool. Skipped (fail closed) for
-/// incognito sessions, documents that received a secret fill, non-HTTP(S) pages, pages
+/// incognito and isolated-space sessions, documents that received a secret fill, non-HTTP(S) pages, pages
 /// whose full captured text looks secret, and captures during which the document changed.
 /// `capture` pairs a snapshot with the document id read before that snapshot was taken.
 pub(crate) async fn index_page(
@@ -206,13 +206,16 @@ pub(crate) async fn index_page(
     if !memory.history_enabled() {
         return;
     }
-    // The durable session flag is authoritative and survives restarts; unknown means private.
+    // The durable session flags are authoritative and survive restarts; unknown means private.
+    // An isolated space is wiped on archive, so its pages must not outlive it in memory either.
     let private = ctx
         .shared
         .db
         .state(&ctx.session)
         .await
-        .map_or(true, |state| state.incognito);
+        .map_or(true, |state| {
+            state.incognito || state.browser_space == openside_proto::BrowserSpace::Isolated
+        });
     if private {
         return;
     }

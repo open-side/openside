@@ -39,7 +39,7 @@ use crate::engine::Shared;
 pub(crate) struct OtpRequestArgs {
     /// Tab showing the code prompt.
     tab_id: String,
-    /// Ref of the code field; for a code split over several boxes, the first box.
+    /// Current-document ref from browser_snapshot; refs from before navigation are invalid.
     field_ref: String,
     /// Where the page says the code comes from; `unknown` when it does not say.
     channel: Option<OtpChannel>,
@@ -49,11 +49,15 @@ pub(crate) struct OtpRequestArgs {
 
 fn channel_text(channel: OtpChannel) -> &'static str {
     match channel {
-        OtpChannel::Authenticator => "Enter the code from your authenticator app, or register the authenticator so openside can fill codes for this site from now on.",
+        OtpChannel::Authenticator => {
+            "Enter the code from your authenticator app, or register the authenticator so openside can fill codes for this site from now on."
+        }
         OtpChannel::Sms => "Enter the code the site sent you by text message.",
         OtpChannel::Email => "Enter the code the site sent you by email.",
         OtpChannel::BackupCode => "Enter one of your backup codes for this site.",
-        OtpChannel::Unknown => "Enter the verification code this site asks for. If it comes from an authenticator app, you can register the authenticator instead.",
+        OtpChannel::Unknown => {
+            "Enter the verification code this site asks for. If it comes from an authenticator app, you can register the authenticator instead."
+        }
     }
 }
 
@@ -64,7 +68,7 @@ fn can_register(channel: OtpChannel, vault_available: bool) -> bool {
 }
 
 /// The tab's origin as approved for this call: the origin is the tab's, never the model's.
-fn approved_origin(ctx: &ToolEnv) -> std::result::Result<String, ToolError> {
+pub(super) fn approved_origin(ctx: &ToolEnv) -> std::result::Result<String, ToolError> {
     ctx.approved_actions
         .iter()
         .find(|action| action.capability == Capability::VaultUse)
@@ -74,11 +78,16 @@ fn approved_origin(ctx: &ToolEnv) -> std::result::Result<String, ToolError> {
 
 /// Browse + VaultUse on the tab's live origin: a code or key is released only into the page
 /// the person sees named on the ticket.
-async fn origin_actions(
+pub(super) async fn origin_actions(
     ctx: &ToolEnv,
     tab_id: &str,
 ) -> std::result::Result<Vec<Action>, ToolError> {
-    let browser = ctx.shared.registry.browser.get(&ctx.shared).await?;
+    let browser = ctx
+        .shared
+        .registry
+        .browser
+        .for_session(&ctx.shared, &ctx.session)
+        .await?;
     let origin = Controller::origin(&browser, &ctx.session, tab_id).await?;
     Ok(vec![
         Action::new(Capability::Browse, &origin),
@@ -92,7 +101,12 @@ impl DaemonTool for RequestOtp {
         "request_otp"
     }
     fn spec(&self) -> openside_core::ToolSpec {
-        spec::<OtpRequestArgs>(self.name(), "Use whenever a page asks for a verification / one-time code (authenticator, SMS, email or backup code), including codes split over several boxes (pass the first box). If the vault holds an authenticator for the tab's origin, the daemon fills the current code immediately. Otherwise the person is asked on their own device to enter the code or register the site's authenticator; the code goes straight into the field and the tab is never brought to the screen. Result {\"status\":\"filled\"} (or {\"status\":\"registered\",\"filled\":false}: call request_otp again); you never see the code. Then click the page's verify/continue button yourself. Never ask for codes in chat or ask_user, and never use takeover for a code unless the person asks for it.", ApprovalTier::Read, true)
+        spec::<OtpRequestArgs>(
+            self.name(),
+            "Use whenever a page asks for a verification / one-time code (authenticator, SMS, email or backup code), including codes split over several boxes (pass the first box). field_ref must be the code textbox ref from a fresh browser_snapshot on the current code page: never guess a ref or reuse one from before navigation. If the vault holds an authenticator for the tab's origin, the daemon fills the current code immediately. Otherwise the person is asked on their own device to enter the code or register the site's authenticator; the code goes straight into the field and the tab is never brought to the screen. Result {\"status\":\"filled\"} (or {\"status\":\"registered\",\"filled\":false}: call request_otp again); you never see the code. Wait for the result before clicking the page's verify/continue button; do not batch that click with a still-pending code request. After clicking, inspect the next page: account/profile/trust/terms decisions require request_choice and are not successful sign-in yet. Never ask for codes in chat or ask_user, and never use takeover for a code unless the person asks for it.",
+            ApprovalTier::Read,
+            true,
+        )
     }
     fn visible(&self, ctx: &ToolEnv) -> bool {
         ctx.shared.registry.browser.available()
@@ -134,7 +148,7 @@ impl DaemonTool for RequestOtp {
                     .summary
                     .filter(|summary| !summary.trim().is_empty())
                     .unwrap_or_else(|| format!("Verification code for {origin}"));
-                Ok(ToolExec::Defer(TicketRequest {
+                Ok(ToolExec::Defer(Box::new(TicketRequest {
                     kind: TicketKind::SecretInput,
                     summary,
                     instructions: Some(channel_text(channel).into()),
@@ -150,7 +164,11 @@ impl DaemonTool for RequestOtp {
                         can_register: !ambiguous && can_register(channel, vault),
                     }),
                     otp_register: None,
-                }))
+                    login: None,
+                    choice: None,
+                    approval: None,
+                    pins: Vec::new(),
+                })))
             }
             .await;
             result.unwrap_or_else(|error: ToolError| ToolExec::Denied {
@@ -352,7 +370,12 @@ pub(crate) fn discard(ticket: &Ticket) {
 /// Every terminal path consults this — an answer, a rejection, expiry, a session stop and a
 /// subagent cancellation — so none can report `declined`, `rejected` or `expired` over a saved
 /// factor. Callers hold `ticket_gate`, so no attempt is still in flight.
+/// A `login` ticket, whose answer may keep a sign-in, is answered by
+/// [`super::login::interrupted`].
 pub(crate) async fn interrupted_registration(shared: &Shared, ticket: &Ticket) -> Option<Value> {
+    if ticket.login.is_some() {
+        return super::login::interrupted(shared, ticket).await;
+    }
     let registers =
         ticket.otp_register.is_some() || ticket.otp.as_ref().is_some_and(|otp| otp.can_register);
     if !registers {
@@ -367,9 +390,7 @@ pub(crate) async fn interrupted_registration(shared: &Shared, ticket: &Ticket) -
     };
     let saved = {
         let guard = shared.registry.vault.vault.lock().await;
-        guard
-            .as_ref()
-            .map(|vault| vault.totp_registered_by(&operation))
+        guard.as_ref().map(|vault| vault.registered_by(&operation))
     };
     match saved {
         Some(Ok(true)) => {
@@ -413,9 +434,9 @@ async fn enrollment_unchanged(
     let browser = shared
         .registry
         .browser
-        .session_browser(&ticket.session_id)
+        .target_browser(shared, &ticket.session_id, &pending.tab)
         .await
-        .ok_or("target_unavailable")?;
+        .map_err(|error| error.code)?;
     let tab_origin = Controller::origin(&browser, &ticket.session_id, &pending.tab)
         .await
         .map_err(|_| "target_unavailable")?;
@@ -498,7 +519,7 @@ pub(crate) async fn approve_registration(
     let site = match save_totp(shared, vault, &audit, origin, pending.totp, &operation) {
         Ok(site) => site,
         Err(error) if error.code == "audit_incomplete" => {
-            return Ok(json!({"status":"registered","filled":false}))
+            return Ok(json!({"status":"registered","filled":false}));
         }
         Err(error) => {
             // Nothing was saved, so there is no outcome to recover.
@@ -547,7 +568,13 @@ const SETUP_SOURCES: &str = r"(() => {
         for (const a of el.attributes) add(a.value);
         if ('value' in el && typeof el.value === 'string') add(el.value);
     }
-    const text = document.body ? document.body.innerText.slice(0, 50000) : '';
+    // Rendered setup keys may live only in readonly controls, not innerText.
+    const values = [...document.querySelectorAll('input,textarea')].filter((el) => {
+        const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+        return el.type !== 'password' && el.type !== 'hidden' && r.width > 1 && r.height > 1
+            && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity) > 0;
+    }).map((el) => String(el.value || '').slice(0, 4096));
+    const text = [...values, document.body ? document.body.innerText : ''].join('\n').slice(0, 50000);
     add(text);
     let best = null, area = 0;
     for (const el of document.querySelectorAll('img, canvas, svg')) {
@@ -722,13 +749,63 @@ fn displayed_forms(forms: &[Zeroizing<String>]) -> Redactor {
     Redactor::new(&secrets)
 }
 
+/// Protect setup material before snapshots, history or images can expose it. The
+/// caller holds the browser gate; this never registers or persists the factor.
+pub(crate) async fn protect_setup_page(
+    shared: &Shared,
+    browser: &openside_browser::Browser,
+    owner: &str,
+    tab: &str,
+) -> Result<(), ToolError> {
+    let sources = browser
+        .evaluate_isolated(owner, tab, openside_repl::SETUP_SCREENING.source)
+        .await
+        .map_err(|_| ToolError("Setup page could not be inspected".into()))?;
+    let mut forms: Vec<Zeroizing<String>> = sources["uris"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|text| Zeroizing::new(text.to_owned()))
+        .collect();
+    forms.extend(text_keys(sources["text"].as_str().unwrap_or("")));
+    let qr = sources["qr"] == true;
+    drop(sources);
+    let factors: Vec<Totp> = forms
+        .iter()
+        .filter_map(|form| parse_candidate(form).map(|(totp, _)| totp))
+        .collect();
+    {
+        let mut redactors = shared.registry.redactors.write();
+        if !forms.is_empty() {
+            redactors.push(displayed_forms(&forms));
+        }
+        redactors.extend(factors.iter().map(Totp::redactor));
+    }
+    // A QR-only setup page is still secret even before its key can be decoded.
+    if qr || !factors.is_empty() {
+        shared
+            .registry
+            .browser
+            .mark_secret(shared, browser, tab)
+            .await
+            .map_err(|_| ToolError("Browser document unavailable".into()))?;
+    }
+    Ok(())
+}
+
 pub(crate) struct RegisterAuthenticator;
 impl DaemonTool for RegisterAuthenticator {
     fn name(&self) -> &'static str {
         "register_authenticator"
     }
     fn spec(&self) -> openside_core::ToolSpec {
-        spec::<RegisterAuthenticatorArgs>(self.name(), "Use on a site's 2FA / authenticator setup page (it shows a QR code, an otpauth link or a text setup key). The daemon reads the setup key itself and asks the person, on their own device, to approve keeping it in the vault for this site; nothing is shown to you and the tab is never brought to the screen. Pass field_ref when the page asks for a confirmation code, and the current code is filled there on approval. Result {\"status\":\"registered\",\"filled\":true|false} (then click the page's confirm button yourself), {\"approved\":false,\"status\":\"declined\"}, or {\"status\":\"setup_key_lost\"} (call again). Later code prompts on this site: request_otp fills them without asking. Never read, copy or screenshot the setup key yourself.", ApprovalTier::Read, true)
+        spec::<RegisterAuthenticatorArgs>(
+            self.name(),
+            "Use on a site's 2FA / authenticator setup page (it shows a QR code, an otpauth link or a text setup key). The daemon reads the setup key itself and asks the person, on their own device, to approve keeping it in the vault for this site; nothing is shown to you and the tab is never brought to the screen. Pass field_ref when the page asks for a confirmation code, and the current code is filled there on approval. Result {\"status\":\"registered\",\"filled\":true|false} (then click the page's confirm button yourself), {\"approved\":false,\"status\":\"declined\"}, or {\"status\":\"setup_key_lost\"} (call again). Later code prompts on this site: request_otp fills them without asking. Never read, copy or screenshot the setup key yourself.",
+            ApprovalTier::Read,
+            true,
+        )
     }
     fn visible(&self, ctx: &ToolEnv) -> bool {
         ctx.shared.registry.browser.available() && ctx.shared.registry.vault.available()
@@ -760,7 +837,7 @@ impl DaemonTool for RegisterAuthenticator {
                 let args: RegisterAuthenticatorArgs = parse(&args)?;
                 let origin = approved_origin(ctx)?;
                 let controller = &ctx.shared.registry.browser;
-                let browser = controller.get(&ctx.shared).await?;
+                let browser = controller.for_session(&ctx.shared, &ctx.session).await?;
                 if Controller::origin(&browser, &ctx.session, &args.tab_id).await? != origin {
                     return Err(ToolError("Tab origin changed".into()));
                 }
@@ -867,7 +944,7 @@ impl DaemonTool for RegisterAuthenticator {
                     .issuer
                     .as_deref()
                     .map_or_else(|| origin.clone(), |issuer| format!("{issuer} ({origin})"));
-                Ok(ToolExec::Defer(TicketRequest {
+                Ok(ToolExec::Defer(Box::new(TicketRequest {
                     kind: TicketKind::Confirm,
                     summary: format!("Save the authenticator for {named} in the vault"),
                     instructions: Some("Approve to keep this site's authenticator in openside's vault, so its codes are filled for you from now on. Decline to discard it.".into()),
@@ -884,7 +961,11 @@ impl DaemonTool for RegisterAuthenticator {
                         issuer: key.issuer,
                         account: key.account,
                     }),
-                }))
+                    login: None,
+                    choice: None,
+                    approval: None,
+                    pins: Vec::new(),
+                })))
             }
             .await;
             result.unwrap_or_else(|error: ToolError| ToolExec::Denied {

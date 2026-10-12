@@ -83,6 +83,7 @@ fn backoff(quick_deaths: u32) -> Duration {
 impl Controller {
     /// Called with the browser slot locked, after the cached browser lost its transport.
     pub(super) async fn forget_dead_browser(&self, shared: &Shared, dead: Arc<Browser>) {
+        self.forget_dead_spaces(shared, &dead).await;
         self.forget_lost(shared, dead).await;
         self.asleep.lock().await.clear();
     }
@@ -240,6 +241,7 @@ mod tests {
             owner_session_id: Some("s".into()),
             discarded,
             unloaded: false,
+            browser_context_id: None,
         }
     }
 

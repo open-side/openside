@@ -7,7 +7,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use futures_util::future::BoxFuture;
 use openside_core::{ApprovalTier, SubagentControl, TicketId, ToolSpec};
@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
-    api::HttpError,
+    api::{Caller, HttpError},
     engine::{Action, Shared},
     persistence::{random_id, Result},
     tools::{self, DaemonTool, ToolEnv, ToolError, ToolExec},
@@ -29,6 +29,7 @@ use crate::{
 
 pub(crate) const DELEGATE: &str = "delegate";
 const TASK_SUMMARY_CHARS: usize = 500;
+const OUTPUT_SUMMARY_CHARS: usize = 4000;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -54,63 +55,100 @@ struct DelegateArgs {
 
 pub(crate) struct Delegate;
 
-impl Delegate {
-    fn admit(&self, args: DelegateArgs, ctx: &ToolEnv, session_model: String) -> ToolExec {
-        if args.task.trim().is_empty() {
-            return ToolExec::Denied {
-                reason: "Task is empty".into(),
-                hint: Some("Describe the subtask the subagent should complete".into()),
-            };
-        }
-        let models = &ctx.shared.config.loaded.config.models;
-        let model = args.model.unwrap_or_else(|| session_model.clone());
-        if model != session_model
-            && models.default.as_deref() != Some(model.as_str())
-            && !models.fallback.contains(&model)
-        {
-            return ToolExec::Denied {
-                reason: "model_not_allowed".into(),
-                hint: Some(
-                    "Omit model, or use this session's model or a configured fallback model".into(),
-                ),
-            };
-        }
-        let available: Vec<String> = ctx
-            .shared
-            .registry
-            .specs(ctx)
-            .into_iter()
-            .map(|spec| spec.name)
-            .filter(|name| name != DELEGATE)
-            .collect();
-        let tools = match args.tools {
-            None => available,
-            Some(requested) => {
-                if let Some(unknown) = requested.iter().find(|name| !available.contains(name)) {
-                    return ToolExec::Denied {
-                        reason: format!("Tool is not available to subagents: {unknown}"),
-                        hint: Some(format!("Choose from: {}", available.join(", "))),
-                    };
-                }
-                let mut tools = requested;
-                tools.dedup();
-                tools
-            }
+/// Admit a child: the daemon picks its id and checks its model and tools. Children never get
+/// `delegate` or the front agent's task tools.
+pub(crate) fn admit(
+    task: &str,
+    model: Option<String>,
+    tools: Option<Vec<String>>,
+    context: &'static str,
+    ctx: &ToolEnv,
+    session_model: String,
+) -> ToolExec {
+    if task.trim().is_empty() {
+        return ToolExec::Denied {
+            reason: "Task is empty".into(),
+            hint: Some("Describe the subtask the subagent should complete".into()),
         };
-        let context = match args.context.unwrap_or(Context::Fresh) {
-            Context::Fresh => "fresh",
-            Context::Fork => "fork",
-        };
-        ToolExec::Done {
-            for_model: json!({
-                "subagent_id": random_id(),
-                "model": model,
-                "tools": tools,
-                "context": context,
-            }),
-            for_app: None,
-        }
     }
+    let models = &ctx.shared.config.loaded.config.models;
+    let model = model.unwrap_or_else(|| session_model.clone());
+    if model != session_model
+        && models.default.as_deref() != Some(model.as_str())
+        && !models.fallback.contains(&model)
+    {
+        return ToolExec::Denied {
+            reason: "model_not_allowed".into(),
+            hint: Some(
+                "Omit model, or use this session's model or a configured fallback model".into(),
+            ),
+        };
+    }
+    let available: Vec<String> = ctx
+        .shared
+        .registry
+        .specs(ctx)
+        .into_iter()
+        .map(|spec| spec.name)
+        .filter(|name| name != DELEGATE && !crate::tasks::is_task_tool(name))
+        .collect();
+    let tools = match tools {
+        None => available,
+        Some(requested) => {
+            if let Some(unknown) = requested.iter().find(|name| !available.contains(name)) {
+                return ToolExec::Denied {
+                    reason: format!("Tool is not available to subagents: {unknown}"),
+                    hint: Some(format!("Choose from: {}", available.join(", "))),
+                };
+            }
+            let mut tools = requested;
+            tools.dedup();
+            tools
+        }
+    };
+    ToolExec::Done {
+        for_model: json!({
+            "subagent_id": random_id(),
+            "model": model,
+            "tools": tools,
+            "context": context,
+        }),
+        for_app: None,
+    }
+}
+
+/// Record `subagent.started` for an admitted child; the admission is returned unchanged.
+pub(crate) async fn record_start(
+    ctx: &ToolEnv,
+    task: &str,
+    admitted: ToolExec,
+    background: bool,
+) -> ToolExec {
+    let ToolExec::Done { for_model, .. } = &admitted else {
+        return admitted;
+    };
+    let field = |name: &str| for_model[name].clone();
+    let started = EventKind::SubagentStarted {
+        subagent_id: field("subagent_id").as_str().unwrap_or_default().into(),
+        parent_tool_call_id: ctx.tool_call_id.clone(),
+        task: summary(task),
+        model: field("model").as_str().unwrap_or_default().into(),
+        tools: serde_json::from_value(field("tools")).unwrap_or_default(),
+        background,
+    };
+    if ctx.shared.emit(&ctx.session, None, started).await.is_err() {
+        return ToolExec::Failed("Subagent could not be recorded".into());
+    }
+    admitted
+}
+
+pub(crate) async fn session_model(ctx: &ToolEnv) -> Option<String> {
+    ctx.shared
+        .db
+        .state(&ctx.session)
+        .await
+        .ok()
+        .map(|state| state.model)
 }
 
 impl DaemonTool for Delegate {
@@ -125,8 +163,9 @@ impl DaemonTool for Delegate {
             true,
         )
     }
-    fn visible(&self, _: &ToolEnv) -> bool {
-        true
+    fn visible(&self, ctx: &ToolEnv) -> bool {
+        // The front agent starts Tasks instead; Tasks never delegate.
+        !crate::tasks::front(&ctx.shared)
     }
     fn actions<'a>(
         &'a self,
@@ -145,27 +184,22 @@ impl DaemonTool for Delegate {
                 Ok(args) => args,
                 Err(error) => return ToolExec::Failed(error.0),
             };
-            let session_model = match ctx.shared.db.state(&ctx.session).await {
-                Ok(state) => state.model,
-                Err(_) => return ToolExec::Failed("Session state is unavailable".into()),
+            let Some(session_model) = session_model(ctx).await else {
+                return ToolExec::Failed("Session state is unavailable".into());
             };
-            let task = args.task.clone();
-            let admitted = self.admit(args, ctx, session_model);
-            let ToolExec::Done { for_model, .. } = &admitted else {
-                return admitted;
+            let context = match args.context.unwrap_or(Context::Fresh) {
+                Context::Fresh => "fresh",
+                Context::Fork => "fork",
             };
-            let field = |name: &str| for_model[name].clone();
-            let started = EventKind::SubagentStarted {
-                subagent_id: field("subagent_id").as_str().unwrap_or_default().into(),
-                parent_tool_call_id: ctx.tool_call_id.clone(),
-                task: summary(&task),
-                model: field("model").as_str().unwrap_or_default().into(),
-                tools: serde_json::from_value(field("tools")).unwrap_or_default(),
-            };
-            if ctx.shared.emit(&ctx.session, None, started).await.is_err() {
-                return ToolExec::Failed("Subagent could not be recorded".into());
-            }
-            admitted
+            let admitted = admit(
+                &args.task,
+                args.model,
+                args.tools,
+                context,
+                ctx,
+                session_model,
+            );
+            record_start(ctx, &args.task, admitted, false).await
         })
     }
 }
@@ -185,6 +219,7 @@ fn apply(subagents: &mut Vec<Subagent>, event: Event) {
             task,
             model,
             tools,
+            background,
         } => subagents.push(Subagent {
             id: subagent_id,
             parent_tool_call_id,
@@ -196,6 +231,8 @@ fn apply(subagents: &mut Vec<Subagent>, event: Event) {
             ended_at: None,
             reason: None,
             last_progress: None,
+            background,
+            output: None,
         }),
         EventKind::SubagentLifecycle {
             subagent_id,
@@ -221,12 +258,14 @@ fn apply(subagents: &mut Vec<Subagent>, event: Event) {
             subagent_id,
             status,
             reason,
+            output,
         } => {
             if let Some(subagent) = find(subagents, &subagent_id) {
                 if !subagent.status.is_terminal() {
                     subagent.status = status;
                     subagent.ended_at = Some(event.ts);
                     subagent.reason = reason;
+                    subagent.output = output;
                 }
             }
         }
@@ -291,6 +330,7 @@ pub(crate) async fn lifecycle(
     session: &SessionId,
     subagent_id: String,
     status: String,
+    output: Option<String>,
 ) -> Result<Option<EventKind>> {
     let Some(current) = get(shared, session, &subagent_id).await? else {
         return Ok(None);
@@ -301,11 +341,18 @@ pub(crate) async fn lifecycle(
     if current.status.is_terminal() {
         return Ok(None);
     }
+    if next.is_terminal() {
+        shared.host_calls.cancel(session, &subagent_id).await;
+        crate::browser_state::finish(shared, session, &subagent_id).await;
+    }
     Ok(Some(if next.is_terminal() {
         EventKind::SubagentEnded {
             subagent_id,
             status: next,
             reason: (next == SubagentStatus::Failed).then(|| "failed".into()),
+            output: output
+                .filter(|_| next == SubagentStatus::Completed)
+                .map(|text| text.chars().take(OUTPUT_SUMMARY_CHARS).collect()),
         }
     } else {
         EventKind::SubagentLifecycle {
@@ -320,16 +367,20 @@ pub(crate) async fn lifecycle(
 /// respect to `tickets::open`, which rechecks liveness under the same gate. A crash
 /// between the terminal event and the rejections is completed by the next call (or by
 /// `repair` at startup): an already-ended child still gets its leftover tickets closed.
-async fn end(
+pub(crate) async fn end(
     shared: &Shared,
     session: &SessionId,
     id: &str,
     status: SubagentStatus,
     reason: &str,
 ) -> Result<bool> {
+    // Drain host effects before publishing the terminal state or releasing the tab ledger.
+    // Do not hold ticket_gate here: a cancelled tool may still be finishing ticket admission.
+    shared.host_calls.cancel(session, id).await;
     let _gate = shared.ticket_gate.lock().await;
     let ended = match get(shared, session, id).await? {
         Some(child) if !child.status.is_terminal() => {
+            crate::browser_state::finish(shared, session, id).await;
             shared
                 .emit(
                     session,
@@ -338,6 +389,7 @@ async fn end(
                         subagent_id: id.into(),
                         status,
                         reason: Some(reason.into()),
+                        output: None,
                     },
                 )
                 .await?;
@@ -545,6 +597,7 @@ pub(crate) async fn cancel_route(
 
 pub(crate) async fn steer_route(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Path((id, sid)): Path<(String, String)>,
     Json(request): Json<SteerSubagentRequest>,
 ) -> ApiResult<(StatusCode, Json<Subagent>)> {
@@ -559,10 +612,18 @@ pub(crate) async fn steer_route(
         return Err(HttpError::invalid_value());
     }
     live(&existing(&s, &id, &sid).await?)?;
+    caller.record_driver(&s, &id).await?;
     s.command(
         &id,
         Action::Subagent(sid.clone(), SubagentControl::Steer { text: request.text }),
     )
-    .await?;
+    .await
+    .map_err(|error| {
+        if error.to_string() == "subagent_finished" {
+            HttpError(StatusCode::CONFLICT, "subagent_finished")
+        } else {
+            HttpError::from(error)
+        }
+    })?;
     Ok((StatusCode::ACCEPTED, Json(existing(&s, &id, &sid).await?)))
 }

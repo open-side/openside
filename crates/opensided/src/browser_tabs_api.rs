@@ -72,6 +72,7 @@ mod tests {
             owner_session_id: Some(owner.into()),
             discarded: false,
             unloaded: false,
+            browser_context_id: None,
         };
         let tabs = public_tabs(
             vec![

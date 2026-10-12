@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,11 +67,26 @@ struct Generation {
     value: u64,
     tainted: bool,
 }
+
+struct Thumbnail {
+    id: String,
+    session: SessionId,
+    tab: String,
+    document: String,
+    generation: u64,
+    created: Instant,
+    jpeg: axum::body::Bytes,
+}
+
+const THUMBNAIL_TTL: Duration = Duration::from_secs(600);
+const MAX_THUMBNAILS: usize = 64;
+const MAX_THUMBNAIL_BYTES: usize = 128 * 1024;
 #[derive(Default)]
 pub(crate) struct Registry {
     feeds: parking_lot::Mutex<HashMap<SessionId, Arc<Feed>>>,
     captures: parking_lot::Mutex<HashMap<(SessionId, String), Arc<Screencast>>>,
     generations: parking_lot::Mutex<HashMap<String, Generation>>,
+    thumbnails: parking_lot::Mutex<VecDeque<Thumbnail>>,
 }
 impl Registry {
     fn invalidate(&self, tab: &str, tainted: bool) {
@@ -81,6 +96,7 @@ impl Registry {
             generation.value = generation.value.wrapping_add(1);
             generation.tainted |= tainted;
         }
+        self.thumbnails.lock().retain(|image| image.tab != tab);
         self.captures.lock().retain(|(_, captured), cast| {
             if captured == tab {
                 cast.stop();
@@ -116,11 +132,27 @@ impl Registry {
 }
 
 pub(crate) fn committed(s: &Shared, event: &Event) {
+    if matches!(
+        event.kind,
+        EventKind::SessionUpdated {
+            archived: Some(true),
+            ..
+        }
+    ) {
+        s.previews
+            .thumbnails
+            .lock()
+            .retain(|image| image.session != event.session_id);
+    }
     let reason = match event.kind {
         EventKind::SessionStopped {} => PreviewEndReason::SessionStopped,
         EventKind::SessionDeleted {} => PreviewEndReason::SessionDeleted,
         _ => return,
     };
+    s.previews
+        .thumbnails
+        .lock()
+        .retain(|image| image.session != event.session_id);
     let feed = s.previews.feeds.lock().get(&event.session_id).cloned();
     if let Some(feed) = feed {
         s.previews.finish(&event.session_id, &feed, reason);
@@ -131,6 +163,130 @@ pub(crate) fn yield_tab(s: &Shared, _: &SessionId, tab: &str) {
 }
 pub(crate) fn withhold_tab(s: &Shared, tab: &str) {
     s.previews.invalidate(tab, true);
+}
+
+pub(crate) async fn capture_thumbnail(
+    s: &Shared,
+    session: &SessionId,
+    tab: &str,
+) -> Option<String> {
+    let _gate = s.registry.browser.gate.lock().await;
+    let state = s.db.state(session).await.ok()?;
+    if state.incognito
+        || state.deleted
+        || state.archived
+        || state.status == SessionStatus::Stopped
+        || s.registry.browser.tab_tainted(tab).await
+        || paused(s, session, tab).await
+    {
+        return None;
+    }
+    let browser = s.registry.browser.session_browser(session).await?;
+    let document = browser.document_lifetime_id(tab).await.ok()?;
+    let (generation, tainted) = s.previews.generation(tab);
+    if tainted {
+        return None;
+    }
+    let jpeg = tokio::time::timeout(
+        Duration::from_secs(2),
+        browser.thumbnail(session.as_str(), tab),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if jpeg.len() > MAX_THUMBNAIL_BYTES
+        || !jpeg.starts_with(&[0xff, 0xd8])
+        || browser.document_lifetime_id(tab).await.ok().as_deref() != Some(&document)
+        || s.registry.browser.tab_tainted(tab).await
+    {
+        return None;
+    }
+    let generations = s.previews.generations.lock();
+    if !generations
+        .get(tab)
+        .is_some_and(|current| current.value == generation && !current.tainted)
+    {
+        return None;
+    }
+    let id = crate::persistence::random_id();
+    let mut images = s.previews.thumbnails.lock();
+    images.retain(|image| image.created.elapsed() < THUMBNAIL_TTL);
+    if images.len() >= MAX_THUMBNAILS {
+        images.pop_front();
+    }
+    images.push_back(Thumbnail {
+        id: id.clone(),
+        session: session.clone(),
+        tab: tab.to_owned(),
+        document,
+        generation,
+        created: Instant::now(),
+        jpeg: jpeg.into(),
+    });
+    Some(id)
+}
+
+pub(crate) async fn thumbnail(
+    State(s): State<Shared>,
+    Path((id, thumbnail_id)): Path<(String, String)>,
+) -> Result<Response, HttpError> {
+    let session = SessionId::new(id);
+    let state =
+        s.db.state(&session)
+            .await
+            .map_err(|_| HttpError::not_found())?;
+    if state.incognito || state.deleted || state.archived || state.status == SessionStatus::Stopped
+    {
+        return Err(HttpError::not_found());
+    }
+    let image = s
+        .previews
+        .thumbnails
+        .lock()
+        .iter()
+        .find(|image| {
+            image.id == thumbnail_id
+                && image.session == session
+                && image.created.elapsed() < THUMBNAIL_TTL
+        })
+        .map(|image| {
+            (
+                image.tab.clone(),
+                image.document.clone(),
+                image.generation,
+                image.jpeg.clone(),
+            )
+        })
+        .ok_or_else(HttpError::not_found)?;
+    let _gate = s.registry.browser.gate.lock().await;
+    let browser = s
+        .registry
+        .browser
+        .session_browser(&session)
+        .await
+        .ok_or_else(HttpError::not_found)?;
+    if s.registry.browser.tab_tainted(&image.0).await
+        || paused(&s, &session, &image.0).await
+        || browser.document_lifetime_id(&image.0).await.ok().as_deref() != Some(&image.1)
+    {
+        return Err(HttpError::not_found());
+    }
+    let generations = s.previews.generations.lock();
+    if !generations
+        .get(&image.0)
+        .is_some_and(|current| current.value == image.2 && !current.tainted)
+    {
+        return Err(HttpError::not_found());
+    }
+    Ok((
+        [
+            ("Content-Type", "image/jpeg"),
+            ("Cache-Control", "no-store"),
+            ("X-Content-Type-Options", "nosniff"),
+        ],
+        image.3,
+    )
+        .into_response())
 }
 
 struct Capture {

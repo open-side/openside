@@ -9,6 +9,7 @@ async fn start_child(daemon: &Daemon, session: &SessionId, id: &str) {
             task: "work".into(),
             model: "test/model".into(),
             tools: vec!["write".into()],
+            background: false,
         },
         EventKind::SubagentLifecycle {
             subagent_id: id.into(),
@@ -32,6 +33,7 @@ async fn child_ticket(daemon: &Daemon, session: &SessionId, child: &str) -> Tick
         request(),
         None,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -48,6 +50,10 @@ fn request() -> TicketRequest {
         resume_when: None,
         otp: None,
         otp_register: None,
+        login: None,
+        choice: None,
+        approval: None,
+        pins: Vec::new(),
     }
 }
 
@@ -152,6 +158,7 @@ async fn cancelled_child_cannot_open_or_keep_tickets() {
         request(),
         None,
         None,
+        None,
     )
     .await;
     assert_eq!(refused.unwrap_err().to_string(), "subagent_finished");
@@ -223,6 +230,7 @@ async fn startup_closes_tickets_left_by_a_half_recorded_child_end() {
                 subagent_id: "child".into(),
                 status: SubagentStatus::Cancelled,
                 reason: Some("cancelled".into()),
+                output: None,
             },
         )
         .await

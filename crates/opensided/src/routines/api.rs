@@ -3,17 +3,17 @@ use std::sync::Arc;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use openside_proto::{
-    CreateRoutineRequest, Routine, RoutineDraft, RoutineList, RoutineSuggestionList, RunList,
-    RunRecord, UpdateRoutineRequest,
+    CreateRoutineRequest, Routine, RoutineAction, RoutineDraft, RoutineList, RoutineSuggestionList,
+    RunList, RunRecord, UpdateRoutineRequest,
 };
 use openside_sched::{UserMessage, DEFAULT_RUN_LIMIT, ROUTINE_MESSAGE_PREFIX};
 use serde::Deserialize;
 
 use super::{ApiFailure, Sched};
-use crate::engine::Shared;
+use crate::{api::Caller, engine::Shared};
 
 type Result<T, E = ApiFailure> = std::result::Result<T, E>;
 
@@ -27,10 +27,30 @@ pub(crate) async fn list(State(s): State<Shared>) -> Result<Json<RoutineList>> {
     }))
 }
 
+/// Routines run later with the daemon's authority, so a device may not use one to get past
+/// the limits that `POST /v1/sessions` applies to it.
+fn ensure_not_widening(s: &Shared, caller: &Caller, action: &RoutineAction) -> Result<()> {
+    if let RoutineAction::NewSession {
+        mode, workspace, ..
+    } = action
+    {
+        if caller.widens(s, *mode, workspace.as_deref()) {
+            return Err(ApiFailure::new(
+                StatusCode::FORBIDDEN,
+                "local_socket_required",
+                "local socket required",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn create(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Json(request): Json<CreateRoutineRequest>,
 ) -> Result<(StatusCode, Json<Routine>)> {
+    ensure_not_widening(&s, &caller, &request.action)?;
     Ok((
         StatusCode::CREATED,
         Json(scheduler(&s)?.create(request).await?),
@@ -43,9 +63,13 @@ pub(crate) async fn get(State(s): State<Shared>, Path(id): Path<String>) -> Resu
 
 pub(crate) async fn patch(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
     Json(request): Json<UpdateRoutineRequest>,
 ) -> Result<Json<Routine>> {
+    if let Some(action) = &request.action {
+        ensure_not_widening(&s, &caller, action)?;
+    }
     Ok(Json(scheduler(&s)?.update(&id, request).await?))
 }
 

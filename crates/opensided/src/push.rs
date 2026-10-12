@@ -390,8 +390,11 @@ fn ticket_notification(ticket: &Ticket) -> PushNotification {
         TicketKind::Confirm => "Approval needed",
         TicketKind::Info => "Question from the agent",
         TicketKind::SecretInput => "Code needed",
+        TicketKind::DeviceApproval if ticket.approval.is_some() => "Approve on your phone",
         TicketKind::DeviceApproval => "Approve on your device",
         TicketKind::Takeover => "Action needed",
+        TicketKind::Login => "Sign-in needed",
+        TicketKind::Choice => "Choice needed",
     };
     PushNotification {
         kind: "ticket".into(),
