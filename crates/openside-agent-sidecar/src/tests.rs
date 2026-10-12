@@ -261,6 +261,15 @@ async fn every_observation_maps_to_the_runtime_boundary() {
             RuntimeEvent::SubagentLifecycle {
                 subagent_id: "child".into(),
                 status: "running".into(),
+                output: None,
+            },
+        ),
+        (
+            json!({"kind":"subagent.lifecycle","subagent_id":"child","status":"completed","output":"done"}),
+            RuntimeEvent::SubagentLifecycle {
+                subagent_id: "child".into(),
+                status: "completed".into(),
+                output: Some("done".into()),
             },
         ),
         (
@@ -376,18 +385,23 @@ async fn messages_abort_and_all_ticket_resolutions_serialize_exactly() {
         peer.recv().await,
         json!({"v":1,"type":"subagent_cancel","subagent_id":"child"})
     );
-    connection
-        .control_subagent(
+    let (result, message) = tokio::join!(
+        connection.control_subagent(
             "child".into(),
             openside_core::SubagentControl::Steer {
-                text: "focus".into(),
+                text: "focus".into()
             },
-        )
-        .await
-        .unwrap();
+        ),
+        async {
+            let message = peer.recv().await;
+            peer.send(json!({"v":1,"type":"subagent_steer_result","control_id":message["control_id"],"delivered":true})).await;
+            message
+        }
+    );
+    result.unwrap();
     assert_eq!(
-        peer.recv().await,
-        json!({"v":1,"type":"subagent_steer","subagent_id":"child","text":"focus"})
+        message,
+        json!({"v":1,"type":"subagent_steer","subagent_id":"child","text":"focus","control_id":"steer-1"})
     );
     connection.discard_deferred().await.unwrap();
     assert_eq!(peer.recv().await, json!({"v":1,"type":"discard_deferred"}));
@@ -1198,7 +1212,11 @@ async fn text_ingress_cap_is_utf8_bounded_and_rejection_preserves_connection() {
                 text: under.clone()
             }
         ),
-        peer.recv(),
+        async {
+            let message = peer.recv().await;
+            peer.send(json!({"v":1,"type":"subagent_steer_result","control_id":message["control_id"],"delivered":true})).await;
+            message
+        },
     );
     sent.unwrap();
     assert_eq!(message["type"], "subagent_steer");
@@ -1234,4 +1252,37 @@ async fn largest_allowed_text_and_attachments_fit_the_same_wire_line() {
     assert!(serde_json::to_vec(&message).unwrap().len() <= MAX_LINE_BYTES);
     assert_eq!(message["text"], text);
     assert_eq!(message["parts"][0]["data_base64"], expected);
+}
+
+#[tokio::test]
+async fn steering_waits_for_admission_and_rejects_a_finished_destination_without_disconnect() {
+    use openside_core::SubagentControl;
+    let (mut connection, mut peer) = connected(Arc::new(Echo)).await;
+    for delivered in [false, true] {
+        let (result, ()) = tokio::join!(
+            connection.control_subagent(
+                "child".into(),
+                SubagentControl::Steer {
+                    text: "focus".into()
+                }
+            ),
+            async {
+                let message = peer.recv().await;
+                // An unrelated acknowledgement cannot turn an outstanding admission into success.
+                peer.send(json!({"v":1,"type":"subagent_steer_result","control_id":"stale","delivered":true})).await;
+                peer.send(json!({"v":1,"type":"event","event":{"kind":"subagent.lifecycle","subagent_id":"child","status":"completed"}})).await;
+                peer.send(json!({"v":1,"type":"subagent_steer_result","control_id":message["control_id"],"delivered":delivered})).await;
+            }
+        );
+        if delivered {
+            result.unwrap();
+        } else {
+            assert!(
+                matches!(result, Err(RuntimeError::Rejected(reason)) if reason == "subagent_finished")
+            );
+        }
+        assert!(
+            matches!(connection.next_event().await, Some(RuntimeEvent::SubagentLifecycle { status, .. }) if status == "completed")
+        );
+    }
 }

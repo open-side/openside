@@ -50,6 +50,7 @@ pub(crate) enum DaemonMessage {
     SubagentSteer {
         subagent_id: String,
         text: String,
+        control_id: String,
     },
     DiscardDeferred,
     Shutdown,
@@ -173,6 +174,10 @@ pub(crate) enum SidecarMessage {
         subagent: Option<String>,
         approval_ticket: Option<TicketId>,
     },
+    SubagentSteerResult {
+        control_id: String,
+        delivered: bool,
+    },
     Deferred {
         calls: Vec<Deferred>,
     },
@@ -243,7 +248,12 @@ pub(crate) enum Event {
     #[serde(rename = "thinking.delta")]
     ThinkingDelta { text: String },
     #[serde(rename = "subagent.lifecycle")]
-    SubagentLifecycle { subagent_id: String, status: String },
+    SubagentLifecycle {
+        subagent_id: String,
+        status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
     #[serde(rename = "subagent.progress")]
     SubagentProgress {
         subagent_id: String,

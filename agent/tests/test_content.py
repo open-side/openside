@@ -544,13 +544,19 @@ async def test_child_steer_text_cap_matches_parent(tmp_path, monkeypatch):
     async with fake_daemon() as (daemon, session):
         await defer_child(daemon)
         await daemon.send(
-            "subagent_steer", subagent_id="sub-1", text="x" * (MAX_USER_TEXT_BYTES + 1)
+            "subagent_steer",
+            subagent_id="sub-1",
+            text="x" * (MAX_USER_TEXT_BYTES + 1),
+            control_id="over",
         )
         error = await daemon.until("error")
         assert error["code"] == "bad_request" and error["fatal"] is False
         assert not session.children["sub-1"].state.steer_buffer
         await daemon.send(
-            "subagent_steer", subagent_id="sub-1", text="x" * (MAX_USER_TEXT_BYTES - 1)
+            "subagent_steer",
+            subagent_id="sub-1",
+            text="x" * (MAX_USER_TEXT_BYTES - 1),
+            control_id="under",
         )
         progress = await daemon.until("event", kind="subagent.progress")
         assert progress["event"]["progress"]["kind"] == "steer_queued"

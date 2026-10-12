@@ -202,7 +202,10 @@ class Daemon:
                 await self.peer.send("subagent_cancel", subagent_id=subagent_id)
             else:
                 await self.peer.send(
-                    "subagent_steer", subagent_id=subagent_id, text="steer"
+                    "subagent_steer",
+                    subagent_id=subagent_id,
+                    text="steer",
+                    control_id="liveness",
                 )
 
 

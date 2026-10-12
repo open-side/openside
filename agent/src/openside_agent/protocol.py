@@ -99,6 +99,7 @@ class SubagentSteer(Envelope):
     type: Literal["subagent_steer"] = "subagent_steer"
     subagent_id: str
     text: str
+    control_id: str
 
 
 class DiscardDeferred(Envelope):
@@ -220,6 +221,8 @@ class SubagentLifecycle(WireModel):
     kind: Literal["subagent.lifecycle"] = "subagent.lifecycle"
     subagent_id: str
     status: str
+    # Final answer, only with status "completed".
+    output: str | None = None
 
 
 class SubagentProgress(WireModel):
@@ -312,6 +315,12 @@ class Error(Envelope):
     message_id: str | None = None
 
 
+class SubagentSteerResult(Envelope):
+    type: Literal["subagent_steer_result"] = "subagent_steer_result"
+    control_id: str
+    delivered: bool
+
+
 class Bye(Envelope):
     type: Literal["bye"] = "bye"
 
@@ -350,6 +359,7 @@ Outbound = Annotated[
     | Settled
     | ContextCompacted
     | Error
+    | SubagentSteerResult
     | Bye,
     Field(discriminator="type"),
 ]

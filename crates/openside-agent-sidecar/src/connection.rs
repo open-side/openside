@@ -85,6 +85,8 @@ pub struct Connection {
     backlog: VecDeque<RuntimeEvent>,
     bye: watch::Receiver<bool>,
     driver: JoinHandle<()>,
+    steer_ack: watch::Receiver<Option<(String, bool)>>,
+    next_control_id: u64,
 }
 
 impl Connection {
@@ -141,6 +143,7 @@ impl Connection {
         let (events_tx, events) = mpsc::channel(EVENT_CAPACITY);
         let (ready_tx, ready_rx) = oneshot::channel();
         let (bye_tx, bye) = watch::channel(false);
+        let (steer_tx, steer_ack) = watch::channel(None);
         let driver_writer = writer.clone();
         let driver = tokio::spawn(async move {
             drive(
@@ -148,9 +151,12 @@ impl Connection {
                 driver_writer,
                 tools,
                 expected,
-                events_tx,
-                ready_tx,
-                bye_tx,
+                DriveChannels {
+                    events: events_tx,
+                    ready: ready_tx,
+                    bye: bye_tx,
+                    steer: steer_tx,
+                },
             )
             .await;
         });
@@ -166,6 +172,8 @@ impl Connection {
             backlog: VecDeque::new(),
             bye,
             driver,
+            steer_ack,
+            next_control_id: 0,
         };
         connection.info = ready_rx.await.map_err(|_| disconnected())??;
         Ok(connection)
@@ -239,7 +247,7 @@ impl Connection {
         .await
     }
 
-    /// Cancel or steer a child; the sidecar ignores unknown and finished children.
+    /// Steering succeeds only after the destination acknowledges lifecycle admission.
     pub async fn control_subagent(
         &mut self,
         subagent_id: String,
@@ -248,11 +256,41 @@ impl Connection {
         if matches!(&control, SubagentControl::Steer { text } if text.len() > MAX_USER_TEXT_BYTES) {
             return Err(RuntimeError::Rejected("message text exceeds 1 MiB".into()));
         }
-        self.write(match control {
-            SubagentControl::Cancel => DaemonMessage::SubagentCancel { subagent_id },
-            SubagentControl::Steer { text } => DaemonMessage::SubagentSteer { subagent_id, text },
+        let SubagentControl::Steer { text } = control else {
+            return self
+                .write(DaemonMessage::SubagentCancel { subagent_id })
+                .await;
+        };
+        self.next_control_id += 1;
+        let control_id = format!("steer-{}", self.next_control_id);
+        self.write(DaemonMessage::SubagentSteer {
+            subagent_id,
+            text,
+            control_id: control_id.clone(),
         })
-        .await
+        .await?;
+        let acknowledgement = async {
+            loop {
+                if let Some((id, delivered)) = self.steer_ack.borrow_and_update().clone() {
+                    if id == control_id {
+                        return if delivered {
+                            Ok(())
+                        } else {
+                            Err(RuntimeError::Rejected("subagent_finished".into()))
+                        };
+                    }
+                }
+                tokio::select! {
+                    result = self.steer_ack.changed() => result.map_err(|_| disconnected())?,
+                    event = self.events.recv() => {
+                        self.backlog.push_back(event.ok_or_else(disconnected)?);
+                    }
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(30), acknowledgement)
+            .await
+            .map_err(|_| RuntimeError::Unavailable("steer acknowledgement timed out".into()))?
     }
 
     /// Drop the restored continuation; its terminal output is already durable.
@@ -541,16 +579,27 @@ async fn read_message<R: AsyncRead + Unpin>(
     }
 }
 
+struct DriveChannels {
+    events: mpsc::Sender<RuntimeEvent>,
+    ready: oneshot::Sender<Result<SessionInfo, RuntimeError>>,
+    bye: watch::Sender<bool>,
+    steer: watch::Sender<Option<(String, bool)>>,
+}
+
 async fn drive<R: AsyncRead + Unpin>(
     mut lines: Lines<R>,
     writer: Writer,
     tools: Arc<dyn HostToolHandler>,
     expected: HashSet<String>,
-    events: mpsc::Sender<RuntimeEvent>,
-    ready_tx: oneshot::Sender<Result<SessionInfo, RuntimeError>>,
-    bye: watch::Sender<bool>,
+    channels: DriveChannels,
 ) {
-    let mut ready = Some(ready_tx);
+    let DriveChannels {
+        events,
+        ready,
+        bye,
+        steer,
+    } = channels;
+    let mut ready = Some(ready);
     let mut calls = JoinSet::new();
     let mut ids = RpcIds::default();
     loop {
@@ -683,6 +732,12 @@ async fn drive<R: AsyncRead + Unpin>(
                     (rpc_id, result)
                 });
             }
+            SidecarMessage::SubagentSteerResult {
+                control_id,
+                delivered,
+            } => {
+                let _ = steer.send(Some((control_id, delivered)));
+            }
             SidecarMessage::Error {
                 code,
                 message,
@@ -799,9 +854,11 @@ fn runtime_event(message: SidecarMessage) -> Option<RuntimeEvent> {
             Event::SubagentLifecycle {
                 subagent_id,
                 status,
+                output,
             } => RuntimeEvent::SubagentLifecycle {
                 subagent_id,
                 status,
+                output,
             },
             Event::SubagentProgress {
                 subagent_id,

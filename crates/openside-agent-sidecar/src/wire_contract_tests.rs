@@ -58,6 +58,7 @@ fn sidecar_type(message: &SidecarMessage) -> &'static str {
         SidecarMessage::Hello { .. } => "hello",
         SidecarMessage::Ready { .. } => "ready",
         SidecarMessage::Event { .. } => "event",
+        SidecarMessage::SubagentSteerResult { .. } => "subagent_steer_result",
         SidecarMessage::MessageAccepted { .. } => "message_accepted",
         SidecarMessage::MessageResult { .. } => "message_result",
         SidecarMessage::ToolCall { .. } => "tool_call",
@@ -147,6 +148,7 @@ fn daemon_samples() -> Vec<DaemonMessage> {
         DaemonMessage::SubagentSteer {
             subagent_id: "sub-1".into(),
             text: "focus".into(),
+            control_id: "steer-1".into(),
         },
         DaemonMessage::DiscardDeferred,
         DaemonMessage::Shutdown,
@@ -249,6 +251,14 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
         SidecarMessage::ContextCompacted {
             subagent: Some("sub-1".into()),
         },
+        SidecarMessage::SubagentSteerResult {
+            control_id: "steer-1".into(),
+            delivered: true,
+        },
+        SidecarMessage::SubagentSteerResult {
+            control_id: "steer-2".into(),
+            delivered: false,
+        },
         SidecarMessage::Bye,
     ];
     for outcome in [
@@ -288,6 +298,12 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
         Event::SubagentLifecycle {
             subagent_id: "sub-1".into(),
             status: "running".into(),
+            output: None,
+        },
+        Event::SubagentLifecycle {
+            subagent_id: "sub-1".into(),
+            status: "completed".into(),
+            output: Some("done".into()),
         },
         Event::SubagentProgress {
             subagent_id: "sub-1".into(),

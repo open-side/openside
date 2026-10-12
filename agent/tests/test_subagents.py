@@ -198,7 +198,10 @@ async def test_cancel_waiting_child_returns_cancelled_to_parent(tmp_path, monkey
         )
         # Cancelling a finished child is harmless and reports no error.
         await daemon.send("subagent_cancel", subagent_id="sub-1")
-        await daemon.send("subagent_steer", subagent_id="sub-1", text="late")
+        await daemon.send(
+            "subagent_steer", subagent_id="sub-1", text="late", control_id="late"
+        )
+        assert (await daemon.until("subagent_steer_result"))["delivered"] is False
         await daemon.user("after", "after cancel")
         await daemon.until("settled")
         assert not any(item["type"] == "error" for item in daemon.outputs)
@@ -250,7 +253,9 @@ async def test_steer_injects_at_child_model_request_boundary(tmp_path, monkeypat
         delegate = await daemon.until("tool_call")
         await daemon.result(delegate, admission(delegate))
         await daemon.until("event", kind="subagent.progress")
-        await daemon.send("subagent_steer", subagent_id="sub-1", text="focus on X")
+        await daemon.send(
+            "subagent_steer", subagent_id="sub-1", text="focus on X", control_id="live"
+        )
         probe = await daemon.until("tool_call")
         await daemon.result(probe, {"status": "done", "for_model": "probed"})
         await daemon.until("settled")

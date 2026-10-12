@@ -40,7 +40,7 @@ class FakeDaemon:
                 return message
             assert message["type"] != "error" or not message["fatal"], message
 
-    async def open(self, *, tools=None, resume_state=None):
+    async def open(self, *, tools=None, resume_state=None, agent=None):
         model = TestModel()
         await self.send(
             "open",
@@ -49,7 +49,7 @@ class FakeDaemon:
             system_prompt_parts=["Use daemon tools only."],
             tools=tools or [],
             resume_state=resume_state,
-            config={"credentials": {}, "agent": {}},
+            config={"credentials": {}, "agent": agent or {}},
         )
         return await self.until("ready")
 

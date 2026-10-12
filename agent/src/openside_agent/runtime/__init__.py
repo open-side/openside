@@ -70,6 +70,7 @@ from openside_agent.protocol import (
     SubagentLifecycle,
     SubagentProgress,
     SubagentSteer,
+    SubagentSteerResult,
     ThinkingDelta,
     TicketResolved,
     ToolCall,
@@ -93,6 +94,7 @@ from openside_agent.runtime.state import (
     load_messages,
 )
 from openside_agent.runtime.subagents import (
+    FRONT_INSTRUCTIONS,
     SUBAGENT_INSTRUCTIONS,
     Admission,
     Child,
@@ -189,6 +191,7 @@ class Session:
         self.pending: dict[str, PendingCall] = {}
         self.pending_delegates: dict[str, PendingDelegate] = {}
         self.children: dict[str, Child] = {}
+        self.front = False
         self.retries = 3
         self.steer_buffer: deque[UserMessage] = deque()
         self.queue: deque[UserMessage] = deque()
@@ -253,13 +256,23 @@ class Session:
     async def open(self, spec: Open) -> None:
         start = time.monotonic()
         self.spec = spec
-        self.expected_tools = {tool.name for tool in spec.tools}
+        all_tools = {tool.name for tool in spec.tools}
+        self.front = spec.config.agent.get("orchestration") == "front"
+        front_tools = spec.config.agent.get("front_tools", [])
+        if not isinstance(front_tools, list) or not all(
+            isinstance(name, str) and name in all_tools
+            for name in cast(list[Any], front_tools)
+        ):
+            raise ValueError("Invalid front tool list")
+        self.expected_tools = (
+            set(cast(list[str], front_tools)) if self.front else all_tools
+        )
         self.skill_names = (
             index_names(spec.system_prompt_parts)
             if SKILL_TOOL in self.expected_tools
             else []
         )
-        if len(self.expected_tools) != len(spec.tools):
+        if len(all_tools) != len(spec.tools):
             await self.error("tool_gate", "Duplicate daemon tool names", fatal=True)
             return
         cursor = 0
@@ -308,8 +321,11 @@ class Session:
         elif self.model_override is not None:
             model = self.model_override
         else:
+            front_model = spec.config.agent.get("front_model")
             model = await providers.build_model(
-                spec.model.id,
+                front_model
+                if self.front and isinstance(front_model, str)
+                else spec.model.id,
                 spec.model.fallback,
                 spec.config.credentials,
                 session_id=spec.session,
@@ -329,13 +345,22 @@ class Session:
             model,
             output_type=[str, DeferredToolRequests],
             deps_type=type(None),
-            instructions=spec.system_prompt_parts,
+            instructions=(
+                [*spec.system_prompt_parts, FRONT_INSTRUCTIONS]
+                if self.front
+                else spec.system_prompt_parts
+            ),
             toolsets=[
                 proxy_toolset(
-                    spec.tools,
+                    [tool for tool in spec.tools if tool.name in self.expected_tools],
                     self.reverse_call,
                     retries=retries,
-                    continuations={"delegate": self.delegate},
+                    continuations={
+                        "delegate": self.delegate,
+                        "task_start": self.task_start,
+                        "task_steer": self.task_steer,
+                        "task_cancel": self.task_cancel,
+                    },
                 )
             ],
             capabilities=capabilities,
@@ -362,7 +387,8 @@ class Session:
             return
         await self.connection.send(
             Ready(
-                tools=sorted(exposed),
+                # Front mode: the front agent exposes its share; Tasks get the rest.
+                tools=sorted(all_tools),
                 pending_deferred=self.deferred_wire(),
                 startup_ms=int((time.monotonic() - start) * 1000),
             )
@@ -417,7 +443,11 @@ class Session:
         return bool(self.pending or self.pending_delegates)
 
     def children_active(self) -> bool:
-        return any(child.active for child in self.children.values())
+        """Foreground children only: a background Task never keeps the session busy."""
+        return any(
+            child.active and not child.state.background
+            for child in self.children.values()
+        )
 
     def start_next(self, *, allow_steer: bool) -> bool:
         if self.shutting_down or self.fatal or self.waiting():
@@ -709,6 +739,48 @@ class Session:
             raise CallDeferred(metadata={"subagent_id": child.id})
         return child.state.result
 
+    async def task_start(
+        self, ctx: RunContext[None], args: dict[str, Any], admitted: Any
+    ) -> Any:
+        """Start the admitted Task and return at once; the front agent stays free."""
+        assert ctx.tool_call_id is not None
+        admission = Admission.model_validate(admitted)
+        child = Child(
+            SubagentState(
+                id=admission.subagent_id,
+                parent_tool_call_id=ctx.tool_call_id,
+                task=str(args.get("goal", "")),
+                model=admission.model,
+                tools=admission.tools,
+                status="running",
+                background=True,
+            )
+        )
+        self.children[child.id] = child
+        self.start_child(child, child.state.task, None)
+        return {"task_id": child.id, "status": "running"}
+
+    async def task_steer(
+        self, ctx: RunContext[None], args: dict[str, Any], admitted: Any
+    ) -> Any:
+        delivered = await self.steer_subagent(
+            SubagentSteer(
+                subagent_id=str(args.get("task_id", "")),
+                text=str(args.get("message", "")),
+                control_id=f"tool:{ctx.tool_call_id}",
+            )
+        )
+        if not delivered:
+            return {"status": "denied", "reason": "task_finished"}
+        return {"task_id": str(args.get("task_id", "")), "status": "steered"}
+
+    async def task_cancel(
+        self, ctx: RunContext[None], args: dict[str, Any], admitted: Any
+    ) -> Any:
+        # The daemon already recorded the cancellation; stop the child here.
+        await self.cancel_subagent(str(args.get("task_id", "")))
+        return admitted
+
     async def child_agent(
         self, child: Child
     ) -> Agent[None, str | DeferredToolRequests]:
@@ -872,7 +944,13 @@ class Session:
             }
         elif status == "cancelled":
             child.state.result = {"status": "cancelled", "subagent_id": child.id}
-        await self.event(SubagentLifecycle(subagent_id=child.id, status=status))
+        await self.event(
+            SubagentLifecycle(
+                subagent_id=child.id,
+                status=status,
+                output=output if status == "completed" else None,
+            )
+        )
         await self.child_stopped(child)
 
     async def child_stopped(self, child: Child) -> None:
@@ -896,7 +974,13 @@ class Session:
         await self.snapshot()
         if self.resume_if_ready():
             return
-        if not self.children_active() and not self.start_next(allow_steer=True):
+        if self.start_next(allow_steer=True):
+            return
+        # A finished Task's report is queued by the daemon and starts the next front
+        # run; settling here would announce a settled session just before it.
+        if child.state.background and child.state.status in TERMINAL:
+            return
+        if not self.children_active():
             await self.connection.send(Settled())
 
     async def cancel_subagent(self, subagent_id: str) -> None:
@@ -912,13 +996,13 @@ class Session:
         await self.event(SubagentLifecycle(subagent_id=child.id, status="cancelled"))
         await self.child_stopped(child)
 
-    async def steer_subagent(self, message: SubagentSteer) -> None:
+    async def steer_subagent(self, message: SubagentSteer) -> bool:
         if len(message.text.encode("utf-8")) > MAX_USER_TEXT_BYTES:
             await self.error("bad_request", "Message text exceeds 1 MiB")
-            return
+            return False
         child = self.children.get(message.subagent_id)
         if child is None or child.state.status in TERMINAL:
-            return
+            return False
         child.state.steer_buffer.append(message.text)
         child.steer_received.set()
         await self.event(
@@ -926,6 +1010,7 @@ class Session:
         )
         if not child.active and self.run_task is None:
             await self.snapshot()
+        return True
 
     async def discard_deferred(self) -> None:
         """Drop a restored continuation whose terminal output is already durable."""
@@ -1042,7 +1127,12 @@ class Session:
                 elif isinstance(message, SubagentCancel):
                     await self.cancel_subagent(message.subagent_id)
                 elif isinstance(message, SubagentSteer):
-                    await self.steer_subagent(message)
+                    delivered = await self.steer_subagent(message)
+                    await self.connection.send(
+                        SubagentSteerResult(
+                            control_id=message.control_id, delivered=delivered
+                        )
+                    )
                 elif isinstance(message, DiscardDeferred):
                     await self.discard_deferred()
                 else:

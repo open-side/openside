@@ -104,3 +104,39 @@ async def test_wait_steer_timeout_overrides_script_delay():
     model = ScriptedModel(script, asyncio.Event())
     result = await asyncio.wait_for(Agent(model.model).run("go"), 5)
     assert result.output == "timed out"
+
+
+async def test_result_refs_follow_nested_fields_and_list_indexes():
+    script = Script.model_validate(
+        {
+            "responses": [
+                tool_response("tabs", "list"),
+                {
+                    "parts": [
+                        {
+                            "type": "tool_call",
+                            "name": "read_tab",
+                            "args": {"tab_id": "{{result:list.0.tab_id}}"},
+                            "id": "read",
+                        }
+                    ]
+                },
+                text_response("done"),
+            ]
+        }
+    )
+    model = ScriptedModel(script, asyncio.Event())
+    agent = Agent(model.model)
+    seen = []
+
+    @agent.tool_plain
+    def tabs() -> list[dict[str, str]]:
+        return [{"tab_id": "assigned-tab"}]
+
+    @agent.tool_plain
+    def read_tab(tab_id: str) -> str:
+        seen.append(tab_id)
+        return "read"
+
+    assert (await agent.run("read it")).output == "done"
+    assert seen == ["assigned-tab"]

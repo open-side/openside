@@ -124,6 +124,9 @@ class SubagentState(BaseModel):
     steer_buffer: list[str] = Field(default_factory=list[str])
     script_cursor: int = Field(default=0, ge=0)
     result: Any = None
+    # A Task started by the front agent: nobody awaits it; its result reaches the
+    # conversation as a daemon-queued `[task report]` message.
+    background: bool = False
 
 
 class SnapshotData(BaseModel):

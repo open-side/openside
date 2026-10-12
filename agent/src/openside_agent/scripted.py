@@ -7,7 +7,7 @@ import hashlib
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import (
@@ -17,6 +17,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import (
@@ -31,7 +32,9 @@ class ScriptPart(BaseModel):
     model_config = ConfigDict(extra="forbid")
     # media_digest: reply with `mime:sha256` of every binary input part the model
     # received, so offline tests can prove attachments and tool images reached it.
-    type: Literal["text", "tool_call", "wait_steer", "media_digest"]
+    # echo: reply with the latest user prompt text, so offline tests can prove which
+    # instruction (e.g. a steer) reached this agent.
+    type: Literal["text", "tool_call", "wait_steer", "media_digest", "echo"]
     text: str = ""
     name: str = ""
     args: dict[str, Any] = Field(default_factory=dict)
@@ -107,17 +110,14 @@ class ScriptedModel:
         response = await self.next_response()
         parts: list[TextPart | ToolCallPart] = []
         for part in response.parts:
-            if part.type == "text":
-                parts.append(TextPart(part.text))
-            elif part.type == "media_digest":
-                parts.append(TextPart(media_digest(messages)))
+            if part.type in ("text", "media_digest", "echo"):
+                parts.append(TextPart(part_text(part, messages)))
             elif part.type == "tool_call":
+                args = resolve_refs(part.args, messages)
                 if part.id is None:
-                    parts.append(ToolCallPart(part.name, part.args))
+                    parts.append(ToolCallPart(part.name, args))
                 else:
-                    parts.append(
-                        ToolCallPart(part.name, part.args, tool_call_id=part.id)
-                    )
+                    parts.append(ToolCallPart(part.name, args, tool_call_id=part.id))
         return ModelResponse(parts=parts or [TextPart("")])
 
     async def stream(
@@ -126,8 +126,8 @@ class ScriptedModel:
         response = await self.next_response()
         emitted = False
         for index, part in enumerate(response.parts):
-            if part.type in ("text", "media_digest"):
-                text = part.text if part.type == "text" else media_digest(messages)
+            if part.type in ("text", "media_digest", "echo"):
+                text = part_text(part, messages)
                 for word in re.findall(r"\S+\s*|\s+", text):
                     emitted = True
                     yield word
@@ -139,12 +139,61 @@ class ScriptedModel:
                 yield {
                     index: DeltaToolCall(
                         name=part.name,
-                        json_args=json.dumps(part.args),
+                        json_args=json.dumps(resolve_refs(part.args, messages)),
                         tool_call_id=part.id,
                     )
                 }
         if not emitted:
             yield ""
+
+
+REF = re.compile(r"\{\{result:([^.}]+)\.([^}]+)\}\}")
+
+
+def part_text(part: ScriptPart, messages: list[ModelMessage]) -> str:
+    if part.type == "media_digest":
+        return media_digest(messages)
+    if part.type == "echo":
+        return last_user_text(messages)
+    return part.text
+
+
+def last_user_text(messages: list[ModelMessage]) -> str:
+    for message in reversed(messages):
+        if isinstance(message, ModelRequest):
+            for part in reversed(message.parts):
+                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                    return part.content
+    return ""
+
+
+def resolve_refs(args: dict[str, Any], messages: list[ModelMessage]) -> dict[str, Any]:
+    """Resolve result paths without hard-coded daemon IDs."""
+
+    def value(match: re.Match[str]) -> str:
+        for message in messages:
+            if isinstance(message, ModelRequest):
+                for part in message.parts:
+                    if isinstance(
+                        part, ToolReturnPart
+                    ) and part.tool_call_id == match.group(1):
+                        content: object = part.content
+                        for key in match.group(2).split("."):
+                            if isinstance(content, dict):
+                                content = cast(dict[str, Any], content).get(key)
+                            elif isinstance(content, list) and key.isdecimal():
+                                items = cast(list[Any], content)
+                                index = int(key)
+                                content = items[index] if index < len(items) else None
+                            else:
+                                return ""
+                        return "" if content is None else str(content)
+        return ""
+
+    return {
+        key: REF.sub(value, item) if isinstance(item, str) else item
+        for key, item in args.items()
+    }
 
 
 def media_digest(messages: list[ModelMessage]) -> str:
