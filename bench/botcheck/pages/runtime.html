@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Local inspector leak check</title>
+<h1>Console argument getter probe</h1><pre id="results">Running</pre>
+<script>
+(() => {
+  let getterReads = 0;
+  let emissions = 0;
+  const error = new Error('Local inspector probe');
+  Object.defineProperty(error, 'stack', {get() { getterReads++; return 'Local probe stack'; }});
+  // Repetition covers attachment before or after the document's first script executes.
+  const timer = setInterval(() => {
+    console.debug(error);
+    emissions++;
+    if (emissions < 20) return;
+    clearInterval(timer);
+    window.__botcheck_results = [{id: 'cdp.runtime_console_getter', passed: getterReads === 0, observed: {getter_reads: getterReads, emissions}}];
+    document.getElementById('results').textContent = JSON.stringify(window.__botcheck_results, null, 2);
+  }, 25);
+})();
+</script></html>

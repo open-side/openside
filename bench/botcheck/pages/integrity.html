@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Local realm integrity checks</title>
+<h1>Automation globals and realm integrity</h1><pre id="results">Running</pre>
+<script>
+(async () => {
+  const results = [];
+  const check = (id, operation) => {
+    try {
+      const [passed, observed] = operation();
+      results.push({id, passed, observed});
+    } catch (error) {
+      results.push({id, passed: false, observed: {error: String(error)}});
+    }
+  };
+  check('window.automation_globals', () => {
+    const names = Object.getOwnPropertyNames(window).filter(name => /^cdc_|^\$cdc_|^\$wdc_|^__webdriver|^__driver|^__selenium|^_Selenium|^__playwright|^__pwInitScripts|^callPhantom$|^_phantom$|^domAutomation(?:Controller)?$/.test(name));
+    return [names.length === 0, {names}];
+  });
+  const frame = document.createElement('iframe');
+  frame.srcdoc = '<!doctype html><html lang="en"><title>Clean realm</title><body>Local frame</body></html>';
+  await new Promise(resolve => { frame.onload = resolve; document.body.append(frame); });
+  check('iframe.content_window', () => {
+    const child = frame.contentWindow;
+    const observed = {distinct_window: child !== window, self_consistent: child.self === child, correct_frame: child.frameElement === frame, document_present: child.document.body !== null, webdriver: child.navigator.webdriver ?? null};
+    return [Object.values(observed).every(value => value === true || value === false) && observed.distinct_window && observed.self_consistent && observed.correct_frame && observed.document_present && observed.webdriver === navigator.webdriver, observed];
+  });
+  check('native.to_string_integrity', () => {
+    const child = frame.contentWindow;
+    const targets = [
+      ['Function.toString', Function.prototype.toString, child.Function.prototype.toString],
+      ['Navigator.webdriver', Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')?.get, Object.getOwnPropertyDescriptor(child.Navigator.prototype, 'webdriver')?.get],
+      ['Navigator.languages', Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages')?.get, Object.getOwnPropertyDescriptor(child.Navigator.prototype, 'languages')?.get],
+      ['Navigator.plugins', Object.getOwnPropertyDescriptor(Navigator.prototype, 'plugins')?.get, Object.getOwnPropertyDescriptor(child.Navigator.prototype, 'plugins')?.get],
+      ['Permissions.query', Permissions.prototype.query, child.Permissions.prototype.query]
+    ];
+    const observed = targets.map(([name, own, pristine]) => {
+      const localSource = Function.prototype.toString.call(own);
+      const cleanSource = child.Function.prototype.toString.call(own);
+      const referenceSource = child.Function.prototype.toString.call(pristine);
+      return {name, native: /\{\s*\[native code\]\s*\}/.test(cleanSource), same_source: localSource === cleanSource && cleanSource === referenceSource};
+    });
+    return [observed.every(item => item.native && item.same_source), {functions: observed}];
+  });
+  frame.remove();
+  window.__botcheck_results = results;
+  document.getElementById('results').textContent = JSON.stringify(results, null, 2);
+})();
+</script></html>

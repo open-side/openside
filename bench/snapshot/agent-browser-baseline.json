@@ -1,0 +1,81 @@
+{
+  "tool": "agent-browser (npm, vercel-labs/agent-browser)",
+  "version": "agent-browser 0.39.0",
+  "command": "agent-browser --session openside-bench open <page>; agent-browser snapshot; then per workflow step: agent-browser eval <step.script>; agent-browser snapshot",
+  "environment": "HOME redirected to a fresh temporary directory; AGENT_BROWSER_EXECUTABLE_PATH set to the local Chromium; pages served from 127.0.0.1",
+  "unit": "UTF-8 bytes of each `agent-browser snapshot` stdout (default options), in order: after load, then after each workflow step",
+  "pages": {
+    "blog-index.html": [
+      15847,
+      15895,
+      15938,
+      15948
+    ],
+    "checkout-form.html": [
+      3226,
+      3276,
+      3318,
+      3328
+    ],
+    "dashboard-table.html": [
+      21887,
+      21935,
+      21977,
+      21987
+    ],
+    "docs-page.html": [
+      20023,
+      20071,
+      20114,
+      20124
+    ],
+    "email-inbox.html": [
+      31403,
+      31451,
+      31493,
+      31503
+    ],
+    "forum-thread.html": [
+      19297,
+      19345,
+      19388,
+      19398
+    ],
+    "login-form.html": [
+      2043,
+      2091,
+      2133,
+      2143
+    ],
+    "news-article.html": [
+      15540,
+      15588,
+      15631,
+      15641
+    ],
+    "product-listing.html": [
+      19809,
+      19857,
+      19899,
+      19909
+    ],
+    "search-results.html": [
+      14371,
+      14419,
+      14462,
+      14472
+    ],
+    "settings-form.html": [
+      9528,
+      9522,
+      9565,
+      9575
+    ],
+    "wiki-article.html": [
+      17656,
+      17704,
+      17747,
+      17757
+    ]
+  }
+}

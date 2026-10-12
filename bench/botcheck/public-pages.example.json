@@ -1,0 +1,38 @@
+[
+  {
+    "id": "intoli-classic",
+    "url": "https://intoli.com/blog/not-possible-to-block-chrome-headless/chrome-headless-test.html",
+    "timeout_seconds": 30,
+    "extractor": {
+      "kind": "table",
+      "row_selector": "table tr:has(td)",
+      "result_selector": "td.result",
+      "pass_classes": ["passed"],
+      "fail_classes": ["failed"]
+    }
+  },
+  {
+    "id": "sannysoft-classic",
+    "url": "https://bot.sannysoft.com/",
+    "timeout_seconds": 30,
+    "extractor": {
+      "kind": "table",
+      "row_selector": "table:not(#fp2) tr:has(td.result)",
+      "result_selector": "td.result",
+      "pass_classes": ["passed"],
+      "fail_classes": ["failed"]
+    }
+  },
+  {
+    "id": "sannysoft-fpscanner",
+    "url": "https://bot.sannysoft.com/",
+    "timeout_seconds": 30,
+    "extractor": {
+      "kind": "table",
+      "row_selector": "#fp2 tr",
+      "result_selector": "td:nth-child(2)",
+      "pass_classes": ["passed"],
+      "fail_classes": ["failed"]
+    }
+  }
+]

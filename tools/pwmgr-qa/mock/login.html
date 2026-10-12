@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Mock Login (openside pwmgr QA)</title>
+<style>body{font:18px sans-serif;margin:40px}input{display:block;margin:12px 0;padding:8px;width:320px;font-size:18px}</style></head>
+<body>
+<h1>Mock Login</h1>
+<form id="login" action="#" method="post" autocomplete="on">
+  <label for="username">Username</label>
+  <input id="username" name="username" type="text" autocomplete="username">
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password">
+  <button id="submit" type="submit">Sign in</button>
+</form>
+<p id="result">not submitted</p>
+<script>
+// The harness reads window.__submitted over CDP to prove autofill produced the stored values.
+document.getElementById('login').addEventListener('submit', (event) => {
+  event.preventDefault();
+  window.__submitted = {
+    username: document.getElementById('username').value,
+    password: document.getElementById('password').value,
+  };
+  document.getElementById('result').textContent = 'submitted';
+});
+</script>
+</body></html>

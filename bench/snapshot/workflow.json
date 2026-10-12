@@ -1,0 +1,17 @@
+{
+  "description": "Per page: snapshot after load, then after each step. Steps run as page JavaScript in both tools so the DOM changes are identical.",
+  "steps": [
+    {
+      "name": "type into the first text field",
+      "script": "(() => { const field = document.querySelector('input[type=search], input:not([type]), input[type=email], textarea'); if (!field) return false; field.value = 'transit plan'; field.dispatchEvent(new Event('input', {bubbles: true})); return true; })()"
+    },
+    {
+      "name": "tick a checkbox and show a status message",
+      "script": "(() => { const box = document.querySelector('input[type=checkbox]:not(:checked)'); if (box) box.checked = true; const status = document.createElement('div'); status.setAttribute('role', 'status'); status.textContent = 'Saved 1 item'; (document.querySelector('main') || document.body).appendChild(status); return true; })()"
+    },
+    {
+      "name": "update the page heading",
+      "script": "(() => { const heading = document.querySelector('h1, h2'); heading.textContent = heading.textContent + ' (updated)'; return true; })()"
+    }
+  ]
+}

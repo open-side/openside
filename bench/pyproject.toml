@@ -1,0 +1,20 @@
+[project]
+name = "openside-bench"
+version = "0.1.0"
+description = "Hermetic browser task benchmarks against the real openside daemon"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1,<0.29",
+    "jsonschema>=4.26,<5",
+    "psutil>=7.2,<8",
+    # JSON Schema date-time checking silently degrades without this optional checker.
+    "rfc3339-validator>=0.1.4,<0.2",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.1,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: explicitly opted-in provider benchmark"]

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Local classic browser checks</title>
+<h1>Classic browser signals</h1><pre id="results">Running</pre>
+<script>
+(async () => {
+  const results = [];
+  const check = async (id, operation) => {
+    try {
+      const [passed, observed] = await operation();
+      results.push({id, passed, observed});
+    } catch (error) {
+      results.push({id, passed: false, observed: {error: String(error)}});
+    }
+  };
+  await check('navigator.webdriver', () => [navigator.webdriver === false, {value: navigator.webdriver ?? null}]);
+  await check('user_agent.headless', () => [!/HeadlessChrome/i.test(navigator.userAgent), {value: navigator.userAgent}]);
+  await check('client_hints.headless', () => {
+    const brands = navigator.userAgentData?.brands;
+    return [Array.isArray(brands) && brands.length > 0 && !brands.some(item => /headless/i.test(item.brand)), {brands: brands ?? null}];
+  });
+  await check('window.chrome', () => [typeof window.chrome === 'object' && window.chrome !== null, {type: typeof window.chrome}]);
+  await check('navigator.plugins', () => {
+    const names = Array.from(navigator.plugins, item => item.name);
+    return [navigator.plugins instanceof PluginArray && names.length > 0, {names}];
+  });
+  await check('navigator.mime_types', () => {
+    const types = Array.from(navigator.mimeTypes, item => item.type);
+    const linked = Array.from(navigator.mimeTypes, item => !!item.enabledPlugin).every(Boolean);
+    return [navigator.mimeTypes instanceof MimeTypeArray && types.length > 0 && linked, {types, linked}];
+  });
+  await check('navigator.languages', () => {
+    const languages = Array.from(navigator.languages);
+    return [languages.length > 0 && languages.every(item => typeof item === 'string' && item.length > 0) && languages[0] === navigator.language, {languages, language: navigator.language}];
+  });
+  await check('permissions.notifications', async () => {
+    const state = (await navigator.permissions.query({name: 'notifications'})).state;
+    const permission = Notification.permission;
+    const expected = {default: 'prompt', granted: 'granted', denied: 'denied'}[permission];
+    return [state === expected, {state, permission}];
+  });
+  await check('webgl.identity_present', () => {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl');
+    if (!gl) return [false, {context: null}];
+    const extension = gl.getExtension('WEBGL_debug_renderer_info');
+    const vendor = gl.getParameter(extension ? extension.UNMASKED_VENDOR_WEBGL : gl.VENDOR);
+    const renderer = gl.getParameter(extension ? extension.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+    return [typeof vendor === 'string' && vendor.length > 0 && typeof renderer === 'string' && renderer.length > 0, {vendor, renderer, unmasked: !!extension}];
+  });
+  await check('window.dimensions', () => {
+    const dimensions = {outerWidth, outerHeight, innerWidth, innerHeight};
+    return [outerWidth > 0 && outerHeight > 0 && innerWidth > 0 && innerHeight > 0 && outerWidth >= innerWidth && outerHeight >= innerHeight, dimensions];
+  });
+  window.__botcheck_results = results;
+  document.getElementById('results').textContent = JSON.stringify(results, null, 2);
+})();
+</script></html>

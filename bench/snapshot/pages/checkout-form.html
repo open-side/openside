@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkout</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 0; color: #1b1b1f; }
+header, footer { background: #f3f4f6; padding: 12px 24px; }
+nav ul { list-style: none; display: flex; gap: 16px; margin: 0; padding: 0; }
+main { display: flex; gap: 24px; padding: 24px; }
+aside { width: 240px; flex: none; }
+.content { flex: 1; min-width: 0; }
+.card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+table { border-collapse: collapse; width: 100%; }
+td, th { border-bottom: 1px solid #e5e7eb; padding: 4px 8px; text-align: left; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<header><a href="/">Shop home</a><nav aria-label="Checkout steps"><ol><li aria-current="step">Shipping</li><li>Payment</li><li>Review</li></ol></nav></header>
+<main><div class="content"><h1>Checkout</h1><form>
+<fieldset><legend>Contact</legend><label for="e">Email</label><input id="e" type="email"><label><input type="checkbox"> Email me with news and offers</label></fieldset>
+<fieldset><legend>Shipping address</legend><label for="a0">First name</label><input id="a0"><label for="a1">Last name</label><input id="a1"><label for="a2">Address</label><input id="a2"><label for="a3">Apartment, suite, etc.</label><input id="a3"><label for="a4">City</label><input id="a4"><label for="a5">Postal code</label><input id="a5"><label for="a6">Phone</label><input id="a6">
+<label for="country">Country</label><select id="country"><option>United States</option><option>Canada</option><option>Mexico</option><option>Germany</option><option>France</option><option>Japan</option><option>Korea</option></select></fieldset>
+<fieldset><legend>Shipping method</legend><label><input type="radio" name="ship"> Standard (5-7 days) $5.00</label><label><input type="radio" name="ship"> Express (2-3 days) $15.00</label><label><input type="radio" name="ship"> Overnight $30.00</label></fieldset>
+<fieldset><legend>Payment</legend><label for="cc">Card number</label><input id="cc" autocomplete="cc-number"><label for="exp">Expiration (MM/YY)</label><input id="exp"><label for="cvc">Security code</label><input id="cvc"></fieldset>
+<button type="submit">Pay now</button></form></div>
+<aside><h2>Order summary</h2><ul><li>Support Energy Market × 1 <span>$161.00</span></li><li>Pattern Partner Village × 2 <span>$151.00</span></li><li>Season Member Coverage × 3 <span>$185.00</span></li><li>Habitat Portal Software × 3 <span>$67.00</span></li></ul>
+<label for="code">Discount code</label><input id="code"><button>Apply</button><p>Total: <strong>$312.00</strong></p></aside></main>
+</body>
+</html>
