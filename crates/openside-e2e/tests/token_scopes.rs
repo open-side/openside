@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use openside_e2e::Harness;
-use openside_proto::{CapabilityScope, ROUTES};
+use openside_proto::{CapabilityScope, EventKind, ROUTES};
 use serde_json::{json, Value};
 
 const CLI: &str = env!("CARGO_BIN_EXE_e2e-openside");
@@ -33,9 +33,10 @@ async fn mint(harness: &Harness, scope: &str) -> String {
 
 #[tokio::test]
 async fn read_token_over_tcp_cannot_reach_any_steer_route_and_changes_nothing() {
+    // The scripted model holds the run open long enough to outlast every probe.
     let Some(mut harness) = Harness::start(
         env!("CARGO_BIN_EXE_e2e-opensided"),
-        &json!({"responses":[{"parts":[{"type":"text","text":"done"}]}],"delay_ms":1500}),
+        &json!({"responses":[{"parts":[{"type":"text","text":"done"}]}],"delay_ms":10_000}),
     )
     .await
     else {
@@ -53,6 +54,7 @@ async fn read_token_over_tcp_cannot_reach_any_steer_route_and_changes_nothing() 
     let steer = mint(&harness, "steer").await;
 
     // A run is in flight with one pending message, so every steer route has a live target.
+    let mut stream = harness.events(&id, 0).await;
     for (mid, mode) in [("running", "now"), ("pending", "queue")] {
         let response = harness
             .tcp_request(
@@ -77,6 +79,9 @@ async fn read_token_over_tcp_cannot_reach_any_steer_route_and_changes_nothing() 
             )
         }
     };
+    // The run starts asynchronously; until its turn has begun, `turn.started` may still land
+    // between the snapshots and look like a refused request's change.
+    while !matches!(stream.next().await.kind, EventKind::TurnStarted {}) {}
     let before = state(read.clone()).await;
 
     let mut probed = 0;

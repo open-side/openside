@@ -19,6 +19,12 @@ struct Cdp {
 }
 impl Cdp {
     async fn call(&mut self, session: Option<&str>, method: &str, params: Value) -> Value {
+        let message = self.send(session, method, params).await;
+        assert!(message.get("error").is_none(), "{method}: {message}");
+        message["result"].clone()
+    }
+    /// The raw reply, error included.
+    async fn send(&mut self, session: Option<&str>, method: &str, params: Value) -> Value {
         self.next += 1;
         let id = self.next;
         let mut request = json!({"id":id,"method":method,"params":params});
@@ -38,8 +44,7 @@ impl Cdp {
             let Message::Text(text) = frame else { continue };
             let message: Value = serde_json::from_str(&text).unwrap();
             if message["id"] == id {
-                assert!(message.get("error").is_none(), "{method}: {message}");
-                return message["result"].clone();
+                return message;
             }
         }
     }
@@ -55,12 +60,48 @@ impl Cdp {
             .into()
     }
     async fn evaluate(&mut self, session: &str, expression: &str) -> Value {
-        let result = self.call(Some(session), "Runtime.evaluate", json!({"expression":expression,"awaitPromise":true,"returnByValue":true,"userGesture":true})).await;
+        let result = self
+            .call(
+                Some(session),
+                "Runtime.evaluate",
+                evaluate_params(expression),
+            )
+            .await;
         assert!(
             result.get("exceptionDetails").is_none(),
             "JS exception: {result}"
         );
         result["result"]["value"].clone()
+    }
+    /// `None` while the page has no JavaScript context to evaluate in: a freshly attached or
+    /// navigating target briefly has none, and a pending evaluation dies with its context.
+    async fn evaluate_when_ready(&mut self, session: &str, expression: &str) -> Option<Value> {
+        let message = self
+            .send(
+                Some(session),
+                "Runtime.evaluate",
+                evaluate_params(expression),
+            )
+            .await;
+        if let Some(error) = message.get("error") {
+            let between_contexts = error["message"].as_str().is_some_and(|text| {
+                [
+                    "Cannot find default execution context",
+                    "Execution context was destroyed",
+                    "Inspected target navigated or closed",
+                ]
+                .iter()
+                .any(|transient| text.starts_with(transient))
+            });
+            assert!(between_contexts, "Runtime.evaluate: {message}");
+            return None;
+        }
+        let result = &message["result"];
+        assert!(
+            result.get("exceptionDetails").is_none(),
+            "JS exception: {result}"
+        );
+        Some(result["result"]["value"].clone())
     }
     async fn click(&mut self, session: &str, selector: &str) {
         let position = self.evaluate(session, &format!("(() => {{ const r = document.querySelector({}).getBoundingClientRect(); return {{x:r.x+r.width/2,y:r.y+r.height/2}}; }})()", json!(selector))).await;
@@ -89,7 +130,7 @@ impl Cdp {
     async fn wait_for(&mut self, session: &str, expression: &str) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         loop {
-            if self.evaluate(session, expression).await == json!(true) {
+            if self.evaluate_when_ready(session, expression).await == Some(json!(true)) {
                 return;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -101,6 +142,10 @@ impl Cdp {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
+}
+
+fn evaluate_params(expression: &str) -> Value {
+    json!({"expression":expression,"awaitPromise":true,"returnByValue":true,"userGesture":true})
 }
 
 async fn debug_endpoint(profile: &Path) -> String {
@@ -216,20 +261,43 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
         .unwrap();
     let mut cdp = Cdp { socket, next: 0 };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    let worker = loop {
+    // Recent Chromium runs component extensions with their own `background.js` worker
+    // (Contextual Tasks in 154), so the worker is ours only if it reports our manifest.
+    let mut foreign = std::collections::HashSet::new();
+    let (worker, worker_session) = 'found: loop {
         let targets = cdp.call(None, "Target.getTargets", json!({})).await;
-        if let Some(worker) = targets["targetInfos"]
+        let candidates: Vec<Value> = targets["targetInfos"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|target| {
+            .filter(|target| {
                 target["type"] == "service_worker"
                     && target["url"]
                         .as_str()
                         .is_some_and(|url| url.ends_with("/background.js"))
+                    && !foreign.contains(target["targetId"].as_str().unwrap())
             })
-        {
-            break worker.clone();
+            .cloned()
+            .collect();
+        for candidate in candidates {
+            let target = candidate["targetId"].as_str().unwrap().to_owned();
+            let session = cdp.attach(&target).await;
+            match cdp
+                .evaluate_when_ready(&session, "chrome.runtime.getManifest().name")
+                .await
+            {
+                Some(name) if name == manifest["name"] => break 'found (candidate, session),
+                Some(_) => {
+                    foreign.insert(target);
+                }
+                None => {}
+            }
+            cdp.call(
+                None,
+                "Target.detachFromTarget",
+                json!({"sessionId":session}),
+            )
+            .await;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -254,7 +322,6 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
             .await,
         json!("")
     );
-    let worker_session = cdp.attach(worker["targetId"].as_str().unwrap()).await;
     cdp.click(&options, "#agent-tabs").await;
     cdp.wait_for(
         &options,
