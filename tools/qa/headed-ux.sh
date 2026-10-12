@@ -23,10 +23,14 @@ sway)
     podman image exists "$image" || podman build -t "$image" -f "$ROOT/tools/qa/headed-ux.Containerfile" "$ROOT/tools/qa"
     # The venv links to uv's managed interpreters through a version alias; mount them all.
     uv_python="$(dirname -- "$(dirname -- "$(dirname -- "$(realpath -- "$python")")")")"
-    browser_dir="$(dirname -- "$(realpath -- "$patched")")"
+    browser_mount=()
+    if [ "$which" != stock ]; then
+        browser_dir="$(dirname -- "$(realpath -- "$patched")")"
+        browser_mount=(-v "$browser_dir:$browser_dir:ro")
+    fi
     # Rootless and --network=none: daemon and browser talk over the container's loopback only.
     exec podman run --rm --userns=keep-id --network=none --shm-size=1g \
-        -v "$ROOT:$ROOT:ro" -v "$browser_dir:$browser_dir:ro" -v "$uv_python:$uv_python:ro" -v "$out:$out" \
+        -v "$ROOT:$ROOT:ro" "${browser_mount[@]}" -v "$uv_python:$uv_python:ro" -v "$out:$out" \
         -e OPENSIDE_PATCHED_BROWSER="$patched" "$image" bash -c '
 set -euo pipefail
 # sway ships with file capabilities that a rootless user namespace cannot grant; a copy has none.

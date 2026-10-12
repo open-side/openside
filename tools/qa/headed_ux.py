@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import websockets
 
@@ -273,19 +274,27 @@ class Run:
             (r / name).mkdir(parents=True, exist_ok=True)
         (r / "run").chmod(0o700)
         dist = ROOT / "web/dist"
-        if not (dist / "index.html").is_file():
+        if not self.args.prewarm_only and not (dist / "index.html").is_file():
             raise SystemExit("build web/dist first (pnpm -C web build)")
         python = ROOT / "agent/.venv/bin/python"
+        browser = self.executable
+        if self.args.no_sandbox:
+            # The managed browser needs the same container-only sandbox exception as the visible fixture.
+            import shlex
+            browser = r / "daemon-chromium"
+            browser.write_text(f"#!/bin/sh\nexec {shlex.quote(str(self.executable))} --no-sandbox \"$@\"\n")
+            browser.chmod(0o700)
         (r / "config/openside/config.toml").write_text(
             f"[agent]\ncommand = {json.dumps([str(python), '-m', 'openside_agent'])}\n"
             '[models]\ndefault = "script"\n[policy]\nmode = "full"\n'
             f"[ui]\ndir = {json.dumps(str(dist))}\n"
+            f"[browser]\nexecutable = {json.dumps(str(browser))}\n"
         )
         (r / "script.json").write_text(json.dumps(
             {"responses": [{"parts": [{"type": "text", "text": ANSWER}]}] * 8}))
         data = r / "data/openside"
         self.daemon = subprocess.Popen(
-            [str(ROOT / "target/debug/opensided"), "--data-dir", str(data),
+            [str(self.args.daemon_bin), "--data-dir", str(data),
              "--socket", str(r / "run/opensided.sock"), "--listen", "127.0.0.1:0"],
             env=self.env(), cwd=r / "workspace", stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=open(r / "daemon.stderr", "wb"),
@@ -624,6 +633,60 @@ async def extension_ask(run: Run, cdp: Cdp) -> None:
                    f"contains scripted answer={bool(text)}", run.shot("07e-ask-side-panel-answer"))
 
 
+async def prewarm_checks(run: Run, watch: FocusWatch) -> str:
+    async def visible():
+        return run.desktop.window()
+
+    if not await wait_until(visible, 15):
+        raise RuntimeError("foreground fixture window did not appear")
+    reference = run.desktop.active()
+    windows = lambda: {str(node["id"]) for node in run.desktop.nodes() if node.get("app_id")}
+    before = windows()
+    watch.start()
+    created = run.unix("POST", "/v1/sessions", {"mode": "full", "workspace": str(run.root / "workspace")})
+    session = created["id"]
+    run.unix("POST", f"/v1/sessions/{session}/prewarm")
+    run.unix("POST", f"/v1/sessions/{session}/prewarm")
+
+    async def prepared():
+        tabs = run.unix("GET", "/v1/browser/tabs").get("tabs", [])
+        return [tab for tab in tabs if tab.get("owner_session_id") == session and tab.get("url") == "about:blank"] or None
+
+    parked = await wait_until(prepared, 30)
+    run.record("prewarm prepares exactly one agent tab before a message", bool(parked) and len(parked) == 1,
+               f"session={session}; parked={parked}")
+    after = windows()
+    run.record("prewarm opens no compositor window", before == after,
+               f"windows before={sorted(before)}; after={sorted(after)}")
+    run.record("prewarm leaves the foreground window focused", run.desktop.active() == reference,
+               f"focused before={reference}; after={run.desktop.active()}", run.shot("prewarm-focus"))
+    run.unix("POST", f"/v1/sessions/{session}/stop")
+    return reference
+
+
+def write_prewarm_junit(path: Path, results: list[dict], error: str | None, duration: float) -> None:
+    required = {
+        "prewarm prepares exactly one agent tab before a message",
+        "prewarm opens no compositor window",
+        "prewarm leaves the foreground window focused",
+        "active window never changed by the agent",
+    }
+    passed = (
+        error is None
+        and required <= {result["check"] for result in results}
+        and all(result["pass"] is True for result in results)
+    )
+    suite = ET.Element("testsuite", name="headed prewarm", tests="1",
+                       failures="0" if passed else "1", time=f"{duration:.6f}")
+    case = ET.SubElement(suite, "testcase", classname="tools.qa.headed_ux",
+                         name="prewarm_checks", time=f"{duration:.6f}")
+    if not passed:
+        ET.SubElement(case, "failure", message=error or "Prewarm checks failed or did not all run")
+    ET.SubElement(case, "system-out").text = json.dumps(results, indent=2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser", choices=["patched", "stock"], default="patched")
@@ -634,26 +697,43 @@ def main() -> int:
     # patched vertical-tabs toolbar (1418,49); stock horizontal tab strip pushes it to (1485,90).
     parser.add_argument("--bookmarks-button", type=int, nargs=2, metavar=("X", "Y"))
     parser.add_argument("--no-sandbox", action="store_true")
+    parser.add_argument("--prewarm-only", action="store_true")
+    parser.add_argument("--junitxml", type=Path)
+    parser.add_argument("--daemon-bin", type=Path, default=ROOT / "target/debug/opensided")
     args = parser.parse_args()
+    if args.junitxml and not args.prewarm_only:
+        parser.error("--junitxml requires --prewarm-only")
     if not os.environ.get("WAYLAND_DISPLAY"):
         raise SystemExit("needs WAYLAND_DISPLAY")
     run = Run(args)
     watch = FocusWatch(run.desktop)
     run.watch = watch
+    started = time.monotonic()
+    error = None
     try:
         run.start_daemon()
         run.desktop.prepare()
         run.launch_browser()
-        reference = asyncio.run(checks(run, watch))
+        reference = asyncio.run(prewarm_checks(run, watch) if args.prewarm_only else checks(run, watch))
         watch.stop()
         foreign = sorted({s for s in watch.samples if s and s != reference})
         run.record("active window never changed by the agent", not foreign,
                    f"{len(watch.samples)} samples; reference={reference}; other active windows={foreign}")
+    except BaseException as failure:
+        error = str(failure)
+        raise
     finally:
         watch.stop()
-        run.stop()
-        (run.out / "result.json").write_text(json.dumps(run.results, indent=2))
-        (run.out / "focus-changes.json").write_text(json.dumps(watch.changes, indent=2))
+        try:
+            run.stop()
+        except BaseException as failure:
+            error = error or str(failure)
+            raise
+        finally:
+            (run.out / "result.json").write_text(json.dumps(run.results, indent=2))
+            (run.out / "focus-changes.json").write_text(json.dumps(watch.changes, indent=2))
+            if args.junitxml:
+                write_prewarm_junit(args.junitxml, run.results, error, time.monotonic() - started)
     return 1 if any(r["pass"] is False for r in run.results) else 0
 
 

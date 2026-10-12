@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import psutil
@@ -16,7 +17,23 @@ BENCH = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCH))
 
 from fixtures import TASKS  # noqa: E402
-from runner import discover_browser, summarize, validate_result  # noqa: E402
+from runner import daemon_process, discover_browser, summarize, validate_result  # noqa: E402
+
+
+@pytest.mark.parametrize("live_model, orchestration", [(None, "single"), ("openai:fixture", None)])
+def test_daemon_configuration_selects_single_only_for_scripts(monkeypatch, live_model, orchestration):
+    configurations = []
+
+    def capture_launch(*_args, **kwargs):
+        config = Path(kwargs["env"]["XDG_CONFIG_HOME"]) / "openside/config.toml"
+        configurations.append(tomllib.loads(config.read_text()))
+        raise RuntimeError("launch intercepted")
+
+    monkeypatch.setattr(subprocess, "Popen", capture_launch)
+    with pytest.raises(RuntimeError, match="launch intercepted"):
+        with daemon_process(Path("unused"), Path("unused"), Path(sys.executable), live_model, "http://127.0.0.1:12345"):
+            pytest.fail("The configuration check must not launch a daemon")
+    assert configurations[0]["agent"].get("orchestration") == orchestration
 
 
 def valid_task():
@@ -28,7 +45,7 @@ def valid_task():
         "provider": "scripted", "durationMs": 1, "graderDurationMs": 0,
         "tabCount": 1, "messageCount": 2,
         "artifacts": {"stdout": "stdout.txt", "stderr": "stderr.txt", "cliEvents": "events.jsonl", "trajectory": "trajectory.txt", "result": "result.json"},
-        "openside": {"suite": "openside-local-web-v1", "mode": "scripted", "grader": "fixture-state-v1",
+        "openside": {"suite": "openside-local-web-v1", "mode": "scripted", "orchestration": "single", "grader": "fixture-state-v1",
                      "steps": 1, "tokens": {"input": 8, "output": 4, "source": "scripted-function-model-estimate"},
                      "browserBytes": 64, "ticketsResolved": 0},
     }
@@ -37,6 +54,8 @@ def valid_task():
 @pytest.mark.parametrize("mutation", [
     lambda result: result.pop("task_id"),
     lambda result: result.update(outcome="looks-good"),
+    lambda result: result["openside"].pop("orchestration"),
+    lambda result: result["openside"].update(orchestration="unknown"),
     lambda result: result.update(durationMs=-1),
     lambda result: result["openside"].update(browserBytes="unknown"),
     lambda result: result["model"].update(thinkingLevel="unrecorded"),
@@ -63,9 +82,21 @@ def test_summary_counts_failures_and_impossible_tasks_without_fabricating_succes
     assert summary["passRate"] == 0.25
     assert summary["passRateExcludingImpossible"] == pytest.approx(1 / 3)
     assert summary["openside"]["tokens"] == {"input": 32, "output": 16, "source": "scripted-function-model-estimate"}
+    assert summary["openside"]["orchestration"] == "single"
     summary["timestamp"] = "not-a-timestamp"
     with pytest.raises(ValidationError):
         validate_result(summary)
+
+
+def test_live_result_and_summary_record_front_orchestration():
+    result = valid_task()
+    result["openside"].update(mode="live", orchestration="front")
+    result["openside"]["tokens"]["source"] = "provider-usage"
+    validate_result(result)
+    summary = summarize([result], result["model"], 10)
+    validate_result(summary)
+    assert summary["openside"]["mode"] == "live"
+    assert summary["openside"]["orchestration"] == "front"
 
 
 def test_one_command_reproduces_scripted_suite_and_validates_aside_schema(tmp_path):
@@ -91,6 +122,7 @@ def test_one_command_reproduces_scripted_suite_and_validates_aside_schema(tmp_pa
     assert summary["total"] == summary["ran"] == summary["passed"] == len(TASKS)
     assert summary["failed"] == summary["errors"] == summary["skipped"] == 0
     assert summary["openside"]["mode"] == "scripted"
+    assert summary["openside"]["orchestration"] == "single"
     assert summary["openside"]["ticketsResolved"] == 1
     totals = {"steps": 0, "browserBytes": 0, "input": 0, "output": 0}
     for task in TASKS:
@@ -102,6 +134,7 @@ def test_one_command_reproduces_scripted_suite_and_validates_aside_schema(tmp_pa
         assert result["task_id"] == task.task_id
         assert result["model"] == {"provider": "scripted", "modelId": "script", "thinkingLevel": "off", "fastMode": False}
         assert result["openside"]["browserBytes"] > 0
+        assert result["openside"]["orchestration"] == "single"
         assert result["durationMs"] > 0
         for artifact in result["artifacts"].values():
             assert (directory / artifact).is_file()

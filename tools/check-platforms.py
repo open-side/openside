@@ -18,7 +18,7 @@ TARGETS = ("x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-pc-windows-msv
            "x86_64-pc-windows-gnu")
 TARGET_DIR = Path(tempfile.gettempdir()) / "openside-xcheck"
 XWIN_TARGET = "x86_64-pc-windows-msvc"
-NATIVE_ACTION = "run cargo check --workspace --all-targets --locked -j 8 on the matching CI/native runner."
+NATIVE_ACTION = "run cargo check --workspace --all-targets --locked -j 4 on the matching CI/native runner."
 
 
 def find_build_std_toolchain(output=subprocess.check_output) -> str | None:
@@ -82,7 +82,7 @@ def check(installed: set[str], run=subprocess.run, *, build_std_toolchain: str |
                 continue
             command += [f"+{build_std_toolchain}"]
         command += ["xwin"] if use_xwin else []
-        command += ["check", "--workspace", "--all-targets", "--locked", "-j", "8", "--target", target]
+        command += ["check", "--workspace", "--all-targets", "--locked", "-j", "4", "--target", target]
         if target not in installed:
             command += ["-Zbuild-std=std,panic_abort", "--target-dir", str(TARGET_DIR)]
         print(f"platform compile command: {' '.join(command)}", flush=True)

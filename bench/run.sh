@@ -9,7 +9,7 @@ export UV_OFFLINE=1
 export UV_PYTHON_DOWNLOADS=never
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$ROOT/target/uv-cache}"
 if [[ -z "${OPENSIDE_BENCH_DAEMON:-}" ]]; then
-    cargo build --offline --locked -j 8 -p opensided --bin opensided
+    cargo build --offline --locked -j "${CARGO_BUILD_JOBS:-4}" -p opensided --bin opensided
     TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
     if [[ "$TARGET" != /* ]]; then TARGET="$ROOT/$TARGET"; fi
     OPENSIDE_BENCH_DAEMON="$TARGET/debug/opensided"

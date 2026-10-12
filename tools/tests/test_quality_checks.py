@@ -140,7 +140,7 @@ def test_platform_compile_checker_executes_only_installed_targets():
     assert len(calls) == 1
     assert calls[0][-1] == 'x86_64-apple-darwin'
     assert '--workspace' in calls[0] and '--all-targets' in calls[0]
-    assert calls[0][calls[0].index('-j') + 1] == '8'
+    assert calls[0][calls[0].index('-j') + 1] == '4'
     assert not any(arg.startswith('-Z') for arg in calls[0])
     assert len(missing) == len(PLATFORMS.TARGETS) - 1 and failures == 0
     missing, failures = PLATFORMS.check({'x86_64-apple-darwin'}, lambda *args, **kwargs: SimpleNamespace(returncode=1))
@@ -157,7 +157,7 @@ def test_platform_compile_checker_builds_std_without_downloading_a_toolchain():
     assert not missing and failures == 0 and len(calls) == len(PLATFORMS.TARGETS)
     for command in calls:
         assert command[0] == 'cargo' and '--workspace' in command and '--all-targets' in command
-        assert '--locked' in command and command[command.index('-j') + 1] == '8'
+        assert '--locked' in command and command[command.index('-j') + 1] == '4'
         if command[command.index('--target') + 1] == 'x86_64-apple-darwin':
             assert command[1] == 'check' and '--target-dir' not in command
         else:

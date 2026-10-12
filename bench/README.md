@@ -5,6 +5,9 @@ and Chromium**. There are five loopback-only tasks: form fill, three-page
 navigation, table extraction, fake login with an automatically resolved 2FA
 information ticket, and a file download. The grader checks fixture state and
 actual downloaded bytes, not the model's claim that it succeeded.
+The download script waits for the download event and calls `saveAs("report.csv")`
+before grading. Chromium's internal GUID-named file alone is not a completed
+named-file task.
 
 These are synthetic regression tasks, **not** the public Online-Mind2Web,
 BU Bench V1, or Odysseys datasets. The output uses the public Aside BU Bench V1
@@ -40,13 +43,19 @@ installation commands and subsequent runs.
 bench/run.sh
 ```
 
-The command builds `opensided` with `cargo build --offline --locked -j 8 -p
-opensided --bin opensided`, discovers the sidecar interpreter with `uv`, starts
-a temporary daemon and fixture server, runs all five tasks, validates every
+The command builds `opensided` with `cargo build --offline --locked -j
+${CARGO_BUILD_JOBS:-4} -p opensided --bin opensided`, discovers the sidecar
+interpreter with `uv`, starts a temporary daemon and fixture server, runs all
+five tasks, validates every
 result with JSON Schema, prints the summary, and stops its daemon, sidecars,
 browser descendants, and fixture server. No model credentials are read in the
 default scripted mode. HOME, all XDG directories, workspace, socket, and browser
 profiles are temporary and private. No broker or user's browser profile is used.
+
+The scripted suite explicitly selects `orchestration = "single"` because its
+fixed responses call tools directly. Live mode keeps the product's default
+front-agent orchestration, with acting tools delegated to background Tasks.
+Every task result and the run summary record the mode in `openside.orchestration`.
 
 The benchmark run performs no external network requests: Cargo and uv are
 forced offline; fixture pages use a restrictive same-origin CSP and contain no
@@ -94,6 +103,8 @@ All openside-specific measurements are under the single `openside` extension:
 
 - `suite`: `openside-local-web-v1`; `mode`: `scripted` or `live`.
 - `grader`: `fixture-state-v1`, a deterministic local state/file grader.
+- `orchestration`: `single` for scripted direct-tool responses; `front` for live
+  mode using the product default.
 - `steps`: number of actual daemon `tool.started` events, including the fake
   2FA ticket request. A REPL tool call can contain several browser actions.
 - `tokens.input/output`: sums of actual daemon `usage` events. Scripted counts
@@ -138,7 +149,9 @@ environment variables are forwarded; broker, keyring, user CLI authentication,
 and user configuration are not inherited. Live mode selects the existing
 `ultrabrowse` profile, which explicitly requests high thinking; that setting and
 the model/provider are recorded. Scripted mode has no thinking (`off`). Fast
-mode is disabled in both modes. The grader remains the same local deterministic
+mode is disabled in both modes. The live front agent starts Tasks for browser
+actions rather than receiving direct access to acting tools; the benchmark does
+not override this mode. The grader remains the same local deterministic
 grader; no LLM grader is called. Live mode is not run by ordinary pytest and
 should be explicitly budgeted by the operator.
 

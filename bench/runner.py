@@ -128,6 +128,7 @@ def daemon_process(binary: Path, browser: Path, python: Path, live_model: str | 
         model = live_model or "script"
         config = (
             "[agent]\ncommand = " + json.dumps([str(python), "-m", "openside_agent"])
+            + ('\norchestration = "single"\n' if not live_model else "\n")
             + f"\nprofile = {json.dumps(profile)}\n"
             + "[models]\ndefault = " + json.dumps(model)
             + "\n[policy]\nmode = \"full\"\n"
@@ -258,7 +259,8 @@ def metrics(events: list[dict], state, task_id: str, resolved: int, live: bool) 
     with state.lock:
         browser_bytes = state.browser_bytes.get(task_id, 0)
     return {
-        "suite": SUITE, "mode": "live" if live else "scripted", "grader": "fixture-state-v1",
+        "suite": SUITE, "mode": "live" if live else "scripted",
+        "orchestration": "front" if live else "single", "grader": "fixture-state-v1",
         "steps": sum(event["kind"] == "tool.started" for event in events),
         "tokens": {
             "input": sum(event["input_tokens"] for event in usage),
@@ -345,7 +347,9 @@ def summarize(results: list[dict], selection: dict, total_duration: float) -> di
     by_category = {}
     counts = {"passed": 0, "failed": 0, "impossible": 0, "errors": 0}
     verdict_key = {"pass": "passed", "fail": "failed", "impossible": "impossible", "error": "errors"}
-    extension = {"suite": SUITE, "mode": results[0]["openside"]["mode"], "grader": "fixture-state-v1", "steps": 0,
+    extension = {"suite": SUITE, "mode": results[0]["openside"]["mode"],
+                 "orchestration": results[0]["openside"]["orchestration"],
+                 "grader": "fixture-state-v1", "steps": 0,
                  "tokens": {"input": 0, "output": 0, "source": results[0]["openside"]["tokens"]["source"]},
                  "browserBytes": 0, "ticketsResolved": 0}
     for result in results:

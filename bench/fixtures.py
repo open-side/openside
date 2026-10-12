@@ -108,7 +108,9 @@ TASKS = (
         "Open {origin}/download/ and download report.csv using the Get report link.",
         (
             "await page.goto('FIXTURE_ORIGIN/download/'); await page.snapshot()",
-            "await page.getByRole('link', {name: 'Get report'}).click()",
+            "const [download] = await Promise.all([page.waitForEvent('download'), "
+            "page.getByRole('link', {name: 'Get report'}).click()]); "
+            "await download.saveAs('report.csv')",
         ),
     ),
 )

@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 ROOT=$PWD
 DIR=${OPENSIDE_GATE_DIR:-target/gate}
 case $DIR in /*) ;; *) DIR=$ROOT/$DIR ;; esac
-JOBS=${OPENSIDE_GATE_JOBS:-12}
+JOBS=${OPENSIDE_GATE_JOBS:-${CARGO_BUILD_JOBS:-4}}
 
 rm -rf "$DIR"
 mkdir -p "$DIR"
@@ -27,6 +27,16 @@ step() {
 cargo_test() { cargo test -j "$JOBS" --no-fail-fast 2>&1 | tee "$DIR/cargo-test.log"; }
 cargo_clippy() { cargo clippy --all-targets -j "$JOBS" -- -D warnings; }
 
+
+responsive_checks() {
+  python3 tools/qa/responsive.py --results "$DIR" --jobs "$JOBS"
+}
+
+browser_ux_checks() {
+  tools/check-browser-ux.py &&
+    OPENSIDE_QA_OUT="$DIR" tools/qa/headed-ux.sh sway stock --prewarm-only \
+      --daemon-bin "$ROOT/target/debug/e2e-opensided" --junitxml "$DIR/headed-pytest.xml"
+}
 agent_checks() {
   (cd agent && uv run ruff check && uv run ruff format --check && uv run pyright \
     && uv run pytest -m 'not live' --junitxml="$DIR/pytest.xml")
@@ -80,6 +90,7 @@ acceptance_scripts() {
 step "cargo fmt" cargo fmt --check
 step "cargo clippy" cargo_clippy
 step "cargo test" cargo_test
+step "responsive first browser action" responsive_checks
 step "agent (ruff, pyright, pytest)" agent_checks
 js_checks web
 js_checks extension
@@ -90,7 +101,7 @@ step "bench tests" uv run --offline --frozen --project bench pytest bench/tests 
 step "CI workflow" tools/check-ci.py
 step "component languages" tools/check-languages.py
 step "Rust/npm/Python licenses and NOTICE" tools/check-licenses.py
-step "browser UX evidence" tools/check-browser-ux.py
+step "browser UX evidence" browser_ux_checks
 step "installed platform targets" tools/check-platforms.py
 step "openapi breaking changes" tools/openapi-diff.py
 # Payloads are kept current by the opensided profile snapshot tests in the cargo test step.
