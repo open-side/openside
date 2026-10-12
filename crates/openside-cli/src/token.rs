@@ -26,6 +26,10 @@ pub(crate) struct CreateArgs {
     /// Label shown for the device.
     #[arg(long, value_name = "NAME", default_value = "cli token")]
     name: String,
+    /// Issue a person's web/phone/extension token, not an agent-client token.
+    /// Run this on the daemon host; never give a person token to an agent.
+    #[arg(long)]
+    person: bool,
 }
 
 pub(crate) fn parse_scope(value: &str) -> Result<CapabilityScope, String> {
@@ -50,6 +54,11 @@ pub(crate) async fn execute<W: Write>(
                     Some(&PairDeviceRequest {
                         name: args.name.clone(),
                         scopes,
+                        kind: if args.person {
+                            openside_proto::DeviceKind::PersonDevice
+                        } else {
+                            openside_proto::DeviceKind::AgentClient
+                        },
                     }),
                 )
                 .await

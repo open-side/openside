@@ -86,10 +86,61 @@ async fn handle(State(shared): State<Shared>, request: Request<Body>) -> Respons
         ("POST", "/v1/sessions/s-1/messages") => respond(
             202,
             json!({"id": body["message_id"].as_str().unwrap_or("m-1"),
-                "text": body["text"], "status":"pending"}),
+                "text": body["text"], "status":"delivered"}),
         ),
         ("GET", "/v1/tickets") => respond(200, json!({"tickets": mock.tickets})),
         ("GET", "/v1/tickets/t-1") => respond(200, ticket()),
+        ("GET", "/v1/tickets/t-login") => {
+            let mut login = ticket();
+            login["id"] = json!("t-login");
+            login["deferral"] = json!("external");
+            login["kind"] = json!("login");
+            login["status"] = json!("resolved");
+            login["resolution"] = json!({"signed_in": true});
+            respond(200, login)
+        }
+        ("GET", "/v1/tickets/t-choice") => {
+            let mut choice = ticket();
+            choice["id"] = json!("t-choice");
+            choice["kind"] = json!("choice");
+            respond(200, choice)
+        }
+        ("GET", "/v1/tools") => respond(
+            200,
+            json!({"tools":[
+                {"name":"browser_open_tab","description":"Open a tab.","scope":"browse","human":false,
+                 "input_schema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}},
+                {"name":"browser_snapshot","description":"Snapshot.","scope":"browse","human":false,
+                 "input_schema":{"type":"object","properties":{"tab_id":{"type":"string"},"scope":{"type":"string"}},"additionalProperties":false}},
+                {"name":"request_login","description":"Sign in.","scope":"browse","human":true,
+                 "input_schema":{"type":"object","properties":{"tab_id":{"type":"string"}},"additionalProperties":false}},
+            ]}),
+        ),
+        ("POST", "/v1/sessions/s-1/tools/browser_open_tab") => respond(
+            200,
+            json!({"tool_call_id":"api-tool-1","status":"done","result":{"tab_id":"tab-1"}}),
+        ),
+        ("POST", "/v1/sessions/s-1/tools/browser_snapshot") => respond(
+            200,
+            json!({"tool_call_id":"api-tool-2","status":"done","result":"- heading \"Mock\" [e1]"}),
+        ),
+        ("POST", "/v1/sessions/s-1/tools/request_login") => respond(
+            200,
+            json!({"tool_call_id":"api-tool-3","status":"deferred","ticket_id":"t-login","deferral":"external"}),
+        ),
+        ("GET", "/v1/sessions/s-1/subagents") => respond(
+            200,
+            json!({"subagents":[{"id":"task-1","parent_tool_call_id":"c1","task":"compare prices",
+                "model":"m","tools":[],"status":"running","started_at":"2026-01-01T00:00:00Z",
+                "background":true}]}),
+        ),
+        ("POST", "/v1/sessions/s-1/subagents/task-1/steer") => respond(
+            202,
+            json!({"id":"task-1","parent_tool_call_id":"c1","task":"compare prices",
+                "model":"m","tools":[],"status":"running","started_at":"2026-01-01T00:00:00Z",
+                "background":true}),
+        ),
+        ("POST", "/v1/sessions/s-1/stop") => respond(200, session("idle")),
         ("GET", "/v1/tickets/t-secret") => {
             let mut secret = ticket();
             secret["id"] = json!("t-secret");
@@ -246,7 +297,7 @@ fn is_public_route(method: &str, target: &str) -> bool {
 }
 
 #[tokio::test]
-async fn tools_list_is_the_documented_set_with_closed_schemas() {
+async fn tools_list_is_the_documented_set_plus_the_daemon_catalog() {
     let rig = Rig::new(|_| {}).await;
     let tools = rig.peer.list_all_tools().await.unwrap();
     let mut names: Vec<_> = tools.iter().map(|tool| tool.name.to_string()).collect();
@@ -254,11 +305,16 @@ async fn tools_list_is_the_documented_set_with_closed_schemas() {
     assert_eq!(
         names,
         [
-            "browser_act",
-            "browser_open",
+            "agent_cancel",
+            "agent_result",
+            "agent_run",
+            "agent_status",
+            "agent_steer",
+            "browser_open_tab",
             "browser_repl",
             "browser_snapshot",
             "memory_search",
+            "request_login",
             "session_create",
             "session_list",
             "session_send",
@@ -266,6 +322,7 @@ async fn tools_list_is_the_documented_set_with_closed_schemas() {
             "session_wait",
             "ticket_list",
             "ticket_resolve",
+            "ticket_wait",
         ]
     );
     for tool in &tools {
@@ -282,16 +339,30 @@ async fn tools_list_is_the_documented_set_with_closed_schemas() {
                 | "session_status"
                 | "session_wait"
                 | "ticket_list"
+                | "ticket_wait"
                 | "memory_search"
+                | "agent_status"
+                | "agent_result"
                 | "browser_snapshot"
         );
         assert_eq!(read_only, Some(expected), "{}", tool.name);
     }
+    // Catalog tools keep the daemon's schema and gain the session and ticket arguments.
+    let open = tools
+        .iter()
+        .find(|tool| tool.name == "browser_open_tab")
+        .unwrap();
+    assert_eq!(open.input_schema["required"], json!(["url", "session_id"]));
+    assert!(open.input_schema["properties"]["approval_ticket"].is_object());
     assert!(
-        !tools
-            .iter()
-            .any(|tool| tool.name.contains("secret") || tool.name.contains("vault")),
-        "no tool may take or reveal secrets"
+        !tools.iter().any(
+            |tool| tool.input_schema["properties"]
+                .as_object()
+                .is_some_and(|properties| properties
+                    .keys()
+                    .any(|key| key.contains("password") || key.contains("secret")))
+        ),
+        "no tool may take a secret"
     );
 }
 
@@ -440,7 +511,7 @@ async fn ticket_resolve_refuses_secret_input_and_never_calls_the_resolve_route()
     );
 
     let resolved = rig
-        .call("ticket_resolve", json!({"ticket_id":"t-1","value":true}))
+        .call("ticket_resolve", json!({"ticket_id":"t-1","value":false}))
         .await
         .unwrap();
     assert_ne!(resolved.is_error, Some(true));
@@ -451,7 +522,7 @@ async fn ticket_resolve_refuses_secret_input_and_never_calls_the_resolve_route()
         .into_iter()
         .find(|(method, target, _)| method == "POST" && target == "/v1/tickets/t-1/resolve")
         .unwrap();
-    assert_eq!(post.2, json!({"value": true}));
+    assert_eq!(post.2, json!({"value": false}));
 
     let listed = rig.call("ticket_list", json!({})).await.unwrap();
     assert_ne!(listed.is_error, Some(true));
@@ -464,6 +535,31 @@ async fn ticket_resolve_refuses_secret_input_and_never_calls_the_resolve_route()
         .requests()
         .iter()
         .any(|(_, target, _)| target == "/v1/tickets"));
+}
+
+#[tokio::test]
+async fn person_decisions_are_refused_before_posting_and_tell_mcp_to_wait() {
+    let rig = Rig::new(|_| {}).await;
+    for (id, value) in [
+        ("t-1", json!(true)),
+        ("t-1", json!("approve")),
+        ("t-choice", json!({"option":"o1"})),
+    ] {
+        let refused = rig
+            .call("ticket_resolve", json!({"ticket_id":id,"value":value}))
+            .await
+            .unwrap();
+        assert_eq!(refused.is_error, Some(true));
+        let message = text(&refused);
+        assert!(
+            message.contains("person_approval_required") && message.contains("ticket_wait"),
+            "{message}"
+        );
+    }
+    assert!(rig
+        .requests()
+        .iter()
+        .all(|(_, path, _)| !path.ends_with("/resolve")));
 }
 
 #[tokio::test]
@@ -530,65 +626,83 @@ async fn memory_search_encodes_its_query_and_tokens_are_redacted_from_errors() {
 }
 
 #[tokio::test]
-async fn browser_tools_run_repl_code_and_map_every_status() {
+async fn catalog_tools_call_the_tools_route_and_wait_for_the_person() {
     let rig = Rig::new(|_| {}).await;
     let open = rig
         .call(
-            "browser_open",
-            json!({"session_id":"s-1","url":"http://127.0.0.1/\"quoted\""}),
+            "browser_open_tab",
+            json!({"session_id":"s-1","url":"http://127.0.0.1/"}),
         )
         .await
         .unwrap();
     assert_ne!(open.is_error, Some(true), "{}", text(&open));
     let open: Value = serde_json::from_str(&text(&open)).unwrap();
-    assert_eq!(open["tab_id"], "tab-1");
+    assert_eq!(open["result"]["tab_id"], "tab-1");
+    let post = rig
+        .requests()
+        .into_iter()
+        .find(|(_, target, _)| target == "/v1/sessions/s-1/tools/browser_open_tab")
+        .unwrap();
+    // The MCP-only arguments never reach the daemon tool.
+    assert_eq!(post.2, json!({"args":{"url":"http://127.0.0.1/"}}));
 
-    let snapshot = rig
+    // A login ticket's resolution, given in the web or phone UI, is the call's result.
+    let login = rig
         .call(
-            "browser_snapshot",
+            "request_login",
             json!({"session_id":"s-1","tab_id":"tab-1"}),
         )
         .await
         .unwrap();
-    assert_eq!(text(&snapshot), "tab_id: tab-1\n- heading \"Mock\" [e1]");
+    assert_ne!(login.is_error, Some(true), "{}", text(&login));
+    let login: Value = serde_json::from_str(&text(&login)).unwrap();
+    assert_eq!(login["status"], "resolved");
+    assert_eq!(login["result"], json!({"signed_in": true}));
 
-    let acted = rig
+    // Without waiting, the pending ticket comes back at once.
+    let pending = rig
         .call(
-            "browser_act",
-            json!({"session_id":"s-1","action":"fill","ref":"e4","text":"hi \"there\""}),
+            "request_login",
+            json!({"session_id":"s-1","tab_id":"tab-1","wait":false}),
         )
         .await
         .unwrap();
-    assert_ne!(acted.is_error, Some(true));
+    let pending: Value = serde_json::from_str(&text(&pending)).unwrap();
+    assert_eq!(pending["status"], "deferred");
+    assert_eq!(pending["deferral"], "external");
+    assert_eq!(pending["ticket_id"], "t-login");
 
-    let codes: Vec<String> = rig
-        .requests()
-        .into_iter()
-        .filter(|(_, target, _)| target == "/v1/sessions/s-1/repl")
-        .map(|(_, _, body)| body["code"].as_str().unwrap().to_owned())
-        .collect();
-    // The URL and text are JSON-escaped, so quotes cannot break out of the string literal.
-    assert_eq!(
-        codes[0],
-        r#"await page.goto("http://127.0.0.1/\"quoted\""); await page.url()"#
-    );
-    assert_eq!(codes[1], "await page.snapshot()");
-    assert_eq!(
-        codes[2],
-        r#"await page.locator("aria-ref=e4").fill("hi \"there\""); await page.url()"#
-    );
-    let tab = rig
-        .requests()
-        .into_iter()
-        .filter(|(_, target, _)| target == "/v1/sessions/s-1/repl")
-        .nth(1)
+    let missing = rig
+        .call("browser_snapshot", json!({"tab_id":"tab-1"}))
+        .await
+        .unwrap_err();
+    assert!(missing.contains("session_id"), "{missing}");
+
+    let waited = rig
+        .call("ticket_wait", json!({"ticket_id":"t-login"}))
+        .await
         .unwrap();
-    assert_eq!(tab.2["tab_id"], "tab-1");
+    let waited: Value = serde_json::from_str(&text(&waited)).unwrap();
+    assert_eq!(waited["status"], "resolved");
+    assert_eq!(waited["resolution"], json!({"signed_in": true}));
+    let still = rig
+        .call("ticket_wait", json!({"ticket_id":"t-1","timeout_secs":1}))
+        .await
+        .unwrap();
+    let still: Value = serde_json::from_str(&text(&still)).unwrap();
+    assert_eq!(still["status"], "pending");
+    for (method, target, _) in rig.requests() {
+        assert!(is_public_route(&method, &target), "{method} {target}");
+    }
+}
 
+#[tokio::test]
+async fn browser_repl_maps_every_status() {
+    let rig = Rig::new(|_| {}).await;
     let deferred = rig
         .call(
             "browser_repl",
-            json!({"session_id":"s-1","code":"approval-needed"}),
+            json!({"session_id":"s-1","code":"approval-needed","wait":false}),
         )
         .await
         .unwrap();
@@ -611,6 +725,19 @@ async fn browser_tools_run_repl_code_and_map_every_status() {
         .unwrap();
     assert_eq!(retried.2["approval_ticket"], "t-9");
 
+    let snapshot = rig
+        .call(
+            "browser_repl",
+            json!({"session_id":"s-1","code":"await page.snapshot()","tab_id":"tab-1"}),
+        )
+        .await
+        .unwrap();
+    let snapshot: Value = serde_json::from_str(&text(&snapshot)).unwrap();
+    assert_eq!(
+        snapshot["result"]["return_value"],
+        "- heading \"Mock\" [e1]"
+    );
+
     let denied = rig
         .call(
             "browser_repl",
@@ -626,16 +753,88 @@ async fn browser_tools_run_repl_code_and_map_every_status() {
         .unwrap();
     assert_eq!(thrown.is_error, Some(true));
     assert!(text(&thrown).contains("boom"));
-
-    for bad in [
-        json!({"session_id":"s-1","action":"click","ref":"e1\"); evil(\""}),
-        json!({"session_id":"s-1","action":"fill","ref":"e1"}),
-        json!({"session_id":"s-1","action":"explode","ref":"e1"}),
-    ] {
-        assert!(rig.call("browser_act", bad).await.is_err());
-    }
     for (method, target, _) in rig.requests() {
         assert!(is_public_route(&method, &target), "{method} {target}");
+    }
+}
+
+#[tokio::test]
+async fn agent_run_delegates_the_goal_and_waits_for_the_replies() {
+    let rig = Rig::new(|mock| mock.events = message_events(vec![])).await;
+    let started = rig
+        .call("agent_run", json!({"goal":"find the cheapest flight"}))
+        .await
+        .unwrap();
+    assert_ne!(started.is_error, Some(true), "{}", text(&started));
+    let started: Value = serde_json::from_str(&text(&started)).unwrap();
+    assert_eq!(started["session_id"], "s-1");
+    assert_eq!(started["message_id"], "m-1");
+    assert_eq!(started["after_seq"], 7);
+    let message = rig
+        .requests()
+        .into_iter()
+        .find(|(method, target, _)| method == "POST" && target == "/v1/sessions/s-1/messages")
+        .unwrap();
+    assert_eq!(message.2["text"], "find the cheapest flight");
+    assert_eq!(message.2["mode"], "now");
+
+    let result = rig
+        .call(
+            "agent_result",
+            json!({"session_id":"s-1","after_seq":7,"message_id":"m-1","timeout_secs":20}),
+        )
+        .await
+        .unwrap();
+    let result: Value = serde_json::from_str(&text(&result)).unwrap();
+    assert_eq!(result["status"], "settled");
+    assert_eq!(result["replies"], json!(["hello from the daemon"]));
+    assert_eq!(result["tasks"][0]["task_id"], "task-1");
+
+    let waited = rig
+        .call(
+            "agent_run",
+            json!({"goal":"again","session_id":"s-1","wait":true,"timeout_secs":20}),
+        )
+        .await
+        .unwrap();
+    let waited: Value = serde_json::from_str(&text(&waited)).unwrap();
+    assert_eq!(waited["status"], "settled");
+    assert_eq!(waited["replies"], json!(["hello from the daemon"]));
+
+    let status = rig
+        .call("agent_status", json!({"session_id":"s-1"}))
+        .await
+        .unwrap();
+    let status: Value = serde_json::from_str(&text(&status)).unwrap();
+    assert_eq!(status["status"], "idle");
+    assert_eq!(status["tasks"][0]["status"], "running");
+
+    let steered = rig
+        .call(
+            "agent_steer",
+            json!({"session_id":"s-1","text":"only nonstop","task_id":"task-1"}),
+        )
+        .await
+        .unwrap();
+    assert_ne!(steered.is_error, Some(true), "{}", text(&steered));
+    rig.call("agent_steer", json!({"session_id":"s-1","text":"hurry"}))
+        .await
+        .unwrap();
+    let cancelled = rig
+        .call("agent_cancel", json!({"session_id":"s-1"}))
+        .await
+        .unwrap();
+    assert_ne!(cancelled.is_error, Some(true), "{}", text(&cancelled));
+
+    let requests = rig.requests();
+    assert!(requests.iter().any(|(_, target, body)| target
+        == "/v1/sessions/s-1/subagents/task-1/steer"
+        && body["text"] == "only nonstop"));
+    assert!(requests
+        .iter()
+        .any(|(_, target, body)| target == "/v1/sessions/s-1/messages" && body["mode"] == "steer"));
+    for (method, target, _) in &requests {
+        assert!(is_public_route(method, target), "{method} {target}");
     }
 }
 

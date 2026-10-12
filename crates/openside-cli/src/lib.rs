@@ -10,6 +10,12 @@
 //! trailing LF or CRLF; both keep secrets out of argv and shell history.
 //! `--totp` with either form instead sends the input as `{"totp": ...}`, registering the site's
 //! authenticator on a `request_otp` ticket that offers it.
+//! A `login` ticket asks one prompt per page field (hidden for masked fields, `[y/N]` for
+//! checkboxes) and sends `{"values": ..., "save": ...}`; saving follows the site's `can_save`
+//! unless `--no-save` (`--save` insists and fails where saving is not allowed).
+//! `--alternative ID` and `--account ITEM_ID` answer it without typing. A `choice` ticket lists
+//! the page's options and sends `{"option": id}` for the picked number. `-` reads the same
+//! answers from piped stdin, one line per prompt.
 //! Apart from `repl` and `vault init|unlock|add`, these are the only stdin-reading commands,
 //! and they never print the supplied value.
 //! `--model`, `--mode read-only|guard|full`, and `--workspace PATH` select session
@@ -37,6 +43,14 @@
 //! `mcp` serves the public API as an MCP server on stdin/stdout (`docs/specs/mcp.md`); it uses
 //! the same connection and token as every other command, so the token's scopes bound what an
 //! MCP client can do. `--json` has no effect: stdout carries only the MCP protocol.
+//! `run GOAL [--session ID] [--wait|--follow]` delegates a goal to the openside browser agent
+//! (detached by default; `--wait` waits through human tickets and prints the replies) and
+//! `steer`, `cancel` and `tasks` manage the run and its Tasks. `browser <verb> <session> ARGS`
+//! calls one of the session's browser or human-step tools directly, and `session new` creates
+//! a session to drive (`docs/specs/mcp.md`).
+//! `remote setup|status` configures and inspects this daemon's remote transports, `connect`
+//! saves another daemon as a profile and `remote profiles list|rm` manages the saved profiles
+//! that `--remote NAME` selects (`docs/REMOTE.md`).
 //!
 //! The default connection is the daemon socket resolved from the shared configuration
 //! (`daemon.socket`/`OPENSIDE_SOCKET`, else `<runtime dir>/opensided.sock`).
@@ -60,6 +74,8 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod accounts;
+mod agent;
+mod browser;
 mod client;
 mod cursor;
 mod import;
@@ -69,6 +85,8 @@ mod pair;
 mod policy;
 mod prompt;
 mod reference;
+mod remote;
+mod remotes;
 mod repl;
 mod routines;
 mod service;
@@ -76,7 +94,9 @@ mod skills;
 mod sse;
 mod sync;
 mod token;
+mod tool_call;
 mod vault;
+mod wait;
 
 use std::{
     collections::BTreeSet,
@@ -90,9 +110,9 @@ use http_body_util::BodyExt;
 use openside_config::doctor::{self, DoctorOptions, Status};
 use openside_config::StoredVault;
 use openside_proto::{
-    CreateSessionRequest, Event, EventKind, Message, MessageMode, MessageOutcome, PolicyMode,
-    RejectTicketRequest, ResolveTicketRequest, Session, SessionList, SessionStatus,
-    SubmitMessageRequest, Ticket, TicketKind, TicketList,
+    BrowserSpace, CreateSessionRequest, Event, EventKind, LoginFieldKind, Message, MessageMode,
+    MessageOutcome, PolicyMode, RejectTicketRequest, ResolveTicketRequest, Session, SessionList,
+    SessionStatus, SubmitMessageRequest, Ticket, TicketChoice, TicketKind, TicketList, TicketLogin,
 };
 use openside_vault::StoredFormat;
 use serde::Serialize;
@@ -122,6 +142,15 @@ struct Args {
     #[arg(
         long,
         global = true,
+        env = "OPENSIDE_REMOTE",
+        conflicts_with_all = ["socket", "url"],
+        value_name = "NAME",
+        help = "Remote daemon profile saved by `openside connect` (see `openside remote profiles list`)"
+    )]
+    remote: Option<String>,
+    #[arg(
+        long,
+        global = true,
         value_name = "URL",
         help = "Loopback HTTP endpoint (requires a token)"
     )]
@@ -144,6 +173,12 @@ struct Args {
     mode: Option<Mode>,
     #[arg(long, value_name = "PATH", help = "Workspace for the new session")]
     workspace: Option<PathBuf>,
+    #[arg(
+        long,
+        value_enum,
+        help = "Browser space for the new session: shared (default, the managed profile with its logins) or isolated (own cookies and storage, wiped when the session is archived or deleted)"
+    )]
+    browser_space: Option<Space>,
 }
 
 #[derive(Subcommand)]
@@ -190,6 +225,51 @@ enum Command {
         #[command(subcommand)]
         command: skills::SkillsCommand,
     },
+    /// Delegate a goal to the openside browser agent; prints the session and message ids.
+    Run {
+        /// What the agent should do; `-` reads it from stdin.
+        goal: String,
+        /// Run in this session instead of a new one.
+        #[arg(long, value_name = "SESSION_ID")]
+        session: Option<String>,
+        /// Wait until the run ends (through any tickets a person answers) and print the replies.
+        #[arg(long, conflicts_with = "follow")]
+        wait: bool,
+        /// Stream the run's text, progress and tickets until the session settles.
+        #[arg(long)]
+        follow: bool,
+        /// With --wait: give up after this many seconds (status `timeout`, exit 1).
+        #[arg(long, value_name = "SECS", requires = "wait")]
+        timeout: Option<u64>,
+    },
+    /// Steer a running agent, or one of its Tasks with --task.
+    Steer {
+        /// Session to steer.
+        session: String,
+        /// The guidance to send.
+        text: String,
+        /// Steer this Task instead of the session's agent (ids from `openside tasks`).
+        #[arg(long, value_name = "TASK_ID")]
+        task: Option<String>,
+    },
+    /// Cancel one Task with --task, otherwise stop the session's run.
+    Cancel {
+        /// Session whose run or Task to cancel.
+        session: String,
+        /// Cancel only this Task; the agent and the other Tasks keep running.
+        #[arg(long, value_name = "TASK_ID")]
+        task: Option<String>,
+    },
+    /// List a session's Tasks and subagents with their status and results.
+    Tasks {
+        /// Session to list.
+        session: String,
+    },
+    /// Call the session's browser and human-step tools directly, like the in-app agent.
+    Browser {
+        #[command(subcommand)]
+        command: browser::BrowserCommand,
+    },
     /// Run Playwright-syntax JavaScript in a session's agent tab.
     Repl {
         /// Session whose agent tab runs the code.
@@ -214,6 +294,15 @@ enum Command {
     },
     /// Pair a phone or browser: print a one-time QR code valid for 3 minutes (local socket).
     Pair(pair::PairArgs),
+    /// Pair this computer with a remote daemon from its pairing link and save it as a
+    /// `--remote` profile.
+    Connect(remotes::ConnectArgs),
+    /// This daemon's remote access (Tailscale, Cloudflare Tunnel or a relay) and the saved
+    /// profiles for reaching other daemons.
+    Remote {
+        #[command(subcommand)]
+        command: remote::RemoteCommand,
+    },
     /// List or revoke paired devices (admin).
     Device {
         #[command(subcommand)]
@@ -229,6 +318,11 @@ enum Command {
 #[derive(Subcommand)]
 enum SessionCommand {
     List,
+    /// Create an empty session to drive with `browser` or `repl`; prints its id.
+    New {
+        #[arg(long)]
+        title: Option<String>,
+    },
     Resume {
         id: String,
         text: Option<String>,
@@ -257,7 +351,7 @@ enum TicketCommand {
         id: String,
         #[arg(
             allow_hyphen_values = true,
-            help = "JSON or text; '-' reads secret_input from stdin; omitted on a secret_input ticket, asks at a hidden prompt"
+            help = "JSON or text; '-' reads secret_input from stdin; omitted on a secret_input, login or choice ticket, asks at prompts"
         )]
         value: Option<String>,
         #[arg(
@@ -265,6 +359,28 @@ enum TicketCommand {
             help = "With '-' or the prompt: the input is the site's authenticator (otpauth:// URI or base32 setup key) to save in the vault instead of a code; request_otp tickets that offer registration only"
         )]
         totp: bool,
+        #[arg(
+            long,
+            conflicts_with = "no_save",
+            help = "Login tickets: save the login to the vault (the default when the site allows it; needs the approve scope)"
+        )]
+        save: bool,
+        #[arg(long, help = "Login tickets: log in without saving to the vault")]
+        no_save: bool,
+        #[arg(
+            long,
+            value_name = "ID",
+            conflicts_with_all = ["value", "account", "save", "no_save"],
+            help = "Login tickets: use the page's other sign-in option ID (see `ticket show`) instead of typing"
+        )]
+        alternative: Option<String>,
+        #[arg(
+            long,
+            value_name = "ITEM_ID",
+            conflicts_with_all = ["value", "save", "no_save"],
+            help = "Login tickets: log in with this saved vault account (see `ticket show`)"
+        )]
+        account: Option<String>,
     },
     Done {
         id: String,
@@ -293,6 +409,21 @@ impl From<Mode> for PolicyMode {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum Space {
+    Shared,
+    Isolated,
+}
+
+impl From<Space> for BrowserSpace {
+    fn from(space: Space) -> Self {
+        match space {
+            Space::Shared => Self::Shared,
+            Space::Isolated => Self::Isolated,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Summary {
     session_id: Option<String>,
@@ -306,6 +437,12 @@ struct Summary {
 /// This is the content of `docs/reference/cli.md`; a test fails when the committed file differs.
 pub fn reference_markdown() -> String {
     reference::markdown()
+}
+
+/// Tool names the `browser` verbs call, sorted; the daemon's `GET /v1/tools` catalog must list
+/// exactly these (checked in openside-e2e).
+pub fn browser_verb_tools() -> Vec<&'static str> {
+    browser::verb_tools()
 }
 
 /// Runs the CLI using argv (including the executable name) and caller-owned writers.
@@ -410,12 +547,22 @@ where
         }
         return 2;
     }
-    if args.command.is_some()
-        && (args.model.is_some() || args.mode.is_some() || args.workspace.is_some())
+    let creates_session = matches!(
+        args.command,
+        None | Some(Command::Run { session: None, .. })
+            | Some(Command::Session {
+                command: SessionCommand::New { .. }
+            })
+    );
+    if !creates_session
+        && (args.model.is_some()
+            || args.mode.is_some()
+            || args.workspace.is_some()
+            || args.browser_space.is_some())
     {
         let _ = writeln!(
             stderr,
-            "openside: --model, --mode, and --workspace require a task"
+            "openside: --model, --mode, --workspace and --browser-space apply to a new session: a task, `run` without --session, or `session new`"
         );
         if args.json {
             let _ = emit(
@@ -431,6 +578,7 @@ where
             args.url.as_deref(),
             args.token,
             stderr,
+            args.remote.clone(),
         )
         .await;
     }
@@ -441,6 +589,18 @@ where
         import::run(import_args, args.json, stdout).await
     } else if let Some(Command::Service { command }) = &args.command {
         service::execute(command, stdout)
+    } else if let Some(Command::Connect(connect)) = &args.command {
+        remotes::connect(connect, args.json, stdin, stdout, stderr).await
+    } else if let Some(Command::Remote {
+        command: remote::RemoteCommand::Profiles { command },
+    }) = &args.command
+    {
+        remotes::remotes(command, args.json, stdout)
+    } else if let Some(Command::Remote {
+        command: remote::RemoteCommand::Setup(setup),
+    }) = &args.command
+    {
+        remote::setup(setup, args.json, stdout).await
     } else if let Some(Command::Memory {
         command: memory::MemoryCommand::Model { command },
     }) = &args.command
@@ -453,11 +613,14 @@ where
     {
         skills::local(command, args.json, stdout)
     } else {
-        let client = match Client::new(
+        let client = match Client::from_flags(
             args.socket.as_deref(),
             args.url.as_deref(),
             args.token.as_deref(),
-        ) {
+            args.remote.as_deref(),
+        )
+        .await
+        {
             Ok(client) => client,
             Err(error) => {
                 let _ = writeln!(stderr, "openside: {error}");
@@ -481,6 +644,10 @@ where
         summary.status = "error";
         1
     } else {
+        // Commands that run without a daemon never set a status of their own.
+        if summary.status.is_empty() {
+            summary.status = "ok";
+        }
         u8::from(summary.failed)
     };
     if args.json
@@ -518,27 +685,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                 .as_deref()
                 .ok_or("a task or subcommand is required")?;
             let session: Session = client
-                .json(
-                    "POST",
-                    "/v1/sessions",
-                    Some(&CreateSessionRequest {
-                        title: None,
-                        model: args.model.clone(),
-                        mode: args.mode.map(Into::into),
-                        workspace: args
-                            .workspace
-                            .as_ref()
-                            .map(|path| {
-                                path.canonicalize()
-                                    .map_err(|_| "could not canonicalize --workspace".to_owned())?
-                                    .into_os_string()
-                                    .into_string()
-                                    .map_err(|_| "--workspace must be valid UTF-8".to_owned())
-                            })
-                            .transpose()?,
-                        incognito: false,
-                    }),
-                )
+                .json("POST", "/v1/sessions", Some(&create_request(args, None)?))
                 .await?;
             summary.session_id = Some(session.id.to_string());
             send_message(client, session.id.as_str(), task).await?;
@@ -555,6 +702,84 @@ async fn execute<R: Read, W: Write, E: Write>(
                 summary,
             )
             .await
+        }
+        Some(Command::Run {
+            goal,
+            session,
+            wait,
+            follow: stream,
+            timeout,
+        }) => {
+            let goal = if goal == "-" {
+                let mut text = String::new();
+                stdin
+                    .read_to_string(&mut text)
+                    .map_err(|_| "could not read the goal from stdin".to_owned())?;
+                text
+            } else {
+                goal.clone()
+            };
+            if goal.trim().is_empty() {
+                return Err("the goal is empty".into());
+            }
+            let create = create_request(args, None)?;
+            if *stream {
+                let started = agent::start(client, session.as_deref(), &create, &goal).await?;
+                summary.session_id = Some(started.session.id.to_string());
+                return follow(
+                    args,
+                    client,
+                    started.session.id.as_str(),
+                    ReplayPoint {
+                        last_seen: started.session.last_seq,
+                        terminal_after: started.session.last_seq,
+                    },
+                    stdout,
+                    stderr,
+                    summary,
+                )
+                .await;
+            }
+            agent::run(
+                agent::RunOptions {
+                    goal: &goal,
+                    session: session.as_deref(),
+                    create,
+                    wait: *wait,
+                    timeout: timeout.map(std::time::Duration::from_secs),
+                    json: args.json,
+                },
+                client,
+                stdout,
+                stderr,
+                summary,
+            )
+            .await
+        }
+        Some(Command::Steer {
+            session,
+            text,
+            task,
+        }) => {
+            agent::steer(
+                client,
+                session,
+                task.as_deref(),
+                text,
+                args.json,
+                stdout,
+                summary,
+            )
+            .await
+        }
+        Some(Command::Cancel { session, task }) => {
+            agent::cancel(client, session, task.as_deref(), args.json, stdout, summary).await
+        }
+        Some(Command::Tasks { session }) => {
+            agent::tasks(client, session, args.json, stdout, summary).await
+        }
+        Some(Command::Browser { command }) => {
+            browser::execute(command, args.json, client, stdout, stderr, summary).await
         }
         Some(Command::Session { command }) => match command {
             SessionCommand::List => {
@@ -574,6 +799,22 @@ async fn execute<R: Read, W: Write, E: Write>(
                     }
                 }
                 Ok(())
+            }
+            SessionCommand::New { title } => {
+                let session: Session = client
+                    .json(
+                        "POST",
+                        "/v1/sessions",
+                        Some(&create_request(args, title.clone())?),
+                    )
+                    .await?;
+                summary.session_id = Some(session.id.to_string());
+                summary.last_seq = Some(session.last_seq);
+                if args.json {
+                    emit(stdout, &session)
+                } else {
+                    writeln!(stdout, "{}", session.id).map_err(output_error)
+                }
             }
             SessionCommand::Stop { id } => {
                 let session: Session = client
@@ -658,70 +899,96 @@ async fn execute<R: Read, W: Write, E: Write>(
             }
             TicketCommand::Show { id } => {
                 let ticket: Ticket = client.get(&client::ticket_path(id, "")).await?;
-                print_ticket(args.json, stdout, &ticket, summary)
+                print_ticket(args.json, stdout, &ticket, summary)?;
+                if !args.json {
+                    print_ticket_details(stdout, &ticket)?;
+                }
+                Ok(())
             }
-            TicketCommand::Resolve { id, value, totp } => {
+            TicketCommand::Resolve {
+                id,
+                value,
+                totp,
+                save,
+                no_save,
+                alternative,
+                account,
+            } => {
                 let ask = value.is_none();
                 let piped = value.as_deref() == Some("-");
+                let login_flags = *save || *no_save || alternative.is_some() || account.is_some();
                 if *totp && !ask && !piped {
                     return Err(
                         "--totp reads the authenticator from stdin or the hidden prompt; pass '-' or omit the value"
                             .to_owned(),
                     );
                 }
-                let secret = if ask || piped {
-                    let ticket: Ticket = client.get(&client::ticket_path(id, "")).await?;
-                    (ticket.kind == TicketKind::SecretInput).then_some(ticket)
-                } else {
-                    None
-                };
-                let secret_input = secret.is_some();
-                if *totp && !secret_input {
-                    return Err("--totp only answers a secret_input ticket".to_owned());
-                }
-                if ask && !secret_input {
+                if login_flags && !ask && !piped {
                     return Err(
-                        "a value is required; only secret_input tickets ask for one at a prompt"
+                        "--save, --no-save, --alternative and --account answer a login ticket at its prompts; omit the value"
                             .to_owned(),
                     );
                 }
-                let value = if let Some(ticket) = &secret {
-                    let input = if ask {
-                        let site = ticket
-                            .target
-                            .as_ref()
-                            .and_then(|target| target.origin.as_deref())
-                            .unwrap_or("this site");
-                        let what = if *totp {
-                            "Authenticator setup key or otpauth:// link"
-                        } else if ticket.otp.is_some() {
-                            "Verification code"
-                        } else {
-                            "Secret"
-                        };
-                        prompt::read_hidden(&format!("{what} for {site}"), stdin, stderr)?
-                    } else {
-                        let mut input = String::new();
-                        stdin
-                            .read_to_string(&mut input)
-                            .map_err(|_| "could not read secret input from stdin".to_owned())?;
-                        if input.ends_with('\n') {
-                            input.pop();
-                            if input.ends_with('\r') {
-                                input.pop();
-                            }
-                        }
-                        input
-                    };
-                    if *totp {
-                        serde_json::json!({ "totp": input })
-                    } else {
-                        Value::String(input)
-                    }
+                let fetched: Option<Ticket> = if ask || piped || login_flags {
+                    Some(client.get(&client::ticket_path(id, "")).await?)
                 } else {
-                    let value = value.as_deref().unwrap_or_default();
-                    serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_owned()))
+                    None
                 };
+                let kind = fetched.as_ref().map(|ticket| ticket.kind);
+                if *totp && kind != Some(TicketKind::SecretInput) {
+                    return Err("--totp only answers a secret_input ticket".to_owned());
+                }
+                if login_flags && kind != Some(TicketKind::Login) {
+                    return Err(
+                        "--save, --no-save, --alternative and --account only answer a login ticket"
+                            .to_owned(),
+                    );
+                }
+                let prompted = matches!(
+                    kind,
+                    Some(TicketKind::SecretInput | TicketKind::Login | TicketKind::Choice)
+                );
+                if ask && !prompted {
+                    return Err(
+                        "a value is required; only secret_input, login and choice tickets ask for one at a prompt"
+                            .to_owned(),
+                    );
+                }
+                let value = match fetched.as_ref().filter(|_| prompted) {
+                    Some(ticket) if ticket.kind == TicketKind::SecretInput => {
+                        secret_answer(ticket, ask, *totp, stdin, stderr)?
+                    }
+                    Some(ticket) if ticket.kind == TicketKind::Login => {
+                        let login = ticket
+                            .login
+                            .as_ref()
+                            .ok_or("this login ticket carries no form")?;
+                        login_answer(
+                            login,
+                            LoginFlags {
+                                save: *save,
+                                no_save: *no_save,
+                                alternative: alternative.as_deref(),
+                                account: account.as_deref(),
+                            },
+                            stdin,
+                            stderr,
+                        )?
+                    }
+                    Some(ticket) => {
+                        let choice = ticket
+                            .choice
+                            .as_ref()
+                            .ok_or("this choice ticket carries no options")?;
+                        choice_answer(choice, stdin, stderr)?
+                    }
+                    None => {
+                        let value = value.as_deref().unwrap_or_default();
+                        serde_json::from_str(value)
+                            .unwrap_or_else(|_| Value::String(value.to_owned()))
+                    }
+                };
+                let saving = value.get("save") == Some(&Value::Bool(true));
                 let result = client
                     .json(
                         "POST",
@@ -729,12 +996,28 @@ async fn execute<R: Read, W: Write, E: Write>(
                         Some(&ResolveTicketRequest { value }),
                     )
                     .await;
-                let ticket: Ticket = if secret_input {
-                    result.map_err(|_| {
-                        "could not resolve secret-input ticket (details withheld)".to_owned()
-                    })?
-                } else {
-                    result?
+                let ticket: Ticket = match kind.filter(|_| prompted) {
+                    Some(TicketKind::SecretInput) => result.map_err(|error| {
+                        if error.starts_with("API error person_approval_required ") {
+                            "could not enroll authenticator: API error person_approval_required (HTTP 403); ask a person to respond on their paired device, then use MCP ticket_wait. Only the operator should issue a person token (openside token create --person)".to_owned()
+                        } else {
+                            "could not resolve secret-input ticket (details withheld)".to_owned()
+                        }
+                    })?,
+                    Some(TicketKind::Login) => result.map_err(|error| {
+                        // Keep the API code and status ("API error forbidden (HTTP 403)"), never
+                        // the message, in case anything in it came from the typed values.
+                        let head = error.split_once(": ").map_or(error.as_str(), |(head, _)| head);
+                        if saving && head.contains("person_approval_required") {
+                            return format!("could not save login: {head}; ask a person to respond on their paired device, then use MCP ticket_wait. Only the operator should issue a person token (openside token create --person), or rerun with --no-save");
+                        }
+                        if saving && head.contains("forbidden") {
+                            format!("could not resolve login ticket: {head}; saving to the vault needs the approve scope on this device, rerun with --no-save")
+                        } else {
+                            format!("could not resolve login ticket: {head} (details withheld)")
+                        }
+                    })?,
+                    _ => result?,
                 };
                 print_ticket(args.json, stdout, &ticket, summary)
             }
@@ -804,6 +1087,13 @@ async fn execute<R: Read, W: Write, E: Write>(
         Some(Command::Pair(pair_args)) => pair::pair(pair_args, args.json, client, stdout).await,
         Some(Command::Device { command }) => pair::device(command, args.json, client, stdout).await,
         Some(Command::Service { .. }) => unreachable!("service runs without an API client"),
+        Some(Command::Connect(_)) => unreachable!("connect runs without an API client"),
+        Some(Command::Remote { command }) => match command {
+            remote::RemoteCommand::Status => remote::status(client, args.json, stdout).await,
+            remote::RemoteCommand::Setup(_) | remote::RemoteCommand::Profiles { .. } => {
+                unreachable!("remote setup and profiles run without an API client")
+            }
+        },
     }
 }
 
@@ -877,6 +1167,231 @@ fn print_ticket<W: Write>(
     }
 }
 
+/// What an approver needs to decide: the tool call behind a confirmation, the offered answers,
+/// a login form's fields and other sign-ins, a choice's options and the deadline.
+fn print_ticket_details<W: Write>(stdout: &mut W, ticket: &Ticket) -> Result<(), String> {
+    if let Some(tool) = &ticket.tool {
+        writeln!(stdout, "tool: {} {}", tool.name, tool.args).map_err(output_error)?;
+    }
+    if !ticket.options.is_empty() {
+        let options: Vec<&str> = ticket
+            .options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect();
+        writeln!(stdout, "options: {}", options.join(", ")).map_err(output_error)?;
+    }
+    if let Some(login) = &ticket.login {
+        let fields: Vec<String> = login
+            .fields
+            .iter()
+            .map(|field| plain(&field.label))
+            .collect();
+        writeln!(
+            stdout,
+            "login: {} ({}); fields: {}; save: {}",
+            plain(&login.site_name),
+            login.origin,
+            fields.join(", "),
+            if login.can_save {
+                "allowed"
+            } else {
+                "not allowed"
+            }
+        )
+        .map_err(output_error)?;
+        for account in login.accounts.iter().flatten() {
+            writeln!(
+                stdout,
+                "account {}: {}",
+                account.item_id,
+                plain(&account.username_hint)
+            )
+            .map_err(output_error)?;
+        }
+        for alternative in &login.alternatives {
+            writeln!(
+                stdout,
+                "alternative {}: {}",
+                alternative.id,
+                plain(&alternative.label)
+            )
+            .map_err(output_error)?;
+        }
+    }
+    if let Some(choice) = &ticket.choice {
+        writeln!(stdout, "choice: {}", plain(&choice.question)).map_err(output_error)?;
+        for option in &choice.options {
+            writeln!(stdout, "option {}: {}", option.id, plain(&option.label))
+                .map_err(output_error)?;
+        }
+    }
+    writeln!(
+        stdout,
+        "status: {}, expires {}",
+        format!("{:?}", ticket.status).to_lowercase(),
+        ticket.expires_at.to_rfc3339()
+    )
+    .map_err(output_error)
+}
+
+/// Page text (labels, site names) printed to a terminal: control characters could carry escape
+/// sequences, so they are dropped.
+fn plain(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control())
+        .collect()
+}
+
+/// A `secret_input` answer from the hidden prompt (`ask`) or all of stdin (`-`).
+fn secret_answer<R: Read, E: Write>(
+    ticket: &Ticket,
+    ask: bool,
+    totp: bool,
+    stdin: &mut R,
+    stderr: &mut E,
+) -> Result<Value, String> {
+    let input = if ask {
+        let site = ticket
+            .target
+            .as_ref()
+            .and_then(|target| target.origin.as_deref())
+            .unwrap_or("this site");
+        let what = if totp {
+            "Authenticator setup key or otpauth:// link"
+        } else if ticket.otp.is_some() {
+            "Verification code"
+        } else {
+            "Secret"
+        };
+        prompt::read_hidden(&format!("{what} for {site}"), stdin, stderr)?
+    } else {
+        let mut input = String::new();
+        stdin
+            .read_to_string(&mut input)
+            .map_err(|_| "could not read secret input from stdin".to_owned())?;
+        if input.ends_with('\n') {
+            input.pop();
+            if input.ends_with('\r') {
+                input.pop();
+            }
+        }
+        input
+    };
+    Ok(if totp {
+        serde_json::json!({ "totp": input })
+    } else {
+        Value::String(input)
+    })
+}
+
+struct LoginFlags<'a> {
+    save: bool,
+    no_save: bool,
+    alternative: Option<&'a str>,
+    account: Option<&'a str>,
+}
+
+/// A `login` answer: another sign-in or a saved account from the flags, otherwise one prompt per
+/// field in page order (hidden for masked fields; piped stdin gives one line per field).
+fn login_answer<R: Read, E: Write>(
+    login: &TicketLogin,
+    flags: LoginFlags<'_>,
+    stdin: &mut R,
+    stderr: &mut E,
+) -> Result<Value, String> {
+    if let Some(id) = flags.alternative {
+        if !login
+            .alternatives
+            .iter()
+            .any(|alternative| alternative.id == id)
+        {
+            return Err(format!(
+                "no other sign-in {id} on this login ticket; see `ticket show`"
+            ));
+        }
+        return Ok(json!({ "alternative": id }));
+    }
+    if let Some(id) = flags.account {
+        if !login
+            .accounts
+            .iter()
+            .flatten()
+            .any(|account| account.item_id == id)
+        {
+            return Err(format!(
+                "no saved account {id} on this login ticket; see `ticket show`"
+            ));
+        }
+        return Ok(json!({ "account": id }));
+    }
+    if flags.save && !login.can_save {
+        return Err("this site's login cannot be saved to the vault; omit --save".to_owned());
+    }
+    writeln!(
+        stderr,
+        "Log in to {} ({})",
+        plain(&login.site_name),
+        login.origin
+    )
+    .map_err(output_error)?;
+    let mut values = serde_json::Map::new();
+    for field in &login.fields {
+        let label = plain(&field.label);
+        let value = if field.kind == LoginFieldKind::Checkbox {
+            let answer = prompt::read_visible(&format!("{label} [y/N]"), stdin, stderr)?;
+            Value::Bool(matches!(
+                answer.trim().to_ascii_lowercase().as_str(),
+                "y" | "yes"
+            ))
+        } else {
+            let answer = if field.masked {
+                prompt::read_hidden(&label, stdin, stderr)?
+            } else {
+                prompt::read_visible(&label, stdin, stderr)?
+            };
+            if field.required && answer.is_empty() {
+                return Err(format!("{label} is required"));
+            }
+            Value::String(answer)
+        };
+        values.insert(field.id.clone(), value);
+    }
+    Ok(json!({ "values": values, "save": login.can_save && !flags.no_save }))
+}
+
+/// A `choice` answer: the options numbered on stderr, then the number (or the option id).
+fn choice_answer<R: Read, E: Write>(
+    choice: &TicketChoice,
+    stdin: &mut R,
+    stderr: &mut E,
+) -> Result<Value, String> {
+    writeln!(stderr, "{}", plain(&choice.question)).map_err(output_error)?;
+    for (index, option) in choice.options.iter().enumerate() {
+        match &option.description {
+            Some(description) => writeln!(
+                stderr,
+                "  {}. {} ({})",
+                index + 1,
+                plain(&option.label),
+                plain(description)
+            ),
+            None => writeln!(stderr, "  {}. {}", index + 1, plain(&option.label)),
+        }
+        .map_err(output_error)?;
+    }
+    let answer = prompt::read_visible("Option number", stdin, stderr)?;
+    let answer = answer.trim();
+    let picked = answer
+        .parse::<usize>()
+        .ok()
+        .and_then(|number| number.checked_sub(1))
+        .and_then(|index| choice.options.get(index))
+        .or_else(|| choice.options.iter().find(|option| option.id == answer))
+        .ok_or_else(|| format!("pick a number from 1 to {}", choice.options.len()))?;
+    Ok(json!({ "option": picked.id }))
+}
+
 fn ticket_kind(kind: TicketKind) -> &'static str {
     match kind {
         TicketKind::Confirm => "confirm",
@@ -884,6 +1399,8 @@ fn ticket_kind(kind: TicketKind) -> &'static str {
         TicketKind::DeviceApproval => "device_approval",
         TicketKind::Info => "info",
         TicketKind::Takeover => "takeover",
+        TicketKind::Login => "login",
+        TicketKind::Choice => "choice",
     }
 }
 
@@ -897,6 +1414,29 @@ fn print_waiting<W: Write>(
         writeln!(stdout, "Session {id} is waiting on tickets.").map_err(output_error)?;
     }
     Ok(())
+}
+
+/// The new-session request the global `--model`, `--mode`, `--workspace` and `--browser-space`
+/// describe; workspace paths are made absolute.
+fn create_request(args: &Args, title: Option<String>) -> Result<CreateSessionRequest, String> {
+    Ok(CreateSessionRequest {
+        title,
+        model: args.model.clone(),
+        mode: args.mode.map(Into::into),
+        workspace: args
+            .workspace
+            .as_ref()
+            .map(|path| {
+                path.canonicalize()
+                    .map_err(|_| "could not canonicalize --workspace".to_owned())?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| "--workspace must be valid UTF-8".to_owned())
+            })
+            .transpose()?,
+        incognito: false,
+        browser_space: args.browser_space.map(Into::into).unwrap_or_default(),
+    })
 }
 
 async fn send_message(client: &Client, id: &str, text: &str) -> Result<(), String> {
@@ -965,7 +1505,14 @@ async fn follow<W: Write, E: Write>(
                 emit(stdout, &event)?;
             } else {
                 match &event.kind {
-                    EventKind::TurnStarted {} => saw_delta = false,
+                    EventKind::TurnStarted {} => {
+                        saw_delta = false;
+                        // Text before a tool call and the answer after it are separate turns.
+                        if !ends_with_newline {
+                            writeln!(stdout).map_err(output_error)?;
+                            ends_with_newline = true;
+                        }
+                    }
                     EventKind::AssistantDelta { text } => {
                         write!(stdout, "{text}").map_err(output_error)?;
                         saw_delta = true;
@@ -979,7 +1526,14 @@ async fn follow<W: Write, E: Write>(
                             ends_with_newline = text.ends_with('\n');
                         }
                     }
-                    _ => {}
+                    // Its own notice with the resolve command follows below.
+                    EventKind::TicketOpened { .. } => {}
+                    _ => {
+                        if let Some(line) = agent::progress_line(&event) {
+                            writeln!(stderr, "{line}").map_err(output_error)?;
+                            stderr.flush().map_err(output_error)?;
+                        }
+                    }
                 }
             }
             stdout.flush().map_err(output_error)?;
@@ -989,33 +1543,63 @@ async fn follow<W: Write, E: Write>(
             match &event.kind {
                 EventKind::TicketOpened { ticket } => {
                     pending.insert(ticket.id.to_string());
-                    let (action, value) = match ticket.kind {
-                        TicketKind::Confirm => ("resolve", Some("true".to_owned())),
-                        TicketKind::SecretInput => ("resolve", Some("-".to_owned())),
-                        TicketKind::DeviceApproval | TicketKind::Takeover => ("done", None),
-                        TicketKind::Info => (
-                            "resolve",
-                            Some(match ticket.options.first() {
-                                Some(option) => serde_json::to_string(&option.value)
-                                    .map_err(|_| "could not encode ticket option".to_owned())?,
-                                None => "your answer".to_owned(),
-                            }),
-                        ),
-                    };
-                    writeln!(
+                    // On a terminal the notice shares the screen with a half-written reply line.
+                    if !args.json && !ends_with_newline {
+                        writeln!(stdout).map_err(output_error)?;
+                        ends_with_newline = true;
+                        stdout.flush().map_err(output_error)?;
+                    }
+                    if let Some(approval) = &ticket.approval {
+                        let number = approval
+                            .number
+                            .as_deref()
+                            .map(|number| format!(" Tap {number} on your phone."))
+                            .unwrap_or_default();
+                        writeln!(
+                            stderr,
+                            "Ticket {} (approve on your phone): {}.{number}\nWaiting; openside continues by itself once the site sees the approval. To cancel: {}",
+                            ticket.id, ticket.summary,
+                            client.ticket_command(ticket.id.as_str(), "reject", None)
+                        ).map_err(output_error)?;
+                        stderr.flush().map_err(output_error)?;
+                    } else if ticket.kind == TicketKind::Confirm {
+                        writeln!(
+                            stderr,
+                            "Ticket {} (confirm): {}\nAsk a person to approve on another paired web or phone device; this client cannot approve its own work. Waiting for the ticket.",
+                            ticket.id, ticket.summary,
+                        ).map_err(output_error)?;
+                        stderr.flush().map_err(output_error)?;
+                    } else {
+                        let (action, value) = match ticket.kind {
+                            TicketKind::Confirm => ("resolve", Some("true".to_owned())),
+                            TicketKind::SecretInput => ("resolve", Some("-".to_owned())),
+                            // Both ask at prompts: one per login field, or the numbered options.
+                            TicketKind::Login | TicketKind::Choice => ("resolve", None),
+                            TicketKind::DeviceApproval | TicketKind::Takeover => ("done", None),
+                            TicketKind::Info => (
+                                "resolve",
+                                Some(match ticket.options.first() {
+                                    Some(option) => serde_json::to_string(&option.value)
+                                        .map_err(|_| "could not encode ticket option".to_owned())?,
+                                    None => "your answer".to_owned(),
+                                }),
+                            ),
+                        };
+                        writeln!(
                         stderr,
                         "Ticket {} ({}): {}\nResolve in another process: {}\nFor HTTP connections, supply OPENSIDE_TOKEN or --token to that process.",
                         ticket.id, ticket_kind(ticket.kind), ticket.summary,
                         client.ticket_command(ticket.id.as_str(), action, value.as_deref())
                     ).map_err(output_error)?;
-                    if ticket.kind == TicketKind::SecretInput {
-                        writeln!(
-                            stderr,
-                            "Pipe the secret to stdin; do not put it in argv or shell history."
-                        )
-                        .map_err(output_error)?;
+                        if ticket.kind == TicketKind::SecretInput {
+                            writeln!(
+                                stderr,
+                                "Pipe the secret to stdin; do not put it in argv or shell history."
+                            )
+                            .map_err(output_error)?;
+                        }
+                        stderr.flush().map_err(output_error)?;
                     }
-                    stderr.flush().map_err(output_error)?;
                 }
                 EventKind::TicketResolved { ticket_id, .. }
                 | EventKind::TicketRejected { ticket_id, .. }

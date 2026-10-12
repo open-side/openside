@@ -5,17 +5,17 @@
 //! JavaScript context. When a step needs approval the command prints the ticket, waits until
 //! it is resolved in another process, and reruns the snippet under that approval.
 
-use std::{
-    io::{BufRead, BufReader, Read, Write},
-    time::Duration,
-};
+use std::io::{BufRead, BufReader, Read, Write};
 
-use openside_proto::{ReplRequest, ReplResponse, ReplStatus, Ticket, TicketStatus};
+use openside_proto::{ReplRequest, ReplResponse, ReplStatus};
 use serde_json::Value;
 
-use crate::{client::Client, emit, output_error, Summary};
-
-const TICKET_POLL: Duration = Duration::from_millis(500);
+use crate::{
+    client::Client,
+    emit, output_error,
+    tool_call::{approved, wait_ticket},
+    Summary,
+};
 
 pub(crate) struct ReplOptions<'a> {
     pub(crate) session: &'a str,
@@ -96,18 +96,14 @@ async fn snippet<W: Write, E: Write>(
         }
         writeln!(
             stderr,
-            "Approval needed (ticket {ticket}). Approve in another process: {}\nWaiting; the snippet reruns from the start once approved.",
-            client.ticket_command(ticket.as_str(), "resolve", Some("true"))
+            "Approval needed (ticket {ticket}). Ask a person to approve on another paired web or phone device; this client cannot approve its own work.\nWaiting; the snippet reruns from the start once approved."
         )
         .map_err(output_error)?;
         stderr.flush().map_err(output_error)?;
-        let resolved = wait(client, ticket.as_str()).await?;
-        let approved = resolved.status == TicketStatus::Resolved
-            && resolved
-                .resolution
-                .as_ref()
-                .and_then(|value| value.get("approved"))
-                == Some(&Value::Bool(true));
+        let resolved = wait_ticket(client, ticket.as_str(), None)
+            .await?
+            .ok_or("ticket wait ended without a resolution")?;
+        let approved = approved(&resolved);
         if !approved {
             summary.failed = true;
             summary.status = "error";
@@ -162,14 +158,4 @@ async fn snippet<W: Write, E: Write>(
         }
     }
     stdout.flush().map_err(output_error)
-}
-
-async fn wait(client: &Client, ticket: &str) -> Result<Ticket, String> {
-    loop {
-        let current: Ticket = client.get(&crate::client::ticket_path(ticket, "")).await?;
-        if current.status != TicketStatus::Pending {
-            return Ok(current);
-        }
-        tokio::time::sleep(TICKET_POLL).await;
-    }
 }

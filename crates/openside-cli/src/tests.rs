@@ -16,6 +16,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod agent;
 mod import;
 mod mcp;
 mod memory;
@@ -112,6 +113,8 @@ struct MockState {
     ticket: Option<Value>,
     ticket_terminal: Option<&'static str>,
     secret_error: bool,
+    self_approval: bool,
+    person_approval: bool,
     eof: bool,
     malformed: bool,
     duplicate: bool,
@@ -237,6 +240,14 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
         );
     }
     match (method.as_str(), path.as_str()) {
+        ("POST", "/v1/pairing") => respond(
+            201,
+            json!({
+                "code":"pairing-code","path":"/pair#pairing-code","url":null,
+                "scopes":body["scopes"],"kind":body["kind"],"transport":null,
+                "expires_at":"2026-10-13T12:00:00Z"
+            }),
+        ),
         ("POST", "/v1/sessions") => {
             state.events = vec![event(
                 1,
@@ -377,15 +388,31 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
         }
         ("GET", "/v1/tickets/t-1") => respond(200, state.ticket.clone().unwrap_or_else(ticket)),
         ("POST", "/v1/tickets/t-1/resolve") => {
+            if state.self_approval {
+                return respond(
+                    403,
+                    json!({"code":"self_approval_forbidden","message":"self approval forbidden"}),
+                );
+            }
+            if state.person_approval {
+                return respond(
+                    403,
+                    json!({"code":"person_approval_required","message":"person approval required"}),
+                );
+            }
             let mut ticket = state.ticket.clone().unwrap_or_else(ticket);
             if state.secret_error {
                 return respond(400, json!({"code":"bad_secret","message":body["value"]}));
             }
             ticket["status"] = json!("resolved");
-            ticket["resolution"] = if ticket["kind"] == "secret_input" {
-                json!({"status":"filled"})
-            } else {
-                json!({"answer":body["value"]})
+            ticket["resolution"] = match ticket["kind"].as_str() {
+                Some("secret_input") => json!({"status":"filled"}),
+                // Like the daemon: a login or choice resolution never carries the answer.
+                Some("login") => json!({"status":"submitted","next":"done"}),
+                Some("choice") => {
+                    json!({"status":"chosen","option":body["value"]["option"],"next":"otp"})
+                }
+                _ => json!({"answer":body["value"]}),
             };
             respond(200, ticket)
         }
@@ -523,8 +550,8 @@ async fn ticket_prints_instructions_and_settlement_waits_for_human() {
     let (code, output, error) = fixture.run(&["--json", "hello"]).await;
     assert_eq!(code, 0, "{error}");
     assert!(error.contains("Ticket t-1 (confirm): Run tool?"));
-    assert!(error.contains("ticket resolve t-1 true"));
-    assert!(error.contains(&format!("--socket {}", fixture.socket.display())));
+    assert!(error.contains("another paired web or phone device"));
+    assert!(!error.contains("ticket resolve t-1 true"));
     assert_eq!(
         json_lines(&output).last().unwrap()["status"],
         "waiting_human"
@@ -593,6 +620,39 @@ async fn ticket_resolve_parses_json_or_preserves_text() {
             json!({"value":expected})
         );
     }
+}
+
+#[tokio::test]
+async fn self_approval_refusal_tells_cli_to_wait_for_another_device() {
+    let fixture = Fixture::new().await;
+    fixture.state.lock().self_approval = true;
+    let (code, output, error) = fixture.run(&["ticket", "resolve", "t-1", "approve"]).await;
+    assert_ne!(code, 0);
+    assert!(output.is_empty());
+    assert!(
+        error.contains("403") && error.contains("self_approval_forbidden"),
+        "{error}"
+    );
+    assert!(
+        error.contains("another paired device") && error.contains("ticket_wait"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn person_approval_refusal_tells_cli_how_to_use_a_person_device() {
+    let fixture = Fixture::new().await;
+    fixture.state.lock().person_approval = true;
+    let (code, _, error) = fixture.run(&["ticket", "resolve", "t-1", "true"]).await;
+    assert_ne!(code, 0);
+    assert!(
+        error.contains("403") && error.contains("person_approval_required"),
+        "{error}"
+    );
+    assert!(
+        error.contains("token create --person") && error.contains("ticket_wait"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -733,6 +793,209 @@ async fn non_secret_dash_is_literal_and_never_reads_stdin() {
     );
 }
 
+fn login_ticket(can_save: bool) -> Value {
+    let mut ticket = ticket();
+    ticket["kind"] = json!("login");
+    ticket["deferral"] = json!("external");
+    ticket["target"] = json!({"origin":"https://nid.naver.com","tab_id":"t","field_ref":null});
+    ticket["login"] = json!({
+        "origin":"https://nid.naver.com","site_name":"Naver\u{1b}[2J",
+        "fields":[
+            {"id":"id","kind":"identifier","label":"ID or phone number","masked":false,"required":true},
+            {"id":"pw","kind":"password","label":"Password","masked":true,"required":true},
+            {"id":"keep","kind":"checkbox","label":"Stay signed in","masked":false,"required":false}
+        ],
+        "alternatives":[{"id":"a1","label":"Sign in with Google","kind":"provider","provider":"google"}],
+        "accounts":[{"item_id":"v1","username_hint":"j***@naver.com"}],
+        "submit_label":"Log in","can_save":can_save
+    });
+    ticket
+}
+
+#[tokio::test]
+async fn login_asks_each_field_with_the_password_hidden_and_sends_values_once() {
+    let fixture = Fixture::new().await;
+    fixture.state.lock().ticket = Some(login_ticket(true));
+    let password = "pw-correct-horse";
+    let mut stdin = std::io::Cursor::new(format!("jane\n{password}\ny\n"));
+    let (code, output, error) = fixture
+        .run_with_input(&["--json", "ticket", "resolve", "t-1"], &mut stdin)
+        .await;
+    assert_eq!(code, 0, "{error}");
+    assert_eq!(
+        fixture.state.lock().requests.last().unwrap().body,
+        json!({"value":{"values":{"id":"jane","pw":password,"keep":true},"save":true}})
+    );
+    // Page text is printed without control characters.
+    assert!(
+        error.starts_with(
+            "Log in to Naver[2J (https://nid.naver.com)\nID or phone number: Password: "
+        ),
+        "{error}"
+    );
+    assert!(error.contains("Stay signed in [y/N]: "));
+    assert!(!output.contains(password) && !error.contains(password));
+
+    let mut stdin = std::io::Cursor::new(format!("jane\n{password}\n\n"));
+    let (code, _, error) = fixture
+        .run_with_input(&["ticket", "resolve", "t-1", "-", "--no-save"], &mut stdin)
+        .await;
+    assert_eq!(code, 0, "{error}");
+    assert_eq!(
+        fixture.state.lock().requests.last().unwrap().body,
+        json!({"value":{"values":{"id":"jane","pw":password,"keep":false},"save":false}})
+    );
+
+    // A required field left empty sends nothing.
+    let requests = fixture.state.lock().requests.len();
+    let mut stdin = std::io::Cursor::new("jane\n\n");
+    let (code, _, error) = fixture
+        .run_with_input(&["ticket", "resolve", "t-1"], &mut stdin)
+        .await;
+    assert_eq!(code, 1);
+    assert!(error.contains("Password is required"), "{error}");
+    assert_eq!(
+        fixture.state.lock().requests.len(),
+        requests + 1,
+        "only the ticket was read"
+    );
+
+    // A failed resolve keeps the daemon's message, which could echo a value, out of the error.
+    fixture.state.lock().secret_error = true;
+    let mut stdin = std::io::Cursor::new(format!("jane\n{password}\nn\n"));
+    let (code, _, error) = fixture
+        .run_with_input(&["ticket", "resolve", "t-1"], &mut stdin)
+        .await;
+    assert_eq!(code, 1);
+    assert!(
+        error.contains("could not resolve login ticket: API error (HTTP 400) (details withheld)"),
+        "{error}"
+    );
+    assert!(!error.contains(password));
+}
+
+#[tokio::test]
+async fn person_authority_errors_keep_login_and_enrollment_secrets_out_of_output() {
+    let fixture = Fixture::new().await;
+    fixture.state.lock().person_approval = true;
+    fixture.state.lock().ticket = Some(login_ticket(true));
+    let secret = "gate-canary-password";
+    let mut input = std::io::Cursor::new(format!("gate-user\n{secret}\n\n"));
+    let (code, output, error) = fixture
+        .run_with_input(&["ticket", "resolve", "t-1", "--save"], &mut input)
+        .await;
+    assert_ne!(code, 0);
+    assert!(
+        error.contains("person_approval_required")
+            && error.contains("--person")
+            && error.contains("--no-save"),
+        "{error}"
+    );
+    assert!(!error.contains(secret) && !output.contains(secret));
+
+    let mut enrollment = ticket();
+    enrollment["kind"] = json!("secret_input");
+    fixture.state.lock().ticket = Some(enrollment);
+    let seed = "JBSWY3DPEHPK3PXP";
+    let mut input = std::io::Cursor::new(format!("{seed}\n"));
+    let (code, output, error) = fixture
+        .run_with_input(&["ticket", "resolve", "t-1", "-", "--totp"], &mut input)
+        .await;
+    assert_ne!(code, 0);
+    assert!(
+        error.contains("403")
+            && error.contains("person_approval_required")
+            && error.contains("--person")
+            && error.contains("ticket_wait"),
+        "{error}"
+    );
+    assert!(!error.contains(seed) && !output.contains(seed));
+}
+
+#[tokio::test]
+async fn login_flags_pick_an_alternative_or_account_and_are_checked() {
+    let fixture = Fixture::new().await;
+    fixture.state.lock().ticket = Some(login_ticket(false));
+    for (flag, id, body) in [
+        ("--alternative", "a1", json!({"alternative":"a1"})),
+        ("--account", "v1", json!({"account":"v1"})),
+    ] {
+        let mut stdin = std::io::Cursor::new("must not read");
+        let (code, _, error) = fixture
+            .run_with_input(&["ticket", "resolve", "t-1", flag, id], &mut stdin)
+            .await;
+        assert_eq!(code, 0, "{error}");
+        assert_eq!(stdin.position(), 0);
+        assert_eq!(
+            fixture.state.lock().requests.last().unwrap().body,
+            json!({"value":body})
+        );
+    }
+    for (args, message) in [
+        (vec!["--alternative", "zz"], "no other sign-in zz"),
+        (vec!["--account", "zz"], "no saved account zz"),
+        (vec!["--save"], "cannot be saved"),
+    ] {
+        let mut all = vec!["ticket", "resolve", "t-1"];
+        all.extend(args);
+        let (code, _, error) = fixture.run(&all).await;
+        assert_eq!(code, 1);
+        assert!(error.contains(message), "{error}");
+    }
+    let (code, _, error) = fixture
+        .run(&["ticket", "resolve", "t-1", "x", "--no-save"])
+        .await;
+    assert_eq!(code, 1);
+    assert!(error.contains("omit the value"), "{error}");
+    fixture.state.lock().ticket = Some(ticket());
+    let (code, _, error) = fixture
+        .run(&["ticket", "resolve", "t-1", "--no-save"])
+        .await;
+    assert_eq!(code, 1);
+    assert!(error.contains("only answer a login ticket"), "{error}");
+    assert_eq!(
+        fixture
+            .run(&["ticket", "resolve", "t-1", "--save", "--no-save"])
+            .await
+            .0,
+        2
+    );
+}
+
+#[tokio::test]
+async fn choice_lists_the_options_and_sends_the_picked_id() {
+    let fixture = Fixture::new().await;
+    let mut choice = ticket();
+    choice["kind"] = json!("choice");
+    choice["deferral"] = json!("external");
+    choice["choice"] = json!({
+        "origin":"https://nid.naver.com","site_name":"Naver","question":"How would you like to verify?",
+        "options":[{"id":"sms","label":"Text me a code"},{"id":"email","label":"Email me a code","description":"j***@naver.com"}],
+        "multiple":false
+    });
+    fixture.state.lock().ticket = Some(choice);
+    let mut stdin = std::io::Cursor::new("2\n");
+    let (code, output, error) = fixture
+        .run_with_input(&["ticket", "resolve", "t-1"], &mut stdin)
+        .await;
+    assert_eq!(code, 0, "{error}");
+    assert_eq!(
+        error,
+        "How would you like to verify?\n  1. Text me a code\n  2. Email me a code (j***@naver.com)\nOption number: "
+    );
+    assert_eq!(
+        fixture.state.lock().requests.last().unwrap().body,
+        json!({"value":{"option":"email"}})
+    );
+    assert!(output.contains("t-1\tchoice\t"), "{output}");
+    let mut stdin = std::io::Cursor::new("7\n");
+    let (code, _, error) = fixture
+        .run_with_input(&["ticket", "resolve", "t-1"], &mut stdin)
+        .await;
+    assert_eq!(code, 1);
+    assert!(error.contains("pick a number from 1 to 2"), "{error}");
+}
+
 #[tokio::test]
 async fn ticket_show_done_and_reject_use_public_api() {
     let fixture = Fixture::new().await;
@@ -740,6 +1003,13 @@ async fn ticket_show_done_and_reject_use_public_api() {
     assert_eq!(code, 0, "{error}");
     assert_eq!(json_lines(&output)[0]["kind"], "confirm");
     assert_eq!(fixture.state.lock().requests.last().unwrap().method, "GET");
+    // The approver sees what is being approved, not only the summary.
+    let (code, output, error) = fixture.run(&["ticket", "show", "t-1"]).await;
+    assert_eq!(code, 0, "{error}");
+    assert_eq!(
+        output,
+        "t-1\tconfirm\tRun tool?\ntool: test {}\noptions: Approve, Reject\nstatus: pending, expires 2099-01-01T00:00:00+00:00\n"
+    );
     let (code, output, error) = fixture.run(&["--json", "ticket", "done", "t-1"]).await;
     assert_eq!(code, 0, "{error}");
     assert_eq!(
@@ -1102,6 +1372,45 @@ async fn resume_running_session_ignores_an_older_settled_event() {
 }
 
 #[tokio::test]
+async fn resume_text_of_consecutive_turns_is_not_run_together() {
+    let fixture = Fixture::new().await;
+    assert_eq!(fixture.run(&["hello"]).await.0, 0);
+    {
+        let mut state = fixture.state.lock();
+        state.events.push(event(5, "turn.started", json!({})));
+        state
+            .events
+            .push(event(6, "assistant.delta", json!({"text":"second"})));
+        let session = state.session.as_mut().unwrap();
+        session["status"] = json!("running");
+        session["last_seq"] = json!(6);
+        state.settle_on_events = true;
+    }
+    let (code, output, error) = fixture
+        .run(&["session", "resume", "s-1", "--last-event-id", "0"])
+        .await;
+    assert_eq!(code, 0, "{error}");
+    assert_eq!(output, "hello\nsecond\n");
+}
+
+#[tokio::test]
+async fn an_unreachable_daemon_names_the_socket_and_how_to_start_it() {
+    let fixture = Fixture::new().await;
+    fixture.server.abort();
+    // opensided removes its socket on exit; on Darwin a client can still complete a connect
+    // against the stale file and only fail mid-request, which is not the unreachable-daemon
+    // path under test.
+    std::fs::remove_file(&fixture.socket).unwrap();
+    let (code, _, error) = fixture.run(&["session", "list"]).await;
+    assert_eq!(code, 1);
+    assert!(
+        error.contains("could not connect to daemon socket"),
+        "{error}"
+    );
+    assert!(error.contains("opensided"), "{error}");
+}
+
+#[tokio::test]
 async fn task_creation_forwards_model_modes_and_canonical_workspace() {
     let fixture = Fixture::new().await;
     let directory = fixture.environment.directory.path();
@@ -1158,6 +1467,8 @@ async fn ticket_hints_select_the_action_for_each_kind() {
         ("device_approval", "ticket done t-1"),
         ("takeover", "ticket done t-1"),
         ("info", "ticket resolve t-1 '\"true\"'"),
+        ("login", "ticket resolve t-1\n"),
+        ("choice", "ticket resolve t-1\n"),
     ] {
         let mut ticket = ticket();
         ticket["kind"] = json!(kind);
@@ -1298,4 +1609,34 @@ printf '%s\n' '{"python":"test-python","packages":{"pydantic-ai":"test-version"}
     assert_eq!(records[0]["checks"][0]["id"], "config");
     assert_eq!(records[0]["checks"][0]["status"], "fail");
     assert_eq!(records[1]["exit_code"], 1);
+}
+
+#[tokio::test]
+async fn pairing_purpose_sets_the_role_on_the_operator_offer() {
+    let fixture = Fixture::new().await;
+    for (arguments, kind, scopes) in [
+        (
+            vec!["--json", "pair"],
+            "person_device",
+            json!(["read", "approve", "human_step"]),
+        ),
+        (
+            vec!["--json", "pair", "--agent"],
+            "agent_client",
+            json!(["read", "steer", "browse", "approve"]),
+        ),
+    ] {
+        let (code, output, error) = fixture.run(&arguments).await;
+        assert_eq!(code, 0, "{error}");
+        assert_eq!(json_lines(&output)[0]["kind"], kind);
+        let state = fixture.state.lock();
+        let sent = state
+            .requests
+            .iter()
+            .rev()
+            .find(|request| request.path == "/v1/pairing")
+            .unwrap();
+        assert_eq!(sent.body["kind"], kind);
+        assert_eq!(sent.body["scopes"], scopes);
+    }
 }

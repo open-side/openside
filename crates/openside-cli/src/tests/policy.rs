@@ -102,7 +102,7 @@ async fn token_create_pairs_with_exact_wire_scopes_and_prints_the_token_once() {
         (
             "POST".into(),
             "/v1/devices/pair".into(),
-            json!({"name":"sandbox","scopes":["browse","vault_use"]})
+            json!({"name":"sandbox","scopes":["browse","vault_use"],"kind":"agent_client"})
         )
     );
     let (code, _, err) = daemon.run(&["token", "create", "--scope", "root"]).await;
@@ -110,6 +110,24 @@ async fn token_create_pairs_with_exact_wire_scopes_and_prints_the_token_once() {
     let (code, _, _) = daemon.run(&["token", "create"]).await;
     assert_eq!(code, 2, "--scope is required");
     assert_eq!(daemon.seen.lock().len(), 1);
+}
+
+#[tokio::test]
+async fn person_token_flag_issues_a_person_device_for_extension_approvals() {
+    let daemon = daemon().await;
+    let (code, _, error) = daemon
+        .run(&[
+            "token", "create", "--person", "--name", "browser", "--scope", "read", "--scope",
+            "steer", "--scope", "approve",
+        ])
+        .await;
+    assert_eq!(code, 0, "{error}");
+    assert_eq!(
+        daemon.last().2,
+        json!({
+            "name":"browser","kind":"person_device","scopes":["read","steer","approve"]
+        })
+    );
 }
 
 #[tokio::test]

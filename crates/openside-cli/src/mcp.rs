@@ -5,27 +5,34 @@
 //! process and the daemon enforces the capability scopes of whichever token (or the local
 //! socket) the server was started with. The server holds no state of its own.
 //!
+//! Two ways to use the browser: delegate a goal to the openside agent (`agent_*`), or drive the
+//! session browser directly with the same tools the agent has. Those direct tools are listed
+//! from the daemon's catalog (`GET /v1/tools`) on every `tools/list`, so they always match the
+//! daemon's own names and schemas; `browser_repl` runs Playwright-syntax scripts.
+//!
 //! stdout carries the MCP protocol only; diagnostics go to stderr.
 
 use std::{io::Write, path::Path, time::Duration};
 
-use http_body_util::BodyExt;
-use openside_proto::{Event, EventKind, MessageMode, PolicyMode};
+use base64::Engine;
+use openside_proto::{BrowserSpace, MessageMode, PolicyMode, ToolCatalog};
 use rmcp::{
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
-        Tool, ToolAnnotations,
+        JsonObject, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
+        ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
     },
     service::RequestContext,
-    ErrorData, RoleServer, ServerHandler, ServiceExt,
+    ErrorData, Peer, RoleServer, ServerHandler, ServiceExt,
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
+    agent,
     client::{self, Client},
-    sse::Decoder,
+    tool_call,
+    wait::{self, Replay, Until},
 };
 
 const DEFAULT_WAIT_SECS: u64 = 120;
@@ -37,8 +44,9 @@ pub(crate) async fn run<E: Write>(
     url: Option<&str>,
     token: Option<String>,
     stderr: &mut E,
+    remote: Option<String>,
 ) -> u8 {
-    let client = match Client::new(socket, url, token.as_deref()) {
+    let client = match Client::from_flags(socket, url, token.as_deref(), remote.as_deref()).await {
         Ok(client) => client,
         Err(error) => {
             let _ = writeln!(
@@ -102,6 +110,12 @@ impl From<String> for Failure {
     }
 }
 
+/// Where `notifications/progress` go for the current call, when the client asked for them.
+struct Progress {
+    peer: Peer<RoleServer>,
+    token: rmcp::model::ProgressToken,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SessionCreate {
@@ -111,6 +125,8 @@ struct SessionCreate {
     workspace: Option<String>,
     #[serde(default)]
     incognito: bool,
+    #[serde(default)]
+    browser_space: Option<BrowserSpace>,
 }
 
 #[derive(Deserialize)]
@@ -155,40 +171,17 @@ struct TicketResolve {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct TicketWait {
+    ticket_id: String,
+    timeout_secs: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MemorySearch {
     query: Option<String>,
     kind: Option<String>,
     limit: Option<u32>,
-}
-
-/// Fields every browser tool shares: the agent tab and the approval to retry under.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BrowserOpen {
-    session_id: String,
-    url: String,
-    tab_id: Option<String>,
-    approval_ticket: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BrowserSnapshot {
-    session_id: String,
-    tab_id: Option<String>,
-    approval_ticket: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BrowserAct {
-    session_id: String,
-    action: String,
-    #[serde(rename = "ref")]
-    target: String,
-    text: Option<String>,
-    tab_id: Option<String>,
-    approval_ticket: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -198,13 +191,45 @@ struct BrowserRepl {
     code: String,
     tab_id: Option<String>,
     approval_ticket: Option<String>,
+    wait: Option<bool>,
+    timeout_secs: Option<u64>,
 }
 
-/// Where a browser tool runs and which approval, if any, it retries under.
-struct Target {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentRun {
+    goal: String,
+    session_id: Option<String>,
+    #[serde(default)]
+    wait: bool,
+    timeout_secs: Option<u64>,
+    model: Option<String>,
+    mode: Option<PolicyMode>,
+    browser_space: Option<BrowserSpace>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentResult {
     session_id: String,
-    tab_id: Option<String>,
-    approval_ticket: Option<String>,
+    after_seq: u64,
+    message_id: Option<String>,
+    timeout_secs: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSteer {
+    session_id: String,
+    text: String,
+    task_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentCancel {
+    session_id: String,
+    task_id: Option<String>,
 }
 
 impl Mcp {
@@ -216,7 +241,16 @@ impl Mcp {
         redact(&message, self.token.as_deref())
     }
 
-    async fn dispatch(&self, name: &str, arguments: Value) -> Result<Value, Failure> {
+    async fn catalog(&self) -> Result<ToolCatalog, String> {
+        self.client.get("/v1/tools").await
+    }
+
+    async fn dispatch(
+        &self,
+        name: &str,
+        arguments: Value,
+        progress: Option<Progress>,
+    ) -> Result<Value, Failure> {
         match name {
             "session_create" => {
                 let args: SessionCreate = parse(arguments)?;
@@ -232,6 +266,9 @@ impl Mcp {
                 body.insert("workspace".into(), json!(args.workspace));
                 if args.incognito {
                     body.insert("incognito".into(), json!(true));
+                }
+                if let Some(space) = args.browser_space {
+                    body.insert("browser_space".into(), json!(space));
                 }
                 Ok(self
                     .client
@@ -261,71 +298,316 @@ impl Mcp {
                 Ok(self.client.get(path).await?)
             }
             "ticket_resolve" => self.ticket_resolve(parse(arguments)?).await,
+            "ticket_wait" => {
+                let args: TicketWait = parse(arguments)?;
+                let timeout = wait_timeout(args.timeout_secs)?;
+                Ok(
+                    match tool_call::wait_ticket(&self.client, &args.ticket_id, Some(timeout))
+                        .await?
+                    {
+                        Some(ticket) => json!({
+                            "status": ticket.status,
+                            "kind": ticket.kind,
+                            "summary": ticket.summary,
+                            "resolution": ticket.resolution,
+                        }),
+                        None => json!({"status": "pending", "ticket_id": args.ticket_id}),
+                    },
+                )
+            }
             "memory_search" => {
                 let path = memory_path(&parse(arguments)?);
                 Ok(self.client.get(&path).await?)
             }
-            "browser_open" => {
-                let args: BrowserOpen = parse(arguments)?;
-                let code = format!(
-                    "await page.goto({}); await page.url()",
-                    js_string(&args.url)
-                );
-                let target = Target {
-                    session_id: args.session_id,
-                    tab_id: args.tab_id,
-                    approval_ticket: args.approval_ticket,
-                };
-                self.browser(
-                    target,
-                    code,
-                    |result| json!({"tab_id": result["tab_id"], "url": result["return_value"]}),
-                )
-                .await
-            }
-            "browser_snapshot" => {
-                let args: BrowserSnapshot = parse(arguments)?;
-                let target = Target {
-                    session_id: args.session_id,
-                    tab_id: args.tab_id,
-                    approval_ticket: args.approval_ticket,
-                };
-                self.browser(target, "await page.snapshot()".into(), |result| {
-                    let tab = result["tab_id"].as_str().unwrap_or_default();
-                    let snapshot = match &result["return_value"] {
-                        Value::String(text) => text.clone(),
-                        other => other.to_string(),
-                    };
-                    Value::String(format!("tab_id: {tab}\n{snapshot}"))
-                })
-                .await
-            }
-            "browser_act" => {
-                let args: BrowserAct = parse(arguments)?;
-                let code = act_code(&args)?;
-                let target = Target {
-                    session_id: args.session_id,
-                    tab_id: args.tab_id,
-                    approval_ticket: args.approval_ticket,
-                };
-                self.browser(
-                    target,
-                    code,
-                    |result| json!({"tab_id": result["tab_id"], "url": result["return_value"]}),
-                )
-                .await
-            }
             "browser_repl" => {
                 let args: BrowserRepl = parse(arguments)?;
-                let target = Target {
-                    session_id: args.session_id,
-                    tab_id: args.tab_id,
-                    approval_ticket: args.approval_ticket,
+                let wait = direct_wait(args.wait, args.timeout_secs)?;
+                let outcome = tool_call::drive(
+                    &self.client,
+                    args.approval_ticket,
+                    wait,
+                    |approval| {
+                        tool_call::repl(
+                            &self.client,
+                            &args.session_id,
+                            &args.code,
+                            args.tab_id.as_deref(),
+                            approval,
+                        )
+                    },
+                    |_, _| {},
+                )
+                .await?;
+                outcome_result(outcome)
+            }
+            "agent_run" => self.agent_run(parse(arguments)?, progress).await,
+            "agent_status" => {
+                let args: SessionRef = parse(arguments)?;
+                self.agent_status(&args.session_id).await
+            }
+            "agent_result" => {
+                let args: AgentResult = parse(arguments)?;
+                let timeout = wait_timeout(args.timeout_secs)?;
+                let replay = Replay {
+                    last_seen: args.after_seq,
+                    terminal_after: args.after_seq,
+                    message_id: args.message_id,
                 };
-                self.browser(target, args.code, Value::clone).await
+                let mut result = self
+                    .settle_with_progress(&args.session_id, replay, timeout, progress)
+                    .await?;
+                result["tasks"] = self.tasks(&args.session_id).await?;
+                Ok(result)
+            }
+            "agent_steer" => {
+                let args: AgentSteer = parse(arguments)?;
+                Ok(match &args.task_id {
+                    Some(task) => {
+                        self.client
+                            .json(
+                                "POST",
+                                &client::session_path(
+                                    &args.session_id,
+                                    &format!("subagents/{}/steer", client::encode_segment(task)),
+                                ),
+                                Some(&json!({"text": args.text})),
+                            )
+                            .await?
+                    }
+                    None => {
+                        self.client
+                            .json(
+                                "POST",
+                                &client::session_path(&args.session_id, "messages"),
+                                Some(&json!({"text": args.text, "mode": MessageMode::Steer})),
+                            )
+                            .await?
+                    }
+                })
+            }
+            "agent_cancel" => {
+                let args: AgentCancel = parse(arguments)?;
+                let path = match &args.task_id {
+                    Some(task) => client::session_path(
+                        &args.session_id,
+                        &format!("subagents/{}/cancel", client::encode_segment(task)),
+                    ),
+                    None => client::session_path(&args.session_id, "stop"),
+                };
+                Ok(self
+                    .client
+                    .json::<Value, Value>("POST", &path, None)
+                    .await?)
             }
             other => Err(Failure::Params(format!("unknown tool `{other}`"))),
         }
+    }
+
+    /// A daemon tool from the catalog, called through `POST /v1/sessions/{id}/tools/{name}`.
+    /// Saved PNG artifacts (screenshots) come back as image content too, so the client's model
+    /// sees the page the way the in-app agent does.
+    async fn direct(
+        &self,
+        name: &str,
+        arguments: Value,
+    ) -> Result<(Value, Vec<ContentBlock>), Failure> {
+        let catalog = self.catalog().await?;
+        if !catalog.tools.iter().any(|tool| tool.name == name) {
+            return Err(Failure::Params(format!("unknown tool `{name}`")));
+        }
+        let Value::Object(mut args) = (match arguments {
+            Value::Null => json!({}),
+            other => other,
+        }) else {
+            return Err(Failure::Params("arguments must be an object".into()));
+        };
+        let session = match args.remove("session_id") {
+            Some(Value::String(session)) => session,
+            _ => return Err(Failure::Params("session_id is required".into())),
+        };
+        let approval_ticket = match args.remove("approval_ticket") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(ticket)) => Some(ticket),
+            Some(_) => return Err(Failure::Params("approval_ticket must be a string".into())),
+        };
+        let wait = match args.remove("wait") {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(wait)) => Some(wait),
+            Some(_) => return Err(Failure::Params("wait must be a boolean".into())),
+        };
+        let timeout = match args.remove("timeout_secs") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .ok_or_else(|| Failure::Params("timeout_secs must be an integer".into()))?,
+            ),
+        };
+        let wait = direct_wait(wait, timeout)?;
+        let args = Value::Object(args);
+        let outcome = tool_call::drive(
+            &self.client,
+            approval_ticket,
+            wait,
+            |approval| tool_call::tool(&self.client, &session, name, &args, approval),
+            |_, _| {},
+        )
+        .await?;
+        let value = outcome_result(outcome)?;
+        let mut images = Vec::new();
+        for artifact in value["artifacts"].as_array().into_iter().flatten() {
+            let Some(artifact) = artifact.as_str().filter(|path| path.ends_with(".png")) else {
+                continue;
+            };
+            let path = artifact
+                .split('/')
+                .map(client::encode_segment)
+                .collect::<Vec<_>>()
+                .join("/");
+            let (content_type, bytes) = self
+                .client
+                .bytes(&client::session_path(
+                    &session,
+                    &format!("artifacts/{path}"),
+                ))
+                .await?;
+            images.push(ContentBlock::image(
+                base64::engine::general_purpose::STANDARD.encode(bytes),
+                content_type,
+            ));
+        }
+        Ok((value, images))
+    }
+
+    async fn agent_run(
+        &self,
+        args: AgentRun,
+        progress: Option<Progress>,
+    ) -> Result<Value, Failure> {
+        let timeout = wait_timeout(args.timeout_secs)?;
+        if args.goal.trim().is_empty() {
+            return Err(Failure::Params("goal must not be empty".into()));
+        }
+        let create = openside_proto::CreateSessionRequest {
+            title: None,
+            model: args.model,
+            mode: args.mode,
+            workspace: None,
+            incognito: false,
+            browser_space: args.browser_space.unwrap_or_default(),
+        };
+        let started = agent::start(
+            &self.client,
+            args.session_id.as_deref(),
+            &create,
+            &args.goal,
+        )
+        .await?;
+        let session = started.session.id.to_string();
+        let mut result = json!({
+            "session_id": session,
+            "message_id": started.message.id,
+            "after_seq": started.session.last_seq,
+        });
+        if !args.wait {
+            result["next"] = json!("Poll agent_status, or call agent_result with session_id, message_id and after_seq to wait for the replies.");
+            return Ok(result);
+        }
+        let replay = Replay {
+            last_seen: started.session.last_seq,
+            terminal_after: started.session.last_seq,
+            message_id: Some(started.message.id.to_string()),
+        };
+        let waited = self
+            .settle_with_progress(&session, replay, timeout, progress)
+            .await?;
+        if let (Some(result), Value::Object(waited)) = (result.as_object_mut(), waited) {
+            result.extend(waited);
+        }
+        result["tasks"] = self.tasks(&session).await?;
+        Ok(result)
+    }
+
+    async fn agent_status(&self, session: &str) -> Result<Value, Failure> {
+        let current: Value = self.client.get(&client::session_path(session, "")).await?;
+        Ok(json!({
+            "session_id": session,
+            "status": current["status"],
+            "last_seq": current["last_seq"],
+            "queue": current["queue"],
+            "tasks": self.tasks(session).await?,
+            "pending_tickets": wait::pending_tickets(&self.client, session).await?,
+        }))
+    }
+
+    async fn tasks(&self, session: &str) -> Result<Value, String> {
+        let list: Value = self
+            .client
+            .get(&client::session_path(session, "subagents"))
+            .await?;
+        Ok(Value::Array(
+            list["subagents"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|task| {
+                    json!({
+                        "task_id": task["id"],
+                        "task": task["task"],
+                        "status": task["status"],
+                        "background": task["background"],
+                        "output": task["output"],
+                        "reason": task["reason"],
+                        "last_progress": task["last_progress"],
+                    })
+                })
+                .collect(),
+        ))
+    }
+
+    /// [`wait::settle`] that reports tasks, browser activity and tickets as
+    /// `notifications/progress` when the client sent a progress token.
+    async fn settle_with_progress(
+        &self,
+        session: &str,
+        replay: Replay,
+        timeout: Duration,
+        progress: Option<Progress>,
+    ) -> Result<Value, String> {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let forward = progress.map(|progress| {
+            tokio::spawn(async move {
+                let mut count = 0.0;
+                while let Some(message) = receiver.recv().await {
+                    count += 1.0;
+                    let mut param = ProgressNotificationParam::new(progress.token.clone(), count);
+                    param.message = Some(message);
+                    if progress.peer.notify_progress(param).await.is_err() {
+                        break;
+                    }
+                }
+            })
+        });
+        let result = wait::settle(
+            &self.client,
+            session,
+            replay,
+            Until {
+                timeout: Some(timeout),
+                through_human: false,
+            },
+            |event| {
+                if let Some(line) = agent::progress_line(event) {
+                    let _ = sender.send(line);
+                }
+            },
+        )
+        .await;
+        drop(sender);
+        if let Some(forward) = forward {
+            let _ = forward.await;
+        }
+        result
     }
 
     async fn session_send(&self, args: SessionSend) -> Result<Value, Failure> {
@@ -387,7 +669,7 @@ impl Mcp {
         if after_seq == last_seq && !active {
             // Nothing in flight: report the current state instead of waiting for an event that
             // will not come.
-            let pending = self.pending_tickets(&args.session_id).await?;
+            let pending = wait::pending_tickets(&self.client, &args.session_id).await?;
             let status = match status {
                 "idle" if pending.is_empty() => "settled",
                 "idle" => "waiting_human",
@@ -415,86 +697,40 @@ impl Mcp {
         Ok(self.wait_settled(&args.session_id, replay, timeout).await?)
     }
 
-    async fn pending_tickets(&self, session: &str) -> Result<Vec<Value>, String> {
-        let tickets: Value = self.client.get("/v1/tickets?status=pending").await?;
-        Ok(tickets["tickets"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|ticket| ticket["session_id"].as_str() == Some(session))
-            .map(summarize)
-            .collect())
-    }
-
-    /// Streams the session's events after `replay.last_seen` until it settles or stops, or the
-    /// timeout passes (reported as status `timeout`, not as an error).
     async fn wait_settled(
         &self,
         session: &str,
         replay: Replay,
         timeout: Duration,
     ) -> Result<Value, String> {
-        let mut state = Wait::new(replay);
-        let outcome = tokio::time::timeout(timeout, self.drive(session, &mut state)).await;
-        match outcome {
-            Ok(result) => result?,
-            Err(_) => state.status = Some("timeout"),
-        }
-        // Read at the end, not before the replay: tickets opened and resolved while we were
-        // catching up must not be reported, and one opened last must not be missed.
-        let pending = self.pending_tickets(session).await?;
-        if state.status == Some("settled") && !pending.is_empty() {
-            state.status = Some("waiting_human");
-        }
-        Ok(json!({
-            "status": state.status,
-            "last_seq": state.last_seq,
-            "replies": state.replies,
-            "pending_tickets": pending,
-            "error": state.error,
-        }))
-    }
-
-    async fn drive(&self, session: &str, state: &mut Wait) -> Result<(), String> {
-        let mut response = self.client.events(session, state.last_seq).await?;
-        let mut decoder = Decoder::default();
-        while let Some(frame) = response.body_mut().frame().await {
-            let frame = frame.map_err(|_| "event stream connection failed".to_owned())?;
-            let Ok(bytes) = frame.into_data() else {
-                continue;
-            };
-            for record in decoder.push(&bytes)? {
-                let event: Event = serde_json::from_slice(&record.data)
-                    .map_err(|_| "invalid event JSON in SSE stream".to_owned())?;
-                if event.session_id.as_str() != session
-                    || event.seq == 0
-                    || record.id != Some(event.seq)
-                {
-                    return Err(
-                        "SSE event session/sequence does not match its envelope or id".into(),
-                    );
-                }
-                if event.seq <= state.last_seq {
-                    continue;
-                }
-                state.last_seq = event.seq;
-                state.apply(event.seq, event.kind);
-                if state.status.is_some() {
-                    return Ok(());
-                }
-            }
-        }
-        Err("event stream ended before the session settled or stopped".into())
+        wait::settle(
+            &self.client,
+            session,
+            replay,
+            Until {
+                timeout: Some(timeout),
+                through_human: false,
+            },
+            |_| {},
+        )
+        .await
     }
 
     async fn ticket_resolve(&self, args: TicketResolve) -> Result<Value, Failure> {
         let path = client::ticket_path(&args.ticket_id, "");
         let ticket: Value = self.client.get(&path).await?;
-        if ticket["kind"].as_str() == Some("secret_input") {
+        if ticket["kind"] == "choice"
+            || (ticket["kind"] == "confirm" && (args.value == true || args.value == "approve"))
+        {
+            return Err(Failure::Tool(
+                "person_approval_required: MCP cannot approve confirmations or answer choice tickets. Ask the user to respond on a paired person device, then use ticket_wait. Denying a confirmation with false or \"reject\" is allowed.".into(),
+            ));
+        }
+        if matches!(ticket["kind"].as_str(), Some("secret_input" | "login")) {
             // Secrets must reach the daemon without passing through a model-driven client.
             return Err(Failure::Tool(
-                "secret_input tickets are never resolved through MCP; ask the user to run \
-                 `openside ticket resolve <id> -` and pipe the secret on stdin"
+                "secret_input and login tickets are never resolved through MCP; ask the user \
+                 to answer them in the openside web UI or with `openside ticket resolve <id>`, then use ticket_wait"
                     .into(),
             ));
         }
@@ -506,123 +742,6 @@ impl Mcp {
                 Some(&json!({"value": args.value})),
             )
             .await?)
-    }
-
-    /// Runs `code` in the session's agent tab through `POST /v1/sessions/{id}/repl`.
-    async fn browser(
-        &self,
-        target: Target,
-        code: String,
-        render: impl FnOnce(&Value) -> Value,
-    ) -> Result<Value, Failure> {
-        let mut body = Map::new();
-        body.insert("code".into(), json!(code));
-        if let Some(tab) = target.tab_id {
-            body.insert("tab_id".into(), json!(tab));
-        }
-        if let Some(ticket) = target.approval_ticket {
-            body.insert("approval_ticket".into(), json!(ticket));
-        }
-        let reply: Value = self
-            .client
-            .json(
-                "POST",
-                &client::session_path(&target.session_id, "repl"),
-                Some(&Value::Object(body)),
-            )
-            .await?;
-        match reply["status"].as_str() {
-            Some("done") => {
-                let result = &reply["result"];
-                if result["error"].as_str().is_some() {
-                    return Err(Failure::Tool(result.to_string()));
-                }
-                Ok(render(result))
-            }
-            Some("deferred") => Ok(json!({
-                "status": "deferred",
-                "ticket_id": reply["ticket_id"],
-                "next": "A human approval is pending. Once the ticket is resolved, call this tool \
-                         again with the same arguments plus approval_ticket set to ticket_id.",
-            })),
-            _ => Err(Failure::Tool(
-                json!({
-                    "status": reply["status"],
-                    "reason": reply["reason"],
-                    "hint": reply["hint"],
-                })
-                .to_string(),
-            )),
-        }
-    }
-}
-
-/// Where a wait starts and which part of the replayed log counts.
-struct Replay {
-    /// Events up to and including this sequence are not replayed.
-    last_seen: u64,
-    /// A settlement, stop or error at or before this sequence is history, not an outcome.
-    terminal_after: u64,
-    /// The message whose turn is awaited, when the wait follows a send.
-    message_id: Option<String>,
-}
-
-struct Wait {
-    last_seq: u64,
-    terminal_after: u64,
-    message_id: Option<String>,
-    /// Replies are only ours once our message was dispatched; earlier queued turns may still
-    /// finish first.
-    started: bool,
-    replies: Vec<String>,
-    message_done: bool,
-    status: Option<&'static str>,
-    error: Option<String>,
-}
-
-impl Wait {
-    fn new(replay: Replay) -> Self {
-        Self {
-            last_seq: replay.last_seen,
-            terminal_after: replay.terminal_after,
-            started: replay.message_id.is_none(),
-            message_id: replay.message_id,
-            replies: Vec::new(),
-            message_done: false,
-            status: None,
-            error: None,
-        }
-    }
-
-    fn is_ours(&self, id: &str) -> bool {
-        self.message_id.as_deref() == Some(id)
-    }
-
-    fn apply(&mut self, seq: u64, kind: EventKind) {
-        let current = seq > self.terminal_after;
-        match kind {
-            EventKind::AssistantFinal { text } if self.started => self.replies.push(text),
-            EventKind::MessageInjected { message_id } if self.is_ours(message_id.as_str()) => {
-                self.started = true;
-            }
-            EventKind::MessageCompleted { message_id: id, .. }
-            | EventKind::MessageDropped { message_id: id, .. }
-                if self.is_ours(id.as_str()) =>
-            {
-                self.message_done = true;
-            }
-            EventKind::RuntimeError { code, message } if current => {
-                self.error = Some(format!("{code}: {message}"));
-                self.status = Some("error");
-            }
-            EventKind::SessionSettled {}
-                if current && (self.message_id.is_none() || self.message_done) =>
-            {
-                self.status = Some("settled");
-            }
-            EventKind::SessionStopped {} if current => self.status = Some("stopped"),
-            _ => {}
-        }
     }
 }
 
@@ -666,52 +785,22 @@ fn wait_timeout(secs: Option<u64>) -> Result<Duration, Failure> {
     }
 }
 
-fn summarize(ticket: &Value) -> Value {
-    json!({"id": ticket["id"], "kind": ticket["kind"], "summary": ticket["summary"]})
+/// Direct tools wait for a person by default: the call completes once the approval or answer
+/// is given in the web or phone UI, and returns the pending ticket if `timeout_secs` passes.
+fn direct_wait(
+    wait: Option<bool>,
+    timeout: Option<u64>,
+) -> Result<Option<Option<Duration>>, Failure> {
+    let timeout = wait_timeout(timeout)?;
+    Ok(wait.unwrap_or(true).then_some(Some(timeout)))
 }
 
-/// A JSON string literal, which is also a valid JavaScript string literal.
-fn js_string(value: &str) -> String {
-    Value::String(value.to_owned()).to_string()
-}
-
-/// REPL code for one `browser_act`; `ref` comes from a `browser_snapshot`.
-fn act_code(args: &BrowserAct) -> Result<String, Failure> {
-    let valid = !args.target.is_empty()
-        && args
-            .target
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
-    if !valid {
-        return Err(Failure::Params(
-            "ref must be an element ref from browser_snapshot, such as e12".into(),
-        ));
+fn outcome_result(outcome: tool_call::Outcome) -> Result<Value, Failure> {
+    if outcome.ok {
+        Ok(outcome.value)
+    } else {
+        Err(Failure::Tool(outcome.value.to_string()))
     }
-    let locator = format!(
-        "page.locator({})",
-        js_string(&format!("aria-ref={}", args.target))
-    );
-    let text = || {
-        args.text
-            .as_deref()
-            .map(js_string)
-            .ok_or_else(|| Failure::Params(format!("action `{}` needs `text`", args.action)))
-    };
-    let call = match args.action.as_str() {
-        "click" => "click()".to_owned(),
-        "hover" => "hover()".to_owned(),
-        "check" => "check()".to_owned(),
-        "uncheck" => "uncheck()".to_owned(),
-        "fill" => format!("fill({})", text()?),
-        "press" => format!("press({})", text()?),
-        "select_option" => format!("selectOption({})", text()?),
-        other => {
-            return Err(Failure::Params(format!(
-                "unknown action `{other}`; use click, hover, check, uncheck, fill, press or select_option"
-            )))
-        }
-    };
-    Ok(format!("await {locator}.{call}; await page.url()"))
 }
 
 fn object(value: Value) -> JsonObject {
@@ -730,31 +819,57 @@ fn schema(properties: Value, required: &[&str]) -> JsonObject {
     }))
 }
 
-fn browser_schema(extra: Value, required: &[&str]) -> JsonObject {
-    let mut properties = object(json!({
-        "session_id": {"type": "string", "description": "Session whose agent tab is driven."},
-        "tab_id": {"type": "string",
-            "description": "Agent tab; optional when the session owns at most one tab."},
-        "approval_ticket": {"type": "string",
-            "description": "Approved ticket id from an earlier `deferred` result."},
-    }));
-    properties.extend(object(extra));
-    let mut required = required.to_vec();
-    required.push("session_id");
-    schema(Value::Object(properties), &required)
-}
-
 fn tool(name: &'static str, description: &'static str, read_only: bool, input: JsonObject) -> Tool {
     Tool::new(name, description, input)
         .with_annotations(ToolAnnotations::new().read_only(read_only))
 }
 
+fn direct_properties() -> Value {
+    json!({
+        "session_id": {"type": "string", "description": "Session whose browser is driven (session_create or agent_run gives one)."},
+        "approval_ticket": {"type": "string",
+            "description": "Approved ticket id from an earlier `deferred` result; normally the call waits and reruns by itself."},
+        "wait": {"type": "boolean",
+            "description": "Wait (default) until a person answers a ticket this call opens in the openside web or phone UI; false returns the pending ticket at once."},
+        "timeout_secs": {"type": "integer", "minimum": 1, "maximum": MAX_WAIT_SECS,
+            "description": "Give up waiting for a person after this long; default 120."},
+    })
+}
+
+/// The MCP form of a daemon catalog tool: its own schema plus [`direct_properties`].
+fn direct_tool(descriptor: &openside_proto::ToolDescriptor) -> Tool {
+    let mut input = object(descriptor.input_schema.clone());
+    input.insert("type".into(), json!("object"));
+    let properties = input.entry("properties").or_insert_with(|| json!({}));
+    if let Value::Object(properties) = properties {
+        properties.extend(object(direct_properties()));
+    }
+    let required = input.entry("required").or_insert_with(|| json!([]));
+    if let Value::Array(required) = required {
+        required.push(json!("session_id"));
+    }
+    let read_only = matches!(
+        descriptor.name.as_str(),
+        "browser_tabs" | "browser_snapshot" | "browser_screenshot"
+    );
+    let description = format!(
+        "{} (Direct daemon tool, same as the openside agent's; needs the {} scope over TCP.)",
+        descriptor.description,
+        serde_json::to_value(descriptor.scope)
+            .ok()
+            .and_then(|scope| scope.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    );
+    Tool::new(descriptor.name.clone(), description, input)
+        .with_annotations(ToolAnnotations::new().read_only(read_only))
+}
+
+/// The tools that do not come from the daemon's catalog.
 pub(crate) fn tools() -> Vec<Tool> {
     let session_id = json!({"type": "string", "description": "Session id."});
-    let wait_args = json!({
-        "timeout_secs": {"type": "integer", "minimum": 1, "maximum": MAX_WAIT_SECS,
-            "description": "Give up waiting after this long; default 120."},
-    });
+    let timeout = json!({"type": "integer", "minimum": 1, "maximum": MAX_WAIT_SECS,
+        "description": "Give up waiting after this long; default 120."});
+    let wait_args = json!({ "timeout_secs": timeout });
     let mut send_props = object(json!({
         "session_id": session_id,
         "text": {"type": "string", "description": "Message for the agent."},
@@ -771,10 +886,74 @@ pub(crate) fn tools() -> Vec<Tool> {
             "description": "Only consider events after this sequence (`after_seq` from session_send, or `last_seq` from a timed-out wait)."},
     }));
     wait_props.extend(object(wait_args));
+    let mut repl_props = object(json!({
+        "code": {"type": "string", "description": "Playwright-syntax script; may run many actions in one call. The last expression is returned."},
+        "tab_id": {"type": "string", "description": "Agent tab; optional when the session owns at most one tab."},
+    }));
+    repl_props.extend(object(direct_properties()));
     vec![
         tool(
+            "agent_run",
+            "Delegate a goal to the openside browser agent (it plans, browses, signs in through the user's vault, and asks the user on their phone when it needs a person). Starts a new session unless session_id is given. Returns session_id, message_id and after_seq at once; with wait=true, waits for the run (progress arrives as notifications/progress when the client sends a progress token) and returns the replies. Needs the steer scope, plus read to wait.",
+            false,
+            schema(
+                json!({
+                    "goal": {"type": "string", "description": "What the agent should do, self-contained."},
+                    "session_id": {"type": "string", "description": "Continue in this session instead of a new one."},
+                    "wait": {"type": "boolean", "description": "Wait for the run's end and return the replies."},
+                    "timeout_secs": timeout,
+                    "model": {"type": "string", "description": "Provider-qualified model for a new session."},
+                    "mode": {"type": "string", "enum": ["read-only", "guard", "full"]},
+                    "browser_space": {"type": "string", "enum": ["shared", "isolated"], "description": "shared (default): the user's managed browser profile with its logins. isolated: own cookies and storage."},
+                }),
+                &["goal"],
+            ),
+        ),
+        tool(
+            "agent_status",
+            "A run's state without waiting: session status, Tasks (with their latest progress and results) and pending tickets.",
+            true,
+            schema(json!({"session_id": session_id}), &["session_id"]),
+        ),
+        tool(
+            "agent_result",
+            "Wait for a run started by agent_run and return the agent's replies, its Tasks and pending tickets. Status `waiting_human` means a person must answer a ticket in the openside app; `timeout` means call again.",
+            true,
+            schema(
+                json!({
+                    "session_id": session_id,
+                    "after_seq": {"type": "integer", "minimum": 0, "description": "after_seq from agent_run."},
+                    "message_id": {"type": "string", "description": "message_id from agent_run."},
+                    "timeout_secs": timeout,
+                }),
+                &["session_id", "after_seq"],
+            ),
+        ),
+        tool(
+            "agent_steer",
+            "Steer a running agent with new instructions, or one Task with task_id. Needs the steer scope.",
+            false,
+            schema(
+                json!({
+                    "session_id": session_id,
+                    "text": {"type": "string"},
+                    "task_id": {"type": "string", "description": "Task id from agent_status."},
+                }),
+                &["session_id", "text"],
+            ),
+        ),
+        tool(
+            "agent_cancel",
+            "Cancel one Task with task_id, otherwise stop the session's whole run. Needs the steer scope.",
+            false,
+            schema(
+                json!({"session_id": session_id, "task_id": {"type": "string"}}),
+                &["session_id"],
+            ),
+        ),
+        tool(
             "session_create",
-            "Create an agent session. Needs the steer scope.",
+            "Create a session, e.g. to drive its browser directly. Needs the steer scope.",
             false,
             schema(
                 json!({
@@ -783,6 +962,7 @@ pub(crate) fn tools() -> Vec<Tool> {
                     "mode": {"type": "string", "enum": ["read-only", "guard", "full"]},
                     "workspace": {"type": "string", "description": "Absolute workspace path."},
                     "incognito": {"type": "boolean", "description": "Private session whose browsing is never remembered."},
+                    "browser_space": {"type": "string", "enum": ["shared", "isolated"], "description": "shared (default): the managed browser profile with its logins. isolated: own cookies and storage, wiped when the session is archived or deleted."},
                 }),
                 &[],
             ),
@@ -817,14 +997,23 @@ pub(crate) fn tools() -> Vec<Tool> {
         ),
         tool(
             "ticket_resolve",
-            "Resolve a confirmation or information ticket. Refuses secret_input tickets; the user must supply those. Needs the approve and read scopes.",
+            "Answer non-secret information tickets or deny confirmations (false or reject). Refuses confirmation approvals and choice answers: those require a person on a paired person device; use ticket_wait. Also refuses secret_input and login tickets. Needs the approve and read scopes.",
             false,
             schema(
                 json!({
                     "ticket_id": {"type": "string"},
-                    "value": {"description": "true/false for confirmations, or the answer for information tickets."},
+                    "value": {"description": "A non-secret info answer, or false/reject to deny a confirmation. Positive approvals and choice answers require a person; use ticket_wait."},
                 }),
                 &["ticket_id", "value"],
+            ),
+        ),
+        tool(
+            "ticket_wait",
+            "Wait until a person answers a ticket in the openside web or phone UI; returns its status and resolution (status `pending` after the timeout).",
+            true,
+            schema(
+                json!({"ticket_id": {"type": "string"}, "timeout_secs": timeout}),
+                &["ticket_id"],
             ),
         ),
         tool(
@@ -841,42 +1030,10 @@ pub(crate) fn tools() -> Vec<Tool> {
             ),
         ),
         tool(
-            "browser_open",
-            "Navigate the session's agent tab to a URL. Needs the browse scope; policy may require human approval.",
-            false,
-            browser_schema(
-                json!({"url": {"type": "string", "description": "Address to open."}}),
-                &["url"],
-            ),
-        ),
-        tool(
-            "browser_snapshot",
-            "Accessibility snapshot of the agent tab; its eN refs feed browser_act. Large snapshots come back truncated.",
-            true,
-            browser_schema(json!({}), &[]),
-        ),
-        tool(
-            "browser_act",
-            "Act on an element by its snapshot ref: click, hover, check, uncheck, fill, press or select_option. Policy may require human approval.",
-            false,
-            browser_schema(
-                json!({
-                    "action": {"type": "string",
-                        "enum": ["click", "hover", "check", "uncheck", "fill", "press", "select_option"]},
-                    "ref": {"type": "string", "description": "Element ref from browser_snapshot, such as e12."},
-                    "text": {"type": "string", "description": "Value for fill, key for press, option for select_option."},
-                }),
-                &["action", "ref"],
-            ),
-        ),
-        tool(
             "browser_repl",
-            "Run Playwright-syntax JavaScript (page, expect, console) in the agent tab; see docs/specs/browser-repl.md.",
+            "Run a Playwright-syntax script (page, expect, console; page.evaluate where the daemon allows it) in the session's tab: batch many actions in one call. See docs/specs/browser-repl.md. Sensitive steps wait for the user's approval.",
             false,
-            browser_schema(
-                json!({"code": {"type": "string", "description": "Snippet; the last expression is returned."}}),
-                &["code"],
-            ),
+            schema(Value::Object(repl_props), &["session_id", "code"]),
         ),
     ]
 }
@@ -886,8 +1043,11 @@ impl ServerHandler for Mcp {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("openside", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Tools over the openside daemon's public API: sessions, human tickets, memory \
-                 search and the session browser. Each call is limited by the token's scopes.",
+                "The user's openside browser agent and browser. For a multi-step web task, \
+                 delegate with agent_run (it uses the user's logins and asks the user on their \
+                 phone when a person is needed); to drive the browser yourself, create a session \
+                 and use the browser_* tools or browser_repl for a batch of steps. Each call is \
+                 limited by the token's scopes.",
             )
     }
 
@@ -896,22 +1056,51 @@ impl ServerHandler for Mcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(tools()))
+        let catalog = self.catalog().await.map_err(|error| {
+            ErrorData::internal_error(
+                self.redact(format!("could not read the daemon's tool catalog: {error}")),
+                None,
+            )
+        })?;
+        let mut tools = tools();
+        tools.extend(
+            catalog
+                .tools
+                .iter()
+                .filter(|descriptor| !tools.iter().any(|tool| tool.name == descriptor.name))
+                .map(direct_tool)
+                .collect::<Vec<_>>(),
+        );
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let progress = context.meta.get_progress_token().map(|token| Progress {
+            peer: context.peer.clone(),
+            token,
+        });
         let arguments = request.arguments.map_or(Value::Null, Value::Object);
-        match self.dispatch(&request.name, arguments).await {
-            Ok(value) => {
+        let builtin = tools().iter().any(|tool| tool.name == request.name);
+        let result = if builtin {
+            self.dispatch(&request.name, arguments, progress)
+                .await
+                .map(|value| (value, Vec::new()))
+        } else {
+            self.direct(&request.name, arguments).await
+        };
+        match result {
+            Ok((value, images)) => {
                 let text = match value {
                     Value::String(text) => text,
                     other => other.to_string(),
                 };
-                Ok(CallToolResult::success(vec![ContentBlock::text(self.redact(text))]).into())
+                let mut content = vec![ContentBlock::text(self.redact(text))];
+                content.extend(images);
+                Ok(CallToolResult::success(content).into())
             }
             Err(Failure::Params(message)) => {
                 Err(ErrorData::invalid_params(self.redact(message), None))

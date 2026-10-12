@@ -5,7 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
     body::Incoming,
     header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE, HOST},
@@ -13,28 +13,132 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use openside_proto::{ApiError, ROUTES};
+use openside_relay::{client::Tunnel, net::Origin};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::net::TcpStream;
 #[cfg(unix)]
 use tokio::net::UnixStream;
 use url::{Host, Url};
 
+use crate::remotes::{self, Transport};
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-// A REPL snippet may run for 30 s after waiting for the browser gate and a browser launch.
+// Relays and tunnels add TLS, a WebSocket upgrade and a Noise handshake before the request.
+const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+// A REPL snippet may run for 30 s after waiting for the browser gate and a browser launch;
+// a direct browser tool call (navigate, login) can wait as long.
 const REPL_TIMEOUT: Duration = Duration::from_secs(90);
+const MAX_BYTES: usize = 32 << 20;
 
 enum Endpoint {
     Unix(PathBuf),
     Tcp(SocketAddr),
+    /// A remote profile reached over HTTPS (Tailscale Serve, Cloudflare Tunnel, a proxy).
+    Direct {
+        name: String,
+        origin: Origin,
+    },
+    /// A remote profile reached through a relay, end-to-end encrypted to the daemon key.
+    Relay {
+        name: String,
+        relay: String,
+        daemon_id: String,
+        daemon_key: [u8; 32],
+        tunnel: tokio::sync::Mutex<Option<Tunnel>>,
+    },
 }
 
 pub(crate) struct Client {
     endpoint: Endpoint,
     token: Option<HeaderValue>,
     key: String,
+    host: String,
+}
+
+fn bearer(token: &str) -> Result<HeaderValue, String> {
+    let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|_| "token is not a valid HTTP header value".to_owned())?;
+    value.set_sensitive(true);
+    Ok(value)
 }
 
 impl Client {
+    /// The connection every command uses: `--remote`/`OPENSIDE_REMOTE` (a profile saved by
+    /// `openside connect`), else `--url` (loopback HTTP with a token), else the local socket.
+    pub(crate) async fn from_flags(
+        socket: Option<&Path>,
+        url: Option<&str>,
+        token: Option<&str>,
+        remote: Option<&str>,
+    ) -> Result<Self, String> {
+        match remote {
+            Some(name) => Self::remote(name),
+            None => Self::new(socket, url, token),
+        }
+    }
+
+    /// A saved remote profile with its stored device token.
+    pub(crate) fn remote(name: &str) -> Result<Self, String> {
+        let (profile, token) = remotes::load(name)?;
+        let origin = Origin::parse(&profile.url).map_err(|error| error.to_string())?;
+        let endpoint = match profile.transport {
+            Transport::Direct => Endpoint::Direct {
+                name: name.to_owned(),
+                origin: origin.clone(),
+            },
+            Transport::Relay => {
+                let (Some(daemon_id), Some(daemon_key)) = (
+                    profile.daemon_id.clone(),
+                    profile
+                        .daemon_key
+                        .as_deref()
+                        .and_then(openside_relay::noise::decode_key),
+                ) else {
+                    return Err(format!(
+                        "remote {name} is a relay profile without a daemon key; run `openside connect` again"
+                    ));
+                };
+                Endpoint::Relay {
+                    name: name.to_owned(),
+                    relay: profile.url.clone(),
+                    daemon_id,
+                    daemon_key,
+                    tunnel: tokio::sync::Mutex::new(None),
+                }
+            }
+        };
+        Ok(Self {
+            host: origin.authority(),
+            endpoint,
+            token: Some(bearer(&token)?),
+            key: format!("remote:{name}"),
+        })
+    }
+
+    /// An unauthenticated client for `POST /v1/pairing/exchange` during `openside connect`.
+    pub(crate) fn pairing(link: &remotes::PairingLink) -> Result<Self, String> {
+        let origin = Origin::parse(&link.origin).map_err(|error| error.to_string())?;
+        let endpoint = match &link.relay {
+            None => Endpoint::Direct {
+                name: String::new(),
+                origin: origin.clone(),
+            },
+            Some((daemon_id, daemon_key)) => Endpoint::Relay {
+                name: String::new(),
+                relay: link.origin.clone(),
+                daemon_id: daemon_id.clone(),
+                daemon_key: *daemon_key,
+                tunnel: tokio::sync::Mutex::new(None),
+            },
+        };
+        Ok(Self {
+            host: origin.authority(),
+            endpoint,
+            token: None,
+            key: format!("pairing:{}", origin.http_url()),
+        })
+    }
+
     pub(crate) fn new(
         socket: Option<&Path>,
         url: Option<&str>,
@@ -56,7 +160,10 @@ impl Client {
                 Some(Host::Ipv4(ip)) if ip.is_loopback() => IpAddr::V4(ip),
                 Some(Host::Ipv6(ip)) if ip.is_loopback() => IpAddr::V6(ip),
                 Some(Host::Domain("localhost")) => IpAddr::V4(Ipv4Addr::LOCALHOST),
-                _ => return Err("refusing non-loopback --url".into()),
+                _ => return Err(
+                    "refusing non-loopback --url (pair with `openside connect` and use --remote)"
+                        .into(),
+                ),
             };
             let address = SocketAddr::new(
                 ip,
@@ -66,13 +173,11 @@ impl Client {
             let token = token
                 .filter(|token| !token.is_empty())
                 .ok_or("--url requires --token or OPENSIDE_TOKEN")?;
-            let mut token = HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|_| "token is not a valid HTTP header value".to_owned())?;
-            token.set_sensitive(true);
             Ok(Self {
                 endpoint: Endpoint::Tcp(address),
-                token: Some(token),
+                token: Some(bearer(token)?),
                 key: format!("http://{address}"),
+                host: "localhost".into(),
             })
         } else {
             let socket = match socket {
@@ -92,6 +197,7 @@ impl Client {
                 key: format!("unix:{}", socket.display()),
                 endpoint: Endpoint::Unix(socket),
                 token: None,
+                host: "localhost".into(),
             })
         }
     }
@@ -100,10 +206,21 @@ impl Client {
         &self.key
     }
 
+    /// Whether requests leave this machine (a `--remote` profile).
+    pub(crate) fn is_remote(&self) -> bool {
+        matches!(
+            self.endpoint,
+            Endpoint::Direct { .. } | Endpoint::Relay { .. }
+        )
+    }
+
     pub(crate) fn ticket_command(&self, id: &str, action: &str, value: Option<&str>) -> String {
         let connection = match &self.endpoint {
             Endpoint::Unix(path) => format!("--socket {}", shell_quote(&path.to_string_lossy())),
             Endpoint::Tcp(address) => format!("--url http://{address}"),
+            Endpoint::Direct { name, .. } | Endpoint::Relay { name, .. } => {
+                format!("--remote {}", shell_quote(name))
+            }
         };
         let mut command = format!("openside {connection} ticket {action} {}", shell_quote(id));
         if let Some(value) = value {
@@ -115,6 +232,48 @@ impl Client {
 
     pub(crate) async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         self.json::<_, serde_json::Value>("GET", path, None).await
+    }
+
+    /// `GET` a non-JSON route (artifact bytes): `(Content-Type, body)`, at most 32 MiB.
+    pub(crate) async fn bytes(&self, path: &str) -> Result<(String, Vec<u8>), String> {
+        let response = self.request("GET", path, Vec::new(), None).await?;
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        let body = Limited::new(response.into_body(), MAX_BYTES)
+            .collect()
+            .await
+            .map_err(|_| "could not read API response (or it exceeds 32 MiB)")?
+            .to_bytes();
+        Ok((content_type, body.to_vec()))
+    }
+
+    /// A fresh relay stream, reconnecting the shared tunnel when it has ended.
+    async fn relay_stream(
+        relay: &str,
+        daemon_id: &str,
+        daemon_key: &[u8; 32],
+        tunnel: &tokio::sync::Mutex<Option<Tunnel>>,
+    ) -> Result<openside_relay::mux::MuxStream, String> {
+        let mut slot = tunnel.lock().await;
+        if let Some(current) = slot.as_ref().filter(|tunnel| !tunnel.is_closed()) {
+            if let Ok(stream) = current.open().await {
+                return Ok(stream);
+            }
+        }
+        let fresh = tokio::time::timeout(
+            REMOTE_CONNECT_TIMEOUT,
+            Tunnel::connect(relay, daemon_id, daemon_key),
+        )
+        .await
+        .map_err(|_| format!("relay {relay} did not answer"))?
+        .map_err(|error| format!("relay {relay}: {error}"))?;
+        let stream = fresh.open().await.map_err(|error| error.to_string())?;
+        *slot = Some(fresh);
+        Ok(stream)
     }
 
     pub(crate) async fn json<T: DeserializeOwned, B: Serialize>(
@@ -172,7 +331,7 @@ impl Client {
         let mut builder = Request::builder()
             .method(method)
             .uri(path)
-            .header(HOST, "localhost");
+            .header(HOST, &self.host);
         if !body.is_empty() {
             builder = builder.header(CONTENT_TYPE, "application/json");
         }
@@ -187,10 +346,15 @@ impl Client {
         let request = builder
             .body(Full::new(Bytes::from(body)))
             .map_err(|_| "invalid API request")?;
-        let wait = if route.path == "/v1/sessions/{id}/repl" {
+        let wait = if matches!(
+            route.path,
+            "/v1/sessions/{id}/repl" | "/v1/sessions/{id}/tools/{name}"
+        ) {
             REPL_TIMEOUT
         } else if route.path == "/v1/accounts" {
             Duration::from_secs(15)
+        } else if self.is_remote() {
+            REMOTE_CONNECT_TIMEOUT
         } else {
             CONNECT_TIMEOUT
         };
@@ -204,7 +368,12 @@ impl Client {
                 let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(path))
                     .await
                     .map_err(|_| "daemon connection timed out")?
-                    .map_err(|_| "could not connect to daemon socket")?;
+                    .map_err(|_| {
+                        format!(
+                            "could not connect to daemon socket {} (is opensided running? `openside service install` sets it up)",
+                            path.display()
+                        )
+                    })?;
                 exchange(stream, request, wait).await?
             }
             Endpoint::Tcp(address) => {
@@ -212,6 +381,22 @@ impl Client {
                     .await
                     .map_err(|_| "daemon connection timed out")?
                     .map_err(|_| "could not connect to loopback daemon")?;
+                exchange(stream, request, wait).await?
+            }
+            Endpoint::Direct { origin, .. } => {
+                let stream = openside_relay::net::connect(origin)
+                    .await
+                    .map_err(|error| format!("could not reach {}: {error}", origin.http_url()))?;
+                exchange(stream, request, wait).await?
+            }
+            Endpoint::Relay {
+                relay,
+                daemon_id,
+                daemon_key,
+                tunnel,
+                ..
+            } => {
+                let stream = Self::relay_stream(relay, daemon_id, daemon_key, tunnel).await?;
                 exchange(stream, request, wait).await?
             }
         };
@@ -226,10 +411,20 @@ impl Client {
             .map_err(|_| format!("API error (HTTP {status})"))?
             .to_bytes();
         match serde_json::from_slice::<ApiError>(&bytes) {
-            Ok(error) => Err(format!(
-                "API error {} (HTTP {status}): {}",
-                error.code, error.message
-            )),
+            Ok(error) => {
+                let message = format!(
+                    "API error {} (HTTP {status}): {}",
+                    error.code, error.message
+                );
+                if error.code == "person_approval_required" {
+                    return Err(format!("{message}. This decision needs a person-device token, not an agent client or the local socket. Ask a person on a paired web/phone/extension/channel device, then use ticket_wait. The operator can issue a person token with openside token create --person."));
+                }
+                if error.code == "self_approval_forbidden" {
+                    Err(format!("{message}. This client cannot approve its own work. Ask a person to approve on another paired device, then wait with MCP ticket_wait (CLI browser/run commands wait for the ticket)."))
+                } else {
+                    Err(message)
+                }
+            }
             Err(_) => Err(format!("API error (HTTP {status})")),
         }
     }

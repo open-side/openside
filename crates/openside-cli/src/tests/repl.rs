@@ -149,7 +149,7 @@ async fn repl_waits_for_approval_then_reruns_with_the_ticket() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(out, "log line\n\"bought\"\n");
     assert!(err.contains("Approval needed (ticket t-9)"), "{err}");
-    assert!(err.contains("ticket resolve t-9 true"), "{err}");
+    assert!(err.contains("another paired web or phone device"), "{err}");
     let seen = seen.lock().clone();
     let paths: Vec<_> = seen
         .iter()

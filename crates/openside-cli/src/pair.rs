@@ -9,18 +9,46 @@
 use std::io::Write;
 
 use clap::{Args, Subcommand};
-use openside_proto::{CapabilityScope, CreatePairingRequest, DeviceList, PairingOffer};
+use openside_proto::{
+    CapabilityScope, CreatePairingRequest, DeviceList, PairingOffer, PairingTransport,
+};
 
 use crate::{client::Client, emit, output_error, token::parse_scope};
 
 #[derive(Args)]
 pub(crate) struct PairArgs {
-    /// Scope the new device gets; repeat for several. Default: read, approve, human_step.
+    /// Scope the new device gets; repeat for several. Default: read, approve, human_step
+    /// for a person; read, steer, browse, approve with --agent.
     #[arg(long = "scope", value_name = "SCOPE", value_parser = parse_scope)]
     scopes: Vec<CapabilityScope>,
     /// Label shown in `openside device list`.
     #[arg(long, value_name = "NAME", default_value = "phone")]
     name: String,
+    /// Transport the QR link uses: tailscale, cloudflare or relay. Default: the first
+    /// enabled `remote.mode`.
+    #[arg(long, value_enum, value_name = "TRANSPORT")]
+    via: Option<Via>,
+    /// Pair an external CLI/MCP agent instead of a person's phone/browser.
+    /// Its token cannot approve confirmations for sessions it drives.
+    #[arg(long)]
+    agent: bool,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub(crate) enum Via {
+    Tailscale,
+    Cloudflare,
+    Relay,
+}
+
+impl From<Via> for PairingTransport {
+    fn from(via: Via) -> Self {
+        match via {
+            Via::Tailscale => Self::Tailscale,
+            Via::Cloudflare => Self::Cloudflare,
+            Via::Relay => Self::Relay,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -53,11 +81,20 @@ pub(crate) async fn pair<W: Write>(
     stdout: &mut W,
 ) -> Result<(), String> {
     let mut scopes = if args.scopes.is_empty() {
-        vec![
-            CapabilityScope::Read,
-            CapabilityScope::Approve,
-            CapabilityScope::HumanStep,
-        ]
+        if args.agent {
+            vec![
+                CapabilityScope::Read,
+                CapabilityScope::Steer,
+                CapabilityScope::Browse,
+                CapabilityScope::Approve,
+            ]
+        } else {
+            vec![
+                CapabilityScope::Read,
+                CapabilityScope::Approve,
+                CapabilityScope::HumanStep,
+            ]
+        }
     } else {
         args.scopes.clone()
     };
@@ -69,6 +106,12 @@ pub(crate) async fn pair<W: Write>(
             Some(&CreatePairingRequest {
                 name: args.name.clone(),
                 scopes,
+                via: args.via.map(PairingTransport::from),
+                kind: if args.agent {
+                    openside_proto::DeviceKind::AgentClient
+                } else {
+                    openside_proto::DeviceKind::PersonDevice
+                },
             }),
         )
         .await
@@ -84,16 +127,27 @@ pub(crate) async fn pair<W: Write>(
     if json {
         return emit(stdout, &offer);
     }
+    writeln!(
+        stdout,
+        "{}",
+        if args.agent {
+            "Connecting an agent / CLI: it must wait for approval on another paired device."
+        } else {
+            "Pairing a phone/browser for a person. For a CLI/MCP agent, issue a new link with openside pair --agent."
+        }
+    ).map_err(output_error)?;
     let target = offer.url.clone().unwrap_or_else(|| offer.path.clone());
     if offer.url.is_some() {
         if let Some(code) = qr(&target) {
             writeln!(stdout, "{code}").map_err(output_error)?;
         }
         writeln!(stdout, "Scan with the phone, or open: {target}").map_err(output_error)?;
+        writeln!(stdout, "From another computer: openside connect '{target}'")
+            .map_err(output_error)?;
     } else {
         writeln!(
             stdout,
-            "remote.public_url is not set: open the web app on the device and go to {target}"
+            "No remote transport is set up (`openside remote setup <mode>`): open the web app on the device and go to {target}"
         )
         .map_err(output_error)?;
     }
