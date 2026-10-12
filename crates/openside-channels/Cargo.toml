@@ -33,6 +33,7 @@ url = "2"
 
 [dev-dependencies]
 axum = "0.8"
+parking_lot = "0.12"
 
 [lints]
 workspace = true

@@ -335,7 +335,7 @@ async fn serve(
 ) -> Result<(SocketAddr, JoinHandle<()>)> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
-        .map_err(|_| ChannelError::Config(format!("cannot listen on {listen}")))?;
+        .map_err(|error| ChannelError::Config(format!("cannot listen on {listen}: {error}")))?;
     let address = listener.local_addr()?;
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, router)
@@ -367,6 +367,7 @@ pub async fn pair(socket: &Path, name: &str, out: &Path) -> Result<String> {
         .map_err(ChannelError::http)?;
     let request = PairDeviceRequest {
         name: name.to_owned(),
+        kind: openside_proto::DeviceKind::PersonDevice,
         scopes: vec![
             CapabilityScope::Read,
             CapabilityScope::Steer,

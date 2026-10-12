@@ -212,6 +212,31 @@ fn card(ticket: &Ticket, web_url: Option<&str>) -> (String, Vec<Button>) {
                 Vec::new(),
             )
         }
+        // Credentials are never typed into chat: a deep link only, like a secret.
+        TicketKind::Login => (
+            format!(
+                "Sign-in requested\n{}\nChat history is not private, so this cannot be answered here. Open {}.",
+                ticket.summary,
+                web()
+            ),
+            Vec::new(),
+        ),
+        // A page's choice releases no secret, so it may be picked from chat.
+        TicketKind::Choice => {
+            let options = ticket
+                .choice
+                .as_ref()
+                .map(|choice| choice.options.as_slice())
+                .unwrap_or_default();
+            let mut buttons: Vec<Button> = options
+                .iter()
+                .take(MAX_OPTIONS)
+                .enumerate()
+                .map(|(index, option)| button(&option.label, format!("c:{id}:{index}"), false))
+                .collect();
+            buttons.push(button("Dismiss", format!("r:{id}"), true));
+            (format!("Choice needed\n{}", ticket.summary), buttons)
+        }
         TicketKind::DeviceApproval | TicketKind::Takeover => (
             format!(
                 "Action needed outside chat\n{}\nComplete it in the openside web UI or at the desktop.",
@@ -345,6 +370,7 @@ impl<M: Messenger> Core<M> {
                 mode: None,
                 workspace: None,
                 incognito: false,
+                browser_space: Default::default(),
             })
             .await?;
         let id = session.id.as_str().to_owned();
@@ -621,7 +647,7 @@ impl<M: Messenger> Core<M> {
                 return Err("That request cannot be answered from chat.".into())
             }
             ("a", TicketKind::Confirm) => format!("Approved by user {}", press.user),
-            ("r", TicketKind::Confirm | TicketKind::Info) => {
+            ("r", TicketKind::Confirm | TicketKind::Info | TicketKind::Choice) => {
                 format!("Rejected by user {}", press.user)
             }
             ("o", TicketKind::Info) => {
@@ -629,6 +655,12 @@ impl<M: Messenger> Core<M> {
                     .and_then(|index| ticket.options.get(index))
                     .ok_or("That option no longer exists.")?;
                 format!("Answered: {}", option.label)
+            }
+            ("c", TicketKind::Choice) => {
+                let option = index
+                    .and_then(|index| ticket.choice.as_ref()?.options.get(index))
+                    .ok_or("That option no longer exists.")?;
+                format!("Chose: {}", option.label)
             }
             // Secret, device and takeover tickets are never answerable from chat.
             _ => return Err("That request cannot be answered from chat.".into()),
@@ -643,6 +675,12 @@ impl<M: Messenger> Core<M> {
                 self.daemon
                     .reject(id, &format!("rejected from {}", M::PLATFORM))
                     .await
+            }
+            "c" => {
+                let value = index
+                    .and_then(|index| ticket.choice.as_ref()?.options.get(index))
+                    .map(|option| json!({"option": option.id}));
+                self.daemon.resolve(id, value.unwrap_or(Value::Null)).await
             }
             _ => {
                 let value = index
@@ -755,6 +793,7 @@ impl<M: Messenger> Core<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::Mutex as RecordedMutex;
 
     fn otp_ticket() -> Ticket {
         serde_json::from_value(serde_json::json!({
@@ -784,6 +823,204 @@ mod tests {
         assert!(text.contains("openside ticket resolve t-otp -"), "{text}");
         let (text, _) = card(&ticket, None);
         assert!(text.contains("Open the openside web UI"), "{text}");
+    }
+
+    fn login_ticket() -> Ticket {
+        let mut ticket = otp_ticket();
+        ticket.id = openside_proto::TicketId::new("t-login");
+        ticket.kind = TicketKind::Login;
+        ticket.otp = None;
+        ticket.summary = "Sign in to https://bank.test".into();
+        ticket.login = Some(
+            serde_json::from_value(json!({
+                "origin":"https://bank.test", "site_name":"Bank",
+                "fields":[{"id":"private-field-canary","kind":"password",
+                    "label":"Private password label canary","masked":true,"required":true}],
+                "alternatives":[], "submit_label":"Private submit label canary", "can_save":true
+            }))
+            .unwrap(),
+        );
+        ticket
+    }
+
+    #[test]
+    fn login_cards_are_link_only_and_choices_offer_page_labelled_buttons() {
+        let ticket = login_ticket();
+        let (text, buttons) = card(&ticket, Some("https://host.example.ts.net/"));
+        assert!(buttons.is_empty(), "{buttons:?}");
+        assert!(
+            text.contains("Open https://host.example.ts.net/sessions/s-1."),
+            "{text}"
+        );
+        assert!(text.contains("cannot be answered here"), "{text}");
+        for forbidden in [
+            "Private password",
+            "private-field-canary",
+            "Private submit",
+            "/answer",
+            "ticket resolve",
+            "field_ref",
+            "secret",
+            "values",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "login card exposed {forbidden}: {text}"
+            );
+        }
+        assert!(card(&ticket, None).0.contains("Open the openside web UI."));
+        let mut choice = ticket;
+        choice.kind = TicketKind::Choice;
+        choice.login = None;
+        choice.choice = Some(
+            serde_json::from_value(json!({
+                "origin":"https://bank.test", "site_name":"Bank", "question":"How to verify?",
+                "options":[{"id":"sms","label":"Text me a code"},{"id":"email","label":"Email"}],
+                "multiple":false
+            }))
+            .unwrap(),
+        );
+        let (_, buttons) = card(&choice, None);
+        assert_eq!(
+            buttons,
+            vec![
+                Button {
+                    label: "Text me a code".into(),
+                    data: "c:t-login:0".into(),
+                    danger: false
+                },
+                Button {
+                    label: "Email".into(),
+                    data: "c:t-login:1".into(),
+                    danger: false
+                },
+                Button {
+                    label: "Dismiss".into(),
+                    data: "r:t-login".into(),
+                    danger: true
+                },
+            ]
+        );
+    }
+
+    #[derive(Default)]
+    struct RecordedMessenger(RecordedMutex<Vec<String>>);
+
+    impl Messenger for RecordedMessenger {
+        const PLATFORM: &'static str = "telegram";
+        fn max_chars(&self) -> usize {
+            4096
+        }
+        async fn send(
+            &self,
+            _: &ThreadKey,
+            text: &str,
+            _: &[Button],
+        ) -> crate::error::Result<MsgRef> {
+            self.0.lock().push(text.into());
+            Ok(MsgRef("message".into()))
+        }
+        async fn edit(
+            &self,
+            _: &ThreadKey,
+            _: &MsgRef,
+            _: &str,
+            _: &[Button],
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        async fn download_audio(
+            &self,
+            _: &AudioRef,
+            _: &std::path::Path,
+            _: u64,
+        ) -> crate::error::Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_answers_and_button_presses_cannot_resolve_a_login() {
+        use axum::{extract::Request, routing::any, Json, Router};
+        let requests = Arc::new(RecordedMutex::new(Vec::new()));
+        let recorded = Arc::clone(&requests);
+        let ticket = login_ticket();
+        let served = ticket.clone();
+        let app = Router::new().fallback(any(move |request: Request| {
+            let served = served.clone();
+            let recorded = Arc::clone(&recorded);
+            async move {
+                recorded.lock().push((
+                    request.method().to_string(),
+                    request.uri().path().to_owned(),
+                ));
+                match request.uri().path() {
+                    "/v1/tickets" => Json(json!({"tickets":[served]})),
+                    "/v1/tickets/t-login" => Json(json!(served)),
+                    path => panic!("login answer reached a mutation: {path}"),
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(dir.path()).unwrap());
+        let thread = ThreadKey::new("telegram", "chat", "");
+        store
+            .update(&thread, |state| {
+                state.session_id = Some("s-1".into());
+                state.cards.insert(
+                    "t-login".into(),
+                    Card {
+                        message: "message".into(),
+                        text: card(&ticket, None).0,
+                        done: false,
+                    },
+                );
+            })
+            .unwrap();
+        let messenger = Arc::new(RecordedMessenger::default());
+        let core = Core::new(
+            Arc::clone(&messenger),
+            crate::DaemonClient::new(
+                &format!("http://{addr}"),
+                crate::secret::Secret::new("token"),
+            )
+            .unwrap(),
+            store,
+            CoreOptions {
+                edit_interval: Duration::ZERO,
+                stt: None,
+                web_url: None,
+            },
+            CancellationToken::new(),
+        );
+        core.answer(&thread, "s-1", "PASSWORD-CANARY").await;
+        assert_eq!(
+            messenger.0.lock().as_slice(),
+            ["No question is waiting for a free-form answer."]
+        );
+        for action in ["a", "r", "o", "c"] {
+            let press = Press {
+                thread: thread.clone(),
+                user: "user".into(),
+                data: format!("{action}:t-login:0"),
+                message: MsgRef("message".into()),
+                token: String::new(),
+            };
+            assert_eq!(
+                core.press(&press).await,
+                Err("That request cannot be answered from chat.".into())
+            );
+        }
+        let requests = requests.lock();
+        assert_eq!(requests.len(), 5);
+        assert!(
+            requests.iter().all(|(method, _)| method == "GET"),
+            "{requests:?}"
+        );
+        server.abort();
     }
 
     #[test]
