@@ -1,4 +1,4 @@
-import { ChevronRight, SlidersHorizontal } from "lucide-react";
+import { ChevronRight, Compass, SlidersHorizontal } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Health } from "../api/types";
 import { AppearanceSettings } from "../components/AppearanceSettings";
@@ -6,7 +6,7 @@ import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
 import { disableNotifications, enableNotifications, pushSupported, storedSubscription, subscriptionActive } from "../push";
 import { Button, ICON_STROKE } from "../ui";
-import { ErrorNote, StatusRow } from "./blocks";
+import { Badge, ErrorNote, StatusRow } from "./blocks";
 
 /** aside-relay re-checks the connection every five seconds while Settings is open. */
 const HEALTH_INTERVAL_MS = 5_000;
@@ -92,7 +92,9 @@ function Notifications() {
   return (
     <section aria-label="Notifications">
       <h3 className="settings-heading">Notifications</h3>
-      <StatusRow label="Response notifications">{PUSH_LABEL[status]}</StatusRow>
+      <div className="settings-group">
+        <StatusRow label="Response notifications">{PUSH_LABEL[status]}</StatusRow>
+      </div>
       <p className="settings-text">{text}</p>
       {status === "off" || status === "enabled" || status === "checking" ? (
         <div className="settings-actions-row">
@@ -133,30 +135,44 @@ function Connection() {
     };
   }, [client]);
 
+  const daemon = failed ? "Unavailable" : health ? (health.ok ? "Connected" : "Degraded") : "Checking…";
   return (
     <section aria-label="Connection">
       <h3 className="settings-heading">Connection</h3>
-      <StatusRow label="Daemon">{failed ? "Unavailable" : health ? (health.ok ? "Connected" : "Degraded") : "Checking…"}</StatusRow>
-      {health ? <StatusRow label="API version">{health.api_version}</StatusRow> : null}
+      <div className="settings-group">
+        <StatusRow label="Daemon">
+          {health || failed ? <Badge tone={failed ? "danger" : health?.ok ? "success" : "attention"}>{daemon}</Badge> : daemon}
+        </StatusRow>
+        {health ? <StatusRow label="API version">{health.api_version}</StatusRow> : null}
+      </div>
     </section>
   );
 }
 
 /** Content of the Settings dialog (aside-relay `Settings.tsx`). */
-export function SettingsPage({ onWorkspace, onSignOut }: { onWorkspace: () => void; onSignOut: () => void }) {
+export function SettingsPage({ onWorkspace, onGuide, onSignOut }: { onWorkspace: () => void; onGuide: () => void; onSignOut: () => void }) {
   return (
     <div className="manage-body" data-section="settings">
-      <section aria-label="openside">
-        <h3 className="settings-heading">openside</h3>
-        <button type="button" className="workspace-entry" onClick={onWorkspace}>
-          <SlidersHorizontal size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          <span className="tile-copy">
-            <strong>Workspace</strong>
-            <span>Skills, routines, memory, accounts, vault, devices and configuration</span>
-          </span>
-          <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        </button>
-      </section>
+      <button type="button" className="workspace-entry" onClick={onWorkspace}>
+        <span className="tile-icon" aria-hidden="true">
+          <SlidersHorizontal size={20} strokeWidth={ICON_STROKE} />
+        </span>
+        <span className="tile-copy">
+          <strong>Workspace</strong>
+          <span>Skills, routines, memory, accounts, vault, devices and configuration</span>
+        </span>
+        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      </button>
+      <button type="button" className="workspace-entry" onClick={onGuide}>
+        <span className="tile-icon" aria-hidden="true">
+          <Compass size={20} strokeWidth={ICON_STROKE} />
+        </span>
+        <span className="tile-copy">
+          <strong>Setup guide</strong>
+          <span>Connect agents, import browser data, set up the vault and pair a phone</span>
+        </span>
+        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      </button>
       <Connection />
       <Notifications />
       <section aria-label="Appearance">
@@ -165,15 +181,18 @@ export function SettingsPage({ onWorkspace, onSignOut }: { onWorkspace: () => vo
       </section>
       <section aria-label="Access">
         <h3 className="settings-heading">Access</h3>
-        <p className="settings-text">
-          This browser is signed in with a paired device token. Signing out removes the token here; the device stays paired
-          until you revoke it under Devices.
-        </p>
-        <div className="settings-actions-row">
-          <Button variant="danger" onClick={onSignOut}>
-            Sign out
-          </Button>
+        <div className="settings-group">
+          <div className="status-row">
+            <span>This browser</span>
+            <Button variant="danger" size="compact" onClick={onSignOut}>
+              Sign out
+            </Button>
+          </div>
         </div>
+        <p className="settings-text">
+          Signed in with a paired device token. Signing out removes the token from this browser; the device stays paired until
+          you revoke it under Devices.
+        </p>
       </section>
     </div>
   );

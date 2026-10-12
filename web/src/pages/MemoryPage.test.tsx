@@ -79,7 +79,8 @@ describe("MemoryPage", () => {
   it("shows status, searches with kind filter, and shows history", async () => {
     const user = userEvent.setup();
     const { calls } = setup();
-    expect(await screen.findByLabelText("Memory status")).toHaveTextContent("2 memories · search: keywords only · openside memory model fetch");
+    expect(await screen.findByLabelText("Memory status")).toHaveTextContent("2 memories · keyword search");
+    expect(screen.getByText("openside memory model fetch")).toBeInTheDocument();
     const list = await screen.findByRole("list", { name: "Memories" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(2);
 
@@ -88,7 +89,7 @@ describe("MemoryPage", () => {
     await vi.waitFor(() => expect(calls.at(-1)?.path).toBe("/v1/memory?q=window&kind=note"));
     await vi.waitFor(() => expect(within(screen.getByRole("list", { name: "Memories" })).getAllByRole("listitem")).toHaveLength(1));
 
-    await user.click(screen.getByRole("button", { name: "History" }));
+    await user.click(screen.getByRole("button", { name: "Change history" }));
     const history = await screen.findByRole("list", { name: "History of m1" });
     expect(within(history).getByText("Prefers aisle seats")).toBeInTheDocument();
     expect(within(history).getByText(/by agent:s1/)).toBeInTheDocument();
@@ -109,14 +110,16 @@ describe("MemoryPage", () => {
 
     const row = screen.getByText("Prefers window seats").closest("article") as HTMLElement;
     expect(row).toHaveAttribute("data-memory", "m1");
-    await user.click(within(row).getByRole("button", { name: "Edit" }));
+    await user.click(within(row).getByRole("button", { name: "Options for Prefers window seats" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
     const editor = await screen.findByRole("form", { name: "Edit memory m1" });
     await user.selectOptions(within(editor).getByLabelText("Retention"), "days_90");
     await user.click(within(editor).getByRole("button", { name: "Save" }));
     expect(await within(row).findByText("90 days after last edit")).toBeInTheDocument();
     expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/v1/memory/m1", body: { retention: "days_90", tags: ["travel"] } });
 
-    await user.click(within(row).getByRole("button", { name: "Delete" }));
+    await user.click(within(row).getByRole("button", { name: "Options for Prefers window seats" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
     const confirm = await screen.findByRole("dialog", { name: "Delete memory?" });
     await user.click(within(confirm).getByRole("button", { name: "Delete" }));
     await vi.waitFor(() => expect(screen.queryByText("Prefers window seats")).toBeNull());

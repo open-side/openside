@@ -1,20 +1,25 @@
-import { Brain } from "lucide-react";
+import { Brain, Pencil, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { ApiError } from "../api/client";
 import type { Memory, MemoryKind, MemorySearchResponse, Retention } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
-import { Button, Dialog, DialogActions, Segmented, useToast } from "../ui";
+import { Button, Dialog, DialogActions, ICON_STROKE, MenuItem, Segmented, useToast } from "../ui";
 import {
   AddButton,
-  CardActions,
+  Badge,
+  Disclosure,
   EmptyState,
   ErrorNote,
   Loading,
   ResourceCard,
+  RowMenu,
+  ScopeNotice,
   SectionList,
   useConfirm,
   useDialogState,
 } from "./blocks";
+import { formatDate, formatDateTime } from "./format";
 
 const RETENTIONS: { value: Retention; label: string }[] = [
   { value: "permanent", label: "Keep forever" },
@@ -37,12 +42,12 @@ function History({ memory }: { memory: Memory }) {
   if (!history.data) return <Loading />;
   return (
     <ol className="card-history" aria-label={`History of ${memory.id}`}>
-      {history.data.versions.map((version, index) => (
-        <li key={index}>
+      {[...history.data.versions].reverse().map((version) => (
+        <li key={version.version}>
           <span>
-            <span className="badge badge--muted">{version.op}</span> by {version.actor}
+            <Badge>{version.op}</Badge> by {version.actor}
           </span>
-          <span className="status-row-value">{new Date(version.at).toLocaleString()}</span>
+          <span className="status-row-value">{formatDateTime(version.at)}</span>
           {version.content != null ? <p>{version.content}</p> : null}
         </li>
       ))}
@@ -114,6 +119,7 @@ export function MemoryPage() {
   const [kind, setKind] = useState<MemoryKind | "all">("all");
   const [result, setResult] = useState<MemorySearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [forbidden, setForbidden] = useState(false);
   const [historyOf, setHistoryOf] = useState<string | null>(null);
   // `{}` opens a blank form; `{ memory }` edits that memory.
   const form = useDialogState<{ memory?: Memory }>();
@@ -125,8 +131,10 @@ export function MemoryPage() {
     try {
       setResult(await client.searchMemory({ q: query, kind: kind === "all" ? undefined : kind }));
       setError(null);
+      setForbidden(false);
     } catch (cause) {
       setError(errorMessage(cause));
+      setForbidden(cause instanceof ApiError && cause.status === 403);
     }
   }, [client, query, kind]);
 
@@ -141,18 +149,27 @@ export function MemoryPage() {
     await health.reload();
   }
 
+  if (forbidden || health.forbidden) {
+    return (
+      <div className="manage-body" data-section="memory">
+        <ScopeNotice what="memory" />
+      </div>
+    );
+  }
+
   return (
     <div className="manage-body" data-section="memory">
       <SectionList
         label="Saved memories"
-        description={
+        summary={
           health.data ? (
             <span aria-label="Memory status">
-              {health.data.count} memories · search: {health.data.mode === "hybrid" ? "hybrid (local embeddings)" : "keywords only"}
-              {health.data.next_step ? ` · ${health.data.next_step}` : ""}
+              {health.data.count} {health.data.count === 1 ? "memory" : "memories"} ·{" "}
+              {health.data.mode === "hybrid" ? "hybrid search (local embeddings)" : "keyword search"}
             </span>
           ) : undefined
         }
+        description={health.data?.next_step || undefined}
         actions={<AddButton onClick={() => form.show({})}>New memory</AddButton>}
       >
         <div className="section-toolbar">
@@ -177,7 +194,7 @@ export function MemoryPage() {
           error ? null : <Loading />
         ) : result.hits.length === 0 ? (
           query ? (
-            <p className="settings-text">No memories match.</p>
+            <p className="settings-text">No memories match “{query}”.</p>
           ) : (
             <EmptyState icon={Brain} title="No memories yet" detail="Saved context the agent can recall in later conversations." />
           )
@@ -187,17 +204,40 @@ export function MemoryPage() {
               <li key={memory.id}>
                 <ResourceCard
                   data-memory={memory.id}
-                  title={memory.title || (memory.kind === "history" ? "Visited page" : "Note")}
+                  className={memory.kind === "note" ? "memory-note" : undefined}
+                  title={memory.kind === "history" ? memory.title || "Visited page" : memory.content}
                   detail={[
+                    memory.kind === "history" && memory.url ? memory.url : null,
                     RETENTIONS.find((option) => option.value === memory.retention)?.label ?? memory.retention,
-                    memory.expires_at ? `expires ${new Date(memory.expires_at).toLocaleDateString()}` : null,
+                    memory.expires_at ? `expires ${formatDate(memory.expires_at)}` : null,
                   ]
                     .filter(Boolean)
                     .join(" · ")}
-                  badge={memory.kind}
-                  badgeTone="muted"
+                  badge={memory.kind === "history" ? "Visited page" : undefined}
+                  trailing={
+                    <RowMenu name={memory.kind === "history" ? memory.title || memory.url || "visited page" : memory.content.slice(0, 40)}>
+                      <MenuItem icon={<Pencil size={18} strokeWidth={ICON_STROKE} />} onClick={() => form.show({ memory })}>
+                        Edit
+                      </MenuItem>
+                      <MenuItem
+                        danger
+                        icon={<Trash2 size={18} strokeWidth={ICON_STROKE} />}
+                        onClick={() =>
+                          ask({
+                            title: "Delete memory?",
+                            description: "Its history keeps only who deleted it and when.",
+                            confirmLabel: "Delete",
+                            onConfirm: () =>
+                              void client.deleteMemory(memory.id).then(refresh, (cause: unknown) => setError(errorMessage(cause))),
+                          })
+                        }
+                      >
+                        Delete
+                      </MenuItem>
+                    </RowMenu>
+                  }
                 >
-                  <p className="resource-card-body">{memory.content}</p>
+                  {memory.kind === "history" ? <p className="resource-card-body">{memory.content}</p> : null}
                   {memory.tags.length ? (
                     <div className="resource-card-meta">
                       {memory.tags.map((tag) => (
@@ -207,33 +247,9 @@ export function MemoryPage() {
                       ))}
                     </div>
                   ) : null}
-                  <CardActions>
-                    <Button size="compact" onClick={() => form.show({ memory })}>
-                      Edit
-                    </Button>
-                    <Button
-                      size="compact"
-                      aria-expanded={historyOf === memory.id}
-                      onClick={() => setHistoryOf(historyOf === memory.id ? null : memory.id)}
-                    >
-                      History
-                    </Button>
-                    <Button
-                      size="compact"
-                      variant="danger"
-                      onClick={() =>
-                        ask({
-                          title: "Delete memory?",
-                          description: "Its history keeps only who deleted it and when.",
-                          confirmLabel: "Delete",
-                          onConfirm: () =>
-                            void client.deleteMemory(memory.id).then(refresh, (cause: unknown) => setError(errorMessage(cause))),
-                        })
-                      }
-                    >
-                      Delete
-                    </Button>
-                  </CardActions>
+                  <Disclosure expanded={historyOf === memory.id} onToggle={() => setHistoryOf(historyOf === memory.id ? null : memory.id)}>
+                    Change history
+                  </Disclosure>
                   {historyOf === memory.id ? <History memory={memory} /> : null}
                 </ResourceCard>
               </li>

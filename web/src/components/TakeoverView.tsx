@@ -2,6 +2,7 @@ import { Globe, Minimize2, X } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { ApiError } from "../api/client";
+import { whilePageShown } from "../api/pageLifecycle";
 import type { TakeoverInput, TakeoverServerMessage, Ticket } from "../api/types";
 import { useClient } from "../context";
 import { Button, ICON_STROKE, IconButton } from "../ui";
@@ -70,51 +71,67 @@ export function TakeoverView({ ticket, onClose }: { ticket: Ticket; onClose: () 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialog = useRef<HTMLDivElement>(null);
+  const screen = useRef<HTMLDivElement>(null);
+  // The control that opened the view gets focus back when it closes or shrinks to the PiP.
+  const opener = useRef(document.activeElement);
 
   // Move focus into the full-screen view so keyboard users start inside it.
   useEffect(() => {
     if (!pip) dialog.current?.focus();
+    else if (opener.current instanceof HTMLElement) opener.current.focus();
   }, [pip]);
-  useEffect(() => {
-    const ws = client.takeover(ticket.id);
-    socket.current = ws;
-    let finished = false;
-    ws.onopen = () => setStatus("open");
-    ws.onmessage = (event: MessageEvent) => {
-      let message: TakeoverServerMessage;
-      try {
-        message = JSON.parse(String(event.data)) as TakeoverServerMessage;
-      } catch {
-        return;
-      }
-      switch (message.type) {
-        case "frame":
-          setFrame(message);
-          setWithheld(false);
-          break;
-        case "withheld":
-          setWithheld(true);
-          break;
-        case "input_error":
-          setInputError(message.code);
-          break;
-        case "ended":
+  useEffect(
+    () => () => {
+      if (opener.current instanceof HTMLElement && opener.current.isConnected) opener.current.focus();
+    },
+    [],
+  );
+  useEffect(
+    () =>
+      whilePageShown(() => {
+        const ws = client.takeover(ticket.id);
+        socket.current = ws;
+        let finished = false;
+        ws.onopen = () => setStatus("open");
+        ws.onmessage = (event: MessageEvent) => {
+          let message: TakeoverServerMessage;
+          try {
+            message = JSON.parse(String(event.data)) as TakeoverServerMessage;
+          } catch {
+            return;
+          }
+          switch (message.type) {
+            case "frame":
+              setFrame(message);
+              setWithheld(false);
+              break;
+            case "withheld":
+              setWithheld(true);
+              break;
+            case "input_error":
+              setInputError(message.code);
+              break;
+            case "ended":
+              finished = true;
+              setEnded(message.reason);
+              setStatus("ended");
+              ws.close();
+              break;
+          }
+        };
+        ws.onclose = () => {
+          if (!finished) setStatus((current) => (current === "open" ? "ended" : "failed"));
+        };
+        // The daemon admits one controller per ticket; a page leaving for the back/forward cache
+        // hands the takeover back so the page on screen can open it.
+        return () => {
           finished = true;
-          setEnded(message.reason);
-          setStatus("ended");
+          socket.current = null;
           ws.close();
-          break;
-      }
-    };
-    ws.onclose = () => {
-      if (!finished) setStatus((current) => (current === "open" ? "ended" : "failed"));
-    };
-    return () => {
-      finished = true;
-      socket.current = null;
-      ws.close();
-    };
-  }, [client, ticket.id]);
+        };
+      }),
+    [client, ticket.id],
+  );
 
   function send(input: TakeoverInput) {
     if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(input));
@@ -195,15 +212,55 @@ export function TakeoverView({ ticket, onClose }: { ticket: Ticket; onClose: () 
 
   if (pip) {
     return (
-      <BrowserPip label="Browser preview" title={ticket.summary} status={status} onExpand={() => setPip(false)} onClose={onClose}>
+      <BrowserPip
+        label="Browser preview"
+        title={ticket.summary}
+        status={status}
+        live={!!image && status === "open" && !withheld}
+        onExpand={() => setPip(false)}
+        onClose={onClose}
+      >
         {image ?? <p className="pip-state">{state ?? "Waiting for a frame…"}</p>}
       </BrowserPip>
     );
   }
 
+  // The remote screen forwards every key, Tab and Escape included, to the page; elsewhere in the
+  // view Escape shrinks it to the PiP and Tab stays inside, as in a modal dialog.
+  function dialogKey(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.target === screen.current || !dialog.current) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setPip(true);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const items = Array.from(dialog.current.querySelectorAll<HTMLElement>("button:not(:disabled), [tabindex='0']"));
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!first || !last) return;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === dialog.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   // Portaled so no transcript stacking context can sit above the full-screen view.
   return createPortal(
-    <div ref={dialog} className="takeover" role="dialog" aria-modal="true" aria-label="Remote control" data-status={status} tabIndex={-1}>
+    <div
+      ref={dialog}
+      className="takeover"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Remote control"
+      data-status={status}
+      tabIndex={-1}
+      onKeyDown={dialogKey}
+    >
       <header className="takeover-head">
         <IconButton label="Minimize" onClick={() => setPip(true)}>
           <Minimize2 size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
@@ -228,6 +285,7 @@ export function TakeoverView({ ticket, onClose }: { ticket: Ticket; onClose: () 
           </p>
         ) : null}
         <div
+          ref={screen}
           className="takeover-screen"
           tabIndex={0}
           aria-label="Remote browser screen; click to interact, type to send keys"

@@ -8,12 +8,14 @@ import { Composer } from "../components/Composer";
 import { OtpSheet } from "../components/OtpSheet";
 import { QueueList } from "../components/QueueList";
 import { SessionMenu } from "../components/SessionMenu";
+import { StopTaskDialog } from "../components/StopTaskDialog";
 import { SubagentPanel } from "../components/SubagentPanel";
 import { Timeline } from "../components/Timeline";
 import { useClient } from "../context";
 import { useSessionFiles } from "../hooks/useSessionFiles";
 import { useSessionView } from "../hooks/useSessionView";
 import { useShell } from "../shell";
+import { isApprovalTicket, isChoiceTicket, isLoginTicket } from "../otp/loginForm";
 import { isOtpTicket, otpRegistrationOf } from "../otp/otpForm";
 import { pendingTickets } from "../state/session";
 import { ICON_STROKE, IconButton, useToast } from "../ui";
@@ -28,7 +30,11 @@ export function SessionPage() {
   const toast = useToast();
   const { view, connection, error } = useSessionView(client, id);
   const files = useSessionFiles(client, id, view);
-  const waiting = pendingTickets(view).length > 0;
+  const pending = pendingTickets(view);
+  const waiting = pending.length > 0;
+  // Login, choice and code cards carry their own "Action needed" chip; the composer offers the
+  // jump only for requests without one.
+  const unflagged = pending.some((ticket) => !(isOtpTicket(ticket) || isLoginTicket(ticket) || isChoiceTicket(ticket) || isApprovalTicket(ticket)));
   const running = view.status === "running";
 
   const main = useRef<HTMLElement>(null);
@@ -36,15 +42,19 @@ export function SessionPage() {
   const dock = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  const [confirmStop, setConfirmStop] = useState(false);
 
-  // `?ticket=` comes from a tapped push notification. A pending code request opens the code
-  // sheet; any other ticket is scrolled into view. The parameter is dropped once handled, so the
-  // conversation is what Back and a reload show afterwards.
+  // `?ticket=` comes from a tapped push notification. A pending code, login or choice request
+  // opens its sheet; any other ticket is scrolled into view. The parameter is dropped once
+  // handled, so the conversation is what Back and a reload show afterwards.
   const [params, setParams] = useSearchParams();
   const linked = params.get("ticket");
   const linkedTicket = linked ? view.tickets[linked] : undefined;
   const sheetTicket =
-    linkedTicket?.status === "pending" && (isOtpTicket(linkedTicket) || otpRegistrationOf(linkedTicket)) ? linkedTicket : null;
+    linkedTicket?.status === "pending" &&
+    (isOtpTicket(linkedTicket) || otpRegistrationOf(linkedTicket) || isLoginTicket(linkedTicket) || isChoiceTicket(linkedTicket) || isApprovalTicket(linkedTicket))
+      ? linkedTicket
+      : null;
   const closeSheet = useCallback(
     () =>
       setParams(
@@ -85,15 +95,30 @@ export function SessionPage() {
   }, [view.lastSeq, view.queue.length]);
 
   // The transcript keeps its last turn clear of the floating composer, whatever its height.
+  // Set on the document too: the browser preview and code dock are portaled to the body.
   useEffect(() => {
     // The anchor is `display: contents`; its only child is the absolutely placed composer dock.
     const element = dock.current?.firstElementChild;
     const root = main.current;
     if (!element || !root || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => root.style.setProperty("--composer-height", `${Math.round(element.getBoundingClientRect().height)}px`));
+    const observer = new ResizeObserver(() => {
+      const height = `${Math.round(element.getBoundingClientRect().height)}px`;
+      root.style.setProperty("--composer-height", height);
+      document.documentElement.style.setProperty("--composer-height", height);
+    });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty("--composer-height");
+    };
   }, [error]);
+
+  // A dropped or restored stream re-checks the daemon at once, so the shell's connection
+  // banner follows it instead of waiting for the next list sync.
+  const { refreshSessions } = shell;
+  useEffect(() => {
+    if (connection === "reconnecting" || connection === "open") refreshSessions();
+  }, [connection, refreshSessions]);
 
   if (error) {
     return (
@@ -104,20 +129,17 @@ export function SessionPage() {
             <p role="alert" className="error">
               {error.message}
             </p>
-            <Link to="/">Start a new chat</Link>
+            <Link to="/" className="action-link">
+              Start a new chat
+            </Link>
           </div>
         </div>
       </main>
     );
   }
 
-  const subtitle = [
-    view.model,
-    waiting ? "Needs you" : running ? "Working…" : view.status === "stopped" ? "Stopped" : null,
-    connection === "reconnecting" ? "Reconnecting…" : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  // Status only: the model id is a provider identifier, not something to read in the title.
+  const subtitle = waiting ? "Needs you" : running ? "Working…" : view.status === "stopped" ? "Stopped" : undefined;
 
   return (
     <main className="session conversation" data-status={view.status} data-last-seq={view.lastSeq} ref={main}>
@@ -149,12 +171,8 @@ export function SessionPage() {
         }}
       >
         <div className="conversation-column">
+          <BrowserPreview key={id} sessionId={id} view={view} onShowPending={showPending} onCancel={() => setConfirmStop(true)} />
           <Timeline view={view} sessionId={id} visuals={files.visuals} />
-          {view.thinking || (running && view.items.at(-1)?.type !== "assistant") ? (
-            <p className="thinking" role="status">
-              Working…
-            </p>
-          ) : null}
           <SubagentPanel sessionId={id} subagents={view.subagents} />
           <ArtifactsPanel sessionId={id} artifacts={files.artifacts} />
           <QueueList sessionId={id} queue={view.queue} running={running} />
@@ -170,24 +188,25 @@ export function SessionPage() {
           sessionId={id}
           running={running}
           waiting={waiting}
-          onStop={() =>
-            void client.stopSession(id).catch(() => toast.notify("Could not stop the response", "error"))
-          }
+          onStop={() => setConfirmStop(true)}
           onSent={() => scrollToEnd()}
           tools={
-            <>
-              {waiting ? (
-                <button type="button" className="tool-pill waiting-pill" onClick={showPending}>
-                  <Hand size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                  <span className="tool-pill-label">Waiting for you above</span>
-                </button>
-              ) : null}
-              <BrowserPreview key={id} sessionId={id} privateSession={view.incognito} />
-            </>
+            unflagged ? (
+              <button type="button" className="tool-pill waiting-pill" aria-label="Show the request waiting for you" onClick={showPending}>
+                <Hand size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                <span className="tool-pill-label">Needs you</span>
+              </button>
+            ) : null
           }
         />
       </div>
       {sheetTicket ? <OtpSheet ticket={sheetTicket} onClose={closeSheet} /> : null}
+      <StopTaskDialog
+        open={confirmStop && running}
+        scope={{ kind: "all", tasks: view.subagents.filter((task) => task.status === "running" || task.status === "waiting_human").length }}
+        onClose={() => setConfirmStop(false)}
+        onConfirm={() => void client.stopSession(id).catch(() => toast.notify("Could not stop the agent", "error"))}
+      />
     </main>
   );
 }

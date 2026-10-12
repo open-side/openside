@@ -53,6 +53,9 @@ export async function enableNotifications(client: Client): Promise<string> {
   if (!endpoint || !keys?.p256dh || !keys.auth) throw new Error("The browser returned an incomplete push subscription.");
   const stored = await client.createPushSubscription({ endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } });
   localStorage.setItem(SUBSCRIPTION_KEY, stored.id);
+  // The shell's presence loop only reports every 30 s; without this a push for the screen the
+  // person is looking at can arrive right after enabling.
+  reportPresence(client);
   return stored.id;
 }
 
@@ -70,23 +73,25 @@ export async function disableNotifications(client: Client): Promise<void> {
   await (await worker?.pushManager.getSubscription())?.unsubscribe();
 }
 
+function reportPresence(client: Client): void {
+  const id = storedSubscription();
+  if (!id) return;
+  const focused = document.visibilityState === "visible" && document.hasFocus();
+  client.pushPresence(id, focused).catch((cause: unknown) => {
+    if (cause instanceof ApiError && cause.status === 404) localStorage.removeItem(SUBSCRIPTION_KEY);
+  });
+}
+
 /**
  * Tells the daemon whether this app is in the foreground, so it does not push what the
  * screen already shows. Runs for the whole signed-in shell.
  */
 export function usePushPresence(client: Client): void {
   useEffect(() => {
-    const focused = () => document.visibilityState === "visible" && document.hasFocus();
-    const report = () => {
-      const id = storedSubscription();
-      if (!id) return;
-      client.pushPresence(id, focused()).catch((cause: unknown) => {
-        if (cause instanceof ApiError && cause.status === 404) localStorage.removeItem(SUBSCRIPTION_KEY);
-      });
-    };
+    const report = () => reportPresence(client);
     report();
     const timer = setInterval(() => {
-      if (focused()) report();
+      if (document.visibilityState === "visible" && document.hasFocus()) report();
     }, PRESENCE_INTERVAL_MS);
     document.addEventListener("visibilitychange", report);
     window.addEventListener("focus", report);

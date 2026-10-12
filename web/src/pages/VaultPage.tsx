@@ -1,24 +1,27 @@
-import { KeyRound } from "lucide-react";
+import { KeyRound, LockKeyhole, LockKeyholeOpen, Trash2 } from "lucide-react";
 import { useCallback, useState, type FormEvent } from "react";
-import { ApiError, type VaultAuditQuery } from "../api/client";
-import type { VaultBackend, VaultPolicyOverride, VaultStatus } from "../api/types";
+import type { VaultAuditQuery } from "../api/client";
+import type { VaultBackend, VaultPolicy, VaultPolicyOverride, VaultStatus } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
-import { Button, Dialog, DialogActions, useToast } from "../ui";
+import { Button, Dialog, DialogActions, ICON_STROKE, MenuItem, useToast } from "../ui";
 import {
   AddButton,
   CardActions,
   EmptyState,
   ErrorNote,
-  Loading,
   ResourceCard,
+  ResourceView,
+  RowMenu,
+  ScopeNotice,
   SectionList,
   useConfirm,
   useDialogState,
+  type BadgeTone,
 } from "./blocks";
+import { formatDateTime } from "./format";
 
-const POLICY_LABEL: Record<VaultPolicyOverride, string> = {
-  default: "Vault default",
+const POLICY_LABEL: Record<VaultPolicy, string> = {
   always: "Always",
   while_unlocked: "While unlocked",
   never: "Never",
@@ -41,33 +44,11 @@ const REASON: Record<string, string> = {
   probe_timeout: "The computer's keyring did not answer in time.",
 };
 
-/** A 403 here means the paired device lacks the admin scope, which every vault route needs. */
-function adminScope(cause: unknown): unknown {
-  return cause instanceof ApiError && cause.status === 403 && cause.code === "forbidden"
-    ? new ApiError(
-        403,
-        "admin_scope_required",
-        "This device needs the admin scope to manage the vault. On the computer, pair it again with openside pair --scope admin.",
-      )
-    : cause;
-}
-
-function vaultError(cause: unknown): string {
-  return errorMessage(adminScope(cause));
-}
-
-/** Rethrows with the admin-scope explanation so `useResource` shows it. */
-function explained<T>(request: Promise<T>): Promise<T> {
-  return request.catch((cause: unknown) => {
-    throw adminScope(cause);
-  });
-}
-
-const STATE_LABEL: Record<VaultStatus["state"], string> = {
-  uninitialized: "not set up",
-  locked: "locked",
-  unlocked: "unlocked",
-  unavailable: "unavailable",
+const STATE: Record<VaultStatus["state"], { label: string; tone: BadgeTone }> = {
+  uninitialized: { label: "Not set up", tone: "neutral" },
+  locked: { label: "Locked", tone: "neutral" },
+  unlocked: { label: "Unlocked", tone: "success" },
+  unavailable: { label: "Unavailable", tone: "attention" },
 };
 
 const SECRET_INPUT = { autoComplete: "off", autoCapitalize: "none", autoCorrect: "off", spellCheck: false } as const;
@@ -91,7 +72,7 @@ function PassphraseForm({ label, confirm, onSubmit }: { label: string; confirm: 
   }
 
   return (
-    <form className="dialog-form vault-passphrase" onSubmit={submit} aria-label={label}>
+    <form className="vault-form" onSubmit={submit} aria-label={label}>
       <label className="field">
         <span>{confirm ? "New passphrase (8+ characters)" : "Passphrase"}</span>
         <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} {...SECRET_INPUT} required />
@@ -124,57 +105,56 @@ function Status({ status, onChanged }: { status: VaultStatus; onChanged: () => v
       setError(null);
       onChanged();
     } catch (cause) {
-      setError(vaultError(cause));
+      setError(errorMessage(cause));
     }
   }
 
-  const backend = status.backend ? BACKEND_LABEL[status.backend] : "None available";
+  const backend = status.backend ? BACKEND_LABEL[status.backend] : "No unlock method available";
   const reason = status.reason ? (REASON[status.reason] ?? status.reason) : null;
+  const trailing =
+    status.state === "unlocked" ? (
+      <Button size="compact" onClick={() => void act(() => client.lockVault())}>
+        Lock
+      </Button>
+    ) : status.state === "locked" && !passphrase ? (
+      <Button size="compact" variant="primary" onClick={() => void act(() => client.unlockVault())}>
+        Unlock
+      </Button>
+    ) : status.state === "uninitialized" && !passphrase && status.backend ? (
+      <Button size="compact" variant="primary" onClick={() => void act(() => client.setupVault())}>
+        Set up vault
+      </Button>
+    ) : undefined;
 
   return (
     <ResourceCard
       data-state={status.state}
+      icon={status.state === "unlocked" ? LockKeyholeOpen : LockKeyhole}
       title="Vault"
-      detail={`Unlocks with: ${backend}`}
-      badge={STATE_LABEL[status.state]}
-      badgeTone={status.state === "unlocked" ? "accent" : status.state === "unavailable" ? "attention" : "muted"}
+      detail={`Unlocks with ${backend}`}
+      badge={STATE[status.state].label}
+      badgeTone={STATE[status.state].tone}
+      trailing={trailing}
     >
-      {reason ? <p className="resource-card-detail">{reason}</p> : null}
+      {reason ? <p className="resource-card-body">{reason}</p> : null}
       {status.state === "uninitialized" && passphrase ? (
         <>
-          <p className="resource-card-detail">
+          <p className="resource-card-body">
             No keyring is available, so the vault key is derived from a passphrase. Nobody can recover a forgotten passphrase.
           </p>
           <PassphraseForm label="Set up vault" confirm onSubmit={(value) => act(() => client.setupVault(value))} />
         </>
       ) : null}
       {status.state === "uninitialized" && !passphrase && status.backend ? (
-        <>
-          <p className="resource-card-detail">The vault key is kept in the computer's keyring. Adding the first item also sets it up.</p>
-          <CardActions>
-            <Button variant="primary" onClick={() => void act(() => client.setupVault())}>
-              Set up vault
-            </Button>
-          </CardActions>
-        </>
+        <p className="resource-card-body">The vault key is kept in the computer's keyring. Adding the first item also sets it up.</p>
       ) : null}
       {status.state === "locked" && passphrase ? (
         <PassphraseForm label="Unlock" confirm={false} onSubmit={(value) => act(() => client.unlockVault(value))} />
       ) : null}
-      {status.state === "locked" && !passphrase ? (
-        <CardActions>
-          <Button variant="primary" onClick={() => void act(() => client.unlockVault())}>
-            Unlock
-          </Button>
-        </CardActions>
-      ) : null}
-      {status.state === "unlocked" ? (
-        <CardActions>
-          <Button onClick={() => void act(() => client.lockVault())}>Lock</Button>
-        </CardActions>
-      ) : null}
       {status.state === "unavailable" ? (
-        <p className="resource-card-detail">Run openside doctor on the computer for the next step.</p>
+        <p className="resource-card-body">
+          Run <code>openside doctor</code> on the computer for the next step.
+        </p>
       ) : null}
       {error ? <ErrorNote>{error}</ErrorNote> : null}
     </ResourceCard>
@@ -232,7 +212,7 @@ function ItemForm({ kind, onSaved, onCancel }: { kind: ItemKind; onSaved: (id: s
       // secret must not linger in page state either way; the person retypes it.
       setPassword("");
       setTotp("");
-      setError(vaultError(cause));
+      setError(errorMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -290,10 +270,10 @@ function ItemForm({ kind, onSaved, onCancel }: { kind: ItemKind; onSaved: (id: s
   );
 }
 
-function Items({ status, onChanged }: { status: VaultStatus | null; onChanged: () => void }) {
+function Items({ status, onChanged }: { status: VaultStatus; onChanged: () => void }) {
   const client = useClient();
   const toast = useToast();
-  const load = useCallback(() => explained(client.vaultItems()), [client]);
+  const load = useCallback(() => client.vaultItems(), [client]);
   const items = useResource(load);
   const form = useDialogState<ItemKind>();
   const [confirm, ask] = useConfirm();
@@ -303,13 +283,12 @@ function Items({ status, onChanged }: { status: VaultStatus | null; onChanged: (
       await client.updateVaultItem(id, policy);
       await items.reload();
     } catch (cause) {
-      items.setError(vaultError(cause));
+      items.setError(errorMessage(cause));
     }
   }
 
   // Keyring vaults are created by the first item, so adding is offered before setup too.
-  const canAdd =
-    status?.state === "unlocked" || (status?.state === "uninitialized" && status.backend != null && status.backend !== "passphrase");
+  const canAdd = status.state === "unlocked" || (status.state === "uninitialized" && status.backend != null && status.backend !== "passphrase");
 
   return (
     <SectionList
@@ -320,74 +299,87 @@ function Items({ status, onChanged }: { status: VaultStatus | null; onChanged: (
         canAdd ? (
           <>
             <AddButton onClick={() => form.show("login")}>Login</AddButton>
-            <AddButton onClick={() => form.show("authenticator")}>Authenticator</AddButton>
+            <AddButton variant="secondary" onClick={() => form.show("authenticator")}>
+              Authenticator
+            </AddButton>
           </>
         ) : undefined
       }
     >
-      {items.error ? <ErrorNote>{items.error}</ErrorNote> : null}
-      {!items.data ? (
-        items.error ? null : <Loading />
-      ) : !items.data.available ? (
-        <EmptyState icon={KeyRound} title="Vault locked" detail="No unlocked vault on this daemon." />
-      ) : items.data.items.length === 0 ? (
-        <EmptyState icon={KeyRound} title="The vault has no items" />
-      ) : (
-        <ul className="resource-list" aria-label="Vault items">
-          {items.data.items.map((item) => (
-            <li key={item.id}>
-              <ResourceCard data-item={item.id} title={item.id} detail={item.origins.join(", ")}>
-                {item.has_totp || item.passkey_rp_ids.length ? (
-                  <div className="resource-card-meta">
-                    {item.has_totp ? <span className="tag">one-time codes</span> : null}
-                    {item.passkey_rp_ids.length ? <span className="tag">passkeys: {item.passkey_rp_ids.join(", ")}</span> : null}
-                  </div>
-                ) : null}
-                <div className="select-row">
-                  <span>
-                    Use policy
-                    <span className="resource-card-detail"> enforced: {item.effective_policy}</span>
-                  </span>
-                  <select
-                    aria-label={`Use policy for ${item.id}`}
-                    value={item.policy ?? "default"}
-                    onChange={(e) => void setPolicy(item.id, e.target.value as VaultPolicyOverride)}
-                  >
-                    {(Object.keys(POLICY_LABEL) as VaultPolicyOverride[]).map((policy) => (
-                      <option key={policy} value={policy}>
-                        {policy === "default" ? `${POLICY_LABEL.default} (${items.data?.default_policy})` : POLICY_LABEL[policy]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <CardActions>
-                  <Button
-                    size="compact"
-                    aria-label={`Delete ${item.id}`}
-                    onClick={() =>
-                      ask({
-                        title: `Delete ${item.id}?`,
-                        description: "Its login, one-time codes and passkeys are removed from the vault. The audit log keeps the deletion.",
-                        confirmLabel: "Delete",
-                        onConfirm: () =>
-                          void client.deleteVaultItem(item.id).then(
-                            () => {
-                              toast.notify(`Deleted ${item.id}.`);
-                              void items.reload();
-                            },
-                            (cause: unknown) => items.setError(vaultError(cause)),
-                          ),
-                      })
-                    }
-                  >
-                    Delete
-                  </Button>
-                </CardActions>
-              </ResourceCard>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ResourceView resource={items} what="the vault">
+        {(data) =>
+          !data.available ? (
+            <p className="settings-text">Items appear here once the vault is set up and unlocked.</p>
+          ) : data.items.length === 0 ? (
+            <EmptyState icon={KeyRound} title="The vault has no items" detail="Add a login or an authenticator for a site the agent signs in to." />
+          ) : (
+            <ul className="resource-list" aria-label="Vault items">
+              {data.items.map((item) => {
+                const shown = item.policy ?? data.default_policy;
+                return (
+                  <li key={item.id}>
+                    <ResourceCard
+                      data-item={item.id}
+                      icon={KeyRound}
+                      title={item.id}
+                      detail={item.origins.join(", ")}
+                      trailing={
+                        <>
+                          <select
+                            className="inline-select"
+                            aria-label={`Use policy for ${item.id}`}
+                            title="When the agent may use this item"
+                            value={item.policy ?? "default"}
+                            onChange={(e) => void setPolicy(item.id, e.target.value as VaultPolicyOverride)}
+                          >
+                            <option value="default">Default ({POLICY_LABEL[data.default_policy].toLowerCase()})</option>
+                            {(Object.keys(POLICY_LABEL) as VaultPolicy[]).map((policy) => (
+                              <option key={policy} value={policy}>
+                                {POLICY_LABEL[policy]}
+                              </option>
+                            ))}
+                          </select>
+                          <RowMenu name={item.id}>
+                            <MenuItem
+                              danger
+                              icon={<Trash2 size={18} strokeWidth={ICON_STROKE} />}
+                              onClick={() =>
+                                ask({
+                                  title: `Delete ${item.id}?`,
+                                  description: "Its login, one-time codes and passkeys are removed from the vault. The audit log keeps the deletion.",
+                                  confirmLabel: "Delete",
+                                  onConfirm: () =>
+                                    void client.deleteVaultItem(item.id).then(
+                                      () => {
+                                        toast.notify(`Deleted ${item.id}.`);
+                                        void items.reload();
+                                      },
+                                      (cause: unknown) => items.setError(errorMessage(cause)),
+                                    ),
+                                })
+                              }
+                            >
+                              Delete
+                            </MenuItem>
+                          </RowMenu>
+                        </>
+                      }
+                    >
+                      {item.has_totp || item.passkey_rp_ids.length || item.effective_policy !== shown ? (
+                        <div className="resource-card-meta">
+                          {item.has_totp ? <span className="tag">one-time codes</span> : null}
+                          {item.passkey_rp_ids.length ? <span className="tag">passkeys: {item.passkey_rp_ids.join(", ")}</span> : null}
+                          {item.effective_policy !== shown ? <span className="tag">enforced: {POLICY_LABEL[item.effective_policy].toLowerCase()}</span> : null}
+                        </div>
+                      ) : null}
+                    </ResourceCard>
+                  </li>
+                );
+              })}
+            </ul>
+          )
+        }
+      </ResourceView>
       <Dialog open={form.open} onClose={form.close} title={form.value === "authenticator" ? "New authenticator" : "New login"}>
         {form.value && (
           <ItemForm
@@ -407,14 +399,29 @@ function Items({ status, onChanged }: { status: VaultStatus | null; onChanged: (
   );
 }
 
+const WHAT: Record<string, string> = {
+  fill: "Fill",
+  otp: "One-time code",
+  otp_register: "Save authenticator",
+  passkey_register: "Save passkey",
+  passkey_login: "Passkey sign-in",
+  get: "Read",
+  policy_update: "Policy change",
+  item_add: "Item added",
+  item_delete: "Item deleted",
+  setup: "Set up",
+  unlock: "Unlock",
+  lock: "Lock",
+};
+
 function Audit() {
   const client = useClient();
   const [item, setItem] = useState("");
   const [session, setSession] = useState("");
   const [since, setSince] = useState("");
   const [query, setQuery] = useState<VaultAuditQuery>({});
-  const load = useCallback(() => explained(client.vaultAudit(query)), [client, query]);
-  const { data: audit, error } = useResource(load);
+  const load = useCallback(() => client.vaultAudit(query), [client, query]);
+  const audit = useResource(load);
 
   function apply(event: FormEvent) {
     event.preventDefault();
@@ -426,7 +433,7 @@ function Audit() {
   }
 
   return (
-    <SectionList title="Audit log" label="Vault audit log" description="Newest first.">
+    <SectionList title="Audit log" label="Vault audit log" description="Every use and change of the vault, newest first.">
       <form className="audit-filters" onSubmit={apply} aria-label="Audit filters">
         <label className="field">
           <span>Item</span>
@@ -442,33 +449,34 @@ function Audit() {
         </label>
         <Button type="submit">Filter</Button>
       </form>
-      {error ? <ErrorNote>{error}</ErrorNote> : null}
-      {!audit ? (
-        error ? null : <Loading />
-      ) : audit.records.length === 0 ? (
-        <p className="settings-text">No audit records match.</p>
-      ) : (
-        <ol className="resource-list audit-list" aria-label="Audit records">
-          {[...audit.records].reverse().map((record, index) => (
-            <li key={`${record.at}-${index}`} data-result={record.result} data-item={record.item}>
-              <ResourceCard
-                title={`${record.what} · ${record.item}`}
-                detail={`${new Date(record.at).toLocaleString()} · ${record.who}${record.origin ? ` · ${record.origin}` : ""}`}
-                badge={record.result}
-                badgeTone="muted"
-              >
-                {record.detail || record.session_id ? (
-                  <p className="resource-card-detail">
-                    {record.detail ?? ""}
-                    {record.detail && record.session_id ? " · " : ""}
-                    {record.session_id ? `session ${record.session_id}${record.tool_call_id ? ` / ${record.tool_call_id}` : ""}` : ""}
-                  </p>
-                ) : null}
-              </ResourceCard>
-            </li>
-          ))}
-        </ol>
-      )}
+      <ResourceView resource={audit} what="the vault">
+        {(data) =>
+          data.records.length === 0 ? (
+            <p className="settings-text">No audit records match.</p>
+          ) : (
+            <ol className="resource-list audit-list" aria-label="Audit records">
+              {[...data.records].reverse().map((record, index) => (
+                <li key={`${record.at}-${index}`} data-result={record.result} data-item={record.item}>
+                  <ResourceCard
+                    title={`${WHAT[record.what] ?? record.what}${record.item ? ` · ${record.item}` : ""}`}
+                    detail={`${formatDateTime(record.at)} · ${record.who}${record.origin && record.origin !== "-" ? ` · ${record.origin}` : ""}`}
+                    badge={record.result}
+                    badgeTone={["denied", "failed", "fill-failed"].includes(record.result) ? "danger" : "neutral"}
+                  >
+                    {record.detail || record.session_id ? (
+                      <p className="resource-card-detail">
+                        {record.detail ?? ""}
+                        {record.detail && record.session_id ? " · " : ""}
+                        {record.session_id ? `session ${record.session_id}${record.tool_call_id ? ` / ${record.tool_call_id}` : ""}` : ""}
+                      </p>
+                    ) : null}
+                  </ResourceCard>
+                </li>
+              ))}
+            </ol>
+          )
+        }
+      </ResourceView>
     </SectionList>
   );
 }
@@ -481,7 +489,7 @@ export function VaultPage() {
   const client = useClient();
   // Items and audit remount after setup, unlock, lock or an added item so both refetch.
   const [generation, setGeneration] = useState(0);
-  const loadStatus = useCallback(() => explained(client.vaultStatus()), [client]);
+  const loadStatus = useCallback(() => client.vaultStatus(), [client]);
   const status = useResource(loadStatus);
   const { reload } = status;
   const changed = useCallback(() => {
@@ -489,14 +497,23 @@ export function VaultPage() {
     setGeneration((value) => value + 1);
   }, [reload]);
 
+  if (status.forbidden) {
+    return (
+      <div className="manage-body" data-section="vault">
+        <ScopeNotice what="the vault" />
+      </div>
+    );
+  }
+
   return (
     <div className="manage-body" data-section="vault">
       <SectionList title="Status" label="Vault status">
-        {status.error ? <ErrorNote>{status.error}</ErrorNote> : null}
-        {status.data ? <Status status={status.data} onChanged={changed} /> : status.error ? null : <Loading />}
+        <ResourceView resource={status} what="the vault">
+          {(data) => <Status status={data} onChanged={changed} />}
+        </ResourceView>
       </SectionList>
-      <Items key={`items-${generation}`} status={status.data} onChanged={changed} />
-      <Audit key={`audit-${generation}`} />
+      {status.data ? <Items key={`items-${generation}`} status={status.data} onChanged={changed} /> : null}
+      {status.data ? <Audit key={`audit-${generation}`} /> : null}
     </div>
   );
 }

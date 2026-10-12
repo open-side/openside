@@ -31,3 +31,37 @@ describe("App", () => {
     expect(requested).toContain("/v1/sessions/s1/events");
   });
 });
+
+describe("saved relay connection", () => {
+  it.each(["{broken", "null", JSON.stringify({ kind: "relay" }), JSON.stringify({
+    kind: "relay", relay: "http://localhost:3000", daemon_id: "daemon", daemon_key: "invalid",
+  })])("does not leak the token to a direct API for invalid metadata: %s", (transport) => {
+    localStorage.setItem("openside.token", "must-not-leak");
+    localStorage.setItem("openside.transport", transport);
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    render(<App />);
+    expect(screen.getByRole("alert")).toHaveTextContent("saved relay connection is incomplete");
+    expect(screen.queryByLabelText("Device token")).toBeNull();
+    expect(screen.getByText("openside pair --via relay")).toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("requires pairing on a relay origin even if a bare token was saved", () => {
+    const marker = document.createElement("meta");
+    marker.name = "openside-transport";
+    marker.content = "relay";
+    document.head.append(marker);
+    try {
+      localStorage.setItem("openside.token", "must-not-leak");
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      render(<App />);
+      expect(screen.queryByLabelText("Device token")).toBeNull();
+      expect(screen.getByText("openside pair --via relay")).toBeInTheDocument();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      marker.remove();
+    }
+  });
+});

@@ -75,9 +75,9 @@ export interface BrowserSheetProps {
 }
 
 /**
- * The browser sheet (aside-relay BrowserPanel): the tab the agent is on with its title and URL,
- * its live read-only picture (tap to zoom), and the other tabs this conversation opened.
- * Only actions with a real path exist: opening the page in the user's own browser.
+ * The browser sheet (aside-relay BrowserPanel): the tab the agent is on, titled with its page
+ * title and URL, its live read-only picture (tap to zoom), and the other tabs this conversation
+ * opened. Only actions with a real path exist: opening the page in the user's own browser.
  */
 export function BrowserSheet({ tabs, liveTabId, frame, state, onClose }: BrowserSheetProps) {
   const [zoomed, setZoomed] = useState(false);
@@ -87,20 +87,15 @@ export function BrowserSheet({ tabs, liveTabId, frame, state, onClose }: Browser
   const src = frame ? `data:image/jpeg;base64,${frame}` : null;
 
   return (
-    <Dialog open title="Browser" onClose={onClose} className="browser-sheet">
+    <Dialog
+      open
+      size="wide"
+      title={title}
+      description={live ? <span className="browser-sheet-url" title={live.url}>{live.url}</span> : undefined}
+      onClose={onClose}
+      className="browser-sheet"
+    >
       <div className="browser-sheet-body">
-        <h3 className="browser-sheet-title">{title}</h3>
-        {live ? (
-          <div className="browser-sheet-url" title={live.url}>
-            <span>{live.url}</span>
-          </div>
-        ) : null}
-        {live && /^https?:\/\//i.test(live.url) ? (
-          <a className="ui-button browser-sheet-open" href={live.url} target="_blank" rel="noopener noreferrer external">
-            <ExternalLink size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            Open in your browser
-          </a>
-        ) : null}
         <button type="button" className="browser-sheet-screen" aria-label="Zoom browser preview" disabled={!src} onClick={() => setZoomed(true)}>
           {frame ? (
             <BrowserFrame data={frame} />
@@ -110,15 +105,20 @@ export function BrowserSheet({ tabs, liveTabId, frame, state, onClose }: Browser
             </span>
           )}
         </button>
-        <p className="browser-sheet-note">Live view · read-only. The agent keeps control of this tab.</p>
-        {tabs.disconnected ? (
-          <p className="browser-sheet-note" role="status">
-            The browser is disconnected.
+        <div className="browser-sheet-meta">
+          <p className="browser-sheet-note" role="status" data-live={src && !tabs.disconnected ? "" : undefined}>
+            {tabs.disconnected ? "The browser is disconnected." : "Read-only live view. The agent keeps control."}
           </p>
-        ) : null}
+          {live && /^https?:\/\//i.test(live.url) ? (
+            <a className="ui-button ui-button--secondary browser-sheet-open" href={live.url} target="_blank" rel="noopener noreferrer external">
+              <ExternalLink size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              Open in your browser
+            </a>
+          ) : null}
+        </div>
         {list.length ? (
-          <section className="browser-sheet-tabs" aria-label="Tabs in this conversation">
-            <h4>Tabs in this conversation</h4>
+          <section className="browser-sheet-tabs" aria-labelledby="browser-sheet-tabs-heading">
+            <h4 id="browser-sheet-tabs-heading">Tabs in this conversation</h4>
             <ul>
               {list.map((tab) => (
                 <li key={tab.tab_id} aria-current={tab.tab_id === liveTabId || undefined}>

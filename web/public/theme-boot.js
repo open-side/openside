@@ -12,7 +12,6 @@
   };
   try {
     var theme = localStorage.getItem("openside.theme");
-    var dark = theme === "dark" || (theme !== "light" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
     root.dataset.theme = theme === "light" || theme === "dark" ? theme : "system";
     var palettes = JSON.parse(localStorage.getItem("openside.palette") || "null") || {};
     ["light", "dark"].forEach(function (scheme) {
@@ -29,10 +28,16 @@
       root.style.setProperty("--primary", accent.toLowerCase());
       root.style.setProperty("--primary-foreground", foreground(accent));
     }
-    var current = palettes[dark ? "dark" : "light"];
-    var canvas = current && hex.test(current.background) ? current.background : dark ? "#000000" : "#ffffff";
-    var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", canvas);
+    var canvasOf = function (scheme) {
+      var p = palettes[scheme];
+      return p && hex.test(p.background) ? p.background : scheme === "dark" ? "#000000" : "#ffffff";
+    };
+    // Explicit theme: both metas show the chosen canvas. System: each one keeps its own scheme.
+    var metas = document.querySelectorAll('meta[name="theme-color"]');
+    for (var i = 0; i < metas.length; i++) {
+      var scheme = theme === "light" || theme === "dark" ? theme : /dark/.test(metas[i].getAttribute("media") || "") ? "dark" : "light";
+      metas[i].setAttribute("content", canvasOf(scheme));
+    }
   } catch (error) {
     root.dataset.theme = "system";
   }

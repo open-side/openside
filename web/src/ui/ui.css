@@ -127,15 +127,36 @@
   flex-direction: column;
   width: min(420px, 100%);
   max-height: min(720px, calc(100dvh - 32px));
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-glass);
+  background: var(--glass);
   color: var(--text);
   box-shadow: var(--shadow-popup);
   outline: none;
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
   transition:
     opacity var(--normal) var(--ease),
     transform var(--normal) var(--ease);
+}
+/* Without backdrop blur the translucent sheet would show the page through its text. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .ui-dialog {
+    background: var(--surface);
+  }
+}
+/*
+ * Inside a frosted sheet, fields and secondary buttons are glass insets, not opaque canvas
+ * slabs. Fields use :where so page-level control styles (borderless appearance selects) win.
+ */
+.ui-dialog
+  :where(input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"], [type="color"]), select, textarea),
+.ui-dialog .ui-button:not(.ui-button--primary, .ui-button--ghost) {
+  border-color: var(--glass-inset-border);
+  background: var(--glass-inset-bg);
+}
+.ui-dialog .ui-button:not(.ui-button--primary, .ui-button--ghost):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, var(--glass-inset-bg));
 }
 .ui-dialog[data-starting-style],
 .ui-dialog[data-ending-style] {
@@ -199,7 +220,7 @@
     max-height: calc(100dvh - 48px);
     border-width: 1px 0 0;
     border-radius: 28px 28px 0 0;
-    padding-bottom: env(safe-area-inset-bottom);
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
   .ui-dialog[data-starting-style],
   .ui-dialog[data-ending-style] {
@@ -221,6 +242,8 @@
   }
   .ui-dialog-header {
     padding-top: 6px;
+    /* The header drags the sheet like the handle; its buttons still tap. */
+    touch-action: none;
   }
 }
 
@@ -229,7 +252,10 @@
   inset: 0 auto 0 0;
   z-index: 41;
   display: flex;
-  width: min(320px, calc(100vw - 48px));
+  width: calc(min(320px, 100vw - 48px) + env(safe-area-inset-left));
+  padding-left: env(safe-area-inset-left);
+  /* Vertical pans scroll the list; horizontal ones reach the swipe-to-close handler. */
+  touch-action: pan-y;
   background: var(--canvas);
   box-shadow: var(--shadow-popup);
   outline: none;
@@ -383,14 +409,55 @@
 .ui-spinner {
   display: inline-block;
   flex: 0 0 auto;
-  border: 2px solid color-mix(in srgb, var(--primary) 22%, transparent);
-  border-top-color: var(--primary);
+  /* Follows the surrounding text colour: progress is not an accent-worthy action. */
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-top-color: currentColor;
   border-radius: 999px;
   animation: ui-spin 0.8s linear infinite;
 }
 @keyframes ui-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/*
+ * Under a finger every icon button and segment answers a 44px box. Small icon buttons keep
+ * their 32px circle and grow an invisible hit area instead, so dense rows do not reflow.
+ */
+@media (pointer: coarse) {
+  .ui-icon-button {
+    width: 44px;
+    height: 44px;
+  }
+  .ui-icon-button--small {
+    width: 32px;
+    height: 32px;
+  }
+  :where(.ui-icon-button--small) {
+    position: relative;
+  }
+  .ui-icon-button--small::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    translate: -50% -50%;
+  }
+  .ui-segmented .ui-segment {
+    min-height: 44px;
+  }
+  /* Compact buttons keep their 36px look and grow an invisible 44px hit area. */
+  :where(.ui-button--compact) {
+    position: relative;
+  }
+  .ui-button--compact::after {
+    content: "";
+    position: absolute;
+    /* Relative to the padding box: 1px border + 5px = 44px for a 36px button. */
+    inset: -5px 0;
   }
 }
 
@@ -456,5 +523,67 @@
   }
   .ui-toast[data-leaving] {
     translate: none;
+  }
+}
+
+/* Switch: the native checkbox stays on top (transparent) so clicks, focus and forms work. */
+.ui-switch {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+}
+.ui-switch input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.ui-switch input:disabled {
+  cursor: default;
+}
+.ui-switch-track {
+  position: relative;
+  width: 36px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--control-border);
+  transition: background-color var(--fast) var(--ease);
+}
+.ui-switch-track::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.24);
+  content: "";
+  transition: transform var(--fast) var(--ease);
+}
+.ui-switch input:checked + .ui-switch-track {
+  background: var(--primary);
+}
+.ui-switch input:checked + .ui-switch-track::after {
+  transform: translateX(14px);
+}
+.ui-switch input:focus-visible + .ui-switch-track {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.ui-switch input:disabled + .ui-switch-track {
+  opacity: 0.45;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-switch-track,
+  .ui-switch-track::after {
+    transition-duration: 1ms;
   }
 }

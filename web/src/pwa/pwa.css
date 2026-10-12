@@ -1,0 +1,95 @@
+/* Native-feel layer: pull-to-refresh, the install banner, the queued-message notice and the
+   desktop window-controls-overlay title bar. Tokens come from styles.css; nothing here defines a colour. */
+
+/* The shell scrolls inside its own panes; a document-level overscroll would refresh the page
+   (and, in a standalone app, drop the draft) when a pane is dragged past its end. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
+.install-banner {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + var(--header-height) + 4px);
+  left: 50%;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: 22px;
+  background: var(--glass);
+  box-shadow: var(--shadow-glass);
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  line-height: 1.35;
+  translate: -50% 0;
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+}
+.install-banner > svg {
+  flex: none;
+}
+.install-text {
+  min-width: 0;
+}
+
+/* Sits in the composer dock, above the field, in the same glass as the error line. */
+.outbox-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 6px 6px 14px;
+  border-radius: 14px;
+  background: var(--glass);
+  color: var(--text);
+  font-size: 0.875rem;
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+}
+.outbox-notice[data-failed] {
+  background: color-mix(in srgb, var(--danger) 10%, var(--glass));
+  color: var(--danger);
+}
+.outbox-notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outbox-notice-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+/* Desktop PWA with the title bar folded into the page (manifest display_override): keep the
+   header clear of the window buttons and let the header strip drag the window. */
+@media (display-mode: window-controls-overlay) {
+  .app-header {
+    padding-left: max(16px, calc(env(titlebar-area-x, 0px) + 12px));
+    padding-right: max(12px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px));
+    app-region: drag;
+  }
+  .app-header > * {
+    app-region: no-drag;
+  }
+  .shell-sidebar .sidebar-top {
+    padding-left: max(24px, calc(env(titlebar-area-x, 0px) + 12px));
+    app-region: drag;
+  }
+  .shell-sidebar .sidebar-top > * {
+    app-region: no-drag;
+  }
+}
+
+/* One banner at a time: the connection notice owns the top of the screen while it shows. */
+.connection-banner ~ .install-banner {
+  display: none;
+}

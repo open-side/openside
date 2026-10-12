@@ -42,11 +42,26 @@ describe("NewChatPage", () => {
     await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByRole("button", { name: /provider:big/ })).toBeInTheDocument();
 
-    await user.type(screen.getByRole("combobox", { name: "Message" }), "Which color?\nPick one.");
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Which color?\nPick one.");
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Opened s9")).toBeInTheDocument();
-    const posts = calls.filter((c) => c.method === "POST");
-    expect(posts[0]).toMatchObject({ path: "/v1/sessions", body: { title: "Which color?", model: "provider:big" } });
+    const posts = calls.filter((c) => c.method === "POST" && !c.path.includes("/prewarm"));
+    expect(posts[0]).toMatchObject({ path: "/v1/sessions", body: { model: "provider:big" } });
+    expect(posts[0]?.body).not.toHaveProperty("title");
+    expect(posts[0]?.body).not.toHaveProperty("browser_space");
     expect(posts[1]).toMatchObject({ path: "/v1/sessions/s9/messages", body: { text: "Which color?\nPick one.", mode: "queue" } });
+  });
+
+  it("starts an isolated-browser conversation only when the toggle is on", async () => {
+    const user = userEvent.setup();
+    const { calls } = setup();
+    const toggle = screen.getByRole("button", { name: "Isolated browser" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Sign in fresh");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Opened s9")).toBeInTheDocument();
+    expect(calls.find((c) => c.method === "POST" && !c.path.includes("/prewarm"))).toMatchObject({ path: "/v1/sessions", body: { browser_space: "isolated" } });
   });
 });

@@ -90,11 +90,12 @@ describe("VaultPage", () => {
     const bank = within(items).getByText("bank").closest("article") as HTMLElement;
     expect(bank).toHaveAttribute("data-item", "bank");
     expect(within(bank).getByText("one-time codes")).toBeInTheDocument();
-    expect(within(bank).getByText(/enforced: while_unlocked/)).toBeInTheDocument();
+    expect(within(bank).getByRole("option", { name: "Default (while unlocked)" })).toBeInTheDocument();
+    expect(within(bank).queryByText(/enforced:/)).toBeNull();
     expect(within(bank).getByRole("combobox")).toHaveValue("default");
 
     await user.selectOptions(within(bank).getByLabelText("Use policy for bank"), "never");
-    expect(await within(bank).findByText(/enforced: never/)).toBeInTheDocument();
+    await vi.waitFor(() => expect(within(bank).getByLabelText("Use policy for bank")).toHaveValue("never"));
     expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/v1/vault/items/bank", body: { policy: "never" } });
   });
 
@@ -132,7 +133,7 @@ describe("VaultPage", () => {
     expect(button).toBeDisabled();
     await user.type(within(form).getByLabelText("Repeat passphrase"), "e");
     await user.click(button);
-    expect(await screen.findByText("unlocked")).toBeInTheDocument();
+    expect(await screen.findByText("Unlocked")).toBeInTheDocument();
     expect(calls.find((c) => c.path === "/v1/vault/setup")?.body).toEqual({ passphrase: "correct horse" });
 
     await user.click(screen.getByRole("button", { name: "Lock" }));
@@ -143,7 +144,7 @@ describe("VaultPage", () => {
     expect(within(unlock).getByLabelText("Passphrase")).toHaveValue("");
     await user.type(within(unlock).getByLabelText("Passphrase"), "correct horse");
     await user.click(within(unlock).getByRole("button", { name: "Unlock" }));
-    expect(await screen.findByText("unlocked")).toBeInTheDocument();
+    expect(await screen.findByText("Unlocked")).toBeInTheDocument();
     expect(await screen.findByRole("list", { name: "Vault items" })).toBeInTheDocument();
   });
 
@@ -192,7 +193,8 @@ describe("VaultPage", () => {
     const user = userEvent.setup();
     const { calls } = setup();
     const items = await screen.findByRole("list", { name: "Vault items" });
-    await user.click(within(items).getByRole("button", { name: "Delete mail" }));
+    await user.click(within(items).getByRole("button", { name: "Options for mail" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
     await user.click(await screen.findByRole("button", { name: "Delete" }));
     await vi.waitFor(() => expect(within(screen.getByRole("list", { name: "Vault items" })).queryByText("mail")).toBeNull());
     expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/v1/vault/items/mail"]);
@@ -200,7 +202,7 @@ describe("VaultPage", () => {
 
   it("explains a locked vault", async () => {
     setup({ state: "locked" });
-    expect(await screen.findByText("No unlocked vault on this daemon.")).toBeInTheDocument();
+    expect(await screen.findByText("Items appear here once the vault is set up and unlocked.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Unlock" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Login" })).toBeNull();
   });

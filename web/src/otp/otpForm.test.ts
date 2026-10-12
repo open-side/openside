@@ -52,11 +52,11 @@ describe("mountOtpForm", () => {
     const user = userEvent.setup();
     const { client, onSubmitted } = mount(otpTicket("sms"));
     const input = screen.getByLabelText("Code");
-    expect(screen.getByRole("form", { name: "Verification code" })).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "Verification code https://www.example.com" })).toBeInTheDocument();
     expect(input).toHaveFocus();
     expect(input).toHaveAttribute("autocomplete", "one-time-code");
     expect(input).toHaveAttribute("inputmode", "numeric");
-    expect(screen.getByText("example.com")).toBeInTheDocument();
+    expect(screen.getByText("https://www.example.com")).toBeInTheDocument();
     expect(input).toHaveAccessibleDescription("Code from a text message for example.com");
 
     await user.type(input, "482913{Enter}");

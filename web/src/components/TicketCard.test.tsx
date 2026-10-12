@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Ticket } from "../api/types";
 import { ClientContext } from "../context";
 import { fakeClient, json } from "../test/fakeDaemon";
@@ -80,6 +80,20 @@ describe("TicketCard", () => {
     expect(calls.map((c) => c.body)).toEqual([{ value: true }, { value: false }]);
   });
 
+  it("gives a short pulse for an approval and a double pulse for a rejection", async () => {
+    const vibrate = vi.fn(() => true);
+    Object.defineProperty(navigator, "vibrate", { value: vibrate, configurable: true });
+    try {
+      const user = userEvent.setup();
+      setup(ticket({ kind: "confirm", deferral: "approval", tool: { name: "bash", args: { command: "ls" } } }));
+      await user.click(screen.getByRole("button", { name: "Approve" }));
+      await user.click(screen.getByRole("button", { name: "Reject" }));
+      expect(vibrate.mock.calls).toEqual([[[14]], [[10, 40, 10]]]);
+    } finally {
+      Reflect.deleteProperty(navigator, "vibrate");
+    }
+  });
+
   it("answers info tickets with an option or free text", async () => {
     const user = userEvent.setup();
     const { calls } = setup(ticket({ options: [{ value: "blue", label: "Blue" }] }));
@@ -126,7 +140,7 @@ describe("TicketCard", () => {
     const code = screen.getByLabelText("Code");
     expect(code).toHaveFocus();
     expect(code).toHaveAttribute("autocomplete", "one-time-code");
-    expect(screen.getByText("bank.test")).toBeInTheDocument();
+    expect(screen.getByText("https://bank.test")).toBeInTheDocument();
     await user.click(screen.getByText("Save this site's authenticator"));
     const key = screen.getByLabelText("Setup key or otpauth:// link");
     await user.type(key, KEY);
@@ -177,8 +191,9 @@ describe("TicketCard", () => {
     const { calls } = setup(register);
     const card = screen.getByRole("region", { name: "Save authenticator" });
     expect(card).toHaveTextContent("Save the authenticator for bank.test (Bank · me@bank.test) to your vault?");
-    await user.click(screen.getByRole("button", { name: "Approve" }));
-    await user.click(screen.getByRole("button", { name: "Decline" }));
+    expect(card).toHaveTextContent("bank.test offered to set up two-step sign-in");
+    await user.click(screen.getByRole("button", { name: "Save to vault" }));
+    await user.click(screen.getByRole("button", { name: "Not now" }));
     expect(calls.map((call) => call.body)).toEqual([{ value: true }, { value: false }]);
   });
 

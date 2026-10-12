@@ -46,9 +46,24 @@ export function resolvedTheme(preference: ThemePreference): Scheme {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function syncThemeColor(root: HTMLElement, scheme: Scheme) {
-  const canvas = getComputedStyle(root).getPropertyValue("--canvas").trim();
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", HEX.test(canvas) ? canvas : CANVAS[scheme]);
+/** The canvas a scheme paints, from its stored palette when it is not the one on screen. */
+function canvasOf(scheme: Scheme, palettes: Palettes): string {
+  const preset = presetsFor(scheme).find((item) => item.id === palettes[scheme]);
+  return preset?.background ?? CANVAS[scheme];
+}
+
+/**
+ * index.html carries one theme-color meta per scheme (media query) so the browser chrome is right
+ * before any script runs. A System preference keeps each meta on its own scheme; an explicit
+ * Light/Dark pins both to the painted canvas, because the media query would follow the OS instead.
+ */
+function syncThemeColor(root: HTMLElement, scheme: Scheme, preference: ThemePreference, palettes: Palettes) {
+  const painted = getComputedStyle(root).getPropertyValue("--canvas").trim();
+  const current = HEX.test(painted) ? painted : canvasOf(scheme, palettes);
+  document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+    const own: Scheme = /dark/.test(meta.getAttribute("media") ?? "") ? "dark" : "light";
+    meta.setAttribute("content", preference === "system" && own !== scheme ? canvasOf(own, palettes) : current);
+  });
 }
 
 /**
@@ -63,7 +78,7 @@ export function applyTheme(
   root.dataset.theme = preference;
   if (preference === "system") storage.removeItem(STORAGE_KEY);
   else storage.setItem(STORAGE_KEY, preference);
-  syncThemeColor(root, resolvedTheme(preference));
+  syncThemeColor(root, resolvedTheme(preference), preference, loadPalettes(storage));
 }
 
 /** The custom accent, or `""` when the palette's own accent applies ("Theme default"). */
@@ -145,5 +160,6 @@ export function applyPalettes(palettes: Palettes, root: HTMLElement = document.d
   }
   if (stored.light || stored.dark) storage.setItem(PALETTE_KEY, JSON.stringify(stored));
   else storage.removeItem(PALETTE_KEY);
-  syncThemeColor(root, resolvedTheme(loadTheme(storage)));
+  const preference = loadTheme(storage);
+  syncThemeColor(root, resolvedTheme(preference), preference, palettes);
 }

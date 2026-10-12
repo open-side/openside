@@ -1,4 +1,5 @@
 import { ApiError, toApiError, type Client } from "./client";
+import { whilePageShown } from "./pageLifecycle";
 import type { Event } from "./types";
 
 /** One dispatched SSE message (WHATWG event-stream framing). */
@@ -80,31 +81,31 @@ const defaultDelay = (attempt: number) => Math.min(10_000, 250 * 2 ** Math.min(a
  * Follow a session's durable event log. Uses fetch rather than EventSource because
  * EventSource cannot send the Authorization header. Reconnects resume with
  * `Last-Event-ID` and drop any event at or below the last delivered `seq`, so
- * replays never duplicate or reorder events.
+ * replays never duplicate or reorder events. The connection is dropped while the page sits
+ * in the back/forward cache and resumes from the cursor when it returns (`whilePageShown`).
  */
 export function openSessionStream(options: SessionStreamOptions): SessionStream {
-  const controller = new AbortController();
   const delay = options.retryDelayMs ?? defaultDelay;
   let lastSeq = options.after ?? 0;
   let closed = false;
 
   const setStatus = (status: StreamStatus) => options.onStatus?.(status);
 
-  const sleep = (ms: number) => {
+  const sleep = (ms: number, signal: AbortSignal) => {
     const { promise, resolve } = Promise.withResolvers<void>();
     const timer = setTimeout(resolve, ms);
-    controller.signal.addEventListener("abort", () => {
+    signal.addEventListener("abort", () => {
       clearTimeout(timer);
       resolve();
     });
     return promise;
   };
 
-  async function once(): Promise<void> {
+  async function once(signal: AbortSignal): Promise<void> {
     const url = `${options.client.baseUrl}/v1/sessions/${encodeURIComponent(options.sessionId)}/events`;
     const response = await options.client.fetch(url, {
       headers: options.client.headers({ Accept: "text/event-stream", "Last-Event-ID": String(lastSeq) }),
-      signal: controller.signal,
+      signal,
       cache: "no-store",
     });
     if (!response.ok) throw await toApiError(response);
@@ -126,42 +127,50 @@ export function openSessionStream(options: SessionStreamOptions): SessionStream 
         if (typeof event.seq !== "number" || event.seq <= lastSeq) continue;
         lastSeq = event.seq;
         options.onEvent(event);
-        if (closed) return;
+        if (closed || signal.aborted) return;
       }
     }
   }
 
-  void (async () => {
+  async function follow(signal: AbortSignal): Promise<void> {
     let attempt = 0;
     setStatus("connecting");
-    while (!closed) {
+    while (!closed && !signal.aborted) {
       try {
-        await once();
+        await once(signal);
         attempt = 0;
       } catch (error) {
-        if (closed) break;
+        if (closed || signal.aborted) break;
         const apiError = error instanceof ApiError ? error : new ApiError(0, "network_error");
         if (FATAL_STATUS[apiError.status]) {
           options.onError?.(apiError);
-          closed = true;
+          stream.close();
           break;
         }
         attempt += 1;
       }
-      if (closed) break;
+      if (closed || signal.aborted) break;
       setStatus("reconnecting");
-      await sleep(delay(attempt));
+      await sleep(delay(attempt), signal);
     }
-    setStatus("closed");
-  })();
+    if (closed) setStatus("closed");
+  }
 
-  return {
+  const stop = whilePageShown(() => {
+    const controller = new AbortController();
+    void follow(controller.signal);
+    return () => controller.abort();
+  });
+
+  const stream: SessionStream = {
     close() {
+      if (closed) return;
       closed = true;
-      controller.abort();
+      stop();
     },
     get lastSeq() {
       return lastSeq;
     },
   };
+  return stream;
 }

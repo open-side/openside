@@ -33,6 +33,44 @@ function otpTicket(id: string, session: string): Ticket {
   };
 }
 
+function loginTicket(id: string, session: string): Ticket {
+  return {
+    ...otpTicket(id, session),
+    kind: "login",
+    otp: null,
+    target: { origin: "https://nid.naver.com", tab_id: "t1", field_ref: null },
+    login: {
+      origin: "https://nid.naver.com",
+      site_name: "Naver",
+      fields: [
+        { id: "id", kind: "identifier", label: "ID or phone number", masked: false, required: true },
+        { id: "pw", kind: "password", label: "Password", masked: true, required: true },
+      ],
+      alternatives: [],
+      submit_label: "Log in",
+      can_save: true,
+    },
+  };
+}
+
+function choiceTicket(id: string, session: string): Ticket {
+  return {
+    ...otpTicket(id, session),
+    kind: "choice",
+    otp: null,
+    choice: {
+      origin: "https://nid.naver.com",
+      site_name: "Naver",
+      question: "How would you like to verify?",
+      options: [
+        { id: "sms", label: "Text me a code" },
+        { id: "email", label: "Email me a code" },
+      ],
+      multiple: false,
+    },
+  };
+}
+
 /** An event stream that replays `events` and stays open, as the daemon's does. */
 function stream(session: string, events: Record<string, unknown>[]): Response {
   const encoder = new TextEncoder();
@@ -92,11 +130,16 @@ describe("code requests never move the person", () => {
     window.history.pushState({}, "", "/settings");
     const resolves = stubDaemon({ pending: [otpTicket("k2", "s2")] });
     render(<App />);
-    const dock = await screen.findByRole("complementary", { name: "Code needed" });
+    const dock = await screen.findByRole("complementary", { name: "Code needed for shop.example" });
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
+    expect(within(dock).getByRole("link", { name: /^Go to / })).toHaveAttribute("href", "/sessions/s2");
+    // Phones fold the dock to one row; opening it puts the cursor in the code field.
+    await user.click(within(dock).getByRole("button", { name: "Enter code" }));
+    expect(within(dock).getByRole("button", { name: "Hide" })).toHaveAttribute("aria-expanded", "true");
+    expect(within(dock).getByLabelText("Code")).toHaveFocus();
     await user.type(within(dock).getByLabelText("Code"), "123456{Enter}");
     expect(resolves).toEqual([{ path: "/v1/tickets/k2/resolve", body: { value: "123456" } }]);
-    await vi.waitFor(() => expect(screen.queryByRole("complementary", { name: "Code needed" })).toBeNull());
+    await vi.waitFor(() => expect(screen.queryByRole("complementary", { name: "Code needed for shop.example" })).toBeNull());
     expect(window.location.pathname).toBe("/settings");
   });
 
@@ -130,5 +173,48 @@ describe("code requests never move the person", () => {
     expect(window.location.pathname).toBe("/sessions/s1");
     expect(scrolled).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a login ticket in the open conversation is the login card under an Action needed chip; the route does not change", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("openside.token", "tok");
+    window.history.pushState({}, "", "/sessions/s1");
+    const before = window.history.length;
+    const login = loginTicket("k3", "s1");
+    const resolves = stubDaemon({ events: [{ kind: "ticket.opened", ticket: login }], pending: [login] });
+    render(<App />);
+    const card = await screen.findByRole("form", { name: "Log in https://nid.naver.com" });
+    expect(screen.getByText("Action needed")).toBeInTheDocument();
+    await user.type(within(card).getByLabelText("ID or phone number"), "jane");
+    await user.type(within(card).getByLabelText("Password"), "secret-pw{Enter}");
+    expect(resolves).toEqual([{ path: "/v1/tickets/k3/resolve", body: { value: { values: { id: "jane", pw: "secret-pw" }, save: true } } }]);
+    expect(document.body.innerHTML).not.toContain("secret-pw");
+    expect(window.location.pathname + window.location.search).toBe("/sessions/s1");
+    expect(window.history.length).toBe(before);
+  });
+
+  it("over Settings, another conversation's choice floats in the dock and the route stays", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("openside.token", "tok");
+    window.history.pushState({}, "", "/settings");
+    const resolves = stubDaemon({ pending: [choiceTicket("k4", "s2")] });
+    render(<App />);
+    const dock = await screen.findByRole("complementary", { name: "Choice needed for nid.naver.com" });
+    expect(within(dock).getByText("Choice needed")).toBeInTheDocument();
+    await user.click(within(dock).getByRole("button", { name: "Choose" }));
+    expect(within(dock).getAllByRole("radio")).toHaveLength(2);
+    await user.click(within(dock).getByLabelText("Email me a code"));
+    await user.click(within(dock).getByRole("button", { name: "Continue" }));
+    expect(resolves).toEqual([{ path: "/v1/tickets/k4/resolve", body: { value: { option: "email" } } }]);
+    expect(window.location.pathname).toBe("/settings");
+  });
+
+  it("a tapped login notification (?ticket=) opens the login sheet", async () => {
+    localStorage.setItem("openside.token", "tok");
+    window.history.pushState({}, "", "/sessions/s1?ticket=k3");
+    stubDaemon({ events: [{ kind: "ticket.opened", ticket: loginTicket("k3", "s1") }] });
+    render(<App />);
+    const sheet = await screen.findByRole("dialog", { name: "Log in" });
+    await vi.waitFor(() => expect(within(sheet).getByLabelText("ID or phone number")).toHaveFocus());
   });
 });

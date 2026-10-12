@@ -4,11 +4,13 @@ import type { AccountStatus, AccountUsageWindow } from "../api/types";
 import { useClient } from "../context";
 import { useResource } from "../hooks/useResource";
 import { Button, ICON_STROKE } from "../ui";
-import { EmptyState, ErrorNote, Loading, ResourceCard, SectionList } from "./blocks";
+import { Badge, EmptyState, ResourceCard, ResourceView, SectionList } from "./blocks";
+import { formatDateTime, formatRelative } from "./format";
 
 function UsageBar({ window: usage }: { window: AccountUsageWindow }) {
   const percent = usage.used_percent;
   const level = percent == null ? undefined : percent >= 90 ? "full" : percent >= 70 ? "high" : "normal";
+  const reset = usage.reset_at_ms ? `resets ${formatRelative(usage.reset_at_ms)}` : "";
   return (
     <div className="usage" data-window={usage.name}>
       <span className="usage-name">{usage.name}</span>
@@ -27,10 +29,9 @@ function UsageBar({ window: usage }: { window: AccountUsageWindow }) {
           <span style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} />
         </span>
       )}
-      {percent != null || usage.reset_at_ms ? (
-        <span className="usage-text">
-          {percent == null ? "" : `${Math.round(percent)}% used`}
-          {usage.reset_at_ms ? `${percent == null ? "R" : " · r"}esets ${new Date(usage.reset_at_ms).toLocaleString()}` : ""}
+      {percent != null || reset ? (
+        <span className="usage-text" title={usage.reset_at_ms ? formatDateTime(usage.reset_at_ms) : undefined}>
+          {[percent == null ? "" : `${Math.round(percent)}% used`, reset].filter(Boolean).join(" · ")}
         </span>
       ) : null}
     </div>
@@ -44,7 +45,7 @@ function Account({ account }: { account: AccountStatus }) {
       data-account={account.id}
       title={account.label}
       detail={`${account.provider} · ${account.models.length ? account.models.join(", ") : "no models configured"}`}
-      badge={blocked ? `Rate limited until ${new Date(account.blocked_until_ms ?? 0).toLocaleString()}` : undefined}
+      badge={blocked ? `Rate limited until ${formatDateTime(account.blocked_until_ms ?? 0)}` : undefined}
       badgeTone="attention"
     >
       {account.usage_windows.map((usage) => (
@@ -59,48 +60,53 @@ export function AccountsPage() {
   const client = useClient();
   const load = useCallback(() => client.accounts(), [client]);
   const accounts = useResource(load);
+  const total = accounts.data?.sources.reduce((sum, source) => sum + source.accounts.length, 0) ?? 0;
 
   return (
     <div className="manage-body" data-section="accounts">
       <SectionList
         label="Accounts and usage"
+        summary={accounts.data?.sources.length ? `${total} ${total === 1 ? "account" : "accounts"} · usage as reported by each source` : undefined}
         actions={
-          <Button size="compact" onClick={() => void accounts.reload()}>
-            <RefreshCw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            Refresh
-          </Button>
+          accounts.forbidden ? undefined : (
+            <Button size="compact" onClick={() => void accounts.reload()}>
+              <RefreshCw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              Refresh
+            </Button>
+          )
         }
       >
-        {accounts.error ? <ErrorNote>{accounts.error}</ErrorNote> : null}
-        {!accounts.data ? (
-          accounts.error ? null : <Loading />
-        ) : accounts.data.sources.length === 0 ? (
-          <EmptyState icon={UserRound} title="No credential sources" detail="Add model accounts to config.toml on the computer running openside." />
-        ) : null}
+        <ResourceView resource={accounts} what="model accounts">
+          {(data) =>
+            data.sources.length === 0 ? (
+              <EmptyState icon={UserRound} title="No credential sources" detail="Add model accounts to config.toml on the computer running openside." />
+            ) : null
+          }
+        </ResourceView>
       </SectionList>
-      {accounts.data?.sources.map((source) => (
-        <section key={source.name} className="section-list" aria-label={`Source ${source.name}`} data-source={source.name}>
-          <div className="section-list-header">
-            <h3 className="section-list-title">{source.name}</h3>
-            <div className="section-list-actions">
-              <span className="badge badge--muted">{source.kind}</span>
-              <span className={source.available ? "badge badge--accent" : "badge badge--attention"}>
-                {source.available ? "Available" : "Unavailable"}
-              </span>
-            </div>
-          </div>
-          {source.reason ? <p className="section-list-description">{source.reason}</p> : null}
-          {source.accounts.length ? (
-            <ul className="resource-list" aria-label={`Accounts of ${source.name}`}>
-              {source.accounts.map((account) => (
-                <li key={account.id}>
-                  <Account account={account} />
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ))}
+      {accounts.forbidden
+        ? null
+        : accounts.data?.sources.map((source) => (
+            <section key={source.name} className="section-list" aria-label={`Source ${source.name}`} data-source={source.name}>
+              <div className="section-list-header">
+                <h3 className="section-list-title">{source.name}</h3>
+                <div className="section-list-actions">
+                  <Badge>{source.kind}</Badge>
+                  <Badge tone={source.available ? "success" : "attention"}>{source.available ? "Available" : "Unavailable"}</Badge>
+                </div>
+              </div>
+              {source.reason ? <p className="section-list-description">{source.reason}</p> : null}
+              {source.accounts.length ? (
+                <ul className="resource-list" aria-label={`Accounts of ${source.name}`}>
+                  {source.accounts.map((account) => (
+                    <li key={account.id}>
+                      <Account account={account} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </section>
+          ))}
       {accounts.data?.truncated ? <p className="settings-text">Some accounts are not shown.</p> : null}
     </div>
   );

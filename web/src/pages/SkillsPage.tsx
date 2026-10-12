@@ -1,16 +1,17 @@
-import { BookOpen } from "lucide-react";
+import { BookOpen, Pencil, Trash2 } from "lucide-react";
 import { useCallback, useState, type FormEvent } from "react";
 import type { SkillDetail, SkillSummary } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
-import { Button, Dialog, DialogActions, useToast } from "../ui";
+import { Button, Dialog, DialogActions, ICON_STROKE, MenuItem, Switch, useToast } from "../ui";
 import {
   AddButton,
-  CardActions,
   EmptyState,
   ErrorNote,
   Loading,
   ResourceCard,
+  ResourceView,
+  RowMenu,
   SectionList,
   useConfirm,
   useDialogState,
@@ -141,70 +142,73 @@ export function SkillsPage() {
         <ResourceCard
           data-skill={skill.name}
           title={`/${skill.name}`}
-          detail={editable ? "user" : `${skill.source} · read-only`}
-          badge={skill.enabled ? "Enabled" : "Disabled"}
-          badgeTone={skill.enabled ? "accent" : "muted"}
-        >
-          {skill.description && <p className="resource-card-body">{skill.description}</p>}
-          {editable && (
-            <CardActions>
-              <Button size="compact" onClick={() => editor.show(skill.name)}>
-                Edit
-              </Button>
-              <Button
-                size="compact"
-                onClick={() => void act(() => client.updateSkill(skill.name, { enabled: !skill.enabled }))}
-              >
-                {skill.enabled ? "Disable" : "Enable"}
-              </Button>
-              <Button
-                size="compact"
-                variant="danger"
-                onClick={() =>
-                  ask({
-                    title: "Delete skill?",
-                    description: `/${skill.name} and its bundled files will be removed.`,
-                    confirmLabel: "Delete",
-                    onConfirm: () => void act(() => client.deleteSkill(skill.name), "Skill deleted."),
-                  })
-                }
-              >
-                Delete
-              </Button>
-            </CardActions>
-          )}
-        </ResourceCard>
+          detail={skill.description || undefined}
+          badge={editable ? undefined : "Project · read-only"}
+          trailing={
+            editable ? (
+              <>
+                <Switch
+                  label={`Enable /${skill.name}`}
+                  checked={skill.enabled}
+                  onChange={(enabled) => void act(() => client.updateSkill(skill.name, { enabled }))}
+                />
+                <RowMenu name={`/${skill.name}`}>
+                  <MenuItem icon={<Pencil size={18} strokeWidth={ICON_STROKE} />} onClick={() => editor.show(skill.name)}>
+                    Edit
+                  </MenuItem>
+                  <MenuItem
+                    danger
+                    icon={<Trash2 size={18} strokeWidth={ICON_STROKE} />}
+                    onClick={() =>
+                      ask({
+                        title: "Delete skill?",
+                        description: `/${skill.name} and its bundled files will be removed.`,
+                        confirmLabel: "Delete",
+                        onConfirm: () => void act(() => client.deleteSkill(skill.name), "Skill deleted."),
+                      })
+                    }
+                  >
+                    Delete
+                  </MenuItem>
+                </RowMenu>
+              </>
+            ) : undefined
+          }
+        />
       </li>
     );
   }
 
+  const count = list.data?.skills.length ?? 0;
   return (
     <div className="manage-body" data-section="skills">
       <SectionList
         label="Skill library"
-        actions={
-<AddButton onClick={() => setCreating(true)}>New skill</AddButton>
-        }
+        summary={list.data && count ? `${count} ${count === 1 ? "skill" : "skills"} · call one with /name in a message` : undefined}
+        actions={list.forbidden ? undefined : <AddButton onClick={() => setCreating(true)}>New skill</AddButton>}
       >
-        {list.error ? <ErrorNote>{list.error}</ErrorNote> : null}
-        {!list.data ? (
-          list.error ? null : <Loading />
-        ) : list.data.skills.length === 0 ? (
-          <EmptyState icon={BookOpen} title="No skills yet" detail="Skills add reusable instructions you can call with /name." />
-        ) : (
-          <ul className="resource-list" aria-label="Skills">
-            {list.data.skills.map(card)}
-          </ul>
-        )}
+        <ResourceView resource={list} what="skills">
+          {(data) =>
+            data.skills.length === 0 ? (
+              <EmptyState icon={BookOpen} title="No skills yet" detail="Skills add reusable instructions you can call with /name." />
+            ) : (
+              <ul className="resource-list" aria-label="Skills">
+                {data.skills.map(card)}
+              </ul>
+            )
+          }
+        </ResourceView>
       </SectionList>
       {list.data?.problems.length ? (
-        <SectionList title="Rejected skill folders" label="Skill problems">
+        <SectionList
+          title="Rejected skill folders"
+          label="Skill problems"
+          description="These folders were skipped. Fix SKILL.md on the computer running openside."
+        >
           <ul className="resource-list">
             {list.data.problems.map((problem) => (
               <li key={`${problem.source}:${problem.name}`}>
-                <ResourceCard title={problem.name} detail={problem.source} badge="Rejected" badgeTone="attention">
-                  <p className="resource-card-body error-note">{problem.error}</p>
-                </ResourceCard>
+                <ResourceCard title={problem.name} detail={problem.error} badge="Rejected" badgeTone="danger" />
               </li>
             ))}
           </ul>

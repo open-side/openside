@@ -1,4 +1,4 @@
-import type { Attachment, Event, PolicyMode, QueueMode, SubagentStatus, Ticket } from "../api/types";
+import type { Attachment, BrowserState, Event, PolicyMode, QueueMode, SubagentStatus, Ticket } from "../api/types";
 
 export interface QueuedMessage {
   id: string;
@@ -41,8 +41,10 @@ export interface SessionView {
   /** Pending messages in delivery order: steering lane first, then follow-ups. */
   queue: QueuedMessage[];
   tickets: Record<string, Ticket>;
-  /** Children started by `delegate`, in start order. */
+  /** Children started by `delegate` or `task_start` (`background`), in start order. */
   subagents: SubagentView[];
+  /** Latest `browser.state` per agent tab, keyed by {@link browserStateKey}. */
+  browserStates: Record<string, BrowserStateView>;
   /** Files tools saved into the artifact directory, latest write per path, in first-save order. */
   artifacts: SavedArtifact[];
 }
@@ -54,10 +56,17 @@ export interface SubagentView {
   tools: string[];
   parentToolCallId: string;
   status: SubagentStatus;
+  /** A Task the front agent started; it reports back with a `task-report-<id>` message. */
+  background: boolean;
   reason?: string;
+  /** Final answer of a completed child. */
+  output?: string;
   /** Every `subagent.progress` payload in order: the child's live event stream. */
   progress: unknown[];
 }
+
+/** `seq` orders states across tabs: the highest is the most recent activity. */
+export type BrowserStateView = BrowserState & { seq: number };
 
 export interface SavedArtifact {
   path: string;
@@ -80,8 +89,14 @@ export const emptySessionView: SessionView = {
   queue: [],
   tickets: {},
   subagents: [],
+  browserStates: {},
   artifacts: [],
 };
+
+/** One card per Task and tab; the front agent's reads use the `front` slot. */
+export function browserStateKey(state: Pick<BrowserState, "task_id" | "tab_id">): string {
+  return `${state.task_id ?? "front"}:${state.tab_id}`;
+}
 
 function orderQueue(queue: QueuedMessage[]): QueuedMessage[] {
   return [...queue.filter((m) => m.mode === "steer"), ...queue.filter((m) => m.mode === "queue")];
@@ -119,8 +134,12 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
       };
     case "message.queued": {
       const attachments = event.attachments?.length ? { attachments: event.attachments } : {};
+      // An idle session starts on this message; say so now rather than after the agent
+      // process is up, which takes seconds when it is cold.
+      const starting = state.status !== "running";
       return {
         ...next,
+        ...(starting ? { status: "running" as const, thinking: true } : {}),
         queue: orderQueue([
           ...state.queue,
           { id: event.message_id, text: event.text, mode: event.mode, ...attachments },
@@ -148,8 +167,11 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
         queue: orderQueue([...state.queue.filter((m) => m.mode !== moved.mode), ...lane]),
       };
     }
-    case "message.dropped":
-      return { ...next, queue: state.queue.filter((m) => m.id !== event.message_id) };
+    case "message.dropped": {
+      const queue = state.queue.filter((m) => m.id !== event.message_id);
+      const busy = queue.length > 0 || state.items.some((item) => item.type === "user" && item.outcome === undefined);
+      return { ...next, queue, ...(busy ? {} : { status: "idle" as const, thinking: false }) };
+    }
     case "message.injected": {
       const sent = state.queue.find((m) => m.id === event.message_id);
       return {
@@ -280,6 +302,7 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
             tools: event.tools,
             parentToolCallId: event.parent_tool_call_id,
             status: "running",
+            background: event.background ?? false,
             progress: [],
           },
         ],
@@ -303,10 +326,25 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
         ...next,
         subagents: state.subagents.map((child) =>
           child.id === event.subagent_id
-            ? { ...child, status: event.status, ...(event.reason ? { reason: event.reason } : {}) }
+            ? {
+                ...child,
+                status: event.status,
+                ...(event.reason ? { reason: event.reason } : {}),
+                ...(event.output ? { output: event.output } : {}),
+              }
             : child,
         ),
       };
+    case "browser.state": {
+      const browser: BrowserStateView = {
+        tab_id: event.tab_id, url: event.url, host: event.host, title: event.title,
+        phase: event.phase, page_kind: event.page_kind, facts: event.facts, seq: event.seq,
+        ...(event.task_id != null ? { task_id: event.task_id } : {}),
+        ...(event.action != null ? { action: event.action } : {}),
+        ...(event.thumbnail != null ? { thumbnail: event.thumbnail } : {}),
+      };
+      return { ...next, browserStates: { ...state.browserStates, [browserStateKey(browser)]: browser } };
+    }
     case "artifact.saved": {
       const saved: SavedArtifact = { path: event.path, mime: event.mime, size: event.size, tool: event.tool };
       const known = state.artifacts.some((artifact) => artifact.path === event.path);

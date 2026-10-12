@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createClient } from "./client";
 import { openSessionStream, SseParser } from "./sse";
 import type { Event } from "./types";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
@@ -102,5 +103,42 @@ describe("openSessionStream", () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     stream.close();
     expect(calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("lets go of the connection on pagehide and resumes from the cursor on a back/forward restore", async () => {
+    const signals: AbortSignal[] = [];
+    const cursors: string[] = [];
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init!.signal!);
+      cursors.push((init!.headers as Record<string, string>)["Last-Event-ID"]!);
+      // An open stream: one event, then nothing until the request is aborted.
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(frame(event(signals.length))));
+          init!.signal!.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+        },
+      });
+      return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+    const client = createClient({ token: () => "t", fetch: fetchImpl as typeof fetch });
+    const seen: number[] = [];
+    const statuses: string[] = [];
+    const stream = openSessionStream({ client, sessionId: "s1", onEvent: (e) => seen.push(e.seq), onStatus: (s) => statuses.push(s), retryDelayMs: () => 0 });
+    await vi.waitFor(() => expect(seen).toEqual([1]));
+
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+    expect(signals[0]!.aborted).toBe(true);
+
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    await vi.waitFor(() => expect(seen).toEqual([1, 2]));
+    expect(cursors).toEqual(["0", "1"]);
+    // A retry while hidden would have reported "reconnecting".
+    expect(statuses).toEqual(["connecting", "open", "connecting", "open"]);
+
+    stream.close();
+    expect(signals[1]!.aborted).toBe(true);
+    await vi.waitFor(() => expect(statuses.at(-1)).toBe("closed"));
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

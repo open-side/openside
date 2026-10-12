@@ -20,13 +20,10 @@ export type Endpoint = {
 }[keyof paths];
 
 /** Client members that are helpers rather than requests. */
-type Helper = "baseUrl" | "headers" | "fetch" | "resolve";
+type Helper = "baseUrl" | "relay" | "headers" | "fetch" | "resolve";
 
-/**
- * Every way the UI reaches the daemon: typed client methods, the SSE reader in `sse.ts`, and
- * sandboxed iframes whose `src` is a daemon-issued `preview_url` (resolved by `client.resolve`).
- */
-export type CallName = Exclude<keyof Client, Helper> | "openSessionStream" | "sandboxPreview";
+/** Every daemon call goes through a typed client method or the SSE reader. */
+export type CallName = Exclude<keyof Client, Helper> | "openSessionStream";
 
 export const CALLS: Record<CallName, Endpoint> = {
   health: "GET /v1/health",
@@ -36,6 +33,8 @@ export const CALLS: Record<CallName, Endpoint> = {
   createSession: "POST /v1/sessions",
   updateSession: "PATCH /v1/sessions/{id}",
   stopSession: "POST /v1/sessions/{id}/stop",
+  prewarmSession: "POST /v1/sessions/{id}/prewarm",
+  prewarmBrowser: "POST /v1/browser/prewarm",
   submitMessage: "POST /v1/sessions/{id}/messages",
   editQueued: "PATCH /v1/sessions/{id}/queue/{mid}",
   deleteQueued: "DELETE /v1/sessions/{id}/queue/{mid}",
@@ -52,6 +51,7 @@ export const CALLS: Record<CallName, Endpoint> = {
   artifactBlob: "GET /v1/sessions/{id}/artifacts/{path}",
   takeover: "GET /v1/tickets/{id}/takeover",
   browserPreview: "GET /v1/sessions/{id}/browser/preview",
+  browserThumbnail: "GET /v1/sessions/{id}/browser/thumbnails/{thumbnail_id}",
   browserTabs: "GET /v1/browser/tabs",
   openSessionStream: "GET /v1/sessions/{id}/events",
   sandboxPreview: "GET /v1/sessions/{id}/artifacts/{path}/preview",
@@ -75,6 +75,12 @@ export const CALLS: Record<CallName, Endpoint> = {
   memoryHistory: "GET /v1/memory/{id}/history",
   settingsConfig: "GET /v1/settings/config",
   updateSettingsConfig: "PUT /v1/settings/config",
+  onboarding: "GET /v1/onboarding",
+  setOnboarding: "PUT /v1/onboarding",
+  externalAgents: "GET /v1/external-agents",
+  installAgentSkill: "POST /v1/external-agents/{id}/browser-skill",
+  importProfiles: "GET /v1/import/profiles",
+  runImport: "POST /v1/import",
   vaultStatus: "GET /v1/vault",
   setupVault: "POST /v1/vault/setup",
   unlockVault: "POST /v1/vault/unlock",
@@ -119,20 +125,26 @@ export const FEATURES: UiFeature[] = [
   { screen: "shell", feature: "Sidebar conversation list (pinned group first), re-synced while visible", sources: ["hooks/useSessionList.ts"], calls: ["listSessions"] },
   { screen: "shell", feature: "Search conversations", sources: ["hooks/useSessionList.ts"], calls: ["listSessions"] },
   { screen: "shell", feature: "Row menu: pin / unpin, rename, archive / unarchive; Archived tab", sources: ["components/SessionMenu.tsx", "hooks/useSessionList.ts"], calls: ["updateSession", "listSessions"] },
-  { screen: "/", feature: "New chat: the first message creates the conversation, with model choice", sources: ["components/Composer.tsx", "components/ModelPicker.tsx"], calls: ["createSession", "submitMessage", "settings"] },
+  { screen: "/", feature: "New chat: the first message creates the conversation, with model choice and an opt-in isolated browser space", sources: ["components/Composer.tsx", "components/ModelPicker.tsx", "pages/NewChatPage.tsx"], calls: ["createSession", "submitMessage", "settings", "prewarmBrowser"] },
   { screen: "/sessions/:id", feature: "Live event stream; screen rebuilt from the event log on reload", sources: ["hooks/useSessionView.ts"], calls: ["openSessionStream"] },
   { screen: "/sessions/:id", feature: "Session menu (rename, pin, archive, copy link); stop from the composer", sources: ["components/SessionMenu.tsx", "pages/SessionPage.tsx"], calls: ["updateSession", "stopSession"] },
-  { screen: "/sessions/:id", feature: "Send, or queue while a run is active; image attachments", sources: ["components/Composer.tsx"], calls: ["submitMessage"] },
+  { screen: "/sessions/:id", feature: "Send, or queue while a run is active; image attachments; focusing the box warms the agent and browser", sources: ["components/Composer.tsx"], calls: ["submitMessage", "prewarmSession"] },
   { screen: "/sessions/:id", feature: "`/` skill mention chips", sources: ["components/Composer.tsx"], calls: ["searchSkills"] },
   { screen: "/sessions/:id", feature: "Queued messages: edit, cancel, steer instead / send now", sources: ["components/QueueList.tsx"], calls: ["editQueued", "deleteQueued", "promoteQueued"] },
   { screen: "/sessions/:id", feature: "Approval / info / secret_input / device-approval cards", sources: ["components/TicketCard.tsx"], calls: ["resolveTicket", "rejectTicket", "ticketDone"] },
   { screen: "/sessions/:id", feature: "Inline code form (OTP) with optional authenticator save; `?ticket=` from a code push opens the full-screen code sheet", sources: ["otp/otpForm.ts", "components/OtpSheet.tsx", "pages/SessionPage.tsx"], calls: ["resolveTicket", "rejectTicket"] },
+  { screen: "/sessions/:id", feature: "Secure login card (fields from the page, saved accounts, alternative sign-ins, save to vault) and login-step choice card; `?ticket=` opens them as a sheet", sources: ["otp/loginForm.ts", "otp/authCard.ts", "components/AuthForm.tsx", "components/OtpSheet.tsx"], calls: ["resolveTicket", "rejectTicket"] },
   { screen: "/sessions/:id", feature: "Takeover remote screen and PiP preview", sources: ["components/TakeoverView.tsx"], calls: ["takeover", "ticketDone", "rejectTicket"] },
-  { screen: "/sessions/:id", feature: "Read-only live browser PiP preview, minimize / expand", sources: ["components/BrowserPreview.tsx"], calls: ["browserPreview"] },
+  { screen: "/sessions/:id", feature: "Live browser card docked at the top of the conversation: read-only screencast, agent status, Action needed, click ripple, minimize, cancel task; background Tasks narrate it from browser.state, with authenticated thumbnails and a strip to pick one and cancel per Task", sources: ["components/BrowserPreview.tsx"], calls: ["browserPreview", "browserThumbnail", "cancelSubagent"] },
   { screen: "/sessions/:id", feature: "Browser sheet: this conversation's agent tabs with titles and URLs, live preview and zoom", sources: ["components/BrowserSheet.tsx"], calls: ["browserTabs"] },
   { screen: "/sessions/:id", feature: "Subagent steer / cancel", sources: ["components/SubagentPanel.tsx"], calls: ["steerSubagent", "cancelSubagent"] },
   { screen: "/sessions/:id", feature: "Files panel: list, sandboxed preview, download", sources: ["hooks/useSessionFiles.ts", "components/ArtifactsPanel.tsx", "components/VisualFrame.tsx"], calls: ["listArtifacts", "artifactBlob", "sandboxPreview"] },
   { screen: "/sessions/:id", feature: "Visual blocks: sandboxed preview and source", sources: ["hooks/useSessionFiles.ts", "components/VisualFrame.tsx"], calls: ["listVisuals", "sandboxPreview"] },
+  { screen: "/welcome", feature: "First-run guide: opens once on a new daemon, can be skipped, and is reopened from Settings; whether it was seen is kept on the daemon", sources: ["onboarding/OnboardingGate.tsx", "onboarding/OnboardingPage.tsx"], calls: ["onboarding", "setOnboarding"] },
+  { screen: "/welcome", feature: "Guide step: detect the claude, codex and omp agents and install the openside browser skill for them", sources: ["onboarding/AgentsStep.tsx"], calls: ["externalAgents", "installAgentSkill"] },
+  { screen: "/welcome", feature: "Guide step: import Chrome, Chromium or Firefox history, bookmarks and cookies, with a dry-run preview of the counts before anything is written", sources: ["onboarding/ImportStep.tsx"], calls: ["importProfiles", "runImport"] },
+  { screen: "/welcome", feature: "Guide step: vault status with a link to the Vault setup", sources: ["onboarding/VaultStep.tsx"], calls: ["vaultStatus"] },
+  { screen: "/welcome", feature: "Guide step: pair a phone with `openside pair`; the step notices the new device", sources: ["onboarding/PairStep.tsx"], calls: ["listDevices"] },
   { screen: "/skills", feature: "Skill list with rejected folders", sources: ["pages/SkillsPage.tsx"], calls: ["listSkills"] },
   { screen: "/skills", feature: "Create a skill", sources: ["pages/SkillsPage.tsx"], calls: ["createSkill"] },
   { screen: "/skills", feature: "Edit description and instructions", sources: ["pages/SkillsPage.tsx"], calls: ["getSkill", "updateSkill"] },
@@ -163,8 +175,11 @@ export const FEATURES: UiFeature[] = [
 export const UNSURFACED: Partial<Record<Endpoint, string>> = {
   "POST /v1/pairing": "Local socket only (`local_socket_required` over TCP): `openside pair` prints the QR code the `/pair` screen consumes.",
   "POST /v1/devices/pair": "Local socket only: token minting for `openside token create`.",
+  "GET /v1/remote/status": "Admin diagnostics for the computer running the daemon: `openside remote status` shows which remote transports are up and their public addresses.",
   "POST /v1/otp": "Machine endpoint for an SMS forwarder holding the `otp_ingest` scope.",
   "POST /v1/sessions/{id}/repl": "Machine endpoint (`browse` scope) for sandboxed tools, MCP servers and extensions.",
+  "GET /v1/tools": "Machine endpoint: the catalog `openside mcp` and `openside browser tools` build their direct browser tools from.",
+  "POST /v1/sessions/{id}/tools/{name}": "Machine endpoint (`browse` scope) for the CLI, MCP servers and scripts driving a session's browser and human-step tools directly; the tickets it opens appear in the web UI as usual.",
   "GET /v1/sessions/{id}": "The session screen rebuilds the session from its event stream.",
   "DELETE /v1/sessions/{id}": "Not offered in the web UI: the conversation list archives instead of deleting permanently; deletion stays an API (admin) action.",
   "POST /v1/sessions/{id}/queue/{mid}/move": "Not offered in the web UI: the queue offers edit, delete and send now; reordering stays an API action.",

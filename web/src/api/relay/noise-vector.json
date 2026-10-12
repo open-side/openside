@@ -1,0 +1,24 @@
+{
+  "daemon_id": "0Zvz8IJ4LIe3g_5xNGmK7w",
+  "daemon_key": "e06Qm75__kTEZaIgA31gjuNYl9Me-XLwf3SJLLD3PxM",
+  "ephemeral_public": "D6poTtKIZ7l_Smot7l34zpdOdrcBjj8iocTPJnhXDyA",
+  "ephemeral_secret": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+  "from_daemon": [
+    "c48ab2491d6b2c4cbf60ae0d02e4875f5ac6250b18195ef2b3141083613a9428399f966fe7",
+    "3c5fe24f8ed601c73f33a96c8598fd529baacfa08935"
+  ],
+  "from_daemon_plain": [
+    "hello from the daemon",
+    "second"
+  ],
+  "from_device": [
+    "e3976b1fcb5508346f7e362e0152a1e12aac5ad0",
+    "ac088d3d6b6c8f7f8930062e503213b34698bc94"
+  ],
+  "from_device_plain": [
+    "ping",
+    "pong"
+  ],
+  "message1": "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20c6d73003ea964f048b013da9f6c7adf7",
+  "message2": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14bb71ad971a0002d3961765385c335d2b"
+}

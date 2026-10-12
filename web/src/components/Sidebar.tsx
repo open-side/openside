@@ -1,9 +1,9 @@
-import { Ellipsis, LayoutGrid, Pin, Search, Settings2, SquarePen, X } from "lucide-react";
+import { Archive, Ellipsis, LayoutGrid, Search, Settings2, SquarePen, X } from "lucide-react";
 import { Link, useLocation, useMatch } from "react-router";
 import type { Session } from "../api/types";
 import type { SessionListState } from "../hooks/useSessionList";
 import { manageLinkState } from "../pages/manageRoutes";
-import { BrandMark, cx, ICON_STROKE, IconButton, Segmented, Spinner } from "../ui";
+import { BrandMark, cx, ICON_STROKE, IconButton, Spinner } from "../ui";
 import { SessionMenu } from "./SessionMenu";
 
 const icon = { size: 18, strokeWidth: ICON_STROKE, "aria-hidden": true } as const;
@@ -36,46 +36,57 @@ export function Sidebar({ list, onClose }: SidebarProps) {
         )}
       </div>
 
-      <Link to="/" className="sidebar-new-chat">
-        <SquarePen {...icon} />
-        <span>New chat</span>
-      </Link>
-
-      <div className="sidebar-filters">
-        <label className="sidebar-search">
-          <Search {...icon} />
-          <span className="sr-only">Search conversations</span>
-          <input type="search" value={query} onChange={(event) => list.setQuery(event.target.value)} placeholder="Search" />
-        </label>
-        <Segmented
-          kind="tab"
-          label="Conversation filter"
-          options={[
-            { value: "active", label: "Active" },
-            { value: "archived", label: "Archived" },
-          ]}
-          value={archived ? "archived" : "active"}
-          onChange={(value) => list.setArchived(value === "archived")}
-        />
+      <div className="sidebar-actions">
+        <Link to="/" className="sidebar-nav-item">
+          <SquarePen {...icon} />
+          <span>New chat</span>
+        </Link>
+        <div className="sidebar-search">
+          <label className="sidebar-search-field">
+            <Search {...icon} />
+            <span className="sr-only">Search conversations</span>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => list.setQuery(event.target.value)}
+              placeholder={archived ? "Search archived" : "Search"}
+            />
+          </label>
+          <IconButton
+            label="Show archived"
+            size="small"
+            className="archive-toggle"
+            aria-pressed={archived}
+            onClick={() => list.setArchived(!archived)}
+          >
+            <Archive {...icon} />
+          </IconButton>
+        </div>
       </div>
 
       <div className="session-list">
-        {list.error && (
+        {/* An unreachable daemon is announced once, by the shell's connection banner. */}
+        {list.error && !list.offline && (
           <p role="alert" className="sidebar-note error">
             {list.error}
           </p>
         )}
         {sessions === null ? (
-          <p className="sidebar-note">Loading conversations…</p>
+          list.offline ? null : <p className="sidebar-note">Loading conversations…</p>
         ) : sessions.length === 0 ? (
           <p className="sidebar-note">
-            {query ? "No conversations match." : archived ? "No archived conversations." : "Your conversations will appear here."}
+            {query ? `No conversations match “${query}”.` : archived ? "Nothing archived yet." : "Your conversations will appear here."}
           </p>
         ) : (
           <>
             {pinned.length > 0 && <SessionGroup heading="Pinned" label="Pinned conversations" sessions={pinned} list={list} />}
             {rest.length > 0 && (
-              <SessionGroup heading={archived ? "Archived" : "Conversations"} label="Conversations" sessions={rest} list={list} />
+              <SessionGroup
+                heading={archived ? "Archived" : query ? "Results" : "Conversations"}
+                label="Conversations"
+                sessions={rest}
+                list={list}
+              />
             )}
           </>
         )}
@@ -112,12 +123,13 @@ function SessionRow({ session, list }: { session: Session; list: SessionListStat
   const href = `/sessions/${encodeURIComponent(session.id)}`;
   const current = useMatch("/sessions/:id")?.params.id === session.id;
   return (
-    <li className={cx("session-row", current && "current", session.pinned && "pinned")} data-session={session.id}>
+    <li className={cx("session-row", current && "current")} data-session={session.id}>
       <Link to={href} className="session-link" aria-current={current ? "page" : undefined}>
-        <span className="session-title">{session.title}</span>
+        <span className="session-title" title={session.title}>
+          {session.title}
+        </span>
         {session.status === "running" && <Spinner label="Running" size={14} />}
-        {session.status === "waiting_human" && <span className="attention-ring" role="img" aria-label="Needs you" />}
-        {session.pinned && <Pin className="pin-mark" size={14} strokeWidth={ICON_STROKE} aria-label="Pinned" role="img" />}
+        {session.status === "waiting_human" && <span className="row-badge">Needs you</span>}
       </Link>
       <SessionMenu
         session={session}

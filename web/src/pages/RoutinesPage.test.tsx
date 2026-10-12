@@ -85,23 +85,25 @@ describe("RoutinesPage", () => {
     const list = await screen.findByRole("list", { name: "Routines" });
     const row = within(list).getByText("Morning digest").closest("article") as HTMLElement;
     expect(row).toHaveAttribute("data-routine", "r1");
-    expect(within(row).getByText("cron 0 8 * * * (Europe/Berlin)")).toBeInTheDocument();
+    expect(within(row).getByText(/^Every day at 08:00 · Europe\/Berlin/)).toBeInTheDocument();
 
-    await user.click(within(row).getByRole("button", { name: "Run now" }));
+    await user.click(within(row).getByRole("button", { name: "Options for Morning digest" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Run now" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Morning digest: run started");
     expect(calls.some((c) => c.method === "POST" && c.path === "/v1/routines/r1/run")).toBe(true);
 
-    await user.click(within(row).getByRole("button", { name: "Pause" }));
+    await user.click(within(row).getByRole("switch", { name: "Enable Morning digest" }));
     expect(await within(row).findByText("Paused")).toBeInTheDocument();
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ enabled: false });
-    expect(within(row).getByRole("button", { name: "Resume" })).toBeInTheDocument();
+    expect(within(row).getByRole("switch", { name: "Enable Morning digest" })).not.toBeChecked();
 
-    await user.click(within(row).getByRole("button", { name: "Runs" }));
+    await user.click(within(row).getByRole("button", { name: "Run history" }));
     const runs = await within(row).findByRole("list", { name: "Runs of Morning digest" });
-    expect(within(runs).getByText("skipped_overlap")).toBeInTheDocument();
+    expect(await within(runs).findByText("Skipped: still running")).toBeInTheDocument();
     expect(within(runs).getByText(/previous run active/)).toBeInTheDocument();
 
-    await user.click(within(row).getByRole("button", { name: "Delete" }));
+    await user.click(within(row).getByRole("button", { name: "Options for Morning digest" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
     const confirm = await screen.findByRole("dialog", { name: "Delete routine?" });
     await user.click(within(confirm).getByRole("button", { name: "Delete" }));
     expect(await screen.findByText("No routines yet")).toBeInTheDocument();

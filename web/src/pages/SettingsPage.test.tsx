@@ -54,7 +54,7 @@ function daemon({ healthy = true }: { healthy?: boolean } = {}) {
 
 function setup(options?: { healthy?: boolean }) {
   const fake = daemon(options);
-  const handlers = { onWorkspace: vi.fn(), onSignOut: vi.fn() };
+  const handlers = { onWorkspace: vi.fn(), onGuide: vi.fn(), onSignOut: vi.fn() };
   render(
     <ClientContext.Provider value={fake.client}>
       <SettingsPage {...handlers} />
@@ -81,6 +81,13 @@ describe("SettingsPage", () => {
     expect(onWorkspace).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(onSignOut).toHaveBeenCalledOnce();
+  });
+
+  it("reopens the setup guide", async () => {
+    const user = userEvent.setup();
+    const { onGuide } = setup();
+    await user.click(screen.getByRole("button", { name: /Setup guide/ }));
+    expect(onGuide).toHaveBeenCalledOnce();
   });
 
   it("reports an unreachable daemon", async () => {

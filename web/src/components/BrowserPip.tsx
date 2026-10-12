@@ -42,6 +42,8 @@ export interface BrowserPipProps {
   label: string;
   title: string;
   status: string;
+  /** Frames are arriving; the title's dot turns green. */
+  live: boolean;
   /** Picture or status text shown in the screen area. */
   children: ReactNode;
   onExpand: () => void;
@@ -53,7 +55,7 @@ export interface BrowserPipProps {
  * Floating picture-in-picture card (aside-relay BrowserLive): a draggable title bar with
  * expand, minimize and close, over a read-only screen. It never forwards input to the tab.
  */
-export function BrowserPip({ label, title, status, children, onExpand, onClose, className }: BrowserPipProps) {
+export function BrowserPip({ label, title, status, live, children, onExpand, onClose, className }: BrowserPipProps) {
   const card = useRef<HTMLElement>(null);
   const drag = useRef<{ x: number; y: number; start: Offset; moved: boolean } | null>(null);
   const dragged = useRef(false);
@@ -142,6 +144,7 @@ export function BrowserPip({ label, title, status, children, onExpand, onClose, 
           onKeyDown={handleKey}
           onClick={handleClick}
         >
+          <span className="live-dot" data-live={live || undefined} aria-hidden="true" />
           <span className="pip-title">{title}</span>
         </button>
         <button type="button" className="pip-control" aria-label="Expand" title="Expand" onClick={onExpand}>

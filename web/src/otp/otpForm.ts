@@ -1,14 +1,14 @@
-// The one-time-code form shared by the web app (wrapped by components/OtpForm.tsx) and the
+// The one-time-code form shared by the web app (mounted by components/AuthForm.tsx) and the
 // extension side panel. Plain DOM so both hosts render the exact same form; each host passes
 // its own button classes. The code and the setup key never enter any app state: they live
 // only in the input until submit, which empties the input before the request is sent.
 import { ApiError, type Client } from "../api/client";
 import type { Ticket } from "../api/types";
+import { authFoot, authHead, element, siteOf, type AuthButton } from "./authCard";
 import { parseAuthenticator, totpCode } from "./totp";
 
 type Otp = NonNullable<Ticket["otp"]>;
 export type OtpTicket = Ticket & { otp: Otp };
-export type OtpButton = "primary" | "secondary" | "ghost";
 
 const SOURCE: Record<Otp["channel"], string | null> = {
   authenticator: "your authenticator app",
@@ -20,15 +20,6 @@ const SOURCE: Record<Otp["channel"], string | null> = {
 
 export function isOtpTicket(ticket: Ticket): ticket is OtpTicket {
   return ticket.kind === "secret_input" && !!ticket.otp;
-}
-
-/** Host shown to the person: `https://www.example.com:443` → `example.com`. */
-function siteOf(origin: string | null | undefined): string {
-  try {
-    return new URL(origin ?? "").host.replace(/^www\./, "") || "this site";
-  } catch {
-    return "this site";
-  }
 }
 
 export interface OtpRegistration {
@@ -61,6 +52,11 @@ export function registrationQuestion(info: OtpRegistration): string {
   return `Save the authenticator for ${siteOf(info.origin)}${label ? ` (${label})` : ""} to your vault?`;
 }
 
+/** What saving an authenticator offered during setup does, under the registration question. */
+export function registrationNote(info: OtpRegistration): string {
+  return `${siteOf(info.origin)} offered to set up two-step sign-in. If you save it, openside confirms the setup on the page and fills this site's codes for you from now on. The setup key never appears in the chat.`;
+}
+
 export function registrationOutcome(resolution: unknown): string | null {
   if (!resolution || typeof resolution !== "object" || !("status" in resolution)) return null;
   const { status } = resolution;
@@ -80,7 +76,7 @@ export function codeHelp(ticket: OtpTicket): string {
 export interface OtpFormOptions {
   ticket: OtpTicket;
   client: Pick<Client, "resolveTicket" | "rejectTicket">;
-  buttonClass: (variant: OtpButton) => string;
+  buttonClass: (variant: AuthButton) => string;
   /** `sheet` is the phone screen a push notification opens: bigger field and button. */
   layout?: "card" | "sheet";
   /**
@@ -97,17 +93,6 @@ export interface OtpFormOptions {
 }
 
 let mounts = 0;
-
-function element<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  attributes: Record<string, string> = {},
-  ...children: (Node | string)[]
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
-  node.append(...children);
-  return node;
-}
 
 /** Renders the code form into `host`; returns the cleanup that removes it. */
 export function mountOtpForm(host: HTMLElement, options: OtpFormOptions): () => void {
@@ -138,26 +123,23 @@ export function mountOtpForm(host: HTMLElement, options: OtpFormOptions): () => 
         input,
       )
     : input;
-  const error = element("p", { class: "otp-error", role: "alert" });
+  const error = element("p", { class: "otp-error auth-error", role: "alert" });
   error.hidden = true;
-  const submit = element("button", { type: "submit", class: buttonClass("primary") }, "Submit");
-  const reject = element("button", { type: "button", class: buttonClass("ghost") }, "Reject");
+  const submit = element("button", { type: "submit", class: `${buttonClass("primary")} auth-primary` }, "Submit");
+  const { head, close: reject } = authHead({
+    titleId: `${id}-title`,
+    title: "Verification code",
+    site,
+    origin: ticket.target?.origin,
+    closeLabel: "Reject",
+    onClose: () => void run(() => client.rejectTicket(ticket.id), input),
+  });
 
   const form = element(
     "form",
-    { class: `otp-form otp-form--${layout}`, "aria-labelledby": `${id}-title`, "data-ticket": ticket.id, novalidate: "" },
-    element(
-      "div",
-      { class: "otp-head" },
-      element("span", { class: "otp-avatar", "aria-hidden": "true" }, site === "this site" ? "?" : site[0]!.toUpperCase()),
-      element(
-        "div",
-        { class: "otp-heading" },
-        element("strong", { id: `${id}-title`, class: "otp-title" }, "Verification code"),
-        element("span", { class: "otp-site" }, site),
-      ),
-    ),
-    ...(ticket.summary ? [element("p", { class: "otp-summary" }, ticket.summary)] : []),
+    { class: `auth-card auth-card--${layout} otp-form otp-form--${layout}`, "aria-labelledby": `${id}-title ${id}-title-origin`, "data-ticket": ticket.id, novalidate: "" },
+    head,
+    ...(ticket.summary ? [element("p", { class: "otp-summary auth-lede" }, ticket.summary)] : []),
     element("label", { class: "otp-label", for: `${id}-code` }, "Code"),
     field,
     element(
@@ -166,7 +148,7 @@ export function mountOtpForm(host: HTMLElement, options: OtpFormOptions): () => 
       codeHelp(ticket),
     ),
     error,
-    element("div", { class: "otp-actions" }, submit, reject),
+    element("div", { class: "otp-actions auth-actions" }, element("span", { class: "auth-alts" }), submit),
   );
 
   const controls: (HTMLInputElement | HTMLButtonElement)[] = [input, submit, reject];
@@ -207,7 +189,6 @@ export function mountOtpForm(host: HTMLElement, options: OtpFormOptions): () => 
     }
     void run(() => client.resolveTicket(ticket.id, code), input);
   });
-  reject.addEventListener("click", () => void run(() => client.rejectTicket(ticket.id), input));
 
   if (ticket.otp.can_register && options.canSave !== false) {
     const key = element("input", {
@@ -301,6 +282,7 @@ export function mountOtpForm(host: HTMLElement, options: OtpFormOptions): () => 
     );
   }
 
+  form.append(authFoot());
   host.append(form);
   const focus = options.focus ?? "polite";
   const claimFocus = () => {

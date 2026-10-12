@@ -45,4 +45,11 @@ describe("API client", () => {
     expect(calls[1]).toMatchObject({ method: "PATCH", path: "/v1/sessions/a%2Fb", body: { pinned: true } });
     expect(calls[1]!.headers["Content-Type"]).toBe("application/json");
   });
+  it("accepts empty 202 prewarm responses without decoding JSON", async () => {
+    const { client, calls } = fakeClient(() => new Response(null, { status: 202 }));
+    await expect(client.prewarmSession("a/b")).resolves.toBeUndefined();
+    await expect(client.prewarmBrowser()).resolves.toBeUndefined();
+    expect(calls.map((call) => call.path)).toEqual(["/v1/sessions/a%2Fb/prewarm", "/v1/browser/prewarm"]);
+    expect(calls.every((call) => call.headers.Authorization === "Bearer test-token")).toBe(true);
+  });
 });

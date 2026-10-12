@@ -48,7 +48,7 @@ export function ManageDialogs({ location, onSignOut }: { location: Location; onS
   return (
     <>
       <Dialog open={target?.kind === "settings"} onClose={close} title="Settings">
-        <SettingsPage onWorkspace={() => go("/workspace")} onSignOut={onSignOut} />
+        <SettingsPage onWorkspace={() => go("/workspace")} onGuide={() => navigate("/welcome", { replace: true })} onSignOut={onSignOut} />
       </Dialog>
       <Dialog
         open={target?.kind === "workspace"}

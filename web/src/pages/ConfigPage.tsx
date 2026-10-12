@@ -12,8 +12,8 @@ import {
   type Draft,
   type Field,
 } from "../settings/schemaForm";
-import { Button, Segmented, useToast } from "../ui";
-import { ErrorNote, Loading } from "./blocks";
+import { Button, Segmented, Switch, useToast } from "../ui";
+import { Badge, ErrorNote, ResourceView } from "./blocks";
 
 function FieldInput({
   field,
@@ -29,7 +29,7 @@ function FieldInput({
   const common = { id: `setting-${field.path}`, disabled: locked, "aria-describedby": `setting-${field.path}-help` };
   switch (field.kind) {
     case "boolean":
-      return <input type="checkbox" role="switch" {...common} checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
+      return <Switch {...common} checked={value === true} onChange={onChange} />;
     case "integer":
     case "number":
       return (
@@ -112,39 +112,54 @@ function ConfigForm({ document, onSaved }: { document: SettingsDocument; onSaved
       {sections.map((section) => (
         <fieldset key={section} className="config-group">
           <legend>{section}</legend>
-          {fields
-            .filter((field) => field.section === section)
-            .map((field) => {
-              const locked = document.remote && !remoteEditable(field.path, document.remote_editable);
-              const value = drafts[field.path] ?? toDraft(field, valueAt(document.config, field.path));
-              return (
-                <div key={field.path} className="config-field" data-key={field.path} data-locked={locked}>
-                  <label htmlFor={`setting-${field.path}`}>
-                    <code>{field.path}</code>
-                    {locked ? <span className="badge badge--muted">local only</span> : null}
-                    {drafts[field.path] !== undefined ? <span className="badge badge--accent">changed</span> : null}
-                  </label>
-                  <FieldInput
-                    field={field}
-                    value={value}
-                    locked={locked}
-                    onChange={(next) => setDrafts((current) => ({ ...current, [field.path]: next }))}
-                  />
-                  <p id={`setting-${field.path}-help`}>{field.description}</p>
-                </div>
-              );
-            })}
+          <div className="config-fields">
+            {fields
+              .filter((field) => field.section === section)
+              .map((field) => {
+                const locked = document.remote && !remoteEditable(field.path, document.remote_editable);
+                const value = drafts[field.path] ?? toDraft(field, valueAt(document.config, field.path));
+                const dot = field.path.indexOf(".");
+                return (
+                  <div key={field.path} className="config-field" data-key={field.path} data-kind={field.kind} data-locked={locked}>
+                    <div className="config-field-text">
+                      <label htmlFor={`setting-${field.path}`}>
+                        <code className="config-key">
+                          <span className="config-key-section">{field.path.slice(0, dot + 1)}</span>
+                          {field.path.slice(dot + 1)}
+                        </code>
+                        {locked ? <Badge>local only</Badge> : null}
+                        {drafts[field.path] !== undefined ? <Badge tone="attention">changed</Badge> : null}
+                      </label>
+                      <p id={`setting-${field.path}-help`}>{field.description}</p>
+                    </div>
+                    <div className="config-field-control">
+                      <FieldInput
+                        field={field}
+                        value={value}
+                        locked={locked}
+                        onChange={(next) => setDrafts((current) => ({ ...current, [field.path]: next }))}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
         </fieldset>
       ))}
       {error ? <ErrorNote>{error}</ErrorNote> : null}
-      <div className="config-save">
-        <Button type="submit" variant="primary" disabled={busy || changed === 0}>
-          Save {changed ? `(${changed})` : ""}
-        </Button>
-        <Button variant="ghost" disabled={changed === 0} onClick={() => setDrafts({})}>
-          Discard
-        </Button>
-      </div>
+      {changed ? (
+        <div className="config-save">
+          <span className="config-save-status" role="status">
+            {changed} unsaved {changed === 1 ? "change" : "changes"}
+          </span>
+          <Button variant="ghost" onClick={() => setDrafts({})}>
+            Discard
+          </Button>
+          <Button type="submit" variant="primary" disabled={busy}>
+            Save ({changed})
+          </Button>
+        </div>
+      ) : null}
     </form>
   );
 }
@@ -201,10 +216,10 @@ export function ConfigPage() {
 
   return (
     <div className="manage-body" data-section="config">
-      {settings.error ? <ErrorNote>{settings.error}</ErrorNote> : null}
-      {!document ? (
-        settings.error ? null : <Loading />
-      ) : (
+      <ResourceView resource={settings} what="settings">
+        {() => null}
+      </ResourceView>
+      {!document || settings.forbidden ? null : (
         <>
           {document.remote ? (
             <p className="config-notice" role="note">
@@ -217,19 +232,21 @@ export function ConfigPage() {
               Saved settings differ from the running daemon; they apply after the daemon restarts.
             </p>
           ) : null}
-          {document.file_only.length ? (
-            <p className="settings-text">Edited only in config.toml: {document.file_only.join(", ")}.</p>
-          ) : null}
-          <Segmented
-            kind="tab"
-            label="Settings view"
-            options={[
-              { value: "form", label: "Form" },
-              { value: "json", label: "JSON" },
-            ]}
-            value={view}
-            onChange={setView}
-          />
+          <div className="config-toolbar">
+            <Segmented
+              kind="tab"
+              label="Settings view"
+              options={[
+                { value: "form", label: "Form" },
+                { value: "json", label: "JSON" },
+              ]}
+              value={view}
+              onChange={setView}
+            />
+            {document.file_only.length ? (
+              <p className="settings-text">Only in config.toml: {document.file_only.join(", ")}</p>
+            ) : null}
+          </div>
           {view === "form" ? (
             <ConfigForm key={JSON.stringify(document.config)} document={document} onSaved={setSaved} />
           ) : (

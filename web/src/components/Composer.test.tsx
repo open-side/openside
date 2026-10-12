@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ClientContext } from "../context";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
 import { Composer, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_TEXT_BYTES, mentionedSkills } from "./Composer";
@@ -9,6 +9,9 @@ const SKILLS = [
   { name: "research", description: "Deep web research", source: "user", enabled: true },
   { name: "review-pr", description: "Review a pull request", source: "project", enabled: true },
 ];
+
+/** A request the person caused; focus also prewarms the agent, which tests ignore. */
+const sent = (c: Call) => c.method === "POST" && !c.path.includes("/prewarm");
 
 function setup() {
   const daemon = fakeClient((call: Call) => {
@@ -31,14 +34,14 @@ describe("Composer skill mentions", () => {
   it("offers skills after `/`, inserts the chosen one as a chip and sends it in the text", async () => {
     const user = userEvent.setup();
     const { calls } = setup();
-    const input = screen.getByRole("combobox", { name: "Message" });
+    const input = screen.getByRole("textbox", { name: "Message" });
     await user.type(input, "Please /re");
     const list = await screen.findByRole("listbox", { name: "Skills" });
     expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "/research Deep web research",
       "/review-pr Review a pull request",
     ]);
-    expect(calls[0]?.path).toBe("/v1/skills?q=re&session=s1&enabled=true");
+    expect(calls.find((c) => c.method === "GET")?.path).toBe("/v1/skills?q=re&session=s1&enabled=true");
     await user.keyboard("{ArrowDown}{Enter}");
     expect(input).toHaveValue("Please /review-pr ");
     expect(screen.queryByRole("listbox")).toBeNull();
@@ -48,7 +51,7 @@ describe("Composer skill mentions", () => {
     await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
     await user.type(input, "now", { skipClick: true });
     await user.click(screen.getByRole("button", { name: "Send" }));
-    const submit = calls.find((c) => c.method === "POST");
+    const submit = calls.find(sent);
     expect(submit).toMatchObject({ path: "/v1/sessions/s1/messages", body: { text: "Please /review-pr now", mode: "queue" } });
     expect(submit?.body).not.toHaveProperty("attachments");
   });
@@ -56,7 +59,7 @@ describe("Composer skill mentions", () => {
   it("removes a mention when its chip is dismissed", async () => {
     const user = userEvent.setup();
     setup();
-    const input = screen.getByRole("combobox", { name: "Message" });
+    const input = screen.getByRole("textbox", { name: "Message" });
     await user.type(input, "/res");
     await user.click(await screen.findByRole("option", { name: /research/ }));
     // Choosing restores the caret after the inserted name on the next frame.
@@ -71,7 +74,7 @@ describe("Composer skill mentions", () => {
   it("dismisses mentions delimited by punctuation, not only by spaces", async () => {
     const user = userEvent.setup();
     setup();
-    const input = screen.getByRole("combobox", { name: "Message" });
+    const input = screen.getByRole("textbox", { name: "Message" });
     await user.type(input, "/re");
     await screen.findByRole("option", { name: /review-pr/ });
     fireEvent.change(input, { target: { value: "Check (/review-pr). Then /research, please" } });
@@ -91,6 +94,19 @@ describe("Composer skill mentions", () => {
   });
 });
 
+describe("Composer prewarm", () => {
+  it("warms the session's agent once when the message box takes focus", async () => {
+    const user = userEvent.setup();
+    const { calls } = setup();
+    const input = screen.getByRole("textbox", { name: "Message" });
+    await user.click(input);
+    input.blur();
+    await user.click(input);
+    await waitFor(() => expect(calls.filter((c) => c.path === "/v1/sessions/s1/prewarm")).toHaveLength(1));
+    expect(calls.find((c) => c.path === "/v1/sessions/s1/prewarm")?.method).toBe("POST");
+  });
+});
+
 describe("Composer attachments", () => {
   it("uploads picked files as base64 with the message and clears them", async () => {
     const user = userEvent.setup();
@@ -102,8 +118,8 @@ describe("Composer attachments", () => {
     expect(chips.querySelector("img.attachment-thumb")).toHaveAttribute("src", expect.stringMatching(/^blob:/));
     // An attachment alone is a valid message.
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
-    expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({
+    await waitFor(() => expect(calls.some(sent)).toBe(true));
+    expect(calls.find(sent)?.body).toMatchObject({
       text: "",
       attachments: [{ name: "shot.png", data_base64: "iVBORw==" }],
     });
@@ -115,10 +131,10 @@ describe("Composer attachments", () => {
     const { calls } = setup();
     await user.upload(screen.getByLabelText("Attach files"), new File(["notes"], "notes.txt", { type: "text/plain" }));
     await user.click(screen.getByRole("button", { name: "Remove attachment notes.txt" }));
-    await user.type(screen.getByRole("combobox", { name: "Message" }), "hi");
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "hi");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({ text: "hi" }));
-    expect(calls.find((c) => c.method === "POST")?.body).not.toHaveProperty("attachments");
+    await waitFor(() => expect(calls.find(sent)?.body).toMatchObject({ text: "hi" }));
+    expect(calls.find(sent)?.body).not.toHaveProperty("attachments");
   });
 
   const bytes = (name: string, size: number) => new File([new Uint8Array(size)], name, { type: "application/octet-stream" });
@@ -149,8 +165,8 @@ describe("Composer attachments", () => {
     expect(chipsOf()).toBe(2);
     expect(screen.queryByRole("alert")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "POST")).toBeDefined());
-    expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({
+    await waitFor(() => expect(calls.find(sent)).toBeDefined());
+    expect(calls.find(sent)?.body).toMatchObject({
       attachments: [
         { name: "first", data_base64: btoa("\0".repeat(MAX_ATTACHMENT_BYTES - 10)) },
         { name: "fits", data_base64: btoa("\0".repeat(10)) },
@@ -161,17 +177,17 @@ describe("Composer attachments", () => {
   it("sends text of exactly 1 MiB of UTF-8 and refuses one byte more", async () => {
     const user = userEvent.setup();
     const { calls } = setup();
-    const input = screen.getByRole("combobox", { name: "Message" });
+    const input = screen.getByRole("textbox", { name: "Message" });
     // "é" is two bytes in UTF-8, so the character count is half the byte limit.
     const limit = "é".repeat(MAX_TEXT_BYTES / 2);
     expect(new TextEncoder().encode(limit).length).toBe(MAX_TEXT_BYTES);
     fireEvent.change(input, { target: { value: `${limit}a` } });
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(screen.getByRole("alert")).toHaveTextContent("longer than 1 MiB");
-    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(calls.some(sent)).toBe(false);
     fireEvent.change(input, { target: { value: limit } });
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({ text: limit }));
+    await waitFor(() => expect(calls.find(sent)?.body).toMatchObject({ text: limit }));
   });
 });
 
@@ -200,11 +216,11 @@ describe("Composer run states", () => {
   it("queues a follow-up typed during a run and keeps Stop available", async () => {
     const user = userEvent.setup();
     const { calls } = renderRunning(() => undefined);
-    await user.type(screen.getByRole("combobox", { name: "Message" }), "also check prices");
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "also check prices");
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Queue" }));
     await waitFor(() =>
-      expect(calls.find((c) => c.method === "POST")).toMatchObject({
+      expect(calls.find(sent)).toMatchObject({
         path: "/v1/sessions/s1/messages",
         body: { text: "also check prices", mode: "queue" },
       }),
@@ -219,14 +235,79 @@ describe("Composer run states", () => {
         <Composer sessionId="s1" waiting onStop={() => undefined} />
       </ClientContext.Provider>,
     );
-    const field = screen.getByRole("combobox", { name: "Message" });
+    const field = screen.getByRole("textbox", { name: "Message" });
     expect(field).toHaveAttribute("placeholder", "Follow up");
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     await user.type(field, "after that, summarize");
     await user.click(screen.getByRole("button", { name: "Queue" }));
     await waitFor(() =>
-      expect(daemon.calls.find((c) => c.method === "POST")).toMatchObject({ body: { text: "after that, summarize", mode: "queue" } }),
+      expect(daemon.calls.find(sent)).toMatchObject({ body: { text: "after that, summarize", mode: "queue" } }),
     );
+  });
+
+  it("shows a read-only note instead of a field on a device paired without steer", () => {
+    localStorage.setItem("openside.scopes", JSON.stringify(["read", "approve"]));
+    try {
+      setup();
+      expect(screen.getByRole("note")).toHaveTextContent("can’t send messages");
+      expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();
+    } finally {
+      localStorage.removeItem("openside.scopes");
+    }
+  });
+});
+
+describe("Composer Enter key", () => {
+  const original = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = original;
+  });
+
+  const enter = (input: HTMLElement, init: KeyboardEventInit & { keyCode?: number }) =>
+    fireEvent.keyDown(input, { key: "Enter", ...init });
+
+  function pointer(kind: "fine" | "coarse" | "none") {
+    window.matchMedia = ((query: string) =>
+      ({
+        matches: query === `(pointer: ${kind})`,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }) as unknown as MediaQueryList) as typeof window.matchMedia;
+  }
+
+  function typed(text: string) {
+    const daemon = setup();
+    const input = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.change(input, { target: { value: text } });
+    return { daemon, input };
+  }
+
+  it("does not send the Enter that commits an IME composition, in either event order", async () => {
+    pointer("fine");
+    const { daemon, input } = typed("한글");
+    enter(input, { isComposing: true, keyCode: 229 });
+    // Safari fires compositionend first, so the commit key arrives with isComposing already false.
+    enter(input, { isComposing: false, keyCode: 229 });
+    expect(daemon.calls.find(sent)).toBeUndefined();
+    enter(input, { keyCode: 13 });
+    await waitFor(() => expect(daemon.calls.find(sent)).toMatchObject({ body: { text: "한글" } }));
+  });
+
+  it("sends on Enter without a pointer, as in headless or kiosk browsers", async () => {
+    pointer("none");
+    const { daemon, input } = typed("hello");
+    enter(input, { keyCode: 13 });
+    await waitFor(() => expect(daemon.calls.find(sent)).toMatchObject({ body: { text: "hello" } }));
+  });
+
+  it("keeps Enter as a newline on a touch screen unless Ctrl or Cmd is held", async () => {
+    pointer("coarse");
+    const { daemon, input } = typed("hello");
+    enter(input, { keyCode: 13 });
+    expect(daemon.calls.find(sent)).toBeUndefined();
+    enter(input, { keyCode: 13, ctrlKey: true });
+    await waitFor(() => expect(daemon.calls.find(sent)).toMatchObject({ body: { text: "hello" } }));
   });
 });

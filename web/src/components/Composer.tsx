@@ -1,8 +1,12 @@
-import { ArrowUp, FileText, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Eye, FileText, Plus, Square, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { ApiError } from "../api/client";
-import type { SkillSummary } from "../api/types";
+import type { AttachmentUpload, BrowserSpace, SkillSummary } from "../api/types";
+import { mayUse } from "../auth";
 import { newMessageId, useClient } from "../context";
+import { OutboxNotice } from "../pwa/OutboxNotice";
+import { outbox } from "../pwa/outbox";
+import type { ShareDraft } from "../pwa/share";
 import { ICON_STROKE, IconButton } from "../ui";
 
 // Same rules as the sidecar (agent/src/openside_agent/skills.py `_MENTION`): a mention starts
@@ -16,9 +20,9 @@ export const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 1024 * 1024;
 /** The `/prefix` being typed right before the caret. */
 const TYPING = /(?:^|[\s([{"'])\/([a-z0-9-]*)$/;
-const MAX_TITLE = 80;
 // Eight 24px lines plus the 16px vertical padding (styles.css .composer-field textarea).
 const MAX_INPUT_HEIGHT = 208;
+const PREWARM_EVERY_MS = 30_000;
 
 interface PendingFile {
   key: string;
@@ -45,13 +49,6 @@ export function mentionedSkills(text: string, known: ReadonlySet<string>): strin
   return found.slice(0, MAX_MENTIONS);
 }
 
-/** A new conversation is named after its first message (the daemon would say "New session"). */
-function titleFromMessage(text: string, fallback: string): string {
-  const line = text.split("\n").find((part) => part.trim())?.trim() ?? "";
-  if (!line) return fallback;
-  return line.length > MAX_TITLE ? `${line.slice(0, MAX_TITLE - 1).trimEnd()}…` : line;
-}
-
 export interface ComposerProps {
   /** `null` on the new-chat screen: the first send creates the conversation. */
   sessionId: string | null;
@@ -62,17 +59,23 @@ export interface ComposerProps {
   onStop?: () => void;
   /** New chat only: model for the conversation the first message creates (empty = default). */
   model?: string;
+  /** New chat only: where the created conversation browses (omitted = shared profile). */
+  browserSpace?: BrowserSpace;
   /** New chat only: called with the created conversation id after the first message is sent. */
   onCreated?: (sessionId: string) => void;
   /** Called after every accepted message (the transcript scrolls back to the latest turn). */
   onSent?: () => void;
-  /** Pills shown above the composer (model picker, browser preview). */
+  /** Compact controls in the composer's bottom bar, after Add files (model picker, browser preview). */
   tools?: ReactNode;
+  /** New chat only: content shared to the app (share target); applied once, then `onDraftApplied` fires. */
+  draft?: ShareDraft | null;
+  onDraftApplied?: () => void;
 }
 
-export function Composer({ sessionId, running = false, waiting = false, onStop, model, onCreated, onSent, tools }: ComposerProps) {
+export function Composer({ sessionId, running = false, waiting = false, onStop, model, browserSpace, onCreated, onSent, tools, draft, onDraftApplied }: ComposerProps) {
   const queueing = running || waiting;
   const client = useClient();
+  const warmed = useRef({ key: "", at: -Infinity });
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +86,16 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
   const [files, setFiles] = useState<PendingFile[]>([]);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+
+  // Something was shared to the app: it becomes this composer's starting message.
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft.text);
+    addFiles(draft.files);
+    onDraftApplied?.();
+    textarea.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- applied once per draft id
+  }, [draft?.id]);
 
   useEffect(() => {
     // Skill search is scoped to a session; a new chat has none until the first send.
@@ -155,7 +168,7 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
     setText((current) => current.replace(mention, ""));
   }
 
-  function addFiles(list: FileList | null) {
+  function addFiles(list: ArrayLike<File> | null) {
     if (!list?.length) return;
     const picked = Array.from(list);
     if (files.length + picked.length > MAX_ATTACHMENTS) {
@@ -186,41 +199,77 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
     }
     setBusy(true);
     setError(null);
+    // One id per send: a retry from the outbox after a lost response is deduplicated by the daemon.
+    const messageId = newMessageId();
     let created: string | null = null;
+    let target = sessionId;
+    let attachments: AttachmentUpload[] = [];
+    const newChat = {
+      model: model?.trim() || null,
+      ...(browserSpace === "isolated" ? { browser_space: browserSpace } : {}),
+    };
     try {
-      const attachments = await Promise.all(
+      attachments = await Promise.all(
         files.map(async (pending) => ({ name: pending.file.name, data_base64: await base64(pending.file) })),
       );
-      let target = sessionId;
       if (target === null) {
-        const session = await client.createSession({
-          title: titleFromMessage(body, files[0]?.file.name ?? "New chat"),
-          model: model?.trim() || null,
-        });
+        const session = await client.createSession(newChat);
         target = created = session.id;
       }
       // An idle session starts a run with any mode; a running one gets the message after the
       // current run (steering is offered per queued message).
       await client.submitMessage(target, {
-        message_id: newMessageId(),
+        message_id: messageId,
         text: body,
         mode: "queue",
         ...(attachments.length ? { attachments } : {}),
       });
-      setText("");
-      files.forEach((pending) => pending.thumbnail && URL.revokeObjectURL(pending.thumbnail));
-      setFiles([]);
+      clearInput();
       onSent?.();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Request failed");
+      if (cause instanceof ApiError && cause.status === 0) {
+        // Unreachable daemon: keep the message (and the chat it creates) for the outbox to deliver.
+        try {
+          await outbox.enqueue({
+            message_id: messageId,
+            session_id: target,
+            ...(target === null ? { create: newChat } : {}),
+            text: body,
+            attachments,
+            queued_at: Date.now(),
+          });
+          clearInput();
+        } catch {
+          setError(cause.message);
+        }
+      } else setError(cause instanceof ApiError ? cause.message : "Request failed");
     } finally {
       setBusy(false);
     }
     if (created !== null) onCreated?.(created);
   }
 
+  function clearInput() {
+    setText("");
+    files.forEach((pending) => pending.thumbnail && URL.revokeObjectURL(pending.thumbnail));
+    setFiles([]);
+  }
+
+  // Focus means a message is coming: start the agent process and browser now instead of
+  // after Send. Best effort, at most once per session per half minute.
+  function prewarm() {
+    const key = sessionId ?? "";
+    const now = Date.now();
+    if (warmed.current.key === key && now - warmed.current.at < PREWARM_EVERY_MS) return;
+    warmed.current = { key, at: now };
+    const request = sessionId === null ? client.prewarmBrowser() : client.prewarmSession(sessionId);
+    request.catch(() => undefined);
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.nativeEvent.isComposing) return;
+    // Safari reports the Enter that commits an IME composition after compositionend, with
+    // isComposing already false but keyCode 229.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (open) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -240,22 +289,35 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
         return;
       }
     }
-    // Enter sends with a keyboard and mouse; on touch screens Enter inserts a newline.
-    const finePointer = typeof window.matchMedia !== "function" || window.matchMedia("(pointer: fine)").matches;
-    if (event.key === "Enter" && !event.shiftKey && (event.metaKey || event.ctrlKey || finePointer)) {
+    // Enter sends with a keyboard and mouse; only a coarse (touch) pointer inserts a newline.
+    // Pointer-less browsers (headless, kiosk) report (pointer: none) and still have a keyboard.
+    const touch = typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+    if (event.key === "Enter" && !event.shiftKey && (event.metaKey || event.ctrlKey || !touch)) {
       event.preventDefault();
       void send();
     }
   }
 
+  // A device paired without `steer` would only collect 403s; tell it what it can do instead.
+  if (mayUse("steer") === false) {
+    return (
+      <div className="composer-dock">
+        <p className="composer-readonly" role="note">
+          <Eye size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          This device can follow conversations but can’t send messages.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="composer-dock">
+      <OutboxNotice sessionId={sessionId} />
       {error ? (
         <p role="alert" className="composer-error">
           {error}
         </p>
       ) : null}
-      {tools ? <div className="composer-tools">{tools}</div> : null}
       <form className="composer" onSubmit={send}>
         {chips.length || files.length ? (
           <ul className="composer-chips" aria-label="Message context">
@@ -293,7 +355,22 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
             ))}
           </ul>
         ) : null}
-        <div className="composer-row">
+        <label className="composer-field">
+          <span className="sr-only">Message</span>
+          <textarea
+            ref={textarea}
+            value={text}
+            onChange={(e) => update(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+            onKeyDown={onKeyDown}
+            onFocus={prewarm}
+            rows={1}
+            placeholder={queueing ? "Follow up" : "Message openside"}
+            aria-autocomplete="list"
+            aria-controls={open ? "skill-mentions" : undefined}
+            aria-activedescendant={open && candidates[active] ? `skill-mention-${candidates[active].name}` : undefined}
+          />
+        </label>
+        <div className="composer-bar">
           <input
             ref={picker}
             type="file"
@@ -307,26 +384,12 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
             }}
           />
           <IconButton label="Add files" className="composer-attach" onClick={() => picker.current?.click()}>
-            <Plus size={22} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            <Plus size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </IconButton>
-          <label className="composer-field">
-            <span className="sr-only">Message</span>
-            <textarea
-              ref={textarea}
-              value={text}
-              onChange={(e) => update(e.target.value, e.target.selectionStart ?? e.target.value.length)}
-              onKeyDown={onKeyDown}
-              rows={1}
-              placeholder={queueing ? "Follow up" : "Message"}
-              role="combobox"
-              aria-expanded={open}
-              aria-controls="skill-mentions"
-              aria-autocomplete="list"
-            />
-          </label>
+          <div className="composer-tools">{tools}</div>
           <div className="composer-actions">
             {running && onStop ? (
-              <button type="button" className="composer-send" onClick={onStop}>
+              <button type="button" className="composer-send composer-stop" onClick={onStop}>
                 <Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" />
                 <span className="sr-only">Stop</span>
               </button>
@@ -344,6 +407,7 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
             {candidates.map((skill, index) => (
               <li
                 key={skill.name}
+                id={`skill-mention-${skill.name}`}
                 role="option"
                 aria-selected={index === active}
                 onMouseDown={(e) => {

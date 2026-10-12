@@ -21,11 +21,18 @@ import type {
   CreateRoutineRequest,
   CreateSkillRequest,
   DeviceList,
+  ExternalAgentList,
+  ImportProfileList,
+  ImportReport,
+  ImportRequest,
+  InstalledAgentSkill,
   Memory,
   MemoryHealth,
   MemoryHistory,
   MemoryKind,
   MemorySearchResponse,
+  OnboardingState,
+  OnboardingStatus,
   PairDeviceResponse,
   PushSubscription,
   PushSubscriptionList,
@@ -55,8 +62,10 @@ const MESSAGES: Record<string, string> = {
   forbidden: "This token does not have permission for that action.",
   not_found: "Not found. It may have been deleted.",
   invalid_transition: "That action is no longer possible; the item already changed.",
+  storage_full: "The computer running openside is out of disk space. Free some space and try again.",
   invalid_value: "The daemon rejected that value.",
   invalid_title: "Titles must be 1–200 characters.",
+  empty_message: "Write a message or attach a file first.",
   model_not_configured: "No model is configured. Pick or type a model.",
   secret_input_unavailable: "Secret input is not available on this daemon right now.",
   origin_mismatch: "The page changed origin, so the secret was not filled.",
@@ -92,6 +101,21 @@ const MESSAGES: Record<string, string> = {
   invalid_item: "Item ids use lowercase letters, digits, ':', '_' or '-' (up to 64).",
   item_exists: "An item with that id already exists.",
   unknown_item: "That item no longer exists.",
+  unknown_agent: "That agent is not in the list.",
+  skills_dir_unknown: "openside does not know where this agent keeps its skills. Set it under [skills.agents] in config.toml.",
+  exists: "Already installed.",
+  unknown_profile: "That browser profile is no longer there. Reload the list.",
+  import_in_progress: "Another import is running. Wait for it to finish.",
+  profile_in_use:
+    "The agent browser is running, so cookies cannot be written now. Import history and bookmarks only, or try again when no conversation is using the browser.",
+  source_locked: "The browser is holding its data locked. Close it and try again.",
+  source_unreadable: "openside cannot read this profile. Check that the browser's folder is readable.",
+  source_corrupt: "A database in this profile is damaged, so it cannot be read.",
+  source_unsupported: "This profile uses a format openside cannot read yet.",
+  keyring_password_required:
+    "These cookies are locked by the computer's keyring. Leave cookies out here, or run openside import with --keyring-password-cmd on the computer.",
+  browser_unavailable: "No Chromium-compatible browser was found, so cookies cannot be written. History and bookmarks can still be imported.",
+  import_failed: "The import failed. Nothing was changed; see the daemon log for details.",
 };
 
 export class ApiError extends Error {
@@ -124,6 +148,8 @@ export interface ClientOptions {
   baseUrl?: string;
   token: () => string | null;
   fetch?: typeof fetch;
+  /** Signed iframe navigation cannot use a relay's encrypted fetch replacement. */
+  relay?: boolean;
   /** Called on 401 so the shell can ask for a new token. */
   onUnauthorized?: () => void;
   /** WebSocket factory; tests inject a fake. */
@@ -152,6 +178,7 @@ export interface VaultAuditQuery {
 /** Typed wrapper over the v1 HTTP API; every UI action goes through one of these calls. */
 export interface Client {
   baseUrl: string;
+  readonly relay: boolean;
   /** Request headers carrying the bearer token, shared with the SSE reader. */
   headers(extra?: Record<string, string>): Record<string, string>;
   fetch: typeof fetch;
@@ -162,6 +189,10 @@ export interface Client {
   createSession(request: CreateSessionRequest): Promise<Session>;
   updateSession(id: string, request: UpdateSessionRequest): Promise<Session>;
   stopSession(id: string): Promise<Session>;
+  /** Start the session's agent process, browser and a blank agent tab ahead of a message. */
+  prewarmSession(id: string): Promise<void>;
+  /** Launch the browser ahead of a new chat's first message. */
+  prewarmBrowser(): Promise<void>;
   submitMessage(id: string, request: SubmitMessageRequest): Promise<Message>;
   editQueued(id: string, messageId: string, text: string): Promise<Message>;
   deleteQueued(id: string, messageId: string): Promise<Message>;
@@ -179,6 +210,8 @@ export interface Client {
   listVisuals(id: string): Promise<VisualList>;
   /** Raw artifact bytes through the authenticated download route. */
   artifactBlob(id: string, path: string): Promise<Blob>;
+  /** Fetch a signed preview through the selected transport without losing its network restrictions. */
+  sandboxPreview(path: string, signal?: AbortSignal): Promise<Blob>;
   /** Absolute URL for a daemon-relative path such as a signed `preview_url`. */
   resolve(path: string): string;
   /**
@@ -187,6 +220,7 @@ export interface Client {
    */
   takeover(ticketId: string): WebSocket;
   browserPreview(sessionId: string): WebSocket;
+  browserThumbnail(sessionId: string, thumbnailId: string, signal?: AbortSignal): Promise<Blob>;
   /** Agent-owned, non-private tabs with sanitized URLs; 503 `browser_disconnected` when the controller is gone. */
   browserTabs(): Promise<BrowserTabList>;
   listSkills(): Promise<SkillList>;
@@ -219,6 +253,16 @@ export interface Client {
   vaultItems(): Promise<VaultItemList>;
   updateVaultItem(id: string, policy: VaultPolicyOverride): Promise<VaultItem>;
   vaultAudit(query?: VaultAuditQuery): Promise<VaultAuditList>;
+  /** First-run guide state, kept on the daemon so every device agrees. */
+  onboarding(): Promise<OnboardingStatus>;
+  /** Record how the guide ended; reopening it from Settings does not touch the flag. */
+  setOnboarding(state: Exclude<OnboardingState, "pending">): Promise<OnboardingStatus>;
+  externalAgents(): Promise<ExternalAgentList>;
+  /** Install the bundled browser skill into the agent's skills directory; 409 `exists` unless `force`. */
+  installAgentSkill(agent: string, force?: boolean): Promise<InstalledAgentSkill>;
+  importProfiles(): Promise<ImportProfileList>;
+  /** `dry_run` reads and decrypts the profile and reports counts without writing. */
+  runImport(request: ImportRequest): Promise<ImportReport>;
   listDevices(): Promise<DeviceList>;
   revokeDevice(id: string): Promise<void>;
   /** Public route: the one-time code is the credential, so no bearer token is needed. */
@@ -286,6 +330,7 @@ export function createClient(options: ClientOptions): Client {
 
   return {
     baseUrl: base,
+    relay: options.relay === true,
     headers,
     fetch: doFetch,
     health: () => json<Health>("GET", "/v1/health"),
@@ -302,6 +347,12 @@ export function createClient(options: ClientOptions): Client {
     updateSession: (id: string, request: UpdateSessionRequest) =>
       json<Session>("PATCH", `/v1/sessions/${enc(id)}`, request),
     stopSession: (id: string) => json<Session>("POST", `/v1/sessions/${enc(id)}/stop`),
+    prewarmSession: async (id: string) => {
+      await send(`/v1/sessions/${enc(id)}/prewarm`, { method: "POST", headers: headers() });
+    },
+    prewarmBrowser: async () => {
+      await send("/v1/browser/prewarm", { method: "POST", headers: headers() });
+    },
     submitMessage: (id: string, request: SubmitMessageRequest) =>
       json<Message>("POST", `/v1/sessions/${enc(id)}/messages`, request),
     editQueued: (id: string, messageId: string, text: string) =>
@@ -332,9 +383,31 @@ export function createClient(options: ClientOptions): Client {
       const response = await send(`/v1/sessions/${enc(id)}/artifacts/${enc(path)}`, { headers: headers() });
       return response.blob();
     },
+    sandboxPreview: async (path: string, signal?: AbortSignal) => {
+      const response = await send(path, { signal });
+      const blob = await response.blob();
+      const mime = blob.type.split(";")[0];
+      if (mime !== "text/html" && mime !== "image/svg+xml" && !mime?.startsWith("text/") && mime !== "application/json") {
+        return blob;
+      }
+      // Blob navigation cannot carry HTTP security headers. Put the daemon's restrictions
+      // before attacker-controlled markup; the empty iframe sandbox supplies the opaque origin.
+      const csp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; form-action 'none'; base-uri 'none'";
+      const text = await blob.text();
+      const content = mime === "text/html" || mime === "image/svg+xml"
+        ? text
+        : `<pre>${text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</pre>`;
+      return new Blob([`<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}">`, content], { type: "text/html" });
+    },
     resolve,
     takeover: (ticketId: string) => openWebSocket(`/v1/tickets/${enc(ticketId)}/takeover`),
     browserPreview: (sessionId: string) => openWebSocket(`/v1/sessions/${enc(sessionId)}/browser/preview`),
+    browserThumbnail: async (sessionId: string, thumbnailId: string, signal?: AbortSignal) => {
+      const response = await send(`/v1/sessions/${enc(sessionId)}/browser/thumbnails/${enc(thumbnailId)}`, {
+        headers: headers({ Accept: "image/jpeg" }), signal,
+      });
+      return response.blob();
+    },
     browserTabs: () => json<BrowserTabList>("GET", "/v1/browser/tabs"),
     listSkills: () => json<SkillList>("GET", "/v1/skills"),
     getSkill: (name: string) => json<SkillDetail>("GET", `/v1/skills/${enc(name)}`),
@@ -385,6 +458,14 @@ export function createClient(options: ClientOptions): Client {
       const suffix = params.size ? `?${params}` : "";
       return json<VaultAuditList>("GET", `/v1/vault/audit${suffix}`);
     },
+    onboarding: () => json<OnboardingStatus>("GET", "/v1/onboarding"),
+    setOnboarding: (state: Exclude<OnboardingState, "pending">) =>
+      json<OnboardingStatus>("PUT", "/v1/onboarding", { state }),
+    externalAgents: () => json<ExternalAgentList>("GET", "/v1/external-agents"),
+    installAgentSkill: (agent: string, force = false) =>
+      json<InstalledAgentSkill>("POST", `/v1/external-agents/${enc(agent)}/browser-skill`, { force }),
+    importProfiles: () => json<ImportProfileList>("GET", "/v1/import/profiles"),
+    runImport: (request: ImportRequest) => json<ImportReport>("POST", "/v1/import", request),
     listDevices: () => json<DeviceList>("GET", "/v1/devices"),
     revokeDevice: (id: string) => json<void>("DELETE", `/v1/devices/${enc(id)}`),
     exchangePairing: (code: string) =>

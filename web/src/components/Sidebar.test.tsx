@@ -20,6 +20,7 @@ function session(id: string, title: string, extra: Partial<Session> = {}): Sessi
     pinned: false,
     archived: false,
     incognito: false,
+    browser_space: "shared",
     ...extra,
   };
 }
@@ -84,7 +85,7 @@ describe("Sidebar conversation list", () => {
     const user = userEvent.setup();
     const { calls } = setup("/sessions/b");
     expect(await titles()).toEqual(["Groceries", "Quarterly report"]);
-    expect(within(row("Groceries")).getByRole("img", { name: "Needs you" })).toBeInTheDocument();
+    expect(within(row("Groceries")).getByText("Needs you")).toBeInTheDocument();
     expect(within(row("Quarterly report")).getByRole("img", { name: "Running" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Quarterly report/ })).toHaveAttribute("aria-current", "page");
 
@@ -102,12 +103,14 @@ describe("Sidebar conversation list", () => {
     await waitFor(async () => expect(await titles()).toEqual(["Quarterly report", "Groceries"]));
     expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/v1/sessions/b", body: { pinned: true } });
     const pinned = screen.getByRole("list", { name: "Pinned conversations" });
-    expect(within(pinned).getByRole("img", { name: "Pinned" })).toBeInTheDocument();
+    expect(within(pinned).getByText("Quarterly report")).toBeInTheDocument();
 
     await choose(user, "Groceries", "Archive");
     await waitFor(async () => expect(await titles()).toEqual(["Quarterly report"]));
 
-    await user.click(screen.getByRole("tab", { name: "Archived" }));
+    const toggle = screen.getByRole("button", { name: "Show archived" });
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
     await waitFor(async () => expect(await titles()).toEqual(["Groceries", "Old trip"]));
     expect(calls.at(-1)?.path).toBe("/v1/sessions?archived=true");
     await choose(user, "Old trip", "Unarchive");
@@ -135,5 +138,13 @@ describe("Sidebar conversation list", () => {
     expect(within(nav).getByRole("link", { name: "Workspace" })).toHaveAttribute("href", "/workspace");
     expect(within(nav).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
     expect(screen.getByRole("link", { name: "New chat" })).toHaveAttribute("href", "/");
+  });
+
+  // Rows truncate long titles (layout is asserted in Chromium by web_overflow.rs); the full
+  // title stays reachable on hover.
+  it("keeps every full title on its row", async () => {
+    setup();
+    const link = await screen.findByRole("link", { name: /Quarterly report/ });
+    expect(link.querySelector(".session-title")).toHaveAttribute("title", "Quarterly report");
   });
 });

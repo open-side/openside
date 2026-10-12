@@ -87,11 +87,14 @@ describe("SkillsPage", () => {
 
     const row = created.closest("article")!;
     expect(row).toHaveAttribute("data-skill", "release-notes");
-    await user.click(within(row as HTMLElement).getByRole("button", { name: "Disable" }));
-    expect(await within(row as HTMLElement).findByText("Disabled")).toBeInTheDocument();
+    const toggle = within(row as HTMLElement).getByRole("switch", { name: "Enable /release-notes" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await vi.waitFor(() => expect(within(row as HTMLElement).getByRole("switch", { name: "Enable /release-notes" })).not.toBeChecked());
     expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/v1/skills/release-notes", body: { enabled: false } });
 
-    await user.click(within(row as HTMLElement).getByRole("button", { name: "Edit" }));
+    await user.click(within(row as HTMLElement).getByRole("button", { name: "Options for /release-notes" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
     const editor = await screen.findByRole("form", { name: "Edit release-notes" });
     await within(editor).findByDisplayValue("Draft release notes");
     const description = within(editor).getByLabelText("Description");
@@ -100,7 +103,8 @@ describe("SkillsPage", () => {
     await user.click(within(editor).getByRole("button", { name: "Save" }));
     expect(await within(list).findByText("Write the changelog")).toBeInTheDocument();
 
-    await user.click(within(row as HTMLElement).getByRole("button", { name: "Delete" }));
+    await user.click(within(row as HTMLElement).getByRole("button", { name: "Options for /release-notes" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
     const confirm = await screen.findByRole("dialog", { name: "Delete skill?" });
     await user.click(within(confirm).getByRole("button", { name: "Delete" }));
     await vi.waitFor(() => expect(within(list).queryByText("/release-notes")).toBeNull());

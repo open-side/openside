@@ -37,9 +37,7 @@
   --scrim: rgb(0 0 0 / 0.32);
   --glass: rgb(255 255 255 / 0.72);
   --glass-border: rgb(0 0 0 / 0.08);
-  --composer-bg: rgb(255 255 255 / 0.86);
   --shadow-glass: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px rgb(0 0 0 / 0.06);
-  --shadow-composer: 0 2px 6px rgb(0 0 0 / 0.04), 0 10px 32px rgb(0 0 0 / 0.08);
   --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.06);
 
   --accent-default: #2f6fed;
@@ -55,6 +53,10 @@
   --sidebar-width: 288px;
   --content-width: 736px;
   --composer-width: 768px;
+  /* List rows and nav items: compact under a mouse, 44px under a finger (see the coarse rule below). */
+  --row-height: 40px;
+  --radius-row: 10px;
+  --radius-card: 18px;
 
   --fast: 140ms;
   --normal: 220ms;
@@ -89,7 +91,6 @@
   --control-border: color-mix(in srgb, var(--canvas) 76%, var(--text));
   --glass: color-mix(in srgb, var(--canvas) 72%, transparent);
   --glass-border: color-mix(in srgb, var(--text) 8%, transparent);
-  --composer-bg: color-mix(in srgb, var(--surface) 88%, transparent);
 }
 
 :root[data-theme="dark"] {
@@ -108,11 +109,10 @@
   --warn: #fdb022;
   --success: #47cd89;
   --scrim: rgb(0 0 0 / 0.6);
-  --glass: rgb(28 28 28 / 0.72);
-  --glass-border: rgb(255 255 255 / 0.1);
-  --composer-bg: rgb(24 24 24 / 0.88);
+  /* Navy-tinted so frosted chrome belongs to the deep gradient backdrop. */
+  --glass: rgb(34 40 66 / 0.62);
+  --glass-border: rgb(255 255 255 / 0.12);
   --shadow-glass: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 16px rgb(0 0 0 / 0.4);
-  --shadow-composer: 0 2px 6px rgb(0 0 0 / 0.4), 0 10px 32px rgb(0 0 0 / 0.5);
   --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4);
   --hl-keyword: #d19af7;
   --hl-string: #8bd49c;
@@ -140,11 +140,9 @@
     --warn: #fdb022;
     --success: #47cd89;
     --scrim: rgb(0 0 0 / 0.6);
-    --glass: rgb(28 28 28 / 0.72);
-    --glass-border: rgb(255 255 255 / 0.1);
-    --composer-bg: rgb(24 24 24 / 0.88);
+    --glass: rgb(34 40 66 / 0.62);
+    --glass-border: rgb(255 255 255 / 0.12);
     --shadow-glass: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 16px rgb(0 0 0 / 0.4);
-    --shadow-composer: 0 2px 6px rgb(0 0 0 / 0.4), 0 10px 32px rgb(0 0 0 / 0.5);
     --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4);
     --hl-keyword: #d19af7;
     --hl-string: #8bd49c;
@@ -169,7 +167,6 @@
   --control-border: color-mix(in srgb, var(--canvas) 76%, var(--text));
   --glass: color-mix(in srgb, var(--canvas) 72%, transparent);
   --glass-border: color-mix(in srgb, var(--text) 10%, transparent);
-  --composer-bg: color-mix(in srgb, var(--surface) 88%, transparent);
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"][data-dark-palette] {
@@ -185,7 +182,107 @@
     --control-border: color-mix(in srgb, var(--canvas) 76%, var(--text));
     --glass: color-mix(in srgb, var(--canvas) 72%, transparent);
     --glass-border: color-mix(in srgb, var(--text) 10%, transparent);
-    --composer-bg: color-mix(in srgb, var(--surface) 88%, transparent);
+  }
+}
+
+/*
+ * Glass-on-gradient language (shared by chat, browser card, login/OTP cards and the manage
+ * pages). Strong glass is the dark translucent navy of assistant bubbles and cards; it stays
+ * dark in both themes so its white text keeps AA contrast on either backdrop.
+ */
+:root {
+  --backdrop:
+    radial-gradient(120% 60% at 50% 110%, rgb(255 214 196 / 0.9), transparent 70%),
+    linear-gradient(180deg, #e3eaf6 0%, #dcdcf3 48%, #efe0e6 82%, #f6e2d6 100%);
+  --glass-strong-bg: rgb(28 34 58 / 0.86);
+  --glass-strong-fg: #f5f6fb;
+  --glass-strong-muted: rgb(245 246 251 / 0.66);
+  --glass-strong-border: rgb(255 255 255 / 0.1);
+  --glass-input-bg: rgb(255 255 255 / 0.08);
+  /* Rows and lists inside a frosted (theme-aware) sheet. */
+  --glass-inset-bg: rgb(255 255 255 / 0.55);
+  --glass-inset-border: rgb(23 26 36 / 0.08);
+  --bubble-user-bg: rgb(255 255 255 / 0.62);
+  --bubble-user-fg: #171a24;
+  --pill-primary-bg: #ffffff;
+  --pill-primary-fg: #111318;
+  --status-pill-bg: rgb(255 255 255 / 0.18);
+  --status-pill-border: rgb(23 26 36 / 0.14);
+  --radius-glass: 24px;
+  --blur-glass: blur(24px) saturate(1.5);
+}
+:root[data-theme="dark"] {
+  --backdrop:
+    radial-gradient(120% 55% at 50% 112%, rgb(214 134 104 / 0.75), transparent 70%),
+    linear-gradient(180deg, #1c2747 0%, #2c3a6e 42%, #59629a 74%, #9b7f98 100%);
+  --bubble-user-bg: rgb(255 255 255 / 0.14);
+  --bubble-user-fg: #f5f6fb;
+  --glass-inset-bg: rgb(255 255 255 / 0.06);
+  --glass-inset-border: rgb(255 255 255 / 0.1);
+  --status-pill-bg: rgb(255 255 255 / 0.06);
+  --status-pill-border: rgb(255 255 255 / 0.16);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --backdrop:
+      radial-gradient(120% 55% at 50% 112%, rgb(214 134 104 / 0.75), transparent 70%),
+      linear-gradient(180deg, #1c2747 0%, #2c3a6e 42%, #59629a 74%, #9b7f98 100%);
+    --bubble-user-bg: rgb(255 255 255 / 0.14);
+    --bubble-user-fg: #f5f6fb;
+    --glass-inset-bg: rgb(255 255 255 / 0.06);
+    --glass-inset-border: rgb(255 255 255 / 0.1);
+    --status-pill-bg: rgb(255 255 255 / 0.06);
+    --status-pill-border: rgb(255 255 255 / 0.16);
+  }
+}
+
+/*
+ * Inside strong glass (assistant bubbles, cards, panels, the composer) the page tokens are
+ * re-pointed at light-on-navy values, so Markdown, code, tables, buttons and inputs written
+ * against --text/--muted/--border stay readable without per-component rules. Primary actions
+ * become the white pill. Login/code hosts are bare wrappers around their own card (otp/auth.css).
+ */
+.bubble.assistant,
+.ticket:not(.ticket-auth, .ticket-event),
+.panel,
+.composer,
+.composer-readonly {
+  color-scheme: dark;
+  --text: var(--glass-strong-fg);
+  --muted: var(--glass-strong-muted);
+  --border: rgb(255 255 255 / 0.14);
+  --control-border: rgb(255 255 255 / 0.18);
+  --hover: rgb(255 255 255 / 0.1);
+  --canvas: rgb(255 255 255 / 0.06);
+  --surface: rgb(8 11 24 / 0.32);
+  --bubble: rgb(255 255 255 / 0.12);
+  --primary: var(--pill-primary-bg);
+  --primary-foreground: var(--pill-primary-fg);
+  --primary-hover: #e4e7ef;
+  --link: #a9c7ff;
+  --danger: #ff9b91;
+  --warn: #fdb022;
+  --success: #47cd89;
+  --hl-keyword: #d19af7;
+  --hl-string: #8bd49c;
+  --hl-number: #f6b26b;
+  --hl-comment: #8e93a6;
+  --hl-title: #8ab4f8;
+  --hl-attr: #f7a072;
+  --hl-type: #67d4e6;
+  border: 1px solid var(--glass-strong-border);
+  background: var(--glass-strong-bg);
+  color: var(--text);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .bubble.assistant,
+  .ticket:not(.ticket-auth, .ticket-event),
+  .panel,
+  .composer,
+  .composer-readonly {
+    background: rgb(28 34 58 / 0.97);
   }
 }
 
@@ -405,17 +502,34 @@ summary {
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   height: var(--app-height, 100dvh);
   overflow: hidden;
+  background: var(--backdrop);
+  background-color: var(--canvas);
 }
 .shell-sidebar {
   min-height: 0;
+  padding: 10px 0 10px 10px;
   overflow: hidden;
+}
+/* Desktop: the conversation list is a frosted panel floating on the gradient. */
+.shell-sidebar .sidebar {
+  --hover: color-mix(in srgb, var(--text) 7%, transparent);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-glass);
+  background: var(--glass);
+  box-shadow: var(--shadow-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .shell-sidebar .sidebar {
+    background: var(--surface);
+  }
 }
 .shell-content {
   position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--canvas);
 }
 
 @media (max-width: 820px) {
@@ -466,85 +580,88 @@ summary {
 .brand svg {
   flex: none;
 }
-.sidebar-new-chat {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 12px;
-  min-height: 48px;
-  margin: 0 14px 12px;
-  padding: 0 14px;
-  border-radius: 14px;
-  background: var(--canvas);
-  color: var(--text);
-  font-size: 0.875rem;
-  font-weight: 550;
-  text-decoration: none;
-  transition: background-color var(--fast) var(--ease);
-}
-.sidebar-new-chat:hover {
-  background: var(--hover);
-}
-.sidebar-filters {
+.sidebar-actions {
   display: grid;
   flex: none;
-  gap: 4px;
-  padding: 0 14px 10px;
+  gap: 2px;
+  padding: 0 12px 4px;
 }
 .sidebar-search {
   display: flex;
   align-items: center;
-  gap: 9px;
-  min-height: 44px;
-  padding: 0 10px;
+  gap: 2px;
+  border-radius: var(--radius-row);
+  transition: background-color var(--fast) var(--ease);
+}
+.sidebar-search:focus-within {
+  background: var(--hover);
+}
+.sidebar-search-field {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding-left: 12px;
   color: var(--muted);
+  cursor: text;
 }
 .sidebar-search input {
   flex: 1;
   min-width: 0;
-  min-height: 0;
-  padding: 10px 0;
+  min-height: var(--row-height);
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: 1rem;
+  font-size: 0.875rem;
   outline: none;
+}
+.sidebar-search input::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 .sidebar-search input::-webkit-search-cancel-button {
   cursor: pointer;
 }
-.sidebar .ui-segmented {
-  padding: 2px;
-  border-radius: 12px;
+.archive-toggle {
+  margin-right: 4px;
+  color: var(--muted);
+}
+.archive-toggle[aria-pressed="true"] {
+  background: var(--hover);
+  color: var(--text);
+}
+.sidebar-search:focus-within .archive-toggle[aria-pressed="true"] {
   background: var(--canvas);
 }
-.sidebar .ui-segment {
-  min-height: 36px;
-  border-radius: 10px;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-.sidebar .ui-segment--selected {
-  background: var(--hover);
-  box-shadow: none;
+/* Long titles truncate; nothing in the sidebar may scroll sideways. */
+.sidebar,
+.session-list {
+  overflow-x: hidden;
 }
 .session-list {
   flex: 1;
+  min-width: 0;
   min-height: 0;
-  padding: 0 14px 16px;
+  padding: 0 12px 16px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .session-group-heading {
   margin: 0;
-  padding: 20px 12px 7px;
+  padding: 16px 12px 6px;
+  overflow: hidden;
   color: var(--muted);
   font-size: 0.75rem;
-  font-weight: 500;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sessions {
   display: grid;
-  gap: 2px;
+  gap: 1px;
+  grid-template-columns: minmax(0, 1fr);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -552,21 +669,24 @@ summary {
 .session-row {
   display: flex;
   align-items: center;
-  border-radius: 12px;
+  border-radius: var(--radius-row);
   transition: background-color var(--fast) var(--ease);
 }
 .session-row:hover,
 .session-row.current {
   background: var(--hover);
 }
+.session-row.current .session-title {
+  font-weight: 550;
+}
 .session-link {
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  min-height: 48px;
-  padding: 10px 4px 10px 12px;
+  min-height: var(--row-height);
+  padding: 0 4px 0 12px;
   color: var(--text);
   font-size: 0.875rem;
   text-decoration: none;
@@ -578,8 +698,19 @@ summary {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.session-link .ui-spinner {
+  color: var(--muted);
+}
+/* The one coloured mark in the list: a run stopped on a question for the reader. */
+.row-badge {
+  flex: none;
+  /* Mixed toward the text colour so the accent keeps contrast on the frosted panel in both themes. */
+  color: color-mix(in srgb, var(--primary) 60%, var(--text));
+  font-size: 0.75rem;
+  font-weight: 600;
+}
 .row-options {
-  margin-right: 2px;
+  margin-right: 4px;
   color: var(--muted);
   opacity: 0;
 }
@@ -594,29 +725,18 @@ summary {
     opacity: 1;
   }
 }
-.pin-mark {
-  flex: none;
-  color: var(--primary);
-}
-.attention-ring {
-  display: inline-block;
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border: 2px solid var(--primary);
-  border-radius: 999px;
-}
 .sidebar-note {
   margin: 0;
   padding: 16px 12px;
   color: var(--muted);
   font-size: 0.875rem;
+  overflow-wrap: anywhere;
 }
 .manage-nav {
   display: grid;
   flex: none;
-  gap: 2px;
-  padding: 10px 14px;
+  gap: 1px;
+  padding: 8px 12px;
   border-top: 1px solid var(--border);
 }
 .sidebar-nav-item {
@@ -624,9 +744,9 @@ summary {
   align-items: center;
   gap: 12px;
   min-width: 0;
-  min-height: 48px;
+  min-height: var(--row-height);
   padding: 0 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-row);
   color: var(--text);
   font-size: 0.875rem;
   text-decoration: none;
@@ -634,6 +754,28 @@ summary {
 }
 .sidebar-nav-item:hover {
   background: var(--hover);
+}
+.sidebar-nav-item > svg {
+  color: var(--muted);
+}
+.sidebar-nav-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-row {
+  min-width: 0;
+}
+.row-options,
+.row-badge,
+.session-link .ui-spinner {
+  flex: none;
+}
+@media (pointer: coarse) {
+  :root {
+    --row-height: 44px;
+  }
 }
 
 /* ---- Header ---- */
@@ -647,8 +789,7 @@ summary {
   justify-content: space-between;
   gap: 12px;
   height: calc(var(--header-height) + env(safe-area-inset-top));
-  padding: env(safe-area-inset-top) 12px 0 20px;
-  background: linear-gradient(var(--canvas) 50%, color-mix(in srgb, var(--canvas) 0%, transparent));
+  padding: env(safe-area-inset-top) max(12px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
   pointer-events: none;
 }
 .app-header > * {
@@ -660,8 +801,16 @@ summary {
   gap: 10px;
   min-width: 0;
 }
+/* The title floats as a frosted pill, like the rest of the chrome on the gradient. */
 .app-header-heading {
   min-width: 0;
+  padding: 5px 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--glass);
+  box-shadow: var(--shadow-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
 }
 .app-title {
   margin: 0;
@@ -696,7 +845,18 @@ summary {
 }
 @media (max-width: 820px) {
   .app-header {
-    padding-left: 12px;
+    padding-left: max(12px, env(safe-area-inset-left));
+  }
+  /* Phone: the title pill sits centred between the menu and the actions. */
+  .app-header-start {
+    flex: 1;
+  }
+  .app-header-heading {
+    margin: 0 auto;
+    text-align: center;
+  }
+  .app-header-heading .app-title {
+    font-size: 0.9375rem;
   }
 }
 
@@ -710,11 +870,31 @@ summary {
   overflow: hidden;
 }
 .conversation-scroll {
+  /* The header, plus the row of a request from another conversation while one waits (OtpDock). */
+  --scroll-top: calc(var(--header-height) + env(safe-area-inset-top) + var(--otp-dock-space, 0px));
   flex: 1;
   min-height: 0;
-  padding: calc(var(--header-height) + env(safe-area-inset-top) + 8px) 0 calc(var(--composer-height, 132px) + 32px);
+  padding: calc(var(--scroll-top) + 20px) 0 calc(var(--composer-height, 132px) + 32px);
   overflow-y: auto;
   overscroll-behavior: contain;
+  /*
+   * Messages are fully hidden behind the floating header pills and fade in below them, so no
+   * cut-off words show between the pills; at the bottom they fade out under the composer.
+   */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--scroll-top) - 4px),
+    #000 calc(var(--scroll-top) + 20px),
+    #000 calc(100% - var(--composer-height, 132px) + 8px),
+    transparent calc(100% - 20px - env(safe-area-inset-bottom))
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--scroll-top) - 4px),
+    #000 calc(var(--scroll-top) + 20px),
+    #000 calc(100% - var(--composer-height, 132px) + 8px),
+    transparent calc(100% - 20px - env(safe-area-inset-bottom))
+  );
 }
 .conversation-column {
   display: grid;
@@ -723,49 +903,92 @@ summary {
   gap: 16px;
   max-width: var(--content-width);
   margin: 0 auto;
-  padding: 0 20px;
+  padding: 0 max(20px, env(safe-area-inset-right)) 0 max(20px, env(safe-area-inset-left));
 }
 .empty-chat {
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 12px;
+  gap: 8px;
   min-height: 100%;
   padding: 0 24px;
   text-align: center;
 }
-.empty-chat h2 {
-  margin: 0;
-  font-size: 1.6875rem;
+.empty-chat h1 {
+  margin: 8px 0 0;
+  font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: -0.015em;
 }
-.new-chat .conversation-scroll {
-  padding-bottom: calc(var(--composer-height, 132px) + 48px);
+.empty-chat p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+/*
+ * New chat: the greeting sits just above the composer. Phones keep the composer docked at
+ * the bottom (thumb reach); wider screens centre the pair like a search page.
+ */
+.new-chat-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: calc(var(--header-height) + env(safe-area-inset-top));
+}
+.new-chat-stage > .empty-chat {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: calc(var(--composer-height, 132px) + 24px);
+}
+@media (min-width: 701px) {
+  .new-chat-stage {
+    justify-content: center;
+    gap: 24px;
+    padding-bottom: calc(var(--header-height) + 8vh);
+  }
+  .new-chat-stage > .empty-chat {
+    flex: none;
+    min-height: 0;
+    padding-bottom: 0;
+  }
+  .new-chat-stage > .composer-dock {
+    position: static;
+    padding-top: 0;
+    background: none;
+  }
 }
 
 .timeline {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
+  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+/* A new prompt opens a new turn: more air above it than between a turn's own parts. */
+.timeline > .bubble.user:not(:first-child) {
+  margin-top: 14px;
 }
 .bubble.user {
   justify-self: end;
   display: grid;
   justify-items: end;
   gap: 8px;
-  max-width: 88%;
+  max-width: min(80%, 560px);
 }
 .bubble.user > p {
   margin: 0;
   padding: 12px 18px;
-  border-radius: 24px;
-  background: var(--bubble);
+  border: 1px solid var(--glass-border);
+  border-radius: 22px;
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-fg);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
 }
 .bubble.user .attachments {
   display: flex;
@@ -791,32 +1014,125 @@ summary {
   color: var(--muted);
   font-size: 0.75rem;
 }
+/* Strong glass (see the token block); the bubble hugs short replies and caps long ones. */
 .bubble.assistant {
+  justify-self: start;
+  width: fit-content;
   min-width: 0;
+  max-width: 100%;
+  padding: 14px 18px;
+  border-radius: 22px;
   font-family: var(--font-content);
   font-size: 1rem;
-  line-height: 1.65;
+  line-height: 1.6;
+  box-shadow: 0 1px 2px rgb(10 14 30 / 0.12), 0 8px 24px rgb(10 14 30 / 0.12);
+}
+@media (max-width: 700px) {
+  .bubble.assistant {
+    font-size: 0.9375rem;
+  }
 }
 .runtime-error {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
   padding: 12px 16px;
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--danger) 10%, var(--canvas));
-  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--glass-border));
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--danger) 8%, var(--glass));
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
   font-size: 0.875rem;
 }
-.thinking {
+.runtime-error > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--danger);
+}
+.runtime-error p {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+.runtime-error p + p {
+  margin-top: 4px;
+}
+.runtime-error-title {
+  font-weight: 600;
+}
+.runtime-error-code {
+  color: var(--muted);
+  font-family: var(--font-code);
+  font-size: 0.75rem;
+}
+/*
+ * The transient status line under the latest message ("Clicking on nid.naver.com"): a quiet
+ * outlined pill whose text shimmers while the agent works. A new phrase fades in.
+ */
+.status-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 36px;
+  margin: 0;
+  padding: 0 16px;
+  border: 1px solid var(--status-pill-border);
+  border-radius: 999px;
+  background: var(--status-pill-bg);
   color: var(--muted);
   font-size: 0.875rem;
   font-weight: 550;
-  animation: os-pulse 1.6s ease-in-out infinite;
+  list-style: none;
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
 }
-@keyframes os-pulse {
-  50% {
-    opacity: 0.45;
+.status-line-text {
+  min-width: 0;
+  overflow: hidden;
+  background: linear-gradient(
+      100deg,
+      var(--muted) 0%,
+      var(--muted) 40%,
+      var(--text) 50%,
+      var(--muted) 60%,
+      var(--muted) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation:
+    status-in var(--normal) var(--ease),
+    status-shimmer 2s linear infinite;
+}
+@keyframes status-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@keyframes status-in {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+}
+summary.status-line {
+  cursor: pointer;
+}
+summary.status-line:hover {
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-line-text {
+    animation: none;
+    background: none;
+    color: var(--muted);
   }
 }
 .jump-latest {
@@ -824,16 +1140,62 @@ summary {
   bottom: calc(var(--composer-height, 132px) + 12px);
   left: 50%;
   z-index: 6;
+  border-color: var(--glass-border);
+  background: var(--glass);
   box-shadow: var(--shadow-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
   /* `translate`, not `transform`: the icon button's press scale uses transform. */
   translate: -50% 0;
   animation: jump-in var(--fast) var(--ease);
+}
+/* Shell-level: one message for a daemon the whole app cannot reach. */
+.connection-banner {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 12px);
+  left: 50%;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 8px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--glass);
+  box-shadow: var(--shadow-glass);
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  translate: -50% 0;
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+}
+@media (max-width: 820px) {
+  .connection-banner {
+    top: calc(env(safe-area-inset-top) + var(--header-height) + 4px);
+  }
 }
 @keyframes jump-in {
   from {
     opacity: 0;
     scale: 0.86;
   }
+}
+/* A lone way out of a dead end: a text link with a full touch target. */
+.action-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+.action-link:hover {
+  background: var(--hover);
 }
 
 /* Markdown */
@@ -882,6 +1244,12 @@ summary {
 .markdown ol {
   padding-left: 1.4em;
 }
+.markdown ul {
+  list-style: disc;
+}
+.markdown ul ul {
+  list-style: circle;
+}
 .markdown li + li {
   margin-top: 4px;
 }
@@ -905,7 +1273,7 @@ summary {
   font-size: 0.875em;
 }
 .markdown a {
-  color: var(--primary);
+  color: var(--link, var(--primary));
   text-underline-offset: 2px;
 }
 .markdown .md-image {
@@ -934,12 +1302,24 @@ summary {
 .markdown th,
 .markdown td {
   padding: 8px 12px;
+  /*
+   * Words stay whole (Korean included), so a column is never narrower than its longest word and
+   * short columns are never squeezed by a neighbour. A single word wider than 24rem wraps inside
+   * its cell instead of stretching the table; a table wider than the bubble scrolls inside
+   * .table-scroll, never the page. (`anywhere` is avoided: it lets every column shrink to one
+   * character.)
+   */
+  max-width: 24rem;
+  overflow-wrap: break-word;
+  word-break: keep-all;
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: top;
 }
 .markdown th {
-  font-weight: 650;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 .code-block {
   overflow: hidden;
@@ -955,6 +1335,12 @@ summary {
   color: var(--muted);
   font-size: 0.75rem;
   font-weight: 600;
+}
+@media (pointer: coarse) {
+  /* Room above the copy button for its 44px touch area; the block clips anything beyond. */
+  .code-block-head {
+    padding-top: 6px;
+  }
 }
 .code-block pre {
   margin: 0;
@@ -1009,21 +1395,34 @@ summary {
   color: var(--danger);
 }
 
-/* Tool activity */
+/* Tool activity: finished calls fold into a quiet event chip that opens onto a glass list. */
 
 .activity > summary {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  max-width: 100%;
   min-height: 32px;
-  margin-left: -6px;
-  padding: 2px 6px;
-  border-radius: 10px;
-  color: var(--muted);
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--status-pill-border);
+  border-radius: 999px;
+  background: var(--status-pill-bg);
+  color: color-mix(in srgb, var(--text) 72%, transparent);
   font-size: 0.8125rem;
   font-weight: 550;
   list-style: none;
-  transition: color var(--fast) var(--ease);
+  cursor: pointer;
+  transition:
+    color var(--fast) var(--ease),
+    border-color var(--fast) var(--ease);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+}
+.activity > summary.status-line {
+  min-height: 36px;
+  padding: 0 12px 0 16px;
+  color: var(--muted);
+  font-size: 0.875rem;
 }
 .activity > summary::-webkit-details-marker,
 .tool-details > summary::-webkit-details-marker,
@@ -1031,13 +1430,32 @@ summary {
   display: none;
 }
 .activity > summary:hover {
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
   color: var(--text);
+}
+.activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .activity-icon,
 .tool-icon {
   display: inline-grid;
   place-items: center;
   width: 18px;
+}
+.activity-icon {
+  flex: none;
+  color: var(--success);
+}
+.activity:has(.ui-spinner) .activity-icon,
+.activity:has(.activity-failed) .activity-icon {
+  color: inherit;
+}
+.activity-chevron {
+  flex: none;
+  opacity: 0.7;
 }
 .activity-chevron,
 .subagent-chevron {
@@ -1048,53 +1466,162 @@ summary {
   transform: rotate(90deg);
 }
 .activity-failed {
+  flex: none;
   color: var(--danger);
 }
 .activity-actions {
   display: grid;
-  gap: 4px;
-  margin: 4px 0 4px 8px;
-  padding: 0 0 0 14px;
-  border-left: 1px solid var(--border);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--glass);
   list-style: none;
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+  animation: status-in var(--normal) var(--ease);
 }
-.tool-line {
+/* Background task: a chip like a finished group, carrying the goal and a live state. */
+.task > summary.task-chip {
+  min-height: 36px;
+  padding: 0 12px;
+}
+.task-goal {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-state {
+  flex: none;
+  font-weight: 500;
+}
+.task-state:not(.status-line-text) {
+  color: var(--muted);
+}
+.task-state::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--muted);
+}
+.task-failed .activity-icon {
+  color: var(--danger);
+}
+.task-cancelled .activity-icon {
+  color: var(--muted);
+}
+.task-body {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+  animation: status-in var(--normal) var(--ease);
+}
+.task-body:empty {
+  display: none;
+}
+.task-output {
+  font-size: 0.9375rem;
+}
+.task-reason {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.8125rem;
+}
+.task-steps {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+/* Where a task's result came back: a quiet marker, not a message bubble. */
+.task-report {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 550;
+}
+.task-report[data-status="failed"] .activity-icon {
+  color: var(--danger);
+}
+.task-report[data-status="cancelled"] .activity-icon {
+  color: var(--muted);
+}
+.task-report-goal {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-report-goal::before {
+  content: "· ";
+}
+.tool-details > summary.tool-line {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 30px;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: var(--radius-row);
   font-size: 0.8125rem;
+  list-style: none;
+  cursor: pointer;
+}
+.tool-details > summary.tool-line:hover {
+  background: var(--hover);
 }
 .tool-icon {
+  flex: none;
   color: var(--muted);
 }
 .tool-name {
+  flex: none;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.tool-target {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-code);
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tool-state {
+  flex: none;
+  margin-left: auto;
   color: var(--muted);
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: 0.75rem;
+  font-weight: 550;
 }
 .tool-failed .tool-icon,
 .tool-failed .tool-state {
   color: var(--danger);
 }
-.tool-details {
-  margin-left: 26px;
+.tool-body {
+  padding: 0 8px 8px 34px;
 }
-.tool-details > summary {
-  width: fit-content;
-  color: var(--muted);
-  font-size: 0.75rem;
-  list-style: none;
-}
-.tool-details > summary:hover {
-  color: var(--text);
+@media (pointer: coarse) {
+  .activity > summary,
+  .tool-details > summary.tool-line {
+    min-height: 44px;
+  }
 }
 .tool-body h4 {
   margin: 8px 0 4px;
@@ -1141,12 +1668,14 @@ summary {
   font-size: 0.8125rem;
   font-weight: 550;
 }
+/* Waiting its turn: the bubble's outline without its fill. */
 .queue-bubble {
   max-width: 88%;
   margin: 0;
-  padding: 12px 18px;
-  border-radius: 24px;
-  background: var(--bubble);
+  padding: 11px 17px;
+  border: 1px dashed color-mix(in srgb, var(--text) 28%, transparent);
+  border-radius: 22px;
+  color: var(--muted);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -1186,8 +1715,7 @@ summary {
   z-index: 6;
   display: grid;
   gap: 8px;
-  padding: 24px 16px calc(14px + env(safe-area-inset-bottom));
-  background: linear-gradient(color-mix(in srgb, var(--canvas) 0%, transparent), var(--canvas) 45%);
+  padding: 12px max(16px, env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   pointer-events: none;
 }
 .composer-dock > * {
@@ -1195,61 +1723,112 @@ summary {
   margin: 0 auto;
   pointer-events: auto;
 }
+/*
+ * One row like a message field: + on the left, the text, Stop/Send on the right. The bar is
+ * flattened into the composer grid; its tool pills get their own row only when there are any.
+ */
+.composer-bar {
+  display: contents;
+}
+.composer-attach {
+  grid-area: attach;
+}
 .composer-tools {
+  grid-area: tools;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 .composer-tools:empty {
   display: none;
 }
-.tool-pill,
-.composer-tools > button {
+.tool-pill {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   min-height: 36px;
   max-width: 100%;
-  padding: 0 12px 0 14px;
-  border: 1px solid var(--glass-border);
+  padding: 0 10px;
+  border: 0;
   border-radius: 999px;
-  background: var(--glass);
-  color: var(--text);
-  box-shadow: var(--shadow-glass);
+  background: transparent;
+  color: var(--muted);
   font-size: 0.8125rem;
-  font-weight: 600;
-  -webkit-backdrop-filter: blur(16px) saturate(1.6);
-  backdrop-filter: blur(16px) saturate(1.6);
+  font-weight: 550;
+  transition:
+    background-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
 }
-.composer-tools > button[aria-pressed="true"],
-.composer-tools > .waiting-pill {
+.tool-pill > svg {
+  flex: none;
+}
+.tool-pill:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.tool-pill[aria-pressed="true"],
+.waiting-pill {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
 }
 .tool-pill-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.model-picker {
+  display: flex;
+  min-width: 0;
+}
+@media (pointer: coarse) {
+  .tool-pill {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+  .brand {
+    min-height: 44px;
+  }
+  /* A single line stays a whole-pixel 44px (10 + 24 + 10) so the field is a full touch target. */
+  .composer .composer-field textarea {
+    min-height: 44px;
+    padding-block: 10px;
+  }
+}
+/* On a phone the browser toggle keeps its icon and state; its name stays for screen readers. */
+@media (max-width: 480px) {
+  .composer-tools > .tool-pill[aria-pressed] .tool-pill-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+/* Strong glass pill floating on the gradient (see the token block). */
 .composer {
   position: relative;
   display: grid;
-  gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--glass-border);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "chips chips chips"
+    "attach field actions"
+    "tools tools tools";
+  align-items: end;
+  column-gap: 2px;
+  padding: 6px;
   border-radius: 28px;
-  background: var(--composer-bg);
-  box-shadow: var(--shadow-composer);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  backdrop-filter: blur(20px) saturate(1.6);
-}
-.composer-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 4px;
+  box-shadow: 0 2px 6px rgb(10 14 30 / 0.12), 0 12px 32px rgb(10 14 30 / 0.2);
 }
 .composer-field {
+  grid-area: field;
   display: flex;
-  flex: 1;
   min-width: 0;
 }
 /*
@@ -1262,7 +1841,7 @@ summary {
   width: 100%;
   height: 40px;
   min-height: 40px;
-  padding: 8px 4px;
+  padding: 8px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -1284,22 +1863,24 @@ summary {
   white-space: nowrap;
 }
 .composer-actions {
+  grid-area: actions;
   display: flex;
   align-items: center;
+  min-height: 40px;
   gap: 6px;
-  padding: 1px;
 }
+/* Send is the white circle once there is something to send; Stop is the same circle. */
 .composer-send {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   min-height: 0;
   padding: 0;
   border: 0;
   border-radius: 999px;
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--pill-primary-bg);
+  color: var(--pill-primary-fg);
   transition:
     opacity var(--fast) var(--ease),
     background-color var(--fast) var(--ease);
@@ -1308,15 +1889,30 @@ summary {
   background: var(--primary-hover);
 }
 .composer-send:disabled {
-  opacity: 0.3;
+  background: var(--hover);
+  color: var(--muted);
+}
+.composer-stop {
+  background: var(--hover);
+  color: var(--text);
+}
+.composer-stop:hover:not(:disabled) {
+  background: rgb(255 255 255 / 0.18);
+}
+@media (pointer: coarse) {
+  .composer-send {
+    width: 44px;
+    height: 44px;
+  }
 }
 .composer-chips {
+  grid-area: chips;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 0;
-  padding: 4px 4px 0;
+  padding: 4px 4px 6px;
   list-style: none;
 }
 .skill-chip {
@@ -1410,13 +2006,31 @@ summary {
 .mention-list li[aria-selected="true"] {
   background: var(--hover);
 }
+/* The skill list opens over the conversation: solid, not see-through like the composer. */
+.composer .mention-list {
+  background: rgb(28 34 58 / 0.98);
+}
+.composer-readonly {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 18px;
+  border-radius: 28px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
 .composer-error {
   margin: 0;
   padding: 8px 14px;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--danger) 12%, var(--canvas));
+  background: color-mix(in srgb, var(--danger) 10%, var(--glass));
   color: var(--danger);
   font-size: 0.875rem;
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
 }
 
 /* Model picker (new chat) */
@@ -1443,107 +2057,20 @@ summary {
   color: var(--primary);
 }
 
-/* Appearance settings (rows of label + native select, like aside-relay Settings) */
-
-.appearance {
-  display: grid;
-}
-.appearance-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 56px;
-  border-top: 1px solid var(--border);
-  font-size: 0.9375rem;
-}
-.appearance-select {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  color: var(--text);
-}
-.appearance-select select {
-  max-width: 12rem;
-  min-height: 40px;
-  padding: 0 24px 0 8px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: right;
-  text-align-last: right;
-  appearance: none;
-  cursor: pointer;
-}
-.appearance-select svg {
-  position: absolute;
-  right: 0;
-  color: var(--muted);
-  pointer-events: none;
-}
-.appearance-accent {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-.appearance-reset {
-  min-height: 0;
-  padding: 4px 6px;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 0.8125rem;
-  cursor: pointer;
-}
-.appearance-reset:disabled {
-  color: var(--muted);
-  opacity: 0.6;
-  cursor: default;
-}
-.appearance-accent input[type="color"] {
-  width: 44px;
-  height: 36px;
-  padding: 3px;
-  border: 1px solid var(--control-border);
-  border-radius: 12px;
-  background: transparent;
-  cursor: pointer;
-}
-.accent-swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 4px 0 14px;
-}
-.accent-swatch {
-  width: 36px;
-  height: 36px;
-  min-height: 0;
-  padding: 0;
-  border: 2px solid transparent;
-  border-radius: 999px;
-  cursor: pointer;
-}
-.accent-swatch[aria-pressed="true"] {
-  border-color: var(--text);
-  box-shadow: inset 0 0 0 2px var(--canvas);
-}
-
 /* Tickets */
 
 .ticket {
   display: grid;
   gap: 10px;
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  background: var(--surface);
+  padding: 18px 20px;
+  border-radius: var(--radius-glass);
+  font-size: 0.9375rem;
 }
-.ticket-pending {
-  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+.ticket.ticket-pending:not(.ticket-auth) {
+  border-color: rgb(255 255 255 / 0.28);
+}
+.ticket .ui-button--primary {
+  border-radius: 999px;
 }
 .ticket-head {
   display: flex;
@@ -1561,7 +2088,7 @@ summary {
   white-space: nowrap;
 }
 .ticket-icon {
-  color: var(--primary);
+  color: var(--text);
 }
 .ticket:not(.ticket-pending) .ticket-icon {
   color: var(--muted);
@@ -1584,8 +2111,13 @@ summary {
 .ticket-tool > summary {
   width: fit-content;
   color: var(--muted);
-  font-family: var(--font-code);
   font-size: 0.8125rem;
+  cursor: pointer;
+}
+.ticket-tool > summary code {
+  margin-left: 4px;
+  font-family: var(--font-code);
+  font-size: 0.75rem;
 }
 .ticket-tool pre {
   margin-top: 6px;
@@ -1598,9 +2130,7 @@ summary {
 
 .panel {
   padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  background: var(--surface);
+  border-radius: var(--radius-glass);
 }
 .panel h3 {
   display: flex;
@@ -1618,22 +2148,32 @@ summary {
 }
 .panel > ul {
   display: grid;
-  gap: 6px;
-  margin: 0;
+  margin: 0 -8px;
   padding: 0;
   list-style: none;
 }
-.subagent {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: var(--canvas);
+/* Rows inside the panel are separated by hairlines, not nested cards. */
+.subagent + .subagent {
+  border-top: 1px solid var(--border);
+}
+.attention-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #a9c7ff;
 }
 .subagent summary {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
+  min-height: var(--row-height);
+  padding: 8px;
+  border-radius: var(--radius-row);
+  cursor: pointer;
   list-style: none;
+}
+.subagent summary:hover {
+  background: var(--hover);
 }
 .subagent-mark {
   display: grid;
@@ -1665,8 +2205,8 @@ summary {
   font-size: 0.75rem;
 }
 .subagent-waiting_human .subagent-status {
-  color: var(--primary);
-  font-weight: 600;
+  color: var(--text);
+  font-weight: 650;
 }
 .subagent-chevron {
   color: var(--muted);
@@ -1701,6 +2241,19 @@ summary {
 }
 .subagent-steer label {
   flex: 1 1 12rem;
+}
+
+/* Stop confirmation ("Cancel this task?"): a neutral pill and a rose one. */
+.stop-task-dialog .ui-dialog-actions .ui-button {
+  border-radius: 999px;
+}
+.stop-task-dialog .ui-dialog-actions .ui-button--danger {
+  border-color: transparent;
+  background: #c8435f;
+  color: #ffffff;
+}
+.stop-task-dialog .ui-dialog-actions .ui-button--danger:hover:not(:disabled) {
+  background: #b33a54;
 }
 
 /* Overlays keep a short opacity fade under reduced motion (ui/ui.css); everything else stops moving. */

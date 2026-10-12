@@ -8,6 +8,8 @@ export function errorMessage(cause: unknown): string {
 export interface Resource<T> {
   data: T | null;
   error: string | null;
+  /** The last load was refused with 403: this device's token lacks the scope the screen needs. */
+  forbidden: boolean;
   setError: (error: string | null) => void;
   reload: () => Promise<void>;
 }
@@ -16,13 +18,16 @@ export interface Resource<T> {
 export function useResource<T>(load: () => Promise<T>): Resource<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [forbidden, setForbidden] = useState(false);
 
   const reload = useCallback(async () => {
     try {
       setData(await load());
       setError(null);
+      setForbidden(false);
     } catch (cause) {
       setError(errorMessage(cause));
+      setForbidden(cause instanceof ApiError && cause.status === 403);
     }
   }, [load]);
 
@@ -33,9 +38,12 @@ export function useResource<T>(load: () => Promise<T>): Resource<T> {
         if (cancelled) return;
         setData(value);
         setError(null);
+        setForbidden(false);
       },
       (cause: unknown) => {
-        if (!cancelled) setError(errorMessage(cause));
+        if (cancelled) return;
+        setError(errorMessage(cause));
+        setForbidden(cause instanceof ApiError && cause.status === 403);
       },
     );
     return () => {
@@ -43,5 +51,5 @@ export function useResource<T>(load: () => Promise<T>): Resource<T> {
     };
   }, [load]);
 
-  return { data, error, setError, reload };
+  return { data, error, forbidden, setError, reload };
 }

@@ -199,6 +199,7 @@ describe("subagents, artifacts and attachments", () => {
         tools: ["read"],
         parentToolCallId: "d1",
         status: "failed",
+        background: false,
         reason: "budget",
         progress: [{ kind: "model_request" }, { kind: "model_response", text: "done" }],
       },

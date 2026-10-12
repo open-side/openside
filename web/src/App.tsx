@@ -1,21 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { BrowserRouter, Link, Outlet, Route, Routes, useLocation, type Location } from "react-router";
 import { createClient } from "./api/client";
-import { clearToken, loadToken, saveToken } from "./auth";
+import { relayTransport, type RelayTransport } from "./api/relay/transport";
+import { clearToken, loadToken, loadTransport, saveToken } from "./auth";
 import { AppHeader } from "./components/AppHeader";
 import { OtpDock } from "./components/OtpDock";
 import { Sidebar } from "./components/Sidebar";
 import { TokenEntry } from "./components/TokenEntry";
 import { ClientContext, useClient } from "./context";
 import { useSessionList } from "./hooks/useSessionList";
+import { OnboardingGate } from "./onboarding/OnboardingGate";
+import { OnboardingPage } from "./onboarding/OnboardingPage";
 import { ManageDialogs } from "./pages/ManageDialogs";
 import { backgroundOf, manageTarget } from "./pages/manageRoutes";
 import { NewChatPage } from "./pages/NewChatPage";
 import { PairPage } from "./pages/PairPage";
 import { SessionPage } from "./pages/SessionPage";
 import { usePushPresence } from "./push";
+import { PwaRuntime } from "./pwa/PwaRuntime";
 import { ShellContext, type Shell } from "./shell";
-import { Drawer, ToastProvider } from "./ui";
+import { Drawer, Spinner, ToastProvider } from "./ui";
 
 /**
  * iOS Safari keeps the layout viewport when the keyboard opens; sizing the shell to the visual
@@ -51,19 +55,30 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
   return (
     <ToastProvider>
       <ShellContext.Provider value={shell}>
-        <div className="shell" ref={root}>
+        <div className="shell" ref={root} data-focus={pathname === "/welcome" || undefined}>
           <aside className="shell-sidebar" aria-label="Conversation sidebar">
             <Sidebar list={list} />
           </aside>
           <div className="shell-content">
             <Outlet />
+            {list.offline ? (
+              <p className="connection-banner" role="status">
+                <Spinner size={14} />
+                Can’t reach openside. Reconnecting…
+              </p>
+            ) : null}
+            <PwaRuntime />
+            <OnboardingGate />
           </div>
           <Drawer open={drawer} onClose={() => setDrawer(false)} label="Conversations menu">
             <Sidebar list={list} onClose={() => setDrawer(false)} />
           </Drawer>
           <ManageDialogs location={location} onSignOut={onSignOut} />
           {/* A conversation under a Settings or Workspace dialog is not visible, so its code request floats too. */}
-          <OtpDock visibleSession={manageTarget(pathname) ? null : (/^\/sessions\/([^/]+)/.exec(pathname)?.[1] ?? null)} />
+          <OtpDock
+            visibleSession={manageTarget(pathname) ? null : (/^\/sessions\/([^/]+)/.exec(pathname)?.[1] ?? null)}
+            sessions={list.sessions}
+          />
         </div>
       </ShellContext.Provider>
     </ToastProvider>
@@ -76,7 +91,9 @@ function NotFound() {
       <AppHeader title="Not found" />
       <main className="not-found">
         <p>Page not found.</p>
-        <Link to="/">Start a new chat</Link>
+        <Link to="/" className="action-link">
+          Start a new chat
+        </Link>
       </main>
     </div>
   );
@@ -93,6 +110,7 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
     <Routes location={screen}>
       <Route element={<Layout onSignOut={onSignOut} location={location} />}>
         <Route index element={<NewChatPage />} />
+        <Route path="welcome" element={<OnboardingPage />} />
         <Route path="sessions/:id" element={<SessionPage />} />
         <Route path="*" element={<NotFound />} />
       </Route>
@@ -105,17 +123,36 @@ export function App() {
   const [reason, setReason] = useState<string | undefined>();
   // `/pair#<code>` works with or without a saved token: pairing replaces it.
   const [pairing, setPairing] = useState(() => window.location.pathname === "/pair");
+  // A relay-paired device talks to the daemon through the relay that served this page;
+  // re-read on every token change because pairing stores the transport with the token.
+  const connection = useMemo((): { transport: RelayTransport | null; invalid: boolean } => {
+    if (!token) return { transport: null, invalid: false };
+    try {
+      const target = loadTransport();
+      if (!target && document.querySelector('meta[name="openside-transport"]')?.getAttribute("content") === "relay") {
+        return { transport: null, invalid: true };
+      }
+      return { transport: target ? relayTransport(target) : null, invalid: false };
+    } catch {
+      return { transport: null, invalid: true };
+    }
+  }, [token]);
+  const transport = connection.transport;
+  useEffect(() => () => transport?.close(), [transport]);
   const client = useMemo(
     () =>
       createClient({
         token: () => token,
+        fetch: transport?.fetch,
+        relay: transport !== null,
+        webSocket: transport?.webSocket,
         onUnauthorized: () => {
           clearToken();
-          setReason("The saved token was rejected. Paste a valid device token.");
+          setReason(transport ? "The saved token was rejected. Pair this device again using a new QR code." : "The saved token was rejected. Paste a valid device token.");
           setToken(null);
         },
       }),
-    [token],
+    [token, transport],
   );
   const onPaired = useCallback((value: string) => {
     setReason(undefined);
@@ -125,10 +162,11 @@ export function App() {
 
   if (pairing) return <PairPage onPaired={onPaired} />;
 
-  if (!token) {
+  if (!token || connection.invalid) {
     return (
       <TokenEntry
-        reason={reason}
+        pairingRequired={connection.invalid}
+        reason={connection.invalid ? "The saved relay connection is incomplete. Pair this device again using a new QR code." : reason}
         onToken={(value) => {
           saveToken(value);
           setReason(undefined);

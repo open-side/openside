@@ -125,16 +125,46 @@ describe("Timeline tool activity", () => {
     const groups = document.querySelectorAll("details.activity");
     expect(groups).toHaveLength(1);
     const summary = groups[0]!.querySelector("summary")!;
-    expect(summary).toHaveTextContent("Browsed the web");
+    expect(summary).toHaveTextContent("Browsed example.com");
     expect(summary).toHaveTextContent("1 failed");
     await user.click(summary);
     const actions = within(groups[0] as HTMLElement).getAllByRole("listitem");
+    // Each call names what it acted on; only unusual states are spelled out.
     expect(actions.map((li) => li.querySelector(".tool-line")?.textContent)).toEqual([
-      "Browser navigateCompleted",
+      "Browser navigatehttps://example.com",
       "Browser actFailed",
     ]);
-    await user.click(within(actions[1]!).getByText("Technical details"));
+    await user.click(actions[1]!.querySelector("summary")!);
     expect(actions[1]).toHaveTextContent('"click": "#buy"');
     expect(actions[1]).toHaveTextContent("Error");
+  });
+
+  it("turns the trailing calls of a live run into a status line that opens onto them", async () => {
+    const user = userEvent.setup();
+    const view = replaySession(
+      events([
+        { kind: "turn.started" },
+        { kind: "tool.started", tool_call_id: "t1", name: "browser_navigate", args: { url: "https://nid.naver.com/login" } },
+        { kind: "tool.ended", tool_call_id: "t1", result: { url: "https://nid.naver.com/login" }, is_error: false },
+        { kind: "tool.started", tool_call_id: "t2", name: "browser_act", args: { tab_id: "a", target: "e3", action: "click" } },
+      ]),
+    );
+    setup(view);
+    expect(document.querySelector("details.activity:not(.status-line-group)")).toBeNull();
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Clicking on nid.naver.com");
+    await user.click(status.querySelector("summary")!);
+    expect(within(status).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("says the agent is thinking when a live run has nothing on screen yet", () => {
+    const view = replaySession(
+      events([
+        { kind: "message.queued", message_id: "m1", text: "Hi", mode: "queue" },
+        { kind: "message.injected", message_id: "m1" },
+      ]),
+    );
+    setup(view);
+    expect(screen.getByRole("status")).toHaveTextContent("Thinking");
   });
 });

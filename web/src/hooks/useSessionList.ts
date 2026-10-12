@@ -8,6 +8,8 @@ export interface SessionListState {
   /** `null` until the first response. */
   sessions: Session[] | null;
   error: string | null;
+  /** The last sync could not reach the daemon at all (as opposed to an error it returned). */
+  offline: boolean;
   query: string;
   setQuery: (query: string) => void;
   archived: boolean;
@@ -25,6 +27,7 @@ export function useSessionList(client: Client): SessionListState {
   const [archived, setArchived] = useState(false);
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -34,8 +37,11 @@ export function useSessionList(client: Client): SessionListState {
       if (mine !== generation.current) return;
       setSessions(list.sessions);
       setError(null);
+      setOffline(false);
     } catch (cause) {
-      if (mine === generation.current) setError(cause instanceof ApiError ? cause.message : "Request failed");
+      if (mine !== generation.current) return;
+      setError(cause instanceof ApiError ? cause.message : "Request failed");
+      setOffline(cause instanceof ApiError && cause.status === 0);
     }
   }, [client, query, archived]);
 
@@ -63,5 +69,5 @@ export function useSessionList(client: Client): SessionListState {
 
   const refresh = useCallback(() => void load(), [load]);
 
-  return { sessions, error, query, setQuery, archived, setArchived, refresh };
+  return { sessions, error, offline, query, setQuery, archived, setArchived, refresh };
 }

@@ -9,8 +9,8 @@ import { DevicesPage } from "./DevicesPage";
 
 function daemon() {
   const devices: Device[] = [
-    { device_id: "d1", name: "My phone", scopes: ["read", "approve", "human_step"], created_at: "2026-10-01T00:00:00Z" },
-    { device_id: "d2", name: "Tablet", scopes: ["read", "admin"], created_at: "2026-10-02T00:00:00Z" },
+    { device_id: "d1", name: "My phone", kind: "person_device", scopes: ["read", "approve", "human_step"], created_at: "2026-10-01T00:00:00Z" },
+    { device_id: "d2", name: "Tablet", kind: "person_device", scopes: ["read", "admin"], created_at: "2026-10-02T00:00:00Z" },
   ];
   return fakeClient((call: Call) => {
     const url = new URL(call.path, "http://daemon.test");
@@ -36,8 +36,8 @@ describe("DevicesPage", () => {
     );
     const list = await screen.findByRole("list", { name: "Devices" });
     const phone = within(list).getByText("My phone").closest("li") as HTMLElement;
-    expect(within(phone).getByText("this device")).toBeInTheDocument();
-    expect(within(phone).getByText(/read, approve, human_step/)).toBeInTheDocument();
+    expect(within(phone).getByText("This device")).toBeInTheDocument();
+    expect(within(phone).getByLabelText("Scopes")).toHaveTextContent("readapprovehuman_step");
 
     const tablet = within(list).getByText("Tablet").closest("li") as HTMLElement;
     await user.click(within(tablet).getByRole("button", { name: "Revoke" }));
@@ -63,5 +63,19 @@ describe("DevicesPage", () => {
     const phone = (await screen.findByText("My phone")).closest("li") as HTMLElement;
     await user.click(within(phone).getByRole("button", { name: "Revoke" }));
     expect(await screen.findByRole("dialog", { name: "Revoke My phone?" })).toHaveTextContent("it will be signed out");
+  });
+
+  it("lets the operator choose a person's device or an agent before issuing a link", async () => {
+    const user = userEvent.setup();
+    render(<ClientContext.Provider value={daemon().client}><DevicesPage /></ClientContext.Provider>);
+    const person = screen.getByRole("radio", { name: "Pair a phone/browser" });
+    expect(person).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText('openside pair --name "My phone"')).toBeInTheDocument();
+    expect(screen.getByText(/do not give it to an agent/)).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Connect an agent / CLI" }));
+    expect(person).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText('openside pair --agent --name "My agent"')).toBeInTheDocument();
+    expect(screen.getByText(/must wait for a person’s approval/)).toBeInTheDocument();
+    expect(screen.getByText("openside connect")).toBeInTheDocument();
   });
 });

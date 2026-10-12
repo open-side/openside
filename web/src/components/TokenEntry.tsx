@@ -4,10 +4,11 @@ import "../pages/pages.css";
 import { BrandMark, Button } from "../ui";
 
 /** Accepts a pasted device token after the daemon confirms it with `GET /v1/health`. */
-export function TokenEntry({ onToken, reason }: { onToken: (token: string) => void; reason?: string }) {
+export function TokenEntry({ onToken, reason, pairingRequired = false }: { onToken: (token: string) => void; reason?: string; pairingRequired?: boolean }) {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(reason ?? null);
+  const relay = pairingRequired || document.querySelector('meta[name="openside-transport"]')?.getAttribute("content") === "relay";
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -29,11 +30,21 @@ export function TokenEntry({ onToken, reason }: { onToken: (token: string) => vo
     <main className="token-entry">
       <div className="token-card">
         <div className="token-brand">
-          <BrandMark size={28} />
-          <h1>openside</h1>
+          <BrandMark size={24} />
+          <span>openside</span>
         </div>
-        <p>Paste a device token paired on the computer running the openside daemon.</p>
-        <form onSubmit={submit}>
+        <h1>Connect this device</h1>
+        <p>{relay
+          ? "Pair this device using a QR code or link from the computer running openside. A token alone cannot identify the computer or its encryption key."
+          : "Paste a device token paired on the computer running the openside daemon."}</p>
+        {relay ? (
+          <>
+          {error ? <p role="alert" className="error-note">{error}</p> : null}
+          <p className="token-help">
+            On that computer, run <code>openside pair --via relay</code>, then scan the QR code or open the full pairing link on this device.
+          </p>
+          </>
+        ) : <form onSubmit={submit}>
           <label className="field">
             <span>Device token</span>
             <input
@@ -45,20 +56,21 @@ export function TokenEntry({ onToken, reason }: { onToken: (token: string) => vo
               autoCapitalize="off"
               spellCheck={false}
               disabled={busy}
+              aria-invalid={error ? true : undefined}
             />
           </label>
+          {error ? (
+            <p role="alert" className="error-note">
+              {error}
+            </p>
+          ) : null}
           <Button type="submit" variant="primary" disabled={busy || !token.trim()}>
             {busy ? "Connecting…" : "Connect"}
           </Button>
-        </form>
-        {error ? (
-          <p role="alert" className="error-note">
-            {error}
-          </p>
-        ) : null}
-        <p>
+        </form>}
+        {!relay ? <p className="token-help">
           No token yet? Run <code>openside pair</code> on that computer and scan the QR code with this device.
-        </p>
+        </p> : null}
       </div>
     </main>
   );

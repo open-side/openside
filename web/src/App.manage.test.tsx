@@ -84,7 +84,7 @@ describe("/pair deep link", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("This pairing code has expired. Create a new one with `openside pair`.");
     expect(window.location.hash).toBe("");
     expect(localStorage.getItem("openside.token")).toBeNull();
-    expect(screen.getByRole("link", { name: "Enter a device token instead" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "enter a device token instead" })).toHaveAttribute("href", "/");
   });
 });
 
@@ -98,8 +98,8 @@ describe("management screens (PP-15: no feature flags)", () => {
     expect(await screen.findByText("Hello")).toBeInTheDocument();
 
     const checks: Record<string, () => Promise<HTMLElement>> = {
-      Skills: () => screen.findByRole("button", { name: "Disable" }),
-      Routines: () => screen.findByRole("button", { name: "Run now" }),
+      Skills: () => screen.findByRole("switch", { name: /^Enable \// }),
+      Routines: () => screen.findByRole("switch", { name: /^Enable / }),
       Memory: () => screen.findByPlaceholderText("Search memory"),
       Accounts: () => screen.findByRole("button", { name: "Refresh" }),
       Vault: () => screen.findByLabelText("Use policy for bank"),

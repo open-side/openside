@@ -4,6 +4,7 @@ import { ApiError } from "../api/client";
 import { useClient } from "../context";
 import type { QueuedMessage } from "../state/session";
 import { Button, ICON_STROKE, IconButton, MenuItem, PopoverMenu } from "../ui";
+import { TASK_REPORT_PREFIX } from "./toolStatus";
 
 const icon = { size: 18, strokeWidth: ICON_STROKE, "aria-hidden": true } as const;
 
@@ -104,11 +105,13 @@ function QueueRow({ sessionId, message, running }: { sessionId: string; message:
  * `running` decides whether promoting a follow-up reads "Steer instead" or "Send now".
  */
 export function QueueList({ sessionId, queue, running = false }: { sessionId: string; queue: QueuedMessage[]; running?: boolean }) {
-  if (!queue.length) return null;
+  // A finished task's report waits here for the front agent; it is the daemon's, not the person's.
+  const mine = queue.filter((message) => !message.id.startsWith(TASK_REPORT_PREFIX));
+  if (!mine.length) return null;
   return (
     <section className="queue" aria-label="Queued messages">
       <ol>
-        {queue.map((message) => (
+        {mine.map((message) => (
           <QueueRow key={message.id} sessionId={sessionId} message={message} running={running} />
         ))}
       </ol>

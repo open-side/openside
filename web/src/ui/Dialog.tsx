@@ -23,6 +23,7 @@ const SHEET_QUERY = "(max-width: 700px)";
 // aside-relay's thresholds: 96px down, or a flick faster than 700px/s.
 const CLOSE_DISTANCE = 96;
 const CLOSE_VELOCITY = 0.7;
+const DRAWER_CLOSE_DISTANCE = 80;
 
 /**
  * Phone sheets close when their handle is dragged down far or fast enough; anything less
@@ -95,7 +96,12 @@ export function Dialog({ open, onClose, title, description, back, size = "defaul
             <div className="ui-dialog-handle" aria-hidden="true" onPointerDown={startDrag}>
               <span />
             </div>
-            <header className="ui-dialog-header">
+            <header
+              className="ui-dialog-header"
+              onPointerDown={(event) => {
+                if (!(event.target as Element).closest("button, a, input, select, textarea")) startDrag(event);
+              }}
+            >
               {back && (
                 <IconButton label={back.label} size="small" onClick={back.onClick}>
                   <ChevronLeft size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
@@ -133,8 +139,66 @@ export interface DrawerProps {
   children: ReactNode;
 }
 
+/**
+ * Swiping the drawer back toward the left edge closes it (the mirror of the edge swipe that
+ * opens it). Vertical scrolling of the list wins; only a mostly-horizontal leftward move drags.
+ */
+function useDrawerSwipe(onClose: () => void) {
+  const popup = useRef<HTMLDivElement>(null);
+  const gesture = useRef<{ id: number; x: number; y: number; dragging: boolean; lastX: number; lastTime: number; velocity: number } | null>(null);
+
+  const reset = (element: HTMLElement) => {
+    gesture.current = null;
+    element.style.transition = "";
+    element.style.transform = "";
+  };
+  return {
+    ref: popup,
+    onPointerDown(event: ReactPointerEvent<HTMLElement>) {
+      if (event.pointerType !== "touch") return;
+      gesture.current = { id: event.pointerId, x: event.clientX, y: event.clientY, dragging: false, lastX: event.clientX, lastTime: event.timeStamp, velocity: 0 };
+    },
+    onPointerMove(event: ReactPointerEvent<HTMLElement>) {
+      const g = gesture.current;
+      const element = popup.current;
+      if (!g || !element || g.id !== event.pointerId) return;
+      const dx = event.clientX - g.x;
+      if (!g.dragging) {
+        const dy = Math.abs(event.clientY - g.y);
+        if (dy > 10 && dy > Math.abs(dx)) gesture.current = null;
+        else if (dx < -10 && -dx > dy * 1.5) {
+          g.dragging = true;
+          element.setPointerCapture(event.pointerId);
+          element.style.transition = "none";
+        }
+        if (!g.dragging) return;
+      }
+      const dt = event.timeStamp - g.lastTime;
+      if (dt > 0) g.velocity = (event.clientX - g.lastX) / dt;
+      g.lastX = event.clientX;
+      g.lastTime = event.timeStamp;
+      element.style.transform = `translateX(${Math.min(0, dx)}px)`;
+    },
+    onPointerUp(event: ReactPointerEvent<HTMLElement>) {
+      const g = gesture.current;
+      const element = popup.current;
+      if (!g || !element || g.id !== event.pointerId) return;
+      if (g.dragging && (event.clientX - g.x < -DRAWER_CLOSE_DISTANCE || g.velocity < -CLOSE_VELOCITY)) {
+        gesture.current = null;
+        element.style.transition = "";
+        element.style.transform = "translateX(-100%)";
+        onClose();
+      } else reset(element);
+    },
+    onPointerCancel() {
+      if (popup.current) reset(popup.current);
+    },
+  };
+}
+
 /** Modal side drawer (the phone conversation menu). */
 export function Drawer({ open, onClose, label, children }: DrawerProps) {
+  const { ref, ...swipe } = useDrawerSwipe(onClose);
   return (
     <BaseDialog.Root
       open={open}
@@ -144,7 +208,7 @@ export function Drawer({ open, onClose, label, children }: DrawerProps) {
     >
       <BaseDialog.Portal>
         <BaseDialog.Backdrop className="ui-backdrop ui-drawer-backdrop" />
-        <BaseDialog.Popup className="ui-drawer" aria-label={label}>
+        <BaseDialog.Popup ref={ref} className="ui-drawer" aria-label={label} {...swipe}>
           {children}
         </BaseDialog.Popup>
       </BaseDialog.Portal>

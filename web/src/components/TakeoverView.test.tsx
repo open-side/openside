@@ -179,9 +179,34 @@ describe("TakeoverView (HS-6)", () => {
     expect(socket.closed).toBe(false);
   });
 
+  it("keeps keyboard focus inside, gives the screen every key, and Escape elsewhere shrinks it", async () => {
+    const user = userEvent.setup();
+    setup();
+    const opener = screen.getByRole("button", { name: "Open remote screen" });
+    await user.click(opener);
+    const socket = FakeSocket.last!;
+    act(() => socket.open());
+    const dialog = screen.getByRole("dialog", { name: "Remote control" });
+    expect(dialog).toHaveFocus();
+    // Tab wraps from the last control back to the first instead of leaving for the page below.
+    const reject = screen.getAllByRole("button", { name: "Reject" }).find((b) => dialog.contains(b))!;
+    reject.focus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Minimize" })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(reject).toHaveFocus();
+    // On the remote screen Escape is the page's.
+    fireEvent.keyDown(screen.getByLabelText(/Remote browser screen/), { key: "Escape", code: "Escape" });
+    expect(socket.sent).toEqual([{ type: "key", event: "down", key: "Escape", code: "Escape", modifiers: 0 }]);
+    expect(screen.getByRole("dialog", { name: "Remote control" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("complementary", { name: "Browser preview" })).toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
   it("falls back to desktop instructions for a takeover without a tab", () => {
     setup({ ...ticket, target: null });
     expect(screen.queryByRole("button", { name: "Open remote screen" })).toBeNull();
-    expect(screen.getByText(/Complete this step on the desktop/)).toBeInTheDocument();
+    expect(screen.getByText(/Finish this step in the agent’s browser/)).toBeInTheDocument();
   });
 });

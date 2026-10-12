@@ -1,63 +1,74 @@
-import { CalendarClock } from "lucide-react";
+import { CalendarClock, Play, Trash2 } from "lucide-react";
 import { useCallback, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import type { CreateRoutineRequest, Routine, RoutineDraft, RoutineSchedule } from "../api/types";
+import type { CreateRoutineRequest, Routine, RoutineDraft, RoutineSchedule, RunRecord } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
-import { Button, Dialog, DialogActions, Segmented, useToast } from "../ui";
+import { Button, Dialog, DialogActions, ICON_STROKE, MenuItem, Segmented, Switch, useToast } from "../ui";
 import {
   AddButton,
-  CardActions,
+  Badge,
+  Disclosure,
   EmptyState,
   ErrorNote,
   Loading,
   ResourceCard,
+  ResourceView,
+  RowMenu,
   SectionList,
   useConfirm,
   useDialogState,
+  type BadgeTone,
 } from "./blocks";
+import { describeSchedule, formatDateTime, formatRelative } from "./format";
 
-function describeSchedule(schedule: RoutineSchedule): string {
-  if (schedule.type === "cron") return `cron ${schedule.expr}${schedule.timezone ? ` (${schedule.timezone})` : " (UTC)"}`;
-  return `every ${schedule.secs} s`;
-}
-
-function describeAction(routine: Routine): string {
-  const action = routine.action;
-  return action.type === "new_session" ? `New conversation: ${action.prompt}` : `Message ${action.session_id}: ${action.prompt}`;
-}
-
-function when(value?: string | null): string {
-  return value ? new Date(value).toLocaleString() : "—";
-}
+const RUN_STATUS: Record<RunRecord["status"], { label: string; tone: BadgeTone }> = {
+  started: { label: "Running", tone: "neutral" },
+  completed: { label: "Completed", tone: "success" },
+  failed: { label: "Failed", tone: "danger" },
+  skipped_overlap: { label: "Skipped: still running", tone: "attention" },
+  paused_target_missing: { label: "Paused: conversation gone", tone: "attention" },
+  missed: { label: "Missed", tone: "attention" },
+};
 
 function Runs({ routine }: { routine: Routine }) {
   const client = useClient();
   const load = useCallback(() => client.routineRuns(routine.id), [client, routine.id]);
   const runs = useResource(load);
-  if (runs.error) return <ErrorNote>{runs.error}</ErrorNote>;
-  if (!runs.data) return <Loading />;
-  if (runs.data.runs.length === 0) return <p className="settings-text">No runs yet.</p>;
   return (
     <ol className="card-history" aria-label={`Runs of ${routine.name}`}>
-      {runs.data.runs.map((run) => (
-        <li key={run.id} data-status={run.status}>
-          <span>{when(run.scheduled_at)}</span>
-          <span className="badge badge--muted">{run.status}</span>
-          {run.finished_at || run.detail || run.session_id ? (
-            <p>
-              {run.finished_at ? `Finished ${when(run.finished_at)}` : null}
-              {run.detail ? `${run.finished_at ? " · " : ""}${run.detail}` : null}
-              {run.session_id ? (
-                <>
-                  {run.finished_at || run.detail ? " · " : null}
-                  <Link to={`/sessions/${encodeURIComponent(run.session_id)}`}>Open conversation</Link>
-                </>
-              ) : null}
-            </p>
-          ) : null}
+      {runs.error ? (
+        <li>
+          <ErrorNote>{runs.error}</ErrorNote>
         </li>
-      ))}
+      ) : !runs.data ? (
+        <li>
+          <Loading />
+        </li>
+      ) : runs.data.runs.length === 0 ? (
+        <li>
+          <p className="settings-text">No runs yet.</p>
+        </li>
+      ) : (
+        runs.data.runs.map((run) => (
+          <li key={run.id} data-status={run.status}>
+            <span>{formatDateTime(run.scheduled_at)}</span>
+            <Badge tone={RUN_STATUS[run.status].tone}>{RUN_STATUS[run.status].label}</Badge>
+            {run.finished_at || run.detail || run.session_id ? (
+              <p>
+                {run.finished_at ? `Finished ${formatDateTime(run.finished_at)}` : null}
+                {run.detail ? `${run.finished_at ? " · " : ""}${run.detail}` : null}
+                {run.session_id ? (
+                  <>
+                    {run.finished_at || run.detail ? " · " : null}
+                    <Link to={`/sessions/${encodeURIComponent(run.session_id)}`}>Open conversation</Link>
+                  </>
+                ) : null}
+              </p>
+            ) : null}
+          </li>
+        ))
+      )}
     </ol>
   );
 }
@@ -154,13 +165,16 @@ function Suggestions({ onUse }: { onUse: (draft: RoutineDraft) => void }) {
       <ul className="resource-list">
         {suggestions.data.suggestions.map((draft, index) => (
           <li key={`${draft.name}-${index}`}>
-            <ResourceCard title={draft.name} detail={`${describeSchedule(draft.schedule)} · seen ${draft.occurrences} times`}>
-              <p className="resource-card-body">“{draft.prompt}”</p>
-              <CardActions>
+            <ResourceCard
+              title={draft.name}
+              detail={`${describeSchedule(draft.schedule)} · seen ${draft.occurrences} times`}
+              trailing={
                 <Button size="compact" onClick={() => onUse(draft)}>
                   Use
                 </Button>
-              </CardActions>
+              }
+            >
+              <p className="resource-card-body">“{draft.prompt}”</p>
             </ResourceCard>
           </li>
         ))}
@@ -189,70 +203,83 @@ export function RoutinesPage() {
     }
   }
 
+  const count = list.data?.routines.length ?? 0;
   return (
     <div className="manage-body" data-section="routines">
-      <SectionList label="Scheduled routines" actions={<AddButton onClick={() => form.show({})}>New routine</AddButton>}>
-        {list.error ? <ErrorNote>{list.error}</ErrorNote> : null}
-        {!list.data ? (
-          list.error ? null : <Loading />
-        ) : list.data.routines.length === 0 ? (
-          <EmptyState icon={CalendarClock} title="No routines yet" detail="A routine starts a conversation with your prompt on a schedule." />
-        ) : (
-          <ul className="resource-list" aria-label="Routines">
-            {list.data.routines.map((routine) => (
-              <li key={routine.id}>
-                <ResourceCard
-                  data-routine={routine.id}
-                  title={routine.name}
-                  detail={describeSchedule(routine.schedule)}
-                  badge={routine.enabled ? undefined : `Paused${routine.paused_reason ? `: ${routine.paused_reason}` : ""}`}
-                  badgeTone="attention"
-                >
-                  <p className="resource-card-body">{describeAction(routine)}</p>
-                  <p className="resource-card-detail">Next run: {when(routine.next_run_at)}</p>
-                  <CardActions>
-                    <Button
-                      size="compact"
-                      onClick={() =>
-                        void act(async () => {
-                          const run = await client.runRoutine(routine.id);
-                          toast.notify(`${routine.name}: run ${run.status}`);
-                        })
+      <SectionList
+        label="Scheduled routines"
+        summary={list.data && count ? `${count} ${count === 1 ? "routine" : "routines"}` : undefined}
+        actions={list.forbidden ? undefined : <AddButton onClick={() => form.show({})}>New routine</AddButton>}
+      >
+        <ResourceView resource={list} what="routines">
+          {(data) =>
+            data.routines.length === 0 ? (
+              <EmptyState icon={CalendarClock} title="No routines yet" detail="A routine starts a conversation with your prompt on a schedule." />
+            ) : (
+              <ul className="resource-list" aria-label="Routines">
+                {data.routines.map((routine) => (
+                  <li key={routine.id}>
+                    <ResourceCard
+                      data-routine={routine.id}
+                      title={routine.name}
+                      detail={
+                        routine.next_run_at
+                          ? `${describeSchedule(routine.schedule)} · next ${formatRelative(routine.next_run_at)}`
+                          : describeSchedule(routine.schedule)
+                      }
+                      badge={routine.enabled ? undefined : routine.paused_reason ? "Paused: conversation gone" : "Paused"}
+                      badgeTone="attention"
+                      trailing={
+                        <>
+                          <Switch
+                            label={`Enable ${routine.name}`}
+                            checked={routine.enabled}
+                            onChange={(enabled) => void act(() => client.updateRoutine(routine.id, { enabled }))}
+                          />
+                          <RowMenu name={routine.name}>
+                            <MenuItem
+                              icon={<Play size={18} strokeWidth={ICON_STROKE} />}
+                              onClick={() =>
+                                void act(async () => {
+                                  const run = await client.runRoutine(routine.id);
+                                  toast.notify(`${routine.name}: ${run.status === "started" ? "run started" : RUN_STATUS[run.status].label}`);
+                                })
+                              }
+                            >
+                              Run now
+                            </MenuItem>
+                            <MenuItem
+                              danger
+                              icon={<Trash2 size={18} strokeWidth={ICON_STROKE} />}
+                              onClick={() =>
+                                ask({
+                                  title: "Delete routine?",
+                                  description: `${routine.name} stops running. Its past conversations stay.`,
+                                  confirmLabel: "Delete",
+                                  onConfirm: () => void act(() => client.deleteRoutine(routine.id)),
+                                })
+                              }
+                            >
+                              Delete
+                            </MenuItem>
+                          </RowMenu>
+                        </>
                       }
                     >
-                      Run now
-                    </Button>
-                    <Button size="compact" onClick={() => void act(() => client.updateRoutine(routine.id, { enabled: !routine.enabled }))}>
-                      {routine.enabled ? "Pause" : "Resume"}
-                    </Button>
-                    <Button
-                      size="compact"
-                      aria-expanded={open === routine.id}
-                      onClick={() => setOpen(open === routine.id ? null : routine.id)}
-                    >
-                      Runs
-                    </Button>
-                    <Button
-                      size="compact"
-                      variant="danger"
-                      onClick={() =>
-                        ask({
-                          title: "Delete routine?",
-                          description: `${routine.name} stops running. Its past conversations stay.`,
-                          confirmLabel: "Delete",
-                          onConfirm: () => void act(() => client.deleteRoutine(routine.id)),
-                        })
-                      }
-                    >
-                      Delete
-                    </Button>
-                  </CardActions>
-                  {open === routine.id ? <Runs routine={routine} /> : null}
-                </ResourceCard>
-              </li>
-            ))}
-          </ul>
-        )}
+                      <p className="resource-card-body">
+                        {routine.action.type === "heartbeat" ? "In an existing conversation: " : null}“{routine.action.prompt}”
+                      </p>
+                      <Disclosure expanded={open === routine.id} onToggle={() => setOpen(open === routine.id ? null : routine.id)}>
+                        Run history
+                      </Disclosure>
+                      {open === routine.id ? <Runs routine={routine} /> : null}
+                    </ResourceCard>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
+        </ResourceView>
       </SectionList>
       <Suggestions onUse={(draft) => form.show({ draft })} />
 

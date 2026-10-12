@@ -13,6 +13,7 @@ const running: SubagentView = {
   tools: ["browser_snapshot"],
   parentToolCallId: "d1",
   status: "running",
+  background: false,
   progress: [{ kind: "model_request" }, { kind: "model_response", text: "two shops" }],
 };
 const failed: SubagentView = { ...running, id: "sa2", task: "Book", status: "failed", reason: "budget exceeded", progress: [] };
@@ -57,6 +58,9 @@ describe("SubagentPanel", () => {
     await user.type(screen.getByLabelText("Steer sa1"), "only EU shops");
     await user.click(screen.getByRole("button", { name: "Steer" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
+    const confirm = screen.getByRole("dialog", { name: "Cancel this task?" });
+    expect(confirm).toHaveTextContent("The agent and any other tasks keep running");
+    await user.click(within(confirm).getByRole("button", { name: "Cancel task" }));
     expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
       ["POST", "/v1/sessions/s1/subagents/sa1/steer", { text: "only EU shops" }],
       ["POST", "/v1/sessions/s1/subagents/sa1/cancel", undefined],

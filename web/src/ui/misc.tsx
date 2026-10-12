@@ -50,3 +50,32 @@ export function Segmented<T extends string>({ label, options, value, onChange, k
     </div>
   );
 }
+
+export interface SwitchProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  /** Accessible name when no `<label htmlFor>` names it. */
+  label?: string;
+  id?: string;
+  disabled?: boolean;
+  "aria-describedby"?: string;
+}
+
+/** On/off toggle: a native `role="switch"` checkbox over a drawn track, with a 44px hit box. */
+export function Switch({ checked, onChange, label, id, disabled, "aria-describedby": describedBy }: SwitchProps) {
+  return (
+    <span className="ui-switch">
+      <input
+        type="checkbox"
+        role="switch"
+        id={id}
+        aria-label={label}
+        aria-describedby={describedBy}
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className="ui-switch-track" aria-hidden="true" />
+    </span>
+  );
+}

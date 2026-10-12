@@ -172,7 +172,7 @@ describe("ConfigPage", () => {
   it("over the local socket every key is editable and a missing number is caught before sending", async () => {
     const user = userEvent.setup();
     const { calls } = setup(false);
-    const command = within(await screen.findByText("agent.command").then(() => field("agent.command"))).getByRole("textbox");
+    const command = within(await screen.findByRole("form", { name: "Configuration" }).then(() => field("agent.command"))).getByRole("textbox");
     expect(command).toBeEnabled();
     expect(screen.queryByRole("note")).toBeNull();
     const ttl = within(field("tickets.confirm_ttl_secs")).getByRole("spinbutton");

@@ -1,20 +1,15 @@
-import { Hand, KeyRound, MessageCircleQuestion, MonitorSmartphone, ShieldCheck, type LucideIcon } from "lucide-react";
+import { Check, CircleAlert, Hand, KeyRound, ListChecks, LogIn, MessageCircleQuestion, MonitorSmartphone, ShieldCheck, type LucideIcon } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 import { ApiError } from "../api/client";
 import type { Ticket } from "../api/types";
-import { isOtpTicket, otpRegistrationOf, registrationOutcome, registrationQuestion } from "../otp/otpForm";
+import { authOutcome, isApprovalTicket, isChoiceTicket, isLoginTicket } from "../otp/loginForm";
+import { isOtpTicket, otpRegistrationOf, registrationNote, registrationOutcome, registrationQuestion } from "../otp/otpForm";
+import { KIND_LABEL, siteNote, TAKEOVER_NOTE } from "../otp/ticketCopy";
 import { useClient } from "../context";
+import { haptic, type Haptic } from "../pwa/haptics";
 import { Button, ICON_STROKE } from "../ui";
-import { OtpForm } from "./OtpForm";
+import { AuthForm } from "./AuthForm";
 import { TakeoverView } from "./TakeoverView";
-
-const KIND_LABEL: Record<Ticket["kind"], string> = {
-  confirm: "Approval needed",
-  info: "Question",
-  secret_input: "Secret needed",
-  device_approval: "Approve on another device",
-  takeover: "Hands-on step",
-};
 
 const KIND_ICON: Record<Ticket["kind"], LucideIcon> = {
   confirm: ShieldCheck,
@@ -22,6 +17,8 @@ const KIND_ICON: Record<Ticket["kind"], LucideIcon> = {
   secret_input: KeyRound,
   device_approval: MonitorSmartphone,
   takeover: Hand,
+  login: LogIn,
+  choice: ListChecks,
 };
 
 function outcome(ticket: Ticket): string {
@@ -68,11 +65,12 @@ export function TicketCard({
   const [controlling, setControlling] = useState(false);
   const remote = ticket.kind === "takeover" && !!ticket.target?.tab_id;
 
-  async function act(action: () => Promise<unknown>) {
+  async function act(action: () => Promise<unknown>, feel: Haptic = "approve") {
     setBusy(true);
     setError(null);
     try {
       await action();
+      haptic(feel);
       onResolved?.();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Request failed");
@@ -100,7 +98,7 @@ export function TicketCard({
     });
   }
 
-  const reject = () => act(() => client.rejectTicket(ticket.id));
+  const reject = () => act(() => client.rejectTicket(ticket.id), "reject");
   const registration = otpRegistrationOf(ticket);
   const KindIcon = registration ? KeyRound : KIND_ICON[ticket.kind];
   const kindLabel = ticket.otp ? "Verification code" : registration ? "Save authenticator" : KIND_LABEL[ticket.kind];
@@ -110,12 +108,30 @@ export function TicketCard({
     </span>
   ) : null;
 
-  // The code form carries its own heading (site avatar, title, site), so the card adds only who asked.
-  if (pending && isOtpTicket(ticket)) {
+  // The code, login, choice and phone-approval cards carry their own heading (site icon, title,
+  // close), so the ticket adds only who asked.
+  if (pending && (isOtpTicket(ticket) || isLoginTicket(ticket) || isChoiceTicket(ticket) || isApprovalTicket(ticket))) {
     return (
-      <section className="ticket ticket-pending ticket-otp" aria-label={kindLabel} data-ticket={ticket.id}>
+      <section className="ticket ticket-pending ticket-otp ticket-auth" aria-label={kindLabel} data-ticket={ticket.id}>
         {origin ? <header className="ticket-head">{origin}</header> : null}
-        <OtpForm ticket={ticket} focus={focus} onSubmitted={onResolved} />
+        <AuthForm ticket={ticket} focus={focus} onSubmitted={onResolved} />
+      </section>
+    );
+  }
+
+  // A finished login or choice stays in the conversation as one quiet line, never the values.
+  const done = authOutcome(ticket);
+  if (done) {
+    return (
+      <section className={`ticket ticket-${ticket.status} ticket-event`} aria-label={kindLabel} data-ticket={ticket.id}>
+        <span className="event-chip" data-tone={done.failed ? "warn" : undefined}>
+          {done.failed ? (
+            <CircleAlert size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          ) : (
+            <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          )}
+          {done.text}
+        </span>
       </section>
     );
   }
@@ -132,13 +148,13 @@ export function TicketCard({
         <p className="ticket-summary">{registrationQuestion(registration)}</p>
         {pending ? (
           <>
-            <p className="ticket-note">openside fills this site's codes from the vault from now on. The setup key is never shown.</p>
+            <p className="ticket-note">{registrationNote(registration)}</p>
             <div className="actions">
               <Button type="button" variant="primary" disabled={busy} onClick={() => act(() => client.resolveTicket(ticket.id, true))}>
-                Approve
+                Save to vault
               </Button>
-              <Button type="button" disabled={busy} onClick={() => act(() => client.resolveTicket(ticket.id, false))}>
-                Decline
+              <Button type="button" disabled={busy} onClick={() => act(() => client.resolveTicket(ticket.id, false), "reject")}>
+                Not now
               </Button>
             </div>
           </>
@@ -164,18 +180,20 @@ export function TicketCard({
       {ticket.instructions ? <p className="ticket-instructions">{ticket.instructions}</p> : null}
       {ticket.tool ? (
         <details className="ticket-tool">
-          <summary>{ticket.tool.name}</summary>
+          <summary>
+            Details <code>{ticket.tool.name}</code>
+          </summary>
           <pre>{JSON.stringify(ticket.tool.args, null, 2)}</pre>
         </details>
       ) : null}
-      {ticket.target?.origin ? <p className="ticket-note">Site: {ticket.target.origin}</p> : null}
+      {ticket.target?.origin ? <p className="ticket-note">{siteNote(ticket.target.origin)}</p> : null}
 
       {pending && ticket.kind === "confirm" ? (
         <div className="actions">
           <Button type="button" variant="primary" disabled={busy} onClick={() => act(() => client.resolveTicket(ticket.id, true))}>
             Approve
           </Button>
-          <Button type="button" disabled={busy} onClick={() => act(() => client.resolveTicket(ticket.id, false))}>
+          <Button type="button" disabled={busy} onClick={() => act(() => client.resolveTicket(ticket.id, false), "reject")}>
             Reject
           </Button>
         </div>
@@ -246,7 +264,7 @@ export function TicketCard({
                 Open remote screen
               </Button>
             ) : (
-              <p className="ticket-note">Complete this step on the desktop, then mark it done.</p>
+              <p className="ticket-note">{TAKEOVER_NOTE}</p>
             )
           ) : null}
           <Button type="button" variant="primary" disabled={busy} onClick={() => act(() => client.ticketDone(ticket.id))}>

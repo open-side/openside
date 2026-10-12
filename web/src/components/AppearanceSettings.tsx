@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import {
   ACCENT_COLORS,
   applyAccent,
@@ -59,7 +59,7 @@ export function AppearanceSettings() {
   };
 
   return (
-    <div className="appearance">
+    <div className="appearance settings-group">
       <SelectRow
         id="appearance-mode"
         label="Theme mode"
@@ -110,7 +110,7 @@ export function AppearanceSettings() {
             aria-label={color.name}
             title={color.name}
             className="accent-swatch"
-            style={{ backgroundColor: color.value }}
+            style={{ "--swatch": color.value } as CSSProperties}
             onClick={() => chooseAccent(color.value)}
           />
         ))}

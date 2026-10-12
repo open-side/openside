@@ -41,6 +41,8 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
   createSession: (c) => c.createSession({}),
   updateSession: (c) => c.updateSession("s1", { title: "t" }),
   stopSession: (c) => c.stopSession("s1"),
+  prewarmSession: (c) => c.prewarmSession("s1"),
+  prewarmBrowser: (c) => c.prewarmBrowser(),
   submitMessage: (c) => c.submitMessage("s1", { message_id: "m", text: "hi", mode: "queue" }),
   editQueued: (c) => c.editQueued("s1", "m1", "x"),
   deleteQueued: (c) => c.deleteQueued("s1", "m1"),
@@ -56,13 +58,14 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
   artifactBlob: (c) => c.artifactBlob("s1", "out/a.txt"),
   takeover: (c) => c.takeover("t1"),
   browserPreview: (c) => c.browserPreview("s1"),
+  browserThumbnail: (c) => c.browserThumbnail("s1", "thumb1"),
   browserTabs: (c) => c.browserTabs(),
   listTickets: (c) => c.listTickets("pending"),
   openSessionStream: (c) =>
     new Promise<void>((resolve) => {
       openSessionStream({ client: c, sessionId: "s1", onEvent: () => undefined, onError: () => resolve() });
     }),
-  sandboxPreview: (c, record) => record("GET", c.resolve("/v1/sessions/s1/artifacts/a.html/preview?exp=1&sig=x")),
+  sandboxPreview: (c) => c.sandboxPreview("/v1/sessions/s1/artifacts/a.html/preview?exp=1&sig=x"),
   listSkills: (c) => c.listSkills(),
   getSkill: (c) => c.getSkill("pdf"),
   createSkill: (c) => c.createSkill({ name: "pdf", description: "d", body: "", resources: [] }),
@@ -84,6 +87,12 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
   memoryHistory: (c) => c.memoryHistory("m1"),
   settingsConfig: (c) => c.settingsConfig(),
   updateSettingsConfig: (c) => c.updateSettingsConfig({}),
+  onboarding: (c) => c.onboarding(),
+  setOnboarding: (c) => c.setOnboarding("skipped"),
+  externalAgents: (c) => c.externalAgents(),
+  installAgentSkill: (c) => c.installAgentSkill("claude", true),
+  importProfiles: (c) => c.importProfiles(),
+  runImport: (c) => c.runImport({ profile: "chrome:Default", what: null, dry_run: true }),
   vaultStatus: (c) => c.vaultStatus(),
   setupVault: (c) => c.setupVault("passphrase"),
   unlockVault: (c) => c.unlockVault(),
@@ -163,7 +172,7 @@ describe("UI ↔ API map (PP-16, E-4, G-5)", () => {
         return readFileSync(file, "utf8");
       });
       for (const call of feature.calls) {
-        const needle = call === "openSessionStream" ? "openSessionStream(" : call === "sandboxPreview" ? ".resolve(" : `.${call}(`;
+        const needle = call === "openSessionStream" ? "openSessionStream(" : `.${call}(`;
         expect(
           texts.some((text) => text.includes(needle)),
           `${feature.feature}: ${needle} in ${feature.sources.join(", ")}`,
@@ -194,8 +203,9 @@ describe("UI ↔ API map (PP-16, E-4, G-5)", () => {
   });
 
   it("no web code opens a connection outside src/api", () => {
-    // The service worker's own fetches serve the offline shell and never touch /v1 (see sw.js).
-    const allowed = ["src/api/client.ts", "src/api/sse.ts", "public/sw.js"];
+    // The service worker's own fetches serve the offline shell and never touch /v1 (see sw.js);
+    // the relay transport opens the relay WebSocket that carries every API call when paired via a relay.
+    const allowed = ["src/api/client.ts", "src/api/sse.ts", "src/api/relay/transport.ts", "public/sw.js"];
     const patterns = [
       /(?<![.\w$])fetch\s*\(/,
       /\b(?:globalThis|window|self)\s*\.\s*fetch\b/,
