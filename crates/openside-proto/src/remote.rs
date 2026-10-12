@@ -26,6 +26,26 @@ pub struct CreatePairingRequest {
     pub name: String,
     /// Scopes the device token will hold; at least one.
     pub scopes: Vec<CapabilityScope>,
+    /// Operator-selected identity role, fixed in the offer and not chosen by its redeemer.
+    #[serde(default)]
+    pub kind: DeviceKind,
+    /// Transport the link should use; default: the first entry of `remote.mode`, or the
+    /// plain `remote.public_url` when no transport is configured.
+    #[serde(default)]
+    pub via: Option<PairingTransport>,
+}
+
+/// How a paired device reaches the daemon from outside its network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PairingTransport {
+    /// Tailscale Serve at `remote.public_url`.
+    Tailscale,
+    /// Cloudflare Tunnel run by the daemon.
+    Cloudflare,
+    /// CLI/MCP use Noise with the pairing-pinned daemon key; relay-served PWA code
+    /// still requires trust in the relay operator.
+    Relay,
 }
 
 /// A one-time pairing offer, valid for [`PAIRING_TTL_SECS`].
@@ -33,15 +53,66 @@ pub struct CreatePairingRequest {
 pub struct PairingOffer {
     /// One-time code; exchanged at most once. Show it only to the person pairing.
     pub code: String,
-    /// Path the phone opens on the daemon's origin; the code is in the fragment, so
-    /// it never reaches server logs or `Referer` headers.
+    /// Pairing path on the daemon's origin, or the relay origin for relay links.
+    /// The code is a fragment, absent from ordinary HTTP requests and Referer
+    /// headers but readable by the page's scripts, including relay-served code.
     pub path: String,
-    /// `remote.public_url` + `path`, when a public URL is configured.
+    /// Link for the QR code: `<base>/pair#<code>` for direct transports, or
+    /// `<relay>/pair#c=<code>&t=relay&d=<daemon id>&k=<daemon key>` for the relay. `null`
+    /// when no transport or public URL is configured.
     pub url: Option<String>,
     /// Scopes the resulting token will hold.
     pub scopes: Vec<CapabilityScope>,
     /// Instant after which the code is refused.
     pub expires_at: DateTime<Utc>,
+    /// Transport `url` uses; `null` for a plain `remote.public_url` or no URL.
+    pub transport: Option<PairingTransport>,
+    /// Operator-selected role the resulting token will hold.
+    #[serde(default)]
+    pub kind: DeviceKind,
+}
+
+/// Remote transports the daemon runs (`GET /v1/remote/status`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteStatus {
+    /// Enabled transports in pairing preference order.
+    pub modes: Vec<PairingTransport>,
+    /// `remote.public_url`.
+    pub public_url: Option<String>,
+    /// The supervised `cloudflared`, when enabled.
+    pub cloudflare: Option<CloudflareStatus>,
+    /// The relay registration, when enabled.
+    pub relay: Option<RelayStatus>,
+}
+
+/// Supervised `cloudflared` state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CloudflareStatus {
+    /// `starting`, `running`, `restarting` or `failed` (cannot start at all).
+    pub state: String,
+    /// Public HTTPS URL once known (quick tunnels change it on every restart).
+    pub url: Option<String>,
+    /// Times the process exited and was started again.
+    pub restarts: u32,
+    /// Latest failure, without secrets.
+    pub last_error: Option<String>,
+}
+
+/// Relay registration state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RelayStatus {
+    /// `connecting`, `connected` or `backoff`.
+    pub state: String,
+    /// Relay origin.
+    pub url: String,
+    /// Routing id the relay knows this daemon by.
+    pub daemon_id: String,
+    /// Daemon X25519 public key (base64url) carried in relay pairing links.
+    pub daemon_key: String,
+    /// Devices connected through the relay now.
+    pub clients: u32,
+    /// Latest failure, without secrets.
+    pub last_error: Option<String>,
 }
 
 /// Exchange a pairing code for a device token (no bearer token needed).
@@ -50,6 +121,17 @@ pub struct PairingOffer {
 pub struct ExchangePairingRequest {
     /// Code from the pairing offer.
     pub code: String,
+}
+
+/// Trust role fixed at pairing, not selected anew by each authenticated request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    /// A web, phone, extension or channel client that conveys a person's response.
+    #[default]
+    PersonDevice,
+    /// A CLI, MCP or API agent that must wait for a person device's approval.
+    AgentClient,
 }
 
 /// A paired device (never its token).
@@ -61,6 +143,9 @@ pub struct Device {
     pub name: String,
     /// Scopes the token holds.
     pub scopes: Vec<CapabilityScope>,
+    /// Pairing-time trust role; legacy devices without recorded source default to person_device.
+    #[serde(default)]
+    pub kind: DeviceKind,
     /// Pairing time, when known.
     pub created_at: Option<DateTime<Utc>>,
 }

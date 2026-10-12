@@ -143,9 +143,21 @@ settings = false         # true also syncs the live policy (paired devices can c
 memory_tags = ["sync"]   # memories with one of these tags are synced
 
 [remote]
-# Other devices reach the daemon only through an HTTPS front (docs/REMOTE.md).
-# public_url = "https://host.example.ts.net"   # pairing links and QR codes point here
+# Phones and remote CLIs reach the daemon through one or more transports (docs/REMOTE.md);
+# set them up with `openside remote setup tailscale|cloudflare|relay|off`.
+mode = "off"             # or "tailscale", "cloudflare", "relay", or a list such as ["tailscale", "relay"]
+# public_url = "https://host.example.ts.net"   # Tailscale Serve / reverse proxy address for pairing links
 # push_contact = "mailto:me@example.test"       # VAPID contact; defaults to public_url
+
+[remote.cloudflare]
+tunnel = "quick"         # "quick": random trycloudflare.com URL, no account; "named": stable hostname
+# hostname = "desk.example.com"                 # named tunnel's public hostname
+# token_file = "~/.config/openside/cloudflare-token"  # named tunnel token (0600), or $OPENSIDE_CLOUDFLARE_TOKEN
+bin = "cloudflared"
+
+[remote.relay]
+# url = "https://relay.example.com"             # self-hosted openside-relay; sees only ciphertext
+# token_file = "~/.config/openside/relay-token" # registration token (0600), or $OPENSIDE_RELAY_TOKEN
 
 [otp]
 # Forwarded SMS codes (POST /v1/otp with an otp_ingest token) fill pending secret_input steps.

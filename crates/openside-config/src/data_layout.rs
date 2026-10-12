@@ -42,6 +42,7 @@ data_paths! {
     Vapid => ("push-vapid.key", false, "Private VAPID signing key"),
     Subscriptions => ("push-subscriptions.json", false, "Device-bound push subscriptions; atomic replacement companions"),
     CrashReports => ("crash-reports", true, "panic-<time>-<pid>.json metadata-only redacted reports; no upload"),
+    Onboarding => ("onboarding.json", false, "First-run guide state (pending, completed or skipped); atomic replacement companions"),
 }
 
 /// Reject undocumented locations observed in hermetic daemon lifecycle tests.
@@ -151,6 +152,7 @@ pub fn markdown() -> String {
         let _ = writeln!(text, "| {name} | {paths} | {purpose} |");
     }
     text.push_str("\nConfigured `vault.path`, `skills.dir`, `memory.embedding.model_dir`, sync directory backends and session workspaces may live outside these roots; they are explicit user-owned destinations, not hidden daemon directories. SQLite companions and named atomic replacement files are included in the rows above. Directory rows cover all files delegated to the named component.\n");
+    text.push_str("\nIsolated browser-space downloads stay under `browser-profile/space-downloads/<context>` and staged upload copies under `browser-profile/upload-staging/<tab>`, both in private 0700 directories. Disposing a space deletes its downloads; closing a tab or deleting its session deletes its upload copies. A fresh Chromium launch, verified browser death and clean shutdown sweep stale downloads and orphan upload copies; reconnecting to a surviving browser keeps those of live, bound spaces and tabs.\n");
     text
 }
 

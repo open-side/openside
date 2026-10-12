@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use openside_core::{
     MessageId, MessageQueue, MessageStatus, QueueMode, SessionId, SubmitOutcome, TicketId,
 };
 use openside_proto::{
-    Attachment, Event, EventKind, Message, MessageOutcome, PolicyMode, Session, SessionStatus,
-    Ticket, TicketDeferral, TicketStatus,
+    Attachment, BrowserSpace, Event, EventKind, Message, MessageOutcome, PolicyMode, Session,
+    SessionStatus, Ticket, TicketDeferral, TicketStatus,
 };
 
 use crate::{Error, Result};
@@ -35,6 +36,8 @@ pub struct SessionState {
     pub completions: BTreeMap<MessageId, MessageOutcome>,
     /// All ticket records; filter `Pending` when exposing outstanding human actions.
     pub tickets: BTreeMap<TicketId, Ticket>,
+    /// Agent-client identities recorded durably before their work reaches the runtime.
+    pub driver_ids: BTreeSet<String>,
     /// Set by `session.deleted`; the log is retained but the session is hidden and frozen.
     pub deleted: bool,
     /// Latest `session.updated` pinned flag.
@@ -43,10 +46,14 @@ pub struct SessionState {
     pub archived: bool,
     /// Fixed by `session.created`; private sessions are never indexed into memory.
     pub incognito: bool,
+    /// Fixed by `session.created`; isolated sessions browse in their own browser context.
+    pub browser_space: BrowserSpace,
     /// Original text of the first queued message, used for list search.
     pub first_message: Option<String>,
     /// Stored attachments per message, delivered to the runtime with the message.
     pub attachments: BTreeMap<MessageId, Vec<Attachment>>,
+    /// Timestamp of the latest event other than a metadata update; orders the session list.
+    pub last_activity: DateTime<Utc>,
 }
 
 impl SessionState {
@@ -83,6 +90,7 @@ impl SessionState {
             pinned: self.pinned,
             archived: self.archived,
             incognito: self.incognito,
+            browser_space: self.browser_space,
         }
     }
 
@@ -93,6 +101,7 @@ impl SessionState {
             mode,
             workspace,
             incognito,
+            browser_space,
         } = &event.kind
         else {
             return Err(Error::InvalidEvent(
@@ -114,12 +123,15 @@ impl SessionState {
             injected: BTreeSet::new(),
             completions: BTreeMap::new(),
             tickets: BTreeMap::new(),
+            driver_ids: BTreeSet::new(),
             deleted: false,
             pinned: false,
             archived: false,
             incognito: *incognito,
+            browser_space: *browser_space,
             first_message: None,
             attachments: BTreeMap::new(),
+            last_activity: event.ts,
         })
     }
 
@@ -272,6 +284,9 @@ impl SessionState {
                     };
                 }
             }
+            EventKind::SessionDriverRecorded { device_id } => {
+                self.driver_ids.insert(device_id.clone());
+            }
             EventKind::TicketOpened { ticket } => {
                 self.tickets
                     .insert(ticket.id.clone(), ticket.as_ref().clone());
@@ -327,6 +342,9 @@ impl SessionState {
                 }
             }
             _ => {}
+        }
+        if !matches!(event.kind, EventKind::SessionUpdated { .. }) {
+            self.last_activity = event.ts;
         }
         self.last_seq = event.seq;
         Ok(())

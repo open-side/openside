@@ -380,6 +380,8 @@ fn ticket(number: u8, deferral: TicketDeferral) -> Ticket {
         options: vec![],
         origin: TicketOrigin {
             subagent_id: Some("child".into()),
+            device_id: None,
+            driver_ids: Vec::new(),
         },
         tool: (deferral == TicketDeferral::Approval).then(|| TicketTool {
             name: "mock".into(),
@@ -393,6 +395,9 @@ fn ticket(number: u8, deferral: TicketDeferral) -> Ticket {
         resolution: None,
         otp: None,
         otp_register: None,
+        login: None,
+        choice: None,
+        approval: None,
     }
 }
 

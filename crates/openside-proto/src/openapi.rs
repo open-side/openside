@@ -179,6 +179,33 @@ pub const ROUTES: &[Route] = &[
         sse: false,
     },
     Route {
+        method: HttpMethod::Post,
+        path: "/v1/sessions/{id}/prewarm",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 202,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/browser/prewarm",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 202,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/sessions/{id}/browser/thumbnails/{thumbnail_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Browse,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
         method: HttpMethod::Get,
         path: "/v1/sessions/{id}/events",
         request_schema: None,
@@ -488,6 +515,24 @@ pub const ROUTES: &[Route] = &[
     },
     Route {
         method: HttpMethod::Get,
+        path: "/v1/tools",
+        request_schema: None,
+        response_schema: Some("ToolCatalog"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/sessions/{id}/tools/{name}",
+        request_schema: Some("ToolCallRequest"),
+        response_schema: Some("ToolCallResponse"),
+        scope: CapabilityScope::Browse,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
         path: "/v1/skills",
         request_schema: None,
         response_schema: Some("SkillList"),
@@ -527,6 +572,60 @@ pub const ROUTES: &[Route] = &[
         path: "/v1/skills/{name}",
         request_schema: None,
         response_schema: Some("SkillDetail"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/onboarding",
+        request_schema: None,
+        response_schema: Some("OnboardingStatus"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/onboarding",
+        request_schema: Some("UpdateOnboardingRequest"),
+        response_schema: Some("OnboardingStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/external-agents",
+        request_schema: None,
+        response_schema: Some("ExternalAgentList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/external-agents/{id}/browser-skill",
+        request_schema: Some("InstallAgentSkillRequest"),
+        response_schema: Some("InstalledAgentSkill"),
+        scope: CapabilityScope::Admin,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/import/profiles",
+        request_schema: None,
+        response_schema: Some("ImportProfileList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/import",
+        request_schema: Some("ImportRequest"),
+        response_schema: Some("ImportReport"),
         scope: CapabilityScope::Admin,
         success_status: 200,
         sse: false,
@@ -731,6 +830,15 @@ pub const ROUTES: &[Route] = &[
     },
     Route {
         method: HttpMethod::Get,
+        path: "/v1/remote/status",
+        request_schema: None,
+        response_schema: Some("RemoteStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
         path: "/v1/push/vapid",
         request_schema: None,
         response_schema: Some("VapidPublicKey"),
@@ -809,6 +917,18 @@ fn rewrite_refs(value: &mut Value) {
             if let Some(Value::String(reference)) = object.get_mut("$ref") {
                 if let Some(name) = reference.strip_prefix("#/$defs/") {
                     *reference = format!("#/components/schemas/{name}");
+                }
+            }
+            // A tagged newtype variant is `$ref` plus the tag's `properties`. TypeScript and
+            // most OpenAPI generators drop siblings of `$ref`, losing the tag, so spell it as
+            // an `allOf` of the referenced type and the tag object.
+            if object.contains_key("$ref") && object.contains_key("properties") {
+                let reference = object.remove("$ref").unwrap_or_default();
+                let tag = Value::Object(std::mem::take(object));
+                let description = tag.get("description").cloned();
+                object.insert("allOf".into(), json!([{"$ref": reference}, tag]));
+                if let Some(description) = description {
+                    object.insert("description".into(), description);
                 }
             }
             for child in object.values_mut() {
@@ -959,7 +1079,12 @@ pub fn schemas() -> Map<String, Value> {
         PairingOffer,
         ExchangePairingRequest,
         Device,
+        DeviceKind,
         DeviceList,
+        PairingTransport,
+        RemoteStatus,
+        CloudflareStatus,
+        RelayStatus,
         VapidPublicKey,
         PushKeys,
         CreatePushSubscriptionRequest,
@@ -985,7 +1110,28 @@ pub fn schemas() -> Map<String, Value> {
         TakeoverInput,
         TakeoverMouseButton,
         TakeoverMouseEvent,
-        TakeoverKeyEvent
+        TakeoverKeyEvent,
+        ToolDescriptor,
+        ToolCatalog,
+        ToolCallRequest,
+        ToolCallStatus,
+        ToolCallResponse,
+        OnboardingState,
+        OnboardingStatus,
+        UpdateOnboardingRequest,
+        ExternalAgent,
+        ExternalAgentList,
+        InstallAgentSkillRequest,
+        InstalledAgentSkill,
+        ImportBrowser,
+        ImportCategory,
+        ImportAvailability,
+        ImportProfile,
+        ImportProfileList,
+        ImportRequest,
+        ImportRejectedCookie,
+        ImportCategoryReport,
+        ImportReport
     );
     schemas
 }
@@ -1050,6 +1196,15 @@ pub fn openapi() -> Value {
                 "description": "Subagent identifier from subagent.started.",
                 "schema": {"type": "string"}}));
         }
+        if route.path.contains("{thumbnail_id}") {
+            parameters.push(
+                json!({"name": "thumbnail_id", "in": "path", "required": true,
+                "schema": {"type": "string"}}),
+            );
+            operation["description"] = json!("Read a bounded JPEG thumbnail referenced by browser.state. Requires browse; secret-tainted tabs, changed documents, takeover, private/stopped/archived/deleted sessions, expired IDs and IDs from another session are withheld. IDs expire after ten minutes and after daemon restart; responses are never cached.");
+            operation["responses"]["200"]["content"] =
+                json!({"image/jpeg": {"schema": {"type":"string","format":"binary"}}});
+        }
         if route.sse {
             parameters.push(
                 json!({"name": "Last-Event-ID", "in": "header", "required": false,
@@ -1063,6 +1218,12 @@ pub fn openapi() -> Value {
                 "description": "Set false to omit subagent.* events from the stream.",
                 "schema": {"type": "boolean", "default": true}}),
             );
+        }
+        if route.path == "/v1/sessions/{id}/prewarm" {
+            operation["description"] = json!("Start the session's agent process, launch the browser and open one blank agent tab its next browser_open_tab adopts, so the first reply and browser action skip cold starts. Idempotent; returns before the work finishes.");
+        }
+        if route.path == "/v1/browser/prewarm" {
+            operation["description"] = json!("Launch the browser ahead of a new chat's first message. Idempotent; returns before the browser is up.");
         }
         if route.path == "/v1/sessions/{id}/subagents/{sid}/cancel" {
             operation["description"] = json!("Cancel a running or waiting child; its pending tickets are rejected and the parent's delegate call returns a cancelled result. Cancelling a finished child returns 409.");
@@ -1078,9 +1239,12 @@ pub fn openapi() -> Value {
                 "description": "List archived (true) or unarchived (false, default) sessions; pinned sessions come first.",
                 "schema": {"type": "boolean", "default": false}}));
         }
+        if route.path == "/v1/sessions" && route.method == HttpMethod::Post {
+            operation["description"] = json!("Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space).");
+        }
         if route.path == "/v1/sessions/{id}" && route.method == HttpMethod::Patch {
             operation["description"] =
-                json!("Update title/pinned/archived as a durable session.updated event.");
+                json!("Update title/pinned/archived as a durable session.updated event. Archiving an isolated-space session disposes its browser space.");
         }
         if route.path == "/v1/tickets" {
             parameters.push(json!({"name": "status", "in": "query", "required": false,
@@ -1091,13 +1255,26 @@ pub fn openapi() -> Value {
             route.path,
             "/v1/tickets/{id}/resolve" | "/v1/tickets/{id}/reject"
         ) {
-            operation["description"] = json!("The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step. A secret_input answer that registers an authenticator ({\"value\":{\"totp\":…}} on /resolve) also requires approve.");
+            operation["description"] = json!("The daemon checks the ticket kind: confirm/info/choice require approve; secret_input/device_approval/takeover/login require human_step. A secret_input answer that registers an authenticator ({\"value\":{\"totp\":…}} on /resolve) and a login answer that keeps the login ({\"value\":{\"values\":…,\"save\":true}}) also require approve.");
             operation["x-capability-by-ticket-kind"] = json!({
                 "confirm": CapabilityScope::Approve,
                 "info": CapabilityScope::Approve,
                 "secret_input": CapabilityScope::HumanStep,
                 "device_approval": CapabilityScope::HumanStep,
                 "takeover": CapabilityScope::HumanStep,
+                "login": CapabilityScope::HumanStep,
+                "choice": CapabilityScope::Approve,
+            });
+        }
+        if route.path == "/v1/tickets/{id}/resolve" {
+            operation["description"] = json!(format!(
+                "{} Confirm approval, choice answers, TOTP enrollment, and login save:true require a person_device; agent clients and the Unix socket receive 403 person_approval_required and the ticket stays pending. A person device that directly created the ticket, or was recorded as its session driver, receives 403 self_approval_forbidden. Pairing fixes the device kind. Deny/reject and cancel remain allowed with the appropriate scope.",
+                operation["description"].as_str().unwrap_or_default()
+            ));
+            operation["responses"]["403"] = json!({
+                "description": "Caller lacks the ticket scope or the required person-device authority, or tries to approve its own ticket",
+                "content": {"application/json": {"schema": reference("ApiError"),
+                    "example": {"code": "person_approval_required", "message": "person approval required"}}}
             });
         }
         if route.path == "/v1/tickets/{id}/done" {
@@ -1135,10 +1312,28 @@ pub fn openapi() -> Value {
             operation["x-public"] = json!(true);
         }
         if route.path == "/v1/pairing" {
-            operation["description"] = json!("Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). Issuing, exchanging and revoking are written to audit.jsonl.");
+            operation["description"] = json!("Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). The operator fixes kind here: person_device for phones/browsers, agent_client for external CLI/MCP agents. Redemption cannot change it. Issuing, exchanging and revoking are written to audit.jsonl.");
         }
         if route.path == "/v1/pairing/exchange" {
-            operation["description"] = json!("No bearer token: the one-time code is the credential. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A code is consumed by its first exchange attempt.");
+            operation["description"] = json!("No bearer token: the one-time code is the credential. The token inherits the operator-selected kind from the offer; sending kind at redemption is rejected as an unknown field. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A valid request consumes the code on its first exchange attempt.");
+        }
+        if route.path == "/v1/onboarding" && route.method == HttpMethod::Get {
+            operation["description"] = json!("State of the first-run guide, kept on the daemon so every device agrees: `pending` until someone finishes or skips it once.");
+        }
+        if route.path == "/v1/onboarding" && route.method == HttpMethod::Put {
+            operation["description"] = json!("Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). Reopening the guide from Settings does not reset the flag.");
+        }
+        if route.path == "/v1/external-agents" {
+            operation["description"] = json!("The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any `[skills.agents]` entry. `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`.");
+        }
+        if route.path == "/v1/external-agents/{id}/browser-skill" {
+            operation["description"] = json!("Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown.");
+        }
+        if route.path == "/v1/import/profiles" {
+            operation["description"] = json!("Chrome, Chromium and Firefox profiles found in their standard locations on the daemon's computer, with the data each has. Directory paths are never returned; `POST /v1/import` takes the profile id.");
+        }
+        if route.path == "/v1/import" {
+            operation["description"] = json!("Import history, bookmarks and cookies of a discovered profile into the daemon's browser profile. `dry_run` reads and decrypts everything and reports counts without writing; a real run reads everything before it writes anything. Cookies encrypted with the OS keyring (`v11`) need the CLI (`openside import --keyring-password-cmd`). One import runs at a time. 400 unknown_profile; 409 import_in_progress, profile_in_use; 422 source_locked, source_unreadable, source_corrupt, source_unsupported, keyring_password_required; 500 import_failed; 503 browser_unavailable.");
         }
         if route.path == "/v1/devices/{id}" {
             operation["description"] = json!("Revoke a device token. The next request with it gets 401, its open SSE streams end, and its push subscriptions are deleted.");

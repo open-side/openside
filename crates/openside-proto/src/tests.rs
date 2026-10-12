@@ -18,6 +18,8 @@ fn ticket() -> Ticket {
         }],
         origin: TicketOrigin {
             subagent_id: Some("child1".into()),
+            device_id: None,
+            driver_ids: Vec::new(),
         },
         tool: Some(TicketTool {
             name: "mock".into(),
@@ -35,6 +37,9 @@ fn ticket() -> Ticket {
         resolution: None,
         otp: None,
         otp_register: None,
+        login: None,
+        choice: None,
+        approval: None,
     }
 }
 
@@ -152,12 +157,39 @@ fn every_event_kind_round_trips() {
             task: "Inspect the fixture".into(),
             model: "mock/model".into(),
             tools: vec!["mock".into()],
+            background: true,
         },
         EventKind::SubagentEnded {
             subagent_id: "child1".into(),
-            status: SubagentStatus::Cancelled,
-            reason: Some("cancelled".into()),
+            status: SubagentStatus::Completed,
+            reason: None,
+            output: Some("done".into()),
         },
+        EventKind::BrowserState(Box::new(BrowserState {
+            task_id: Some("child1".into()),
+            tab_id: "tab1".into(),
+            url: "https://example.test/login".into(),
+            host: "example.test".into(),
+            title: "Sign in".into(),
+            phase: BrowserPhase::WaitingHuman,
+            action: Some(BrowserActionState {
+                tool: "browser_act".into(),
+                tool_call_id: "call2".into(),
+                phrase: "Working on “Continue”".into(),
+                target: Some("Continue".into()),
+            }),
+            page_kind: PageKind::Login,
+            facts: PageFacts {
+                heading: Some("Sign in".into()),
+                fields: vec![PageField {
+                    label: "Password".into(),
+                    kind: "password".into(),
+                }],
+                result_count: None,
+                error_text: None,
+            },
+            thumbnail: Some("thumbnail1".into()),
+        })),
         EventKind::SubagentLifecycle {
             subagent_id: "child1".into(),
             status: "running".into(),
@@ -182,6 +214,7 @@ fn every_event_kind_round_trips() {
             mode: PolicyMode::Guard,
             workspace: None,
             incognito: false,
+            browser_space: BrowserSpace::Isolated,
         },
         EventKind::SessionSettled {},
         EventKind::SessionStopped {},
@@ -267,7 +300,7 @@ fn openapi_is_json_and_all_schema_references_resolve() {
             serde_json::to_value(route.scope).unwrap()
         );
     }
-    assert_eq!(ROUTES.len(), 83);
+    assert_eq!(ROUTES.len(), 95);
 }
 
 #[test]
@@ -359,6 +392,8 @@ fn ticket_types_round_trip_with_all_wire_variants() {
         (TicketKind::DeviceApproval, "device_approval"),
         (TicketKind::Info, "info"),
         (TicketKind::Takeover, "takeover"),
+        (TicketKind::Login, "login"),
+        (TicketKind::Choice, "choice"),
     ] {
         assert_eq!(serde_json::to_value(kind).unwrap(), wire);
         for (status, status_wire) in [
@@ -402,6 +437,8 @@ fn ticket_types_round_trip_with_all_wire_variants() {
         "TicketId",
         "ResolveTicketRequest",
         "RejectTicketRequest",
+        "TicketLogin",
+        "TicketChoice",
     ] {
         assert!(schemas[name].is_object(), "missing {name}");
     }
@@ -412,7 +449,9 @@ fn ticket_types_round_trip_with_all_wire_variants() {
             json!("secret_input"),
             json!("device_approval"),
             json!("info"),
-            json!("takeover")
+            json!("takeover"),
+            json!("login"),
+            json!("choice")
         ]
     );
     assert_eq!(
@@ -480,13 +519,24 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
         "sessions are recorded unless incognito is asked for"
     );
     assert_eq!(request.workspace, None);
+    assert_eq!(request.browser_space, BrowserSpace::Shared);
+    assert_eq!(
+        serde_json::to_value(BrowserSpace::Isolated).unwrap(),
+        "isolated"
+    );
     for mode in [PolicyMode::ReadOnly, PolicyMode::Guard, PolicyMode::Full] {
+        let space = if mode == PolicyMode::Guard {
+            BrowserSpace::Isolated
+        } else {
+            BrowserSpace::Shared
+        };
         let request = CreateSessionRequest {
             title: None,
             model: None,
             mode: Some(mode),
             workspace: Some("/tmp/workspace".into()),
             incognito: mode == PolicyMode::Full,
+            browser_space: space,
         };
         assert_eq!(
             serde_json::from_value::<CreateSessionRequest>(serde_json::to_value(&request).unwrap())
@@ -499,6 +549,7 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             mode,
             workspace: Some("/tmp/workspace".into()),
             incognito: mode == PolicyMode::Full,
+            browser_space: space,
         };
         assert_eq!(
             serde_json::from_value::<EventKind>(serde_json::to_value(&event).unwrap()).unwrap(),
@@ -516,6 +567,7 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             pinned: true,
             archived: false,
             incognito: mode == PolicyMode::Full,
+            browser_space: space,
         };
         assert_eq!(
             serde_json::from_value::<Session>(serde_json::to_value(&session).unwrap()).unwrap(),
@@ -533,6 +585,7 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             mode: PolicyMode::Guard,
             workspace: None,
             incognito: false,
+            browser_space: BrowserSpace::Shared,
         }
     );
     assert_eq!(
@@ -582,6 +635,7 @@ fn ticket_routes_document_exact_capability_and_desktop_contracts() {
             json!({
                 "confirm": "approve", "info": "approve", "secret_input": "human_step",
                 "device_approval": "human_step", "takeover": "human_step",
+                "login": "human_step", "choice": "approve",
             })
         );
         assert_eq!(
@@ -752,6 +806,14 @@ fn policy_routes_and_browse_scope_are_documented() {
     assert_eq!(
         scope(HttpMethod::Post, "/v1/sessions/{id}/repl"),
         Some(CapabilityScope::Browse)
+    );
+    assert_eq!(
+        scope(HttpMethod::Post, "/v1/sessions/{id}/tools/{name}"),
+        Some(CapabilityScope::Browse)
+    );
+    assert_eq!(
+        scope(HttpMethod::Get, "/v1/tools"),
+        Some(CapabilityScope::Read)
     );
     let document = openapi();
     assert_eq!(

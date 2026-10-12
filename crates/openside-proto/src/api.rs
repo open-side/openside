@@ -12,9 +12,10 @@ pub enum CapabilityScope {
     Read,
     /// Create sessions and modify or deliver messages.
     Steer,
-    /// Resolve or reject confirmation and information tickets.
+    /// Resolve or reject confirm, info and choice tickets; positive confirm/choice decisions
+    /// additionally require a person device.
     Approve,
-    /// Resolve, complete, or reject secret-input, device-approval, and takeover tickets.
+    /// Resolve, complete, or reject secret-input, login, device-approval, and takeover tickets.
     HumanStep,
     /// Pair and revoke devices.
     Admin,
@@ -66,6 +67,25 @@ impl From<openside_policy::Mode> for PolicyMode {
             openside_policy::Mode::Guard => Self::Guard,
             openside_policy::Mode::FullAccess => Self::Full,
         }
+    }
+}
+
+/// Where a session's agent tabs browse, fixed at creation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserSpace {
+    /// The managed browser profile, with the logins and cookies it already holds.
+    #[default]
+    Shared,
+    /// An isolated browser context in the same managed browser: own cookies and storage,
+    /// kept in memory and wiped when the session is archived or deleted.
+    Isolated,
+}
+
+impl BrowserSpace {
+    /// Whether this is the default shared profile (serde skip helper).
+    pub fn is_shared(&self) -> bool {
+        *self == Self::Shared
     }
 }
 
@@ -133,6 +153,9 @@ pub struct Session {
     /// Private session fixed at creation: its browsing is never written to memory.
     #[serde(default)]
     pub incognito: bool,
+    /// Browser space fixed at creation; historical sessions are shared.
+    #[serde(default)]
+    pub browser_space: BrowserSpace,
 }
 
 /// Health response without environment or credential details.
@@ -159,6 +182,10 @@ pub struct CreateSessionRequest {
     /// Create a private session; immutable afterwards. Browsing history is not indexed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub incognito: bool,
+    /// Browse in the shared managed profile (default) or an isolated space; immutable
+    /// afterwards. Incognito sessions already have their own browser and refuse `isolated`.
+    #[serde(default, skip_serializing_if = "BrowserSpace::is_shared")]
+    pub browser_space: BrowserSpace,
 }
 
 /// Session listing response.
@@ -236,6 +263,12 @@ pub enum TicketKind {
     Info,
     /// Perform an action directly in the browser.
     Takeover,
+    /// Sign in to a site through a form the daemon built from the page's own login form
+    /// (`request_login`); the values go straight into the page, never to the model.
+    Login,
+    /// Pick one of the choices a page offers (`request_choice`); the daemon clicks the page's
+    /// own control.
+    Choice,
 }
 
 /// Resumption semantics for the suspended tool call.
@@ -269,6 +302,12 @@ pub enum TicketStatus {
 pub struct TicketOrigin {
     /// Absent for the parent agent, otherwise the originating subagent.
     pub subagent_id: Option<String>,
+    /// Device behind a direct API tool call; `local` identifies the Unix socket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// Agent-client identities that drove this session before the ticket opened.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub driver_ids: Vec<String>,
 }
 
 /// One selectable non-secret response.
@@ -325,7 +364,7 @@ pub struct TicketOtp {
     /// Besides a code (a string `value`), the person may resolve with
     /// `{"totp": "<otpauth:// URI or base32 setup key>"}`: the daemon stores the authenticator
     /// in the vault for the ticket's origin and fills the code it generates, now and on later
-    /// `request_otp` calls for that origin.
+    /// `request_otp` calls for that origin. Registration requires `approve` and a person device.
     pub can_register: bool,
 }
 
@@ -342,6 +381,181 @@ pub struct TicketOtpRegister {
     pub issuer: Option<String>,
     /// Account named by the setup page's `otpauth://` URI, when it has one.
     pub account: Option<String>,
+}
+
+/// Kind of a field on a `login` ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginFieldKind {
+    /// The account name: user id, email address or phone number.
+    Identifier,
+    /// The password.
+    Password,
+    /// Any other text the form asks for.
+    Text,
+    /// A tick box such as "keep me signed in"; answered with a boolean.
+    Checkbox,
+}
+
+/// One field of the page's login form, in page order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TicketLoginField {
+    /// Daemon-assigned id the answer's `values` are keyed by.
+    pub id: String,
+    /// What the field holds.
+    pub kind: LoginFieldKind,
+    /// The page's own label for the field (untrusted page text, trimmed and capped).
+    pub label: String,
+    /// The page's placeholder, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    /// Autocomplete token for the card's input (`username`, `email`, `tel`,
+    /// `current-password`, `one-time-code`), so the person's own password manager can fill it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autocomplete: Option<String>,
+    /// Whether the input hides what is typed (passwords).
+    pub masked: bool,
+    /// Whether the page requires a value.
+    pub required: bool,
+}
+
+/// Kind of an alternative sign-in control on the page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginAlternativeKind {
+    /// Sign in with another provider's account.
+    Provider,
+    /// Sign in with a passkey or security key.
+    Passkey,
+    /// Sign in by scanning a QR code.
+    Qr,
+    /// Any other sign-in mode the page offers (one-time number, a login-mode tab).
+    Other,
+}
+
+/// Identity provider behind an alternative sign-in control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginProvider {
+    /// Google.
+    Google,
+    /// Apple.
+    Apple,
+    /// Kakao.
+    Kakao,
+    /// Naver.
+    Naver,
+    /// Facebook.
+    Facebook,
+    /// GitHub.
+    Github,
+    /// Microsoft.
+    Microsoft,
+}
+
+/// An alternative sign-in control on the page; answering with its id clicks it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TicketLoginAlternative {
+    /// Daemon-assigned id.
+    pub id: String,
+    /// The control's accessible name on the page (untrusted page text).
+    pub label: String,
+    /// What kind of sign-in it starts.
+    pub kind: LoginAlternativeKind,
+    /// The provider, for `provider` controls the daemon recognized.
+    #[serde(default)]
+    pub provider: Option<LoginProvider>,
+}
+
+/// A login saved in the vault for the ticket's origin, offered instead of typing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TicketLoginAccount {
+    /// Vault item id; answer with `{"account": item_id}`.
+    pub item_id: String,
+    /// Masked account name, e.g. `j***@naver.com`.
+    pub username_hint: String,
+}
+
+/// What a `login` ticket (`request_login`) shows: the page's login form, rebuilt by the
+/// daemon. Answer with `{"values": {<field id>: string | bool}, "save": bool}`,
+/// `{"account": <item_id>}` or `{"alternative": <id>}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TicketLogin {
+    /// Exact page origin the values go to.
+    pub origin: String,
+    /// The site's name as the page gives it (untrusted page text), or its host.
+    pub site_name: String,
+    /// The site's icon as a `data:image/...;base64,` URL (at most 8 KiB, fetched by the
+    /// daemon from the page's own origin), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Fields in page order.
+    pub fields: Vec<TicketLoginField>,
+    /// Other ways to sign in the page offers.
+    pub alternatives: Vec<TicketLoginAlternative>,
+    /// Logins saved for this origin, when there are several to pick from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<Vec<TicketLoginAccount>>,
+    /// The page's own text for its sign-in button.
+    pub submit_label: String,
+    /// Whether `save: true` may keep the identifier and password in the vault for this
+    /// origin (it also needs the `approve` scope and a person device).
+    pub can_save: bool,
+    /// The page's own error message next to the form (e.g. a wrong password on the previous
+    /// attempt; untrusted page text, redacted and capped), when it shows one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_text: Option<String>,
+}
+
+/// What a `device_approval` ticket opened by `wait_for_approval` shows: the site asks the
+/// person to approve the sign-in on their phone (a push notification in the site's own app).
+/// Nobody answers it in openside: the daemon watches the page and resolves the ticket with
+/// `{"status":"done","next":…}` once the page moves on; rejecting it cancels the wait.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TicketApproval {
+    /// Exact page origin.
+    pub origin: String,
+    /// The site's name as the page gives it (untrusted page text), or its host.
+    pub site_name: String,
+    /// The site's icon, as on [`TicketLogin::icon`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// The page's heading and instruction for the approval (untrusted page text, capped).
+    pub message: String,
+    /// The number the page asks the person to tap or type on the phone, when it shows one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<String>,
+}
+
+/// One option of a `choice` ticket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TicketChoiceOption {
+    /// Daemon-assigned id; answer with `{"option": id}`.
+    pub id: String,
+    /// The control's accessible name on the page (untrusted page text), never the model's.
+    pub label: String,
+    /// Secondary page text of the option, when it has some.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// What a `choice` ticket (`request_choice`) shows: a decision the page asks for, such as
+/// which account, which verification method, or whether to trust this device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TicketChoice {
+    /// Exact page origin.
+    pub origin: String,
+    /// The site's name as the page gives it (untrusted page text), or its host.
+    pub site_name: String,
+    /// The site's icon, as on [`TicketLogin::icon`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// The page's heading for the choice.
+    pub question: String,
+    /// Options in page order.
+    pub options: Vec<TicketChoiceOption>,
+    /// Always false: one option is picked.
+    pub multiple: bool,
 }
 
 /// Durable human-intervention ticket correlated with the same deferred tool call.
@@ -386,6 +600,16 @@ pub struct Ticket {
     /// (`register_authenticator`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub otp_register: Option<TicketOtpRegister>,
+    /// Set on `login` tickets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<TicketLogin>,
+    /// Set on `choice` tickets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<TicketChoice>,
+    /// Set on `device_approval` tickets that wait for a phone sign-in approval
+    /// (`wait_for_approval`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<TicketApproval>,
 }
 
 /// Ticket list, optionally filtered by status.
@@ -404,7 +628,9 @@ pub struct ResolveTicketRequest {
     /// Confirmation, non-secret information, or transient daemon-only secret input: a string,
     /// or `{"totp": "<otpauth:// URI or base32 key>"}` for a `secret_input` ticket whose
     /// `otp.can_register` is true. A `confirm` ticket carrying `otp_register` takes `true` or
-    /// `false` like any confirmation.
+    /// `false` like any confirmation. A `login` ticket takes
+    /// `{"values": {<field id>: string | bool}, "save": bool}`, `{"account": <item_id>}` or
+    /// `{"alternative": <id>}`; a `choice` ticket takes `{"option": <id>}`.
     pub value: Value,
 }
 
@@ -424,6 +650,9 @@ pub struct PairDeviceRequest {
     pub name: String,
     /// Explicit capabilities to grant.
     pub scopes: Vec<CapabilityScope>,
+    /// Fixed at token creation; agent clients cannot approve their own work.
+    #[serde(default)]
+    pub kind: crate::DeviceKind,
 }
 
 /// Administrative pairing result; the secret token is returned once.
@@ -435,6 +664,9 @@ pub struct PairDeviceResponse {
     pub token: String,
     /// Granted capabilities.
     pub scopes: Vec<CapabilityScope>,
+    /// Operator-selected trust role fixed when this token was paired.
+    #[serde(default)]
+    pub kind: crate::DeviceKind,
 }
 
 /// JSON error response for non-successful HTTP requests.

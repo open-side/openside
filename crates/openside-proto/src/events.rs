@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{PolicyMode, SubagentStatus, Ticket};
+use crate::{BrowserSpace, PolicyMode, SubagentStatus, Ticket};
 
 /// Terminal runtime disposition, distinct from dispatch to the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -218,6 +218,10 @@ pub enum EventKind {
         model: String,
         /// Tools the child may call.
         tools: Vec<String>,
+        /// A Task started by the front agent's `task_start`: it runs in the background and
+        /// reports its result into the conversation instead of blocking the parent call.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        background: bool,
     },
     /// A child agent reached a terminal state; its result went to the parent.
     #[serde(rename = "subagent.ended")]
@@ -229,6 +233,9 @@ pub enum EventKind {
         /// Sanitized detail for failed or cancelled children.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// Redacted final answer of a completed child, truncated for display.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
     },
     /// Subagent lifecycle transition.
     #[serde(rename = "subagent.lifecycle")]
@@ -266,6 +273,12 @@ pub enum EventKind {
         /// Browser target identifier.
         tab_id: String,
     },
+    /// An agent-client identity drove the session and cannot approve its later confirmations.
+    #[serde(rename = "session.driver_recorded")]
+    SessionDriverRecorded {
+        /// Paired device id, or `local` for the Unix socket.
+        device_id: String,
+    },
     /// First event in a session log.
     #[serde(rename = "session.created")]
     SessionCreated {
@@ -282,6 +295,9 @@ pub enum EventKind {
         /// Private session; historical events are not private.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         incognito: bool,
+        /// Browser space; historical events are shared.
+        #[serde(default, skip_serializing_if = "BrowserSpace::is_shared")]
+        browser_space: BrowserSpace,
     },
     /// Runtime has no active turn.
     #[serde(rename = "session.settled")]
@@ -322,4 +338,120 @@ pub enum EventKind {
         /// Redacted failure detail.
         message: String,
     },
+    /// What an agent is doing in a browser tab, derived by the daemon from the tool call and
+    /// the page itself (labels come from the page, never from the model).
+    #[serde(rename = "browser.state")]
+    BrowserState(Box<BrowserState>),
+}
+
+/// Typed browser situation for one tab, rendered as a live card per Task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BrowserState {
+    /// Task (background subagent) acting in the tab; absent for the front agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// Browser target identifier.
+    pub tab_id: String,
+    /// Current URL with sensitive components redacted.
+    pub url: String,
+    /// Host of `url`, empty for non-network pages.
+    pub host: String,
+    /// Page title.
+    pub title: String,
+    /// What the agent is doing in the tab.
+    pub phase: BrowserPhase,
+    /// The tool call behind this state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<BrowserActionState>,
+    /// Classification of the page.
+    pub page_kind: PageKind,
+    /// Facts read from the page.
+    pub facts: PageFacts,
+    /// Opaque JPEG thumbnail ID, fetched through the authenticated session route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+}
+
+/// Agent activity in a tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserPhase {
+    /// Navigating or waiting for the page to load.
+    Loading,
+    /// Reading the page (snapshot, screenshot).
+    Reading,
+    /// Clicking, typing or otherwise interacting.
+    Acting,
+    /// Waiting for a person (login, code, choice, approval).
+    WaitingHuman,
+    /// The Task finished with this tab.
+    Done,
+    /// The last browser action failed.
+    Error,
+}
+
+/// The tool call that produced a browser state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BrowserActionState {
+    /// Tool name.
+    pub tool: String,
+    /// Runtime call identifier.
+    pub tool_call_id: String,
+    /// Human phrase such as "Clicking" or "Opening example.com".
+    pub phrase: String,
+    /// Accessible label of the target element, read from the page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+/// Page classification for card layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PageKind {
+    /// Sign-in form (password field).
+    Login,
+    /// One-time code entry.
+    Otp,
+    /// A set of options to pick from.
+    Choice,
+    /// Human verification challenge.
+    Captcha,
+    /// Other form.
+    Form,
+    /// Search results or another list of items.
+    List,
+    /// Reading content.
+    Article,
+    /// Payment or order confirmation.
+    Checkout,
+    /// Error page.
+    Error,
+    /// Nothing more specific.
+    Other,
+}
+
+/// Facts extracted from the page, bounded for display.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PageFacts {
+    /// Main heading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading: Option<String>,
+    /// Form fields by accessible label (at most 8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<PageField>,
+    /// Number of items in the main list or results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_count: Option<u32>,
+    /// Error text shown by the page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_text: Option<String>,
+}
+
+/// One form field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PageField {
+    /// Accessible label.
+    pub label: String,
+    /// Input kind: `text`, `email`, `password`, `code`, `checkbox`, `radio`, `select`, `button`, ….
+    pub kind: String,
 }

@@ -161,7 +161,7 @@ fn agent_runtime_options_reach_the_sidecar_and_keep_must_stay_below_max() {
     .unwrap_or_else(|err| panic!("tuned: {err}"));
     assert_eq!(
         tuned.agent.runtime_options(),
-        serde_json::json!({"tool_retries": 1, "compaction_max_messages": 40, "compaction_keep_messages": 39, "profile": "browser-agent"})
+        serde_json::json!({"tool_retries": 1, "compaction_max_messages": 40, "compaction_keep_messages": 39, "profile": "browser-agent", "orchestration": "front"})
     );
     validate(&tuned, path).unwrap_or_else(|err| panic!("tuned validation: {err}"));
     let equal = parse_config(
@@ -644,4 +644,19 @@ fn vault_unlock_auto_keeps_the_file_method_and_never_falls_back_silently() {
     );
     assert!(toml::from_str::<crate::Config>("[vault]\nunlock = \"passphrase-cmd\"").is_err());
     assert_eq!(crate::Config::default().vault.unlock, U::Auto);
+}
+
+#[test]
+fn front_is_default_without_a_separate_model_and_single_remains_explicit() {
+    let path = Path::new("config.toml");
+    let default = parse_config(path, "").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(default.agent.orchestration, crate::Orchestration::Front);
+    assert_eq!(default.models.front, None);
+    let configured = parse_config(
+        path,
+        "[agent]\norchestration = \"single\"\n[models]\nfront = \"provider:fast\"",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(configured.agent.orchestration, crate::Orchestration::Single);
+    assert_eq!(configured.models.front.as_deref(), Some("provider:fast"));
 }

@@ -73,7 +73,7 @@ pub struct VaultAuditRecord {
     /// Caller label: `opensided` for tools and the daemon's own startup unlock, `device:<id>`
     /// for a paired device's API call, `local` for the Unix socket.
     pub who: String,
-    /// `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `get`,
+    /// `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `login_save`, `get`,
     /// `policy_update`, `item_add`, `item_delete`, or the lifecycle steps `setup`, `unlock`
     /// and `lock`.
     pub what: String,

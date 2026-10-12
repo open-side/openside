@@ -282,6 +282,8 @@ pub enum RuntimeEvent {
         subagent_id: String,
         /// Runtime-defined lifecycle state.
         status: String,
+        /// Final answer of a completed child.
+        output: Option<String>,
     },
     /// A subagent reported progress.
     SubagentProgress {

@@ -31,6 +31,7 @@ mod artifacts;
 mod browser_tabs;
 mod events;
 mod memory;
+mod onboarding;
 mod openapi;
 mod policy;
 mod preview;
@@ -42,6 +43,7 @@ mod skills;
 mod subagents;
 mod sync;
 mod takeover;
+mod tool_api;
 mod vault;
 
 pub use accounts::*;
@@ -50,6 +52,7 @@ pub use artifacts::*;
 pub use browser_tabs::*;
 pub use events::*;
 pub use memory::*;
+pub use onboarding::*;
 pub use openapi::{openapi, schemas, HttpMethod, Route, ROUTES};
 pub use openside_core::{
     ContentKind, DropReason, MessageId, MessageStatus, QueueMode, SessionId, TicketId,
@@ -64,6 +67,7 @@ pub use skills::*;
 pub use subagents::*;
 pub use sync::*;
 pub use takeover::*;
+pub use tool_api::*;
 pub use vault::*;
 
 #[cfg(test)]

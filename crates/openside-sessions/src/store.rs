@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, path::Path, time::Duration};
 use chrono::{DateTime, Utc};
 use openside_core::{AgentState, SessionId, TicketId};
 use openside_proto::{
-    Event, EventKind, PolicyMode, Session, TicketDeferral, TicketKind, TicketStatus,
+    BrowserSpace, Event, EventKind, PolicyMode, Session, TicketDeferral, TicketKind, TicketStatus,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
@@ -133,6 +133,7 @@ impl Store {
                 mode,
                 workspace,
                 incognito,
+                browser_space: BrowserSpace::Shared,
             },
         )
     }

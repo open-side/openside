@@ -1,19 +1,149 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-/// Remote access from other devices: pairing links and push notifications (`docs/REMOTE.md`).
+/// Remote access from other devices: transports, pairing links and push notifications
+/// (`docs/REMOTE.md`).
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct RemoteConfig {
-    /// HTTPS base URL other devices use to reach the daemon (Tailscale Serve or a
+    /// Managed transports, in pairing preference order: `"tailscale"`, `"cloudflare"`,
+    /// `"relay"`; a single string, a list, or `"off"` (none). Several may run at once.
+    #[serde(deserialize_with = "modes")]
+    pub mode: Vec<RemoteMode>,
+    /// HTTPS base URL other devices use to reach the daemon directly (Tailscale Serve or a
     /// TLS reverse proxy), e.g. `https://host.example.ts.net`. Pairing links and QR
-    /// codes point here; unset prints only the pairing code and path.
+    /// codes for the `tailscale` transport point here; unset prints only the pairing code
+    /// and path.
     pub public_url: Option<String>,
     /// Contact URI sent to push services in the VAPID `sub` claim (`mailto:` or
     /// `https:`); defaults to `public_url` when it is HTTPS.
     pub push_contact: Option<String>,
+    /// Cloudflare Tunnel run by the daemon (`mode` contains `"cloudflare"`).
+    pub cloudflare: CloudflareConfig,
+    /// Self-hosted relay the daemon registers with (`mode` contains `"relay"`).
+    pub relay: RelayConfig,
+}
+
+/// A way for devices outside this network to reach the daemon.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteMode {
+    /// Tailscale Serve in front of `daemon.listen`; devices use `remote.public_url`.
+    Tailscale,
+    /// `cloudflared` supervised by the daemon, forwarding to `daemon.listen`.
+    Cloudflare,
+    /// Outbound WebSocket to a relay; end-to-end encrypted to paired devices.
+    Relay,
+}
+
+fn modes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<RemoteMode>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Modes {
+        One(String),
+        Many(Vec<RemoteMode>),
+    }
+    let mut list = match Modes::deserialize(deserializer)? {
+        Modes::One(text) if text == "off" => Vec::new(),
+        Modes::One(text) => vec![RemoteMode::deserialize(
+            serde::de::value::StrDeserializer::<D::Error>::new(&text),
+        )?],
+        Modes::Many(list) => list,
+    };
+    let mut seen = Vec::new();
+    list.retain(|mode| {
+        let fresh = !seen.contains(mode);
+        seen.push(*mode);
+        fresh
+    });
+    Ok(list)
+}
+
+/// How the daemon runs `cloudflared`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CloudflareTunnel {
+    /// Account-less quick tunnel: a random `https://*.trycloudflare.com` URL that changes
+    /// whenever `cloudflared` restarts (pair again after a restart).
+    #[default]
+    Quick,
+    /// Named tunnel from the Cloudflare dashboard: stable hostname, needs its token.
+    Named,
+}
+
+/// `[remote.cloudflare]`.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct CloudflareConfig {
+    /// `quick` (zero configuration) or `named` (stable hostname).
+    pub tunnel: CloudflareTunnel,
+    /// Public hostname routed to this tunnel in the Cloudflare dashboard (`named` only),
+    /// e.g. `desk.example.com`.
+    pub hostname: Option<String>,
+    /// File holding the named tunnel's token (0600). `OPENSIDE_CLOUDFLARE_TOKEN` is used
+    /// when unset. The token is passed to `cloudflared` in its environment, never argv.
+    pub token_file: Option<PathBuf>,
+    /// `cloudflared` executable (name on `PATH` or absolute path).
+    pub bin: String,
+}
+
+impl Default for CloudflareConfig {
+    fn default() -> Self {
+        Self {
+            tunnel: CloudflareTunnel::Quick,
+            hostname: None,
+            token_file: None,
+            bin: "cloudflared".into(),
+        }
+    }
+}
+
+/// `[remote.relay]`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RelayConfig {
+    /// Relay origin, e.g. `https://relay.example.com` (`http://` only on loopback).
+    pub url: Option<String>,
+    /// File holding the registration token the relay operator issued (0600).
+    /// `OPENSIDE_RELAY_TOKEN` is used when unset.
+    pub token_file: Option<PathBuf>,
+}
+
+impl RemoteConfig {
+    /// Whether `mode` lists `which`.
+    pub fn has(&self, which: RemoteMode) -> bool {
+        self.mode.contains(&which)
+    }
+}
+
+/// Expand a leading `~/` with `$HOME`; other paths are returned unchanged.
+pub fn expand_home(path: &std::path::Path) -> PathBuf {
+    match (path.strip_prefix("~"), std::env::var_os("HOME")) {
+        (Ok(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => path.to_owned(),
+    }
+}
+
+/// Read a secret from `file` (trimmed), else from the environment variable `env`.
+pub fn read_secret(file: Option<&std::path::Path>, env: &str) -> Option<String> {
+    let value = match file {
+        Some(path) => std::fs::read_to_string(expand_home(path)).ok()?,
+        None => std::env::var(env).ok()?,
+    };
+    let value = value.trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+fn https_or_loopback(url: &str) -> bool {
+    if let Some(rest) = url.strip_prefix("https://") {
+        let host = rest.trim_end_matches('/');
+        return !host.is_empty() && !host.contains(['/', '?', '#', '@', ' ']);
+    }
+    url.strip_prefix("http://")
+        .map(|rest| rest.trim_end_matches('/'))
+        .is_some_and(|rest| !rest.contains(['/', '?', '#', '@', ' ']) && loopback_host(rest))
 }
 
 /// Forwarded SMS one-time codes (`POST /v1/otp`, `otp_ingest` scope).
@@ -92,6 +222,66 @@ pub(crate) fn validate(config: &crate::Config) -> Result<(), (&'static str, &'st
         }) {
             return Err(("remote.push_contact", "must be a mailto: or https:// URL"));
         }
+    }
+    let remote = &config.remote;
+    if let Some(url) = &remote.relay.url {
+        if !https_or_loopback(url) {
+            return Err((
+                "remote.relay.url",
+                "must be an https:// origin without a path (http:// only on loopback)",
+            ));
+        }
+    }
+    if remote.has(RemoteMode::Relay) && remote.relay.url.is_none() {
+        return Err((
+            "remote.relay.url",
+            "is required when remote.mode includes \"relay\"",
+        ));
+    }
+    if let Some(hostname) = &remote.cloudflare.hostname {
+        if hostname.is_empty()
+            || hostname.contains(['/', ':', '?', '#', '@', ' '])
+            || hostname != &hostname.to_ascii_lowercase()
+        {
+            return Err((
+                "remote.cloudflare.hostname",
+                "must be a bare lowercase host name such as desk.example.com",
+            ));
+        }
+    }
+    if remote.has(RemoteMode::Cloudflare) {
+        if remote.cloudflare.tunnel == CloudflareTunnel::Named
+            && remote.cloudflare.hostname.is_none()
+        {
+            return Err((
+                "remote.cloudflare.hostname",
+                "is required for a named tunnel",
+            ));
+        }
+        if remote.cloudflare.bin.trim().is_empty() || remote.cloudflare.bin.contains('\0') {
+            return Err((
+                "remote.cloudflare.bin",
+                "must name the cloudflared executable",
+            ));
+        }
+    }
+    let needs_listener = remote.has(RemoteMode::Cloudflare) || remote.has(RemoteMode::Tailscale);
+    if needs_listener && config.daemon.listen.is_none() {
+        return Err((
+            "daemon.listen",
+            "is required for the tailscale and cloudflare transports (they forward to it)",
+        ));
+    }
+    if remote.has(RemoteMode::Tailscale)
+        && !remote
+            .public_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("https://"))
+    {
+        return Err((
+            "remote.public_url",
+            "must be the https:// Tailscale Serve address when remote.mode includes \"tailscale\"",
+        ));
     }
     if config
         .otp
@@ -224,6 +414,7 @@ pub(crate) fn doctor_check(report: &mut crate::doctor::DoctorReport, loaded: &cr
             }
         }
     }
+    transport_checks(&mut add, loaded);
     let key = loaded.paths.data_dir.join("push-vapid.key");
     match std::fs::symlink_metadata(&key) {
         Err(_) => add(
@@ -272,6 +463,158 @@ pub(crate) fn doctor_check(report: &mut crate::doctor::DoctorReport, loaded: &cr
                     Some("Delete the file; the daemon creates a new one and devices re-enable notifications."),
                 ),
             }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn private_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o077 == 0)
+}
+
+#[cfg(not(unix))]
+fn private_file(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
+/// A secret from a 0600 file or the environment: `Ok(source)` or `Err((summary, next step))`.
+fn secret_check(
+    file: Option<&std::path::Path>,
+    env: &str,
+    what: &str,
+) -> Result<String, (String, String)> {
+    match file {
+        Some(path) => {
+            let path = expand_home(path);
+            if !path.is_file() {
+                return Err((
+                    format!("{what} file {} does not exist", path.display()),
+                    format!("Write the {what} to {} and chmod 600 it.", path.display()),
+                ));
+            }
+            if !private_file(&path) {
+                return Err((
+                    format!("{what} file {} is readable by other users", path.display()),
+                    format!("chmod 600 {}", path.display()),
+                ));
+            }
+            if read_secret(Some(&path), env).is_none() {
+                return Err((
+                    format!("{what} file {} is empty", path.display()),
+                    format!("Write the {what} to it."),
+                ));
+            }
+            Ok(path.display().to_string())
+        }
+        None if read_secret(None, env).is_some() => Ok(format!("${env}")),
+        None => Err((
+            format!("no {what}: neither a token_file nor ${env} is set"),
+            format!("Set the token_file key or export {env} for the daemon."),
+        )),
+    }
+}
+
+fn transport_checks(
+    add: &mut impl FnMut(&str, crate::doctor::Status, String, Option<&str>),
+    loaded: &crate::Loaded,
+) {
+    use crate::doctor::Status;
+    let remote = &loaded.config.remote;
+    if remote.has(RemoteMode::Tailscale) {
+        let url = remote.public_url.as_deref().unwrap_or_default();
+        let host = url
+            .strip_prefix("https://")
+            .unwrap_or_default()
+            .trim_end_matches('/');
+        match (
+            crate::discovery::find_on_path("tailscale"),
+            host.ends_with(".ts.net"),
+        ) {
+            (None, _) => add(
+                "remote.tailscale",
+                Status::Fail,
+                "tailscale is not installed or not on PATH".into(),
+                Some("Install Tailscale, log in, then run `openside remote setup tailscale`."),
+            ),
+            (Some(_), true) => add(
+                "remote.tailscale",
+                Status::Ok,
+                format!("Tailscale Serve address {url}"),
+                None,
+            ),
+            (Some(_), false) => add(
+                "remote.tailscale",
+                Status::Warn,
+                format!("{url} is not a *.ts.net address; is this really the Tailscale Serve URL?"),
+                Some("Run `openside remote setup tailscale` to read it from `tailscale status`."),
+            ),
+        }
+    }
+    if remote.has(RemoteMode::Cloudflare) {
+        let cloudflare = &remote.cloudflare;
+        let token = (cloudflare.tunnel == CloudflareTunnel::Named).then(|| {
+            secret_check(
+                cloudflare.token_file.as_deref(),
+                "OPENSIDE_CLOUDFLARE_TOKEN",
+                "Cloudflare tunnel token",
+            )
+        });
+        match (crate::discovery::find_on_path(&cloudflare.bin), token) {
+            (None, _) => add(
+                "remote.cloudflare",
+                Status::Fail,
+                format!("{} is not installed or not on PATH", cloudflare.bin),
+                Some("Install cloudflared (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)."),
+            ),
+            (Some(_), Some(Err((summary, next)))) => {
+                add("remote.cloudflare", Status::Fail, summary, Some(&next));
+            }
+            (Some(bin), Some(Ok(source))) => add(
+                "remote.cloudflare",
+                Status::Ok,
+                format!(
+                    "Named tunnel https://{} via {} (token from {source})",
+                    cloudflare.hostname.as_deref().unwrap_or_default(),
+                    bin.display()
+                ),
+                None,
+            ),
+            (Some(bin), None) => add(
+                "remote.cloudflare",
+                Status::Ok,
+                format!(
+                    "Quick tunnel via {}: the trycloudflare.com address changes whenever it restarts, so pair again afterwards",
+                    bin.display()
+                ),
+                None,
+            ),
+        }
+    }
+    if remote.has(RemoteMode::Relay) {
+        let url = remote.relay.url.as_deref().unwrap_or_default();
+        let key = loaded.paths.data_dir.join("relay-key");
+        match secret_check(remote.relay.token_file.as_deref(), "OPENSIDE_RELAY_TOKEN", "relay registration token") {
+            Err((summary, next)) => add("remote.relay", Status::Fail, summary, Some(&next)),
+            Ok(_) if key.exists() && !private_file(&key) => add(
+                "remote.relay",
+                Status::Fail,
+                format!("{} is not a private regular file", key.display()),
+                Some("chmod 600 it, or delete it and pair every relay device again."),
+            ),
+            Ok(source) if key.exists() => add(
+                "remote.relay",
+                Status::Ok,
+                format!("Relay {url} (token from {source}); end-to-end key {}", key.display()),
+                None,
+            ),
+            Ok(source) => add(
+                "remote.relay",
+                Status::Warn,
+                format!("Relay {url} (token from {source}); the end-to-end key is created when the daemon starts"),
+                Some("Restart the daemon, then pair devices with `openside pair --via relay`."),
+            ),
         }
     }
 }
@@ -406,5 +749,124 @@ mod tests {
             check(|c| c.remote.push_contact = Some("mailto:ops@example.test".into())),
             Ok(())
         );
+    }
+
+    #[test]
+    fn remote_mode_accepts_a_string_a_list_or_off_and_validates_each_transport() {
+        use super::{CloudflareTunnel, RemoteMode};
+        let parse = |text: &str| -> crate::RemoteConfig { toml::from_str(text).unwrap() };
+        assert_eq!(parse("mode = \"relay\"").mode, vec![RemoteMode::Relay]);
+        assert_eq!(parse("mode = \"off\"").mode, Vec::<RemoteMode>::new());
+        assert_eq!(
+            parse("mode = [\"tailscale\", \"relay\", \"tailscale\"]").mode,
+            vec![RemoteMode::Tailscale, RemoteMode::Relay]
+        );
+        assert!(toml::from_str::<crate::RemoteConfig>("mode = \"carrier-pigeon\"").is_err());
+
+        let check = |edit: fn(&mut crate::Config)| {
+            let mut config = crate::Config::default();
+            edit(&mut config);
+            super::validate(&config).map_err(|(key, _)| key)
+        };
+        assert_eq!(
+            check(|c| c.remote.mode = vec![RemoteMode::Relay]),
+            Err("remote.relay.url")
+        );
+        assert_eq!(
+            check(|c| {
+                c.remote.mode = vec![RemoteMode::Relay];
+                c.remote.relay.url = Some("http://relay.example.test".into());
+            }),
+            Err("remote.relay.url")
+        );
+        assert_eq!(
+            check(|c| {
+                c.remote.mode = vec![RemoteMode::Relay];
+                c.remote.relay.url = Some("https://relay.example.test".into());
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            check(|c| {
+                c.remote.mode = vec![RemoteMode::Relay];
+                c.remote.relay.url = Some("http://127.0.0.1:9000".into());
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            check(|c| c.remote.mode = vec![RemoteMode::Cloudflare]),
+            Err("daemon.listen")
+        );
+        assert_eq!(
+            check(|c| {
+                c.remote.mode = vec![RemoteMode::Cloudflare];
+                c.daemon.listen = Some("127.0.0.1:7777".parse().unwrap());
+                c.remote.cloudflare.tunnel = CloudflareTunnel::Named;
+            }),
+            Err("remote.cloudflare.hostname")
+        );
+        assert_eq!(
+            check(|c| {
+                c.remote.mode = vec![RemoteMode::Cloudflare];
+                c.daemon.listen = Some("127.0.0.1:7777".parse().unwrap());
+                c.remote.cloudflare.hostname = Some("https://desk.example.com".into());
+            }),
+            Err("remote.cloudflare.hostname")
+        );
+        assert_eq!(
+            check(|c| {
+                c.remote.mode = vec![RemoteMode::Tailscale];
+                c.daemon.listen = Some("127.0.0.1:7777".parse().unwrap());
+            }),
+            Err("remote.public_url")
+        );
+    }
+
+    #[test]
+    fn doctor_reports_each_enabled_transport() {
+        use super::RemoteMode;
+        let root = tempfile::tempdir().unwrap();
+        let token = root.path().join("relay-token");
+        std::fs::write(&token, "registration-token-0123456789\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let relay = loaded(root.path(), |c| {
+            c.remote.mode = vec![RemoteMode::Relay];
+            c.remote.relay.url = Some("https://relay.example.test".into());
+        });
+        let mut relay = relay;
+        relay.config.remote.relay.token_file = Some(token.clone());
+        #[cfg(unix)]
+        {
+            assert_eq!(status(&relay, "remote.relay"), Status::Fail);
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert_eq!(status(&relay, "remote.relay"), Status::Warn);
+        std::fs::create_dir_all(root.path().join("data")).unwrap();
+        let key = root.path().join("data/relay-key");
+        std::fs::write(&key, "key").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert_eq!(status(&relay, "remote.relay"), Status::Ok);
+
+        let cloudflare = loaded(root.path(), |c| {
+            c.remote.mode = vec![RemoteMode::Cloudflare];
+            c.remote.cloudflare.bin = "/nonexistent/cloudflared".into();
+        });
+        assert_eq!(status(&cloudflare, "remote.cloudflare"), Status::Fail);
+        let off = loaded(root.path(), |_| {});
+        let mut report = DoctorReport::default();
+        super::doctor_check(&mut report, &off);
+        assert!(!report
+            .checks
+            .iter()
+            .any(|c| c.id.starts_with("remote.relay") || c.id == "remote.cloudflare"));
     }
 }

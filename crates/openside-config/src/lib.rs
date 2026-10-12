@@ -38,7 +38,10 @@ pub use discovery::{agent_command, discover_browser, find_on_path, AgentCommand,
 pub use memory::{EmbeddingConfig, MemoryConfig, MemoryRetentionSetting, EMBEDDING_MODEL_FILES};
 pub use paths::Paths;
 pub use profile::AgentProfile;
-pub use remote::{OtpConfig, RemoteConfig, ServiceConfig};
+pub use remote::{
+    expand_home, read_secret, CloudflareConfig, CloudflareTunnel, OtpConfig, RelayConfig,
+    RemoteConfig, RemoteMode, ServiceConfig,
+};
 pub use skills::SkillsConfig;
 pub use sync::SyncConfig;
 pub use ui::UiConfig;
@@ -378,6 +381,30 @@ pub struct AgentConfig {
     pub compaction_keep_messages: u32,
     /// Tool and system-prompt profile: `full`, `browser-agent` or `ultrabrowse`.
     pub profile: AgentProfile,
+    /// `front` (default): a fast front agent answers every message and runs long work as
+    /// background Tasks; `single`: one agent does everything in the conversation itself.
+    pub orchestration: Orchestration,
+}
+
+/// How user messages reach agents (`docs/specs/sidecar-protocol.md` §11).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Orchestration {
+    /// Front agent plus background Tasks.
+    #[default]
+    Front,
+    /// One agent per session, long tools block its conversation.
+    Single,
+}
+
+impl Orchestration {
+    /// Configuration and wire name (`open.config.agent.orchestration`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Front => "front",
+            Self::Single => "single",
+        }
+    }
 }
 
 impl Default for AgentConfig {
@@ -390,6 +417,7 @@ impl Default for AgentConfig {
             compaction_max_messages: 100,
             compaction_keep_messages: 20,
             profile: AgentProfile::Full,
+            orchestration: Orchestration::Front,
         }
     }
 }
@@ -402,6 +430,7 @@ impl AgentConfig {
             "compaction_max_messages": self.compaction_max_messages,
             "compaction_keep_messages": self.compaction_keep_messages,
             "profile": self.profile.as_str(),
+            "orchestration": self.orchestration.as_str(),
         })
     }
 }
@@ -414,6 +443,8 @@ pub struct ModelsConfig {
     pub default: Option<String>,
     /// Ordered fallback chain.
     pub fallback: Vec<String>,
+    /// Fast model for the front agent; unset uses the session model.
+    pub front: Option<String>,
 }
 
 /// Discovery prefers an explicit executable over `OPENSIDE_BROWSER`.
@@ -580,9 +611,10 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
                 "compaction_max_messages",
                 "compaction_keep_messages",
                 "profile",
+                "orchestration",
             ],
         ),
-        ("models", &["default", "fallback"]),
+        ("models", &["default", "fallback", "front"]),
         ("credentials", &[]),
         (
             "browser",
@@ -622,7 +654,10 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
                 "discord",
             ],
         ),
-        ("remote", &["public_url", "push_contact"]),
+        (
+            "remote",
+            &["mode", "public_url", "push_contact", "cloudflare", "relay"],
+        ),
         ("otp", &["senders", "sites", "ttl_secs"]),
         ("service", &["inhibit_sleep", "inhibit_cmd"]),
     ];
