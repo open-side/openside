@@ -1067,6 +1067,102 @@ fn totp_parameters_persist_and_items_without_them_default_to_six_digits() {
     assert!(PreparedImport::parse("x", bad).is_err());
 }
 
+/// A sign-in typed into a login ticket becomes an item bound to exactly the page's origin;
+/// the same username at that exact origin only gets its new password, an item with wider
+/// origins is never joined, and `Never` refuses. Listing shows masked names only.
+#[test]
+fn saved_logins_bind_exact_origins_update_only_their_password_and_list_masked_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault");
+    let audit = dir.path().join("audit.jsonl");
+    let mut vault = Vault::create(&path, &audit, &passphrase(), PassphraseLock::default()).unwrap();
+    let mut wild = entry("wild", "wild-password-value".into(), AccessPolicy::Always);
+    wild.origins = vec![AllowedOrigin::parse("https://*.example.org").unwrap()];
+    vault.put(wild).unwrap();
+    let save = |vault: &mut Vault, user: &str, password: &str, operation: &str| {
+        vault.save_login(
+            &ctx("device:phone"),
+            "https://login.example.org",
+            Secret::new(user.into()),
+            Secret::new(password.into()),
+            operation,
+        )
+    };
+    let first = save(&mut vault, "jane@mail.test", "first-secret", "op-a")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first,
+        SavedLogin {
+            site: "login-login-example-org".into(),
+            created: true
+        }
+    );
+    assert!(vault.registered_by("op-a").unwrap());
+    let updated = save(&mut vault, "jane@mail.test", "second-secret", "op-b")
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.site, first.site);
+    assert!(!updated.created);
+    assert!(vault.registered_by("op-b").unwrap());
+    let other = save(&mut vault, "bob", "bob-secret", "op-c")
+        .unwrap()
+        .unwrap();
+    assert!(other.created);
+    assert_ne!(other.site, first.site);
+
+    let mut accounts = vault.logins_for("https://login.example.org").unwrap();
+    accounts.sort_by(|a, b| a.site.cmp(&b.site));
+    let hints: Vec<&str> = accounts.iter().map(|a| a.username_hint.as_str()).collect();
+    assert_eq!(hints, ["j***@mail.test", "b***", "u***"]);
+    let mut released = String::new();
+    vault
+        .vault_login(
+            &ctx("host:test"),
+            AuditAction::Fill,
+            &first.site,
+            "https://login.example.org",
+            |secrets| {
+                released = format!("{}:{}", secrets.username, secrets.password);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(released, "jane@mail.test:second-secret");
+    let items = vault.items(&ctx("host:test")).unwrap();
+    let saved = items.iter().find(|item| item.site == first.site).unwrap();
+    assert_eq!(saved.origins, ["https://login.example.org:443"]);
+    assert_eq!(saved.policy, None);
+    let wild = items.iter().find(|item| item.site == "wild").unwrap();
+    assert_eq!(wild.origins, ["https://*.example.org:443"]);
+
+    vault
+        .set_policy(&ctx("host:test"), "wild", Some(AccessPolicy::Never))
+        .unwrap();
+    assert_eq!(
+        vault
+            .login_save_refusal("https://login.example.org")
+            .unwrap(),
+        Some(Denial::PolicyNever)
+    );
+    assert_eq!(
+        save(&mut vault, "eve", "eve-secret", "op-d").unwrap(),
+        Err(Denial::PolicyNever)
+    );
+    assert!(!vault.registered_by("op-d").unwrap());
+    let log = std::fs::read_to_string(&audit).unwrap();
+    for value in [
+        "first-secret",
+        "second-secret",
+        "jane@mail.test",
+        "bob-secret",
+    ] {
+        assert!(!log.contains(value), "{value} reached the audit log");
+    }
+    assert!(log.contains(r#""what":"login_save""#));
+    assert!(log.contains(r#""decision":"updated""#));
+}
+
 /// A registered authenticator always becomes a new TOTP-only item bound to exactly the
 /// ticket's origin: it never joins a login item (which may carry wildcard or extra origins),
 /// never replaces a saved factor (a second or stale registration is refused), and several
@@ -1103,9 +1199,9 @@ fn registered_authenticators_create_exact_origin_items_and_never_replace_or_gues
         vault.totp_site_for("https://example.com").unwrap(),
         TotpMatch::One(site.clone())
     );
-    assert!(vault.totp_registered_by("op-first").unwrap());
+    assert!(vault.registered_by("op-first").unwrap());
     // Another operation is not this one, though an authenticator exists at the origin.
-    assert!(!vault.totp_registered_by("op-other").unwrap());
+    assert!(!vault.registered_by("op-other").unwrap());
     // The marker is local: an export for sync does not carry it.
     let exported = vault.export_item(&ctx("host:test"), &site).unwrap();
     assert!(!String::from_utf8_lossy(&exported).contains("op-first"));
@@ -1113,14 +1209,14 @@ fn registered_authenticators_create_exact_origin_items_and_never_replace_or_gues
     // marker, and a marker smuggled into a payload is never taken.
     let prepared = PreparedImport::parse(&site, &exported).unwrap();
     vault.commit_import(&ctx("host:test"), prepared).unwrap();
-    assert!(vault.totp_registered_by("op-first").unwrap());
+    assert!(vault.registered_by("op-first").unwrap());
     let mut forged: serde_json::Value = serde_json::from_slice(&exported).unwrap();
     forged["registration"] = serde_json::json!("op-forged");
     let forged = serde_json::to_vec(&forged).unwrap();
     let prepared = PreparedImport::parse(&site, &forged).unwrap();
     vault.commit_import(&ctx("host:test"), prepared).unwrap();
-    assert!(!vault.totp_registered_by("op-forged").unwrap());
-    assert!(vault.totp_registered_by("op-first").unwrap());
+    assert!(!vault.registered_by("op-forged").unwrap());
+    assert!(vault.registered_by("op-first").unwrap());
     let items = vault.items(&ctx("host:test")).unwrap();
     let bank = items.iter().find(|item| item.site == "bank").unwrap();
     assert!(!bank.has_totp, "the login item is left alone");
@@ -1133,7 +1229,7 @@ fn registered_authenticators_create_exact_origin_items_and_never_replace_or_gues
             .unwrap(),
         Err(Denial::AlreadyRegistered)
     );
-    assert!(!vault.totp_registered_by("op-stale").unwrap());
+    assert!(!vault.registered_by("op-stale").unwrap());
     assert_eq!(
         vault
             .register_totp(
@@ -1193,7 +1289,7 @@ fn registered_authenticators_create_exact_origin_items_and_never_replace_or_gues
 
     let mut vault = Vault::open(&path, &audit, &passphrase(), PassphraseLock::default()).unwrap();
     // The marker is saved with the item, in the same write.
-    assert!(vault.totp_registered_by("op-local").unwrap());
+    assert!(vault.registered_by("op-local").unwrap());
     let mut code = String::new();
     let outcome = vault
         .vault_login(

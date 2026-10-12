@@ -324,6 +324,40 @@ pub struct ItemInfo {
     pub passkey_rp_ids: Vec<String>,
 }
 
+/// A saved sign-in accepting an origin ([`Vault::logins_for`]); no value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoginAccount {
+    /// Item id.
+    pub site: String,
+    /// The username with all but its first character (and an email's domain) masked.
+    pub username_hint: String,
+    /// Policy actually enforced for the item.
+    pub effective_policy: AccessPolicy,
+}
+
+/// What [`Vault::save_login`] kept.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SavedLogin {
+    /// Item id.
+    pub site: String,
+    /// A new item, rather than a new password for an existing one.
+    pub created: bool,
+}
+
+/// `j***@naver.com` for an email address, `j***` otherwise; empty for an empty username.
+/// Nothing past the first character of the account name is shown.
+fn username_hint(username: &str) -> String {
+    let Some(first) = username.chars().next() else {
+        return String::new();
+    };
+    match username.rsplit_once('@') {
+        Some((local, domain)) if !local.is_empty() && !domain.is_empty() => {
+            format!("{first}***@{domain}")
+        }
+        _ => format!("{first}***"),
+    }
+}
+
 /// Borrowed secrets available solely during the trusted, verified fill callback.
 /// The host must not log, clone into output, or retain these values.
 pub struct FillSecrets<'a> {
@@ -764,15 +798,148 @@ impl<L: PlatformLock> Vault<L> {
         })
     }
 
-    /// Whether the item created by the [`Self::register_totp`] call with this `operation` id is
-    /// saved. Value-free, so not audited. Any other authenticator at the same origin, added by
-    /// a person or by another registration, does not count.
-    pub fn totp_registered_by(&self, operation: &str) -> Result<bool, Error> {
+    /// Whether the item saved by the [`Self::register_totp`] or [`Self::save_login`] call with
+    /// this `operation` id is in the vault. Value-free, so not audited. Any other item at the
+    /// same origin, added by a person or by another call, does not count.
+    pub fn registered_by(&self, operation: &str) -> Result<bool, Error> {
         let state = self.state.as_ref().ok_or(Error::Locked)?;
         Ok(state
             .entries
             .iter()
             .any(|entry| entry.registration.as_deref() == Some(operation)))
+    }
+
+    /// The saved sign-ins (items with a password) that accept `origin`, with a masked account
+    /// name such as `j***@naver.com`. Not audited, like [`Self::totp_site_for`]: no value is
+    /// released and the later fill is audited.
+    pub fn logins_for(&self, origin: &str) -> Result<Vec<LoginAccount>, Error> {
+        let state = self.state.as_ref().ok_or(Error::Locked)?;
+        Ok(state
+            .entries
+            .iter()
+            .filter(|entry| {
+                !entry.password.0.is_empty()
+                    && entry.origins.iter().any(|rule| rule.matches(origin))
+            })
+            .map(|entry| LoginAccount {
+                site: entry.site.clone(),
+                username_hint: username_hint(&entry.username.0),
+                effective_policy: entry.policy.unwrap_or(self.default_policy),
+            })
+            .collect())
+    }
+
+    /// Whether [`Self::save_login`] for `origin` would be refused by policy: the vault default
+    /// or an item accepting the origin says `Never`, or `WhileUnlocked` with a locked platform.
+    pub fn login_save_refusal(&self, origin: &str) -> Result<Option<Denial>, Error> {
+        let state = self.state.as_ref().ok_or(Error::Locked)?;
+        if state.entries.iter().any(|entry| {
+            entry.origins.iter().any(|rule| rule.matches(origin))
+                && entry.policy.unwrap_or(self.default_policy) == AccessPolicy::Never
+        }) {
+            return Ok(Some(Denial::PolicyNever));
+        }
+        Ok(match self.default_policy {
+            AccessPolicy::Never => Some(Denial::PolicyNever),
+            AccessPolicy::WhileUnlocked if !self.platform.is_unlocked() => {
+                Some(Denial::PlatformLocked)
+            }
+            _ => None,
+        })
+    }
+
+    /// Keep a sign-in a person typed into a `login` ticket, bound to exactly `origin`. An
+    /// item bound to exactly that origin with the same username gets the new password (and
+    /// nothing else changes); otherwise a new item `login-<host>` is created with the default
+    /// policy, never joining an item with wildcard or extra origins. Refused like
+    /// [`Self::login_save_refusal`]. Audited as `login_save` before any change and again once
+    /// saved (`saved` or `updated`); [`Error::AuditIncomplete`] means it *was* saved. Callers
+    /// install a redactor for both values first. `operation` is kept on the item in the same
+    /// write, for [`Self::registered_by`].
+    pub fn save_login(
+        &mut self,
+        ctx: &AuditContext<'_>,
+        origin: &str,
+        username: Secret,
+        password: Secret,
+        operation: &str,
+    ) -> Result<Result<SavedLogin, Denial>, Error> {
+        let action = AuditAction::LoginSave;
+        if !valid_label(operation) || password.0.is_empty() {
+            return Err(Error::InvalidEntry);
+        }
+        let rule = AllowedOrigin::parse(origin)?;
+        let Some(state) = self.state.as_ref() else {
+            self.audit(ctx, action, None, Some(origin), "denied", Some("locked"))?;
+            return Err(Error::Locked);
+        };
+        let existing = state
+            .entries
+            .iter()
+            .position(|entry| entry.origins == [rule.clone()] && entry.username.0 == username.0);
+        let site = match existing {
+            Some(index) => state.entries[index].site.clone(),
+            None => new_site(&state.entries, "login", origin),
+        };
+        if let Some(denial) = self.login_save_refusal(origin)? {
+            self.audit(
+                ctx,
+                action,
+                Some(&site),
+                Some(origin),
+                "denied",
+                Some(denial.wire()),
+            )?;
+            return Ok(Err(denial));
+        }
+        self.audit(ctx, action, Some(&site), Some(origin), "allowed", None)?;
+        let saved = match existing {
+            Some(index) => {
+                let state = self.state.as_mut().ok_or(Error::Locked)?;
+                let entry = &mut state.entries[index];
+                let previous = (
+                    std::mem::replace(&mut entry.password, password),
+                    entry.registration.replace(operation.to_owned()),
+                );
+                let written = self.persist(None, false);
+                if written.is_err() {
+                    if let Some(state) = self.state.as_mut() {
+                        let entry = &mut state.entries[index];
+                        entry.password = previous.0;
+                        entry.registration = previous.1;
+                    }
+                }
+                written
+            }
+            None => Entry::build(
+                site.clone(),
+                vec![rule],
+                username,
+                password,
+                None,
+                None,
+                Vec::new(),
+            )
+            .and_then(|mut entry| {
+                entry.registration = Some(operation.to_owned());
+                self.put(entry)
+            }),
+        };
+        if let Err(error) = saved {
+            let _ = self.audit(ctx, action, Some(&site), Some(origin), "failed", None);
+            return Err(error);
+        }
+        let created = existing.is_none();
+        self.audit(
+            ctx,
+            action,
+            Some(&site),
+            Some(origin),
+            if created { "saved" } else { "updated" },
+            None,
+        )
+        .map_err(|_| Error::AuditIncomplete)?;
+        Ok(Ok(SavedLogin { site, created }))
     }
 
     /// Store an authenticator a person approved for `origin` as a new TOTP-only item (empty
@@ -784,7 +951,7 @@ impl<L: PlatformLock> Vault<L> {
     /// `otp_register` before any change and again once it is saved; [`Error::AuditIncomplete`]
     /// means the factor *was* saved. Callers install [`Totp::redactor`] before calling.
     /// `operation` (a `[a-z0-9:_-]{1,64}` id, not secret) is saved on the item in the same
-    /// write, so [`Self::totp_registered_by`] can later tell whether exactly this call took
+    /// write, so [`Self::registered_by`] can later tell whether exactly this call took
     /// effect.
     pub fn register_totp(
         &mut self,
@@ -815,7 +982,7 @@ impl<L: PlatformLock> Vault<L> {
                 .find(|entry| entry.policy.unwrap_or(self.default_policy) == AccessPolicy::Never)
                 .map(|entry| (entry.site.clone(), Denial::PolicyNever))
         };
-        let site = new_totp_site(&state.entries, origin);
+        let site = new_site(&state.entries, "otp", origin);
         let refusal = refusal.or(match self.default_policy {
             AccessPolicy::Never => Some((site.clone(), Denial::PolicyNever)),
             AccessPolicy::WhileUnlocked if !self.platform.is_unlocked() => {
@@ -1375,8 +1542,9 @@ fn valid_label(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b":_-".contains(&b))
 }
-/// `otp-<host>[-<port>]`, made unique among `entries`, for a TOTP-only item.
-fn new_totp_site(entries: &[Entry], origin: &str) -> String {
+/// `<prefix>-<host>[-<port>]`, made unique among `entries`, for an item the vault creates
+/// itself (`otp` for a TOTP-only item, `login` for a saved sign-in).
+fn new_site(entries: &[Entry], prefix: &str, origin: &str) -> String {
     let host: String = origin
         .split_once("://")
         .map_or(origin, |(_, rest)| rest)
@@ -1391,7 +1559,7 @@ fn new_totp_site(entries: &[Entry], origin: &str) -> String {
         })
         .take(48)
         .collect();
-    let base = format!("otp-{}", host.trim_matches('-'));
+    let base = format!("{prefix}-{}", host.trim_matches('-'));
     let taken = |site: &str| entries.iter().any(|entry| entry.site == site);
     (1..)
         .map(|n| {

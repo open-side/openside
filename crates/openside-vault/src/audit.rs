@@ -35,6 +35,8 @@ pub enum AuditAction {
     PasskeyRegister,
     /// Passkey assertion through a virtual authenticator (`vault_passkey` login).
     PasskeyLogin,
+    /// A sign-in a person typed into a `login` ticket was kept (`request_login`).
+    LoginSave,
     /// Item metadata read (names, origins, policy; never values).
     Get,
     /// Per-item access policy change.
@@ -59,6 +61,7 @@ impl AuditAction {
             Self::OtpRegister => "otp_register",
             Self::PasskeyRegister => "passkey_register",
             Self::PasskeyLogin => "passkey_login",
+            Self::LoginSave => "login_save",
             Self::Get => "get",
             Self::PolicyUpdate => "policy_update",
             Self::ItemAdd => "item_add",
@@ -77,8 +80,8 @@ pub struct AuditRecord {
     pub when: u64,
     /// Caller label.
     pub who: String,
-    /// Operation (`fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `get`,
-    /// `policy_update`, `item_add`, `item_delete`, `setup`, `unlock`, `lock`).
+    /// Operation (`fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`,
+    /// `login_save`, `get`, `policy_update`, `item_add`, `item_delete`, `setup`, `unlock`, `lock`).
     pub what: String,
     /// Item id, or `unknown-site`.
     pub site_id: String,

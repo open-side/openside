@@ -1,5 +1,6 @@
 //! macOS Keychain / Windows Credential Manager backend through the `keyring` crate.
-//! Compiled only on those targets; not built or tested in this repository's CI (Linux).
+//! Compiled only on those targets; this repository's CI is Linux. The macOS path is
+//! verified natively on x86_64 macOS 26 (docs/PLATFORMS.md, macOS 네이티브 검증).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
