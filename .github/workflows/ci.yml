@@ -34,6 +34,10 @@ jobs:
       # runtime error sandbox_unavailable. The hosted ubuntu image does not ship it.
       - name: Install bubblewrap
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      # Ubuntu 24.04 runners restrict unprivileged user namespaces through AppArmor, which breaks
+      # both bwrap and Chromium's sandbox (launches die with `Disconnected`).
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # gate.sh runs cargo test before its own JS install steps, and the extension E2E shells out to
       # `pnpm -C extension build` (tsx); a fresh checkout has no node_modules yet.
       - name: Install web and extension dependencies
