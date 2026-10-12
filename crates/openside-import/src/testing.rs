@@ -1,5 +1,6 @@
 //! Synthetic Chrome and Firefox profiles for tests: real table layouts, real `v10`/`v11`
-//! encryption (Linux key derivation). Built from scratch; no real profile is ever read.
+//! encryption with the same key derivation the decryptor uses on this platform. Built from
+//! scratch; no real profile is ever read.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -11,7 +12,7 @@ use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::crypto::{derive_key, DOMAIN_HASH_VERSION};
+use crate::crypto::{derive_key, DOMAIN_HASH_VERSION, ITERATIONS};
 
 const WEBKIT_EPOCH_OFFSET_MS: i64 = 11_644_473_600_000;
 
@@ -77,7 +78,9 @@ impl CookieSpec {
 /// How a Chrome fixture stores cookie values.
 #[derive(Debug, Clone)]
 pub enum Encryption {
-    /// `v10` with the fixed Linux password.
+    /// `v10` with the fixed Linux password (`peanuts`). On macOS the real `v10` key is
+    /// Keychain-derived, so this variant encrypts with [`MAC_V10_PASSWORD`] instead and tests
+    /// must supply it through [`v10_keyring`].
     V10,
     /// `v11` with this keyring password.
     V11(String),
@@ -85,6 +88,26 @@ pub enum Encryption {
     Plain,
     /// The given `encrypted_value` bytes verbatim (unknown versions, corruption).
     Raw(Vec<u8>),
+}
+
+/// Stand-in Safe Storage password for `v10` fixtures on macOS, where the real key comes
+/// from the login Keychain rather than the Linux `peanuts` constant.
+#[cfg(target_os = "macos")]
+pub const MAC_V10_PASSWORD: &str = "openside-test-safe-storage";
+
+#[cfg(not(target_os = "macos"))]
+const V10_PASSWORD: &[u8] = b"peanuts";
+
+#[cfg(target_os = "macos")]
+const V10_PASSWORD: &[u8] = MAC_V10_PASSWORD.as_bytes();
+
+/// The keyring source that decrypts `Encryption::V10` fixtures on this platform: none on
+/// Linux (fixed password), the Keychain stand-in on macOS.
+pub fn v10_keyring() -> crate::KeyringSource {
+    #[cfg(not(target_os = "macos"))]
+    return crate::KeyringSource::None;
+    #[cfg(target_os = "macos")]
+    return crate::KeyringSource::password(MAC_V10_PASSWORD);
 }
 
 type CbcEnc = cbc::Encryptor<aes::Aes128>;
@@ -97,7 +120,7 @@ pub fn encrypt_cookie(
     value: &str,
     schema: i64,
 ) -> Vec<u8> {
-    let key = derive_key(password, 1);
+    let key = derive_key(password, ITERATIONS);
     let mut plain = Vec::new();
     if schema >= DOMAIN_HASH_VERSION {
         plain.extend_from_slice(Sha256::digest(host.as_bytes()).as_slice());
@@ -253,7 +276,7 @@ impl ChromeProfile {
                     String::new(),
                     encrypt_cookie(
                         "v10",
-                        b"peanuts",
+                        V10_PASSWORD,
                         &cookie.host,
                         &cookie.value,
                         self.cookie_schema,

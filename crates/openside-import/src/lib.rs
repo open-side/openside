@@ -13,6 +13,7 @@ mod apply;
 mod chromium;
 mod crypto;
 mod db;
+mod discover;
 mod error;
 mod firefox;
 mod model;
@@ -29,6 +30,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 pub use crypto::KeyringSource;
+pub use discover::{discover, discover_system, DiscoveredProfile};
 pub use error::{ImportError, Result};
 pub use model::{Bookmark, Cookie, SameSite, Visit};
 pub use store::{ProfileLayout, DEFAULT_PROFILE};

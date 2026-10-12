@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::{Decryptor, KeyringSource};
 use crate::testing::{
-    read_jsonl, BookmarkEntry, ChromeProfile, CookieSpec, Encryption, FirefoxProfile, HistoryEntry,
+    read_jsonl, v10_keyring, BookmarkEntry, ChromeProfile, CookieSpec, Encryption, FirefoxProfile,
+    HistoryEntry,
 };
 use crate::*;
 
@@ -92,7 +93,7 @@ fn options(source: Source, target: ProfileLayout) -> ImportOptions {
         },
         skip_missing: false,
         dry_run: false,
-        keyring: KeyringSource::None,
+        keyring: v10_keyring(),
         browser: None,
     }
 }
@@ -126,7 +127,7 @@ fn chrome_v10_cookies_decrypt_in_both_schema_generations_and_locations() {
             ..chrome(Encryption::V10)
         }
         .write(&dir);
-        let read = decrypted(&dir, KeyringSource::None).unwrap();
+        let read = decrypted(&dir, v10_keyring()).unwrap();
         assert_eq!(read.len(), 3, "schema {schema}");
         assert_eq!(read[0].host, "127.0.0.1");
         assert_eq!(read[0].value, "abc123");
@@ -199,7 +200,7 @@ fn unknown_cookie_versions_and_corrupt_values_are_reported_by_cookie() {
         b"v10 not a multiple of block size".to_vec(),
     ))
     .write(&dir);
-    let error = decrypted(&dir, KeyringSource::None).unwrap_err();
+    let error = decrypted(&dir, v10_keyring()).unwrap_err();
     assert!(
         matches!(error, ImportError::CorruptCookie { .. }),
         "{error}"
@@ -220,7 +221,7 @@ fn partitioned_chrome_cookies_are_left_out_and_counted() {
     drop(conn);
     let item = crate::chromium::cookies_item(BrowserKind::Chrome, &dir);
     let (read, partitioned) =
-        crate::chromium::read_cookies(&item, &mut Decryptor::new(KeyringSource::None)).unwrap();
+        crate::chromium::read_cookies(&item, &mut Decryptor::new(v10_keyring())).unwrap();
     assert_eq!((read.len(), partitioned), (2, 1));
 }
 
@@ -524,6 +525,9 @@ async fn failed_cookie_decryption_leaves_the_target_profile_untouched() {
         target,
     );
     opts.what = What::ALL;
+    // v10 fixtures decrypt through v10_keyring(); only an empty source can exercise the
+    // missing-password path for v11.
+    opts.keyring = KeyringSource::None;
     opts.dry_run = false;
     opts.browser = Some(PathBuf::from("/nonexistent/browser"));
     let error = import(opts).await.unwrap_err();
@@ -738,7 +742,7 @@ fn cookie_schema_version_stored_as_an_integer_is_still_read() {
             "DROP TABLE meta; CREATE TABLE meta(key, value); INSERT INTO meta VALUES('version', 24);",
         )
         .unwrap();
-    let read = decrypted(&dir, KeyringSource::None).unwrap();
+    let read = decrypted(&dir, v10_keyring()).unwrap();
     assert_eq!(
         read[0].value, "abc123",
         "the domain hash prefix must be stripped"
@@ -1015,4 +1019,76 @@ async fn a_live_singleton_lock_refuses_cookie_import_even_without_cookies() {
     finished.wait().unwrap();
     symlink(format!("somehost-{}", finished.id()), &lock).unwrap();
     assert_eq!(import(opts).await.unwrap().cookies.unwrap().imported, 0);
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn discovery_lists_standard_profiles_by_id_with_their_available_data() {
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".config");
+    let chrome = config.join("google-chrome");
+    ChromeProfile {
+        history: history(),
+        bookmarks: bookmarks(),
+        cookies: cookies(),
+        ..ChromeProfile::default()
+    }
+    .write(&chrome.join("Default"));
+    // A second profile with only a history database, named in `Local State`.
+    fs::create_dir_all(chrome.join("Profile 2")).unwrap();
+    fs::copy(
+        chrome.join("Default/History"),
+        chrome.join("Profile 2/History"),
+    )
+    .unwrap();
+    fs::write(
+        chrome.join("Local State"),
+        r#"{"profile":{"info_cache":{"Profile 2":{"name":"Work"}}}}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(chrome.join("Crashpad")).unwrap();
+
+    let firefox = home.path().join(".mozilla/firefox");
+    FirefoxProfile {
+        history: history(),
+        ..FirefoxProfile::default()
+    }
+    .write(&firefox.join("abcd.default-release"));
+    fs::write(
+        firefox.join("profiles.ini"),
+        "[Install4F96]\nDefault=Profiles/ignored\n\n[Profile0]\nName=default-release\nIsRelative=1\nPath=abcd.default-release\n\n[Profile1]\nName=gone\nIsRelative=1\nPath=missing\n",
+    )
+    .unwrap();
+
+    let home_dir = home.path().to_owned();
+    let env = move |key: &str| match key {
+        "HOME" => Some(home_dir.clone().into_os_string()),
+        _ => None,
+    };
+    let found = discover(&env);
+    let summary: Vec<_> = found
+        .iter()
+        .map(|profile| (profile.id.as_str(), profile.name.as_str()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("chrome:Default", "Default"),
+            ("chrome:Profile 2", "Work"),
+            ("firefox:abcd.default-release", "default-release"),
+        ]
+    );
+    let flags = |profile: &DiscoveredProfile| {
+        (
+            profile.available.history,
+            profile.available.bookmarks,
+            profile.available.cookies,
+        )
+    };
+    assert_eq!(flags(&found[0]), (true, true, true));
+    assert_eq!(flags(&found[1]), (true, false, false));
+    assert_eq!(flags(&found[2]), (true, true, true));
+    assert_eq!(found[2].source().kind, BrowserKind::Firefox);
+    // Without HOME nothing is guessed.
+    assert!(discover(&|_| None).is_empty());
 }

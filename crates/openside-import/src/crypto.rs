@@ -3,8 +3,8 @@
 //!
 //! Linux: `v10` uses the fixed password `peanuts`; `v11` uses the password stored in the
 //! desktop keyring ("Chrome Safe Storage"), which the caller must supply. macOS derives the
-//! key from the Keychain password with 1003 iterations for `v10`; that path is compiled only
-//! there and unverified. Windows (DPAPI + AES-GCM, `v10`/`v20`) is not supported.
+//! key from the Keychain password with 1003 iterations for `v10`; verified natively on
+//! x86_64 macOS 26. Windows (DPAPI + AES-GCM, `v10`/`v20`) is not supported.
 
 #[cfg(unix)]
 use std::io::Read;
@@ -34,9 +34,9 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DOMAIN_HASH_VERSION: i64 = 24;
 
 #[cfg(target_os = "macos")]
-const ITERATIONS: u32 = 1003;
+pub(crate) const ITERATIONS: u32 = 1003;
 #[cfg(not(target_os = "macos"))]
-const ITERATIONS: u32 = 1;
+pub(crate) const ITERATIONS: u32 = 1;
 
 /// Where the OS keyring password comes from.
 #[derive(Clone, Default)]
