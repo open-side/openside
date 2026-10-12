@@ -1,0 +1,27 @@
+/target
+/results/
+*.swp
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite-*
+*.log
+*.pem
+*.key
+.DS_Store
+.idea/
+.vscode/
+.goal/
+.omp/
+# Internal development notes and scratch spikes; never published.
+.private/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+node_modules/
+dist/
+*.tsbuildinfo

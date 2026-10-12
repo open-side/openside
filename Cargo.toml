@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/openside-policy",
+    "crates/openside-core",
+    "crates/openside-proto",
+    "crates/openside-sessions",
+    "crates/opensided",
+    "crates/openside-cli",
+    "crates/openside-vault",
+    "crates/openside-browser",
+    "crates/openside-config",
+    "crates/openside-agent-sidecar",
+    "crates/openside-e2e",
+    "crates/openside-sched",
+    "crates/openside-memory",
+    "crates/openside-repl",
+    "crates/openside-channels",
+    "crates/openside-skills",
+    "crates/openside-import",
+    "crates/openside-sync",
+    "crates/openside-push",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.80"
+repository = "https://github.com/open-side/openside"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
