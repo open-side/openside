@@ -1,0 +1,25 @@
+[package]
+name = "openside-memory"
+description = "Local agent memory: SQLite FTS5 + local static embeddings, retention, history, secret blocking (no network I/O)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Network clients (HTTP, TLS, async runtimes, model downloaders) are forbidden in this
+# crate's dependency graph; `tests/no_network.rs` enforces it via `cargo metadata`.
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+openside-proto = { path = "../openside-proto" }
+rand = "0.8"
+parking_lot = "0.12"
+regex = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

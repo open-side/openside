@@ -1,0 +1,22 @@
+[package]
+name = "openside-sessions"
+description = "Event-sourced SQLite session store with queue persistence and replay for openside"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+openside-core = { path = "../openside-core" }
+openside-proto = { path = "../openside-proto" }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"

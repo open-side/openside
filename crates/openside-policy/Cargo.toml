@@ -1,0 +1,16 @@
+[package]
+name = "openside-policy"
+description = "Permission modes and Allow/Ask/Deny rule evaluation for openside (requirements D-1, D-2, D-4)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+url = "2"
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

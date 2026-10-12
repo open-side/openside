@@ -1,0 +1,160 @@
+# Optional paths below are relative examples, not machine-specific defaults.
+# Omit optional keys to use XDG/platform discovery.
+
+[daemon]
+# data_dir = "./openside-data"                 # OPENSIDE_DATA_DIR
+# socket = "./openside-runtime/daemon.sock"    # OPENSIDE_SOCKET
+# listen = "127.0.0.1:8080"                    # OPENSIDE_LISTEN
+
+[vault]
+# path = "./vault.db"                           # OPENSIDE_VAULT_PATH; default <data_dir>/vault.db
+unlock = "auto"   # auto | passphrase | secret-service (Linux libsecret) | native (macOS Keychain, Windows Credential Manager)
+# auto: an existing file keeps the method it was created with; a new vault keeps a random
+# wrapping key in this OS's keyring when one is reachable, otherwise `openside vault init`
+# asks for a passphrase. Keys are never written to disk in plaintext.
+# passphrase_cmd = ["pass", "show", "openside/vault"]
+# Passphrase vaults only. Argv is executed without a shell at daemon start; output is used
+# only to unlock the vault, is zeroized, and is never logged. Doctor never executes it.
+# Unset: the vault starts locked until `openside vault unlock` or the Vault page.
+default_policy = "while_unlocked"   # always | while_unlocked | never (per-item override wins)
+
+[tickets]
+# Expiration values are seconds (minimum 1); no environment overrides.
+confirm_ttl_secs = 600
+secret_input_ttl_secs = 300
+device_approval_ttl_secs = 1800
+info_ttl_secs = 86400
+takeover_ttl_secs = 1800
+
+[agent]
+# command = ["python3", "-m", "openside_agent"] # OPENSIDE_AGENT_COMMAND (JSON)
+# dir = "./agent"                              # OPENSIDE_AGENT_DIR
+startup_timeout_ms = 30000
+tool_retries = 3                  # model retries after a denied/failed tool call
+compaction_max_messages = 100     # summarize the conversation beyond this length
+compaction_keep_messages = 20     # recent messages kept verbatim (< max)
+profile = "full"                  # full | browser-agent | ultrabrowse (docs/specs/profiles.md)
+
+[models]
+# default = "provider:your-model"               # OPENSIDE_MODEL
+fallback = []
+
+# This table is passed unchanged to Python; Rust does not interpret its keys.
+# Configure source priority and source-specific settings here, never secret values.
+[credentials]
+
+[browser]
+# executable = "./browser/chrome" # Overrides OPENSIDE_BROWSER and discovery
+# bundle_dir = "./browser"        # Search chrome, then chromium
+gateway = "auto"                  # auto | off; auto uses the patched browser's gateway if present
+extensions = []                  # Unpacked extension dirs; relative to this config file; not loaded in private sessions
+
+[sandbox]
+required = false
+# bwrap = "./bin/bwrap"           # Omit to discover bwrap on PATH
+
+[policy]
+mode = "guard"                    # read-only | guard | full
+allow_origins = []               # Non-empty: browser/vault/sensitive actions only on these origin globs
+deny_origins = []                # e.g. ["https://*.evil.example"]; always denied
+# PUT /v1/policy (openside policy set) writes <data_dir>/policy.json, which overrides this section.
+
+[network]
+# Outbound destinations besides loopback and configured model/service endpoints. The sidecar's
+# HTTP transports, channel adapters and `memory model fetch` refuse anything else (redirects
+# included). bash stays network-isolated regardless of this list.
+allow = []
+
+[ui]
+# dir = "./web/dist"              # OPENSIDE_UI_DIR; unset serves no web UI
+
+[memory]
+default_retention = "permanent"   # permanent | days_90 | days_30 (history is always 30 days)
+history = true                    # index visited pages: public URL, title, short text
+
+[memory.embedding]
+# model_dir = "./memory-model"    # tokenizer.json + model.safetensors; default <data_dir>/memory/model
+# Weights are never downloaded implicitly: `openside memory model fetch <hf-repo>`.
+# Without them search is lexical-only (FTS5) and doctor reports it.
+
+[skills]
+# dir = "./skills"                # user skill library; default <data_dir>/skills
+project = true                    # also offer <workspace>/.openside/skills (read-only)
+
+[skills.agents]
+# Other agents' skill directories for `openside skills install|import`.
+# claude, codex and omp have built-in conventions; any other name needs an entry here
+# or OPENSIDE_SKILLS_<NAME>_DIR.
+# example-agent = "./example-agent/skills"
+
+[channels]
+# Chat adapters run as `openside-channels`; each is a client of the public daemon API.
+# Secrets are env var NAMES or command argv (no shell, stdout is the value), never values.
+# api_url = "http://127.0.0.1:8080"             # OPENSIDE_API_URL; default http://<daemon.listen>
+# token_file = "./channels.token"               # daemon bearer token (scopes read, steer, approve)
+token_env = "OPENSIDE_TOKEN"                    # used when token_file is unset
+# stt_cmd = ["whisper-cli", "--output-txt-stdout"] # local STT: audio path appended, stdout = text
+stt_timeout_secs = 120
+max_audio_bytes = 26214400
+edit_interval_ms = 1000           # minimum delay between edits of a streaming reply (>= 200)
+# state_dir = "./channels-state"  # thread->session map; default <data_dir>/channels
+
+[channels.telegram]
+enabled = false
+api_base = "https://api.telegram.org"
+# token_env = "TELEGRAM_BOT_TOKEN"
+# token_cmd = ["pass", "show", "openside/telegram"]
+allowed_chats = []                # at least one allowed_* entry when enabled
+allowed_users = []
+poll_timeout_secs = 30
+
+[channels.slack]
+enabled = false
+api_base = "https://slack.com/api"
+listen = "127.0.0.1:8787"         # /slack/events and /slack/interactivity
+# bot_token_env = "SLACK_BOT_TOKEN"
+# bot_token_cmd = ["pass", "show", "openside/slack-bot"]
+# signing_secret_env = "SLACK_SIGNING_SECRET"
+# signing_secret_cmd = ["pass", "show", "openside/slack-signing"]
+allowed_workspaces = []
+allowed_channels = []
+allowed_users = []
+
+[channels.discord]
+enabled = false
+api_base = "https://discord.com/api/v10"
+listen = "127.0.0.1:8788"         # /discord/interactions
+# public_key = "<application public key, hex>"
+# bot_token_env = "DISCORD_BOT_TOKEN"
+# bot_token_cmd = ["pass", "show", "openside/discord"]
+allowed_guilds = []
+allowed_channels = []
+allowed_users = []
+
+[sync]
+# End-to-end encrypted sync of settings, pinned tabs, vault items and tagged memories.
+# Set one backend or neither.
+# webdav_url = "https://dav.example.test/openside"  # any WebDAV share (http only on loopback)
+# webdav_username = "me"
+# webdav_password_cmd = ["pass", "show", "openside/webdav"]
+# dir = "./openside-sync"                        # or a folder synced by Syncthing/network share
+# passphrase_cmd = ["pass", "show", "openside/sync"] # argv, no shell; key is kept in memory only
+settings = false         # true also syncs the live policy (paired devices can change it)
+memory_tags = ["sync"]   # memories with one of these tags are synced
+
+[remote]
+# Other devices reach the daemon only through an HTTPS front (docs/REMOTE.md).
+# public_url = "https://host.example.ts.net"   # pairing links and QR codes point here
+# push_contact = "mailto:me@example.test"       # VAPID contact; defaults to public_url
+
+[otp]
+# Forwarded SMS codes (POST /v1/otp with an otp_ingest token) fill pending secret_input steps.
+senders = []             # exact sender ids allowed, e.g. ["+15550100"]; empty rejects all
+ttl_secs = 300           # unconsumed codes are kept in memory only, this long
+
+[otp.sites]
+# "https://login.example.test" = "code[: ]+([0-9]{6})"   # origin = regex (first group is the code)
+
+[service]
+inhibit_sleep = false    # keep the machine awake while a session runs (systemd-inhibit/caffeinate)
+inhibit_cmd = []         # argv override for the inhibitor; empty uses the platform default

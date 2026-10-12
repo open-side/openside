@@ -1,0 +1,36 @@
+[package]
+name = "openside-import"
+description = "Import history, bookmarks and cookies from Chrome/Chromium/Firefox profiles into an openside browser profile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# Synthetic Chrome/Firefox profile builders (real schemas, real v10 encryption) for
+# tests in dependent crates. Never enabled in product builds.
+testing = []
+
+[dependencies]
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc", "block-padding"] }
+futures-util = { version = "0.3", features = ["sink"] }
+openside-browser = { path = "../openside-browser" }
+pbkdf2 = "0.12"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+shlex = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"] }
+tokio-tungstenite = "0.26"
+zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["process", "signal"] }
+
+[lints]
+workspace = true

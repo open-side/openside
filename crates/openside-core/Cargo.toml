@@ -1,0 +1,14 @@
+[package]
+name = "openside-core"
+description = "Core domain types, pure session queue state machine and the AgentRuntime trait for openside"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+schemars = "1"
+serde = { version = "1", features = ["derive"] }

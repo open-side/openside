@@ -1,0 +1,26 @@
+[package]
+name = "openside-sched"
+description = "Routine scheduler for openside: cron/interval routines, overlap skipping, restart recovery and repetition suggestions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono-tz = "0.10"
+croner = "4"
+openside-proto = { path = "../openside-proto" }
+parking_lot = "0.12"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = "1"
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
