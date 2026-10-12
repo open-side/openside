@@ -174,9 +174,16 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
             return;
         }
     };
+    // Unbreakable fixtures: the Ask panel must wrap or truncate them, never scroll sideways.
+    let long_url = format!("https://example.test/{}", "a".repeat(200));
+    let long_korean = "가나다라마바사아자차카타파하".repeat(20);
+    let reply = format!(
+        "Message received by openside. See {long_url} and {long_korean}.\n\n```\n{}\n```",
+        "x".repeat(300)
+    );
     let Some(mut harness) = Harness::prepare(
         env!("CARGO_BIN_EXE_e2e-opensided"),
-        &json!({"responses":[{"parts":[{"type":"text","text":"Message received by openside."}]}]}),
+        &json!({"responses":[{"parts":[{"type":"text","text":reply}]}]}),
     ) else {
         return;
     };
@@ -322,6 +329,32 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
             .await,
         json!("")
     );
+    assert_eq!(
+        cdp.evaluate(
+            &options,
+            "document.querySelector('#pairing-state').textContent"
+        )
+        .await,
+        json!(format!("Paired with {origin}"))
+    );
+    cdp.call(
+        Some(&options),
+        "Emulation.setDeviceMetricsOverride",
+        json!({"width":320,"height":720,"deviceScaleFactor":1,"mobile":false}),
+    )
+    .await;
+    cdp.wait_for(
+        &options,
+        "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
+    )
+    .await;
+    // Later clicks use unscrolled coordinates in the default viewport.
+    cdp.call(
+        Some(&options),
+        "Emulation.clearDeviceMetricsOverride",
+        json!({}),
+    )
+    .await;
     cdp.click(&options, "#agent-tabs").await;
     cdp.wait_for(
         &options,
@@ -427,8 +460,18 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
     }
     // The side-panel document is also drivable as an extension page in headless Chromium.
     let panel = cdp.page(&format!("{extension_origin}panel.html")).await;
-    cdp.evaluate(&panel, "document.querySelector('#message').value = 'Question from Ask'; document.querySelector('#compose').requestSubmit(); true").await;
+    cdp.evaluate(&panel, &format!("document.querySelector('#message').value = {}; document.querySelector('#compose').requestSubmit(); true", json!(format!("Question from Ask {long_url} {long_korean}")))).await;
     cdp.wait_for(&panel, "document.querySelector('#transcript').textContent.includes('Message received by openside.')").await;
+    let no_sideways_scroll = "(() => { const root = document.documentElement; return root.scrollWidth <= root.clientWidth && [...document.querySelectorAll('.scroll, .bar, .bubble, .ticket, .composer')].every(e => e.scrollWidth <= e.clientWidth); })()";
+    for width in [320, 400, 480] {
+        cdp.call(
+            Some(&panel),
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width":width,"height":720,"deviceScaleFactor":1,"mobile":false}),
+        )
+        .await;
+        cdp.wait_for(&panel, no_sideways_scroll).await;
+    }
     assert_eq!(
         harness.request("GET", "/v1/sessions", None).await.body["sessions"]
             .as_array()

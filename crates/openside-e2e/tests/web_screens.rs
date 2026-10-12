@@ -1,16 +1,25 @@
 //! Screenshot harness for the web UI (visual QA, not an acceptance suite; ignored by default).
-//! Boots the hermetic daemon on a scripted model, seeds a conversation with tool activity,
-//! Markdown and code, a pending approval raised by a subagent and two queued follow-ups, then
-//! captures every main screen in headless Chromium at 390x844 and 1440x900, light and dark.
+//! Boots the hermetic daemon on a scripted model and seeds one conversation per state the
+//! conversation surface has to design for: a long thread (tool activity, Markdown, tables,
+//! code, SVG/HTML visuals, an image attachment, a subagent's pending approval and two queued
+//! follow-ups), a short thread, a turn still streaming with a running subagent, an
+//! interrupted run with a failed tool, every pending card kind (question with options, free
+//! answer, secret, inline verification code, desktop step, device approval), an archived
+//! conversation and the daemon going away. Each is captured in headless Chromium at 390x844
+//! and 1440x900, light and dark.
 //!
 //! Run through `tools/qa/web-screens.sh [out-dir]`, which rebuilds `web/dist` first. Env:
 //! - `OPENSIDE_SCREENS_DIR`: output directory (default `/tmp/openside-qa/redesign/core`).
 //! - `OPENSIDE_SCREENS_ROUTES`: extra comma-separated app paths to capture, such as
 //!   `/skills,/settings`; each is saved as `route-<path>`.
 //! - `OPENSIDE_SCREENS_ONLY`: comma-separated screen names to limit a run to: new-chat,
-//!   model-picker, conversation, tool-activity, code-response, ticket, agents, visuals, files,
-//!   queue-menu, queue-edit, session-menu, drawer (phone only), settings, appearance,
-//!   theme-preset (Solarized light / Nord dark palettes).
+//!   model-picker, conversation, long-thread-top, tool-activity, code-response, ticket, agents,
+//!   visuals, files, short-thread, streaming, stop-confirm, working, failed, ask-options, ask-text, secret, otp,
+//!   takeover, device, queue-menu, queue-edit, session-menu, drawer (phone only), archived,
+//!   search, search-empty, settings, appearance, theme-preset (Solarized light / Nord dark
+//!   palettes), offline (captured last: the daemon is stopped for it).
+//! - `OPENSIDE_SCREENS_SKIP_LIVE=1`: skip seeding the otp and secret states, which drive a live
+//!   agent tab (and so also the cross-conversation code dock on every other screen).
 //!
 //! Files are named `<theme>-<phone|desktop>-<screen>.png`.
 
@@ -317,16 +326,24 @@ impl Ui {
 
     async fn goto(&self, path: &str) {
         let url = format!("{}{path}", self.origin);
-        // A navigation can be aborted by an in-flight one from the app (net::ERR_ABORTED).
+        // A navigation can be aborted by an in-flight one from the app (net::ERR_ABORTED), and
+        // Page.navigate sometimes times out although the page did load; the readiness wait below
+        // decides in that case.
         for attempt in 1..=3 {
-            match self.browser.navigate(OWNER, &self.tab, &url).await {
+            let error = match self.browser.navigate(OWNER, &self.tab, &url).await {
                 Ok(_) => break,
-                Err(error) if attempt < 3 => {
-                    eprintln!("navigate {path}: {error:?}; retrying");
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                }
-                Err(error) => panic!("navigate {path}: {error:?}"),
+                Err(error) => error,
+            };
+            let page = self.browser.evaluate(&self.tab, "location.href").await;
+            if matches!(&page, Ok(Value::String(href)) if *href == url) {
+                eprintln!("navigate {path}: {error:?}; the page is there, continuing");
+                break;
             }
+            if attempt == 3 {
+                panic!("navigate {path}: {error:?}; page then: {page:?}");
+            }
+            eprintln!("navigate {path}: {error:?}; retrying");
+            tokio::time::sleep(Duration::from_millis(300)).await;
         }
         self.wait(
             "document",
@@ -382,15 +399,480 @@ async fn submit_with(
 }
 
 async fn create(harness: &Harness, title: &str) -> String {
+    create_in(harness, title, "guard").await
+}
+
+async fn create_in(harness: &Harness, title: &str, mode: &str) -> String {
     let response = harness
         .request(
             "POST",
             "/v1/sessions",
-            Some(json!({"title":title,"mode":"guard","workspace":harness.workspace()})),
+            Some(json!({"title":title,"mode":mode,"workspace":harness.workspace()})),
         )
         .await;
     assert_eq!(response.status, 201, "{}", response.body);
     response.body["id"].as_str().unwrap().to_owned()
+}
+
+/// Events up to and including the first one `done` accepts.
+async fn until(stream: &mut SseReader, what: &str, done: impl Fn(&Event) -> bool) -> Vec<Event> {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let mut events = Vec::new();
+        loop {
+            let event = stream.next().await;
+            let stop = done(&event);
+            events.push(event);
+            if stop {
+                return events;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+/// The pending ticket of `kind` in `session`. Policy may ask before a step on a new origin,
+/// so any other pending approval of that session is granted on the way.
+async fn pending_ticket(harness: &Harness, session: &str, kind: &str) -> Value {
+    let found = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let pending = harness
+                .request("GET", "/v1/tickets?status=pending", None)
+                .await;
+            for ticket in pending.body["tickets"].as_array().into_iter().flatten() {
+                if ticket["session_id"] != session {
+                    continue;
+                }
+                if ticket["kind"] == kind {
+                    return ticket.clone();
+                }
+                if ticket["kind"] == "confirm" {
+                    let id = ticket["id"].as_str().unwrap();
+                    harness
+                        .human_request(
+                            "POST",
+                            &format!("/v1/tickets/{id}/resolve"),
+                            Some(json!({"value":true})),
+                        )
+                        .await;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    match found {
+        Ok(ticket) => ticket,
+        Err(_) => {
+            let mut stream = harness.events(session, 0).await;
+            let mut seen = Vec::new();
+            while let Ok(event) =
+                tokio::time::timeout(Duration::from_millis(500), stream.next()).await
+            {
+                seen.push(format!("{:?}", event.kind));
+            }
+            panic!(
+                "no pending {kind} ticket in {session}; events:\n{}",
+                seen.join("\n")
+            )
+        }
+    }
+}
+
+fn ended_ok<'a>(events: &'a [Event], call: &str) -> &'a Value {
+    events
+        .iter()
+        .find_map(|event| match &event.kind {
+            EventKind::ToolEnded {
+                tool_call_id,
+                result,
+                is_error: false,
+            } if tool_call_id == call => Some(result),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing successful {call}: {events:?}"))
+}
+
+/// The ref of the textbox labelled `name` in a compact accessibility snapshot.
+fn field(snapshot: &Value, name: &str) -> String {
+    let text = snapshot.as_str().expect("compact accessibility snapshot");
+    let label = format!("\"{name}\"");
+    let line = text
+        .lines()
+        .find(|line| line.contains(&label) && line.contains("textbox"))
+        .unwrap_or_else(|| panic!("snapshot lacks {name}: {text}"));
+    let start = line.find('[').unwrap() + 1;
+    let end = line[start..].find(']').unwrap() + start;
+    line[start..end].to_owned()
+}
+
+const OTP_PAGE: &str = r#"<!doctype html><title>Check your email</title>
+<form method="post" action="/login"><label>Email code <input name="code" aria-label="Email code" autocomplete="one-time-code"></label></form>"#;
+const DEPLOY_PAGE: &str = r#"<!doctype html><title>Deploy settings</title>
+<form><label>Deploy key <input name="key" type="password" aria-label="Deploy key"></label></form>"#;
+
+/// Agent (sidecar) processes started so far, live or not.
+fn agent_pids(harness: &Harness) -> std::collections::HashSet<i32> {
+    std::fs::read_dir(harness.root().join("stderr"))
+        .unwrap()
+        .filter_map(|entry| {
+            entry
+                .ok()?
+                .file_name()
+                .to_str()?
+                .strip_prefix("sidecar-")?
+                .strip_suffix(".stderr")?
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
+/// Kills the live agent processes not in `others`, so one conversation reloads its script
+/// while other conversations stay blocked on their tickets.
+fn restart_agent(harness: &Harness, others: &std::collections::HashSet<i32>) {
+    for pid in agent_pids(harness).difference(others) {
+        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+    }
+}
+
+/// A local sign-in page that asks for an emailed code, for the inline code card.
+async fn otp_site() -> (String, tokio::task::JoinHandle<()>) {
+    use axum::{response::Html, routing::get, Router};
+    let app = Router::new()
+        .route("/login", get(|| async { Html(OTP_PAGE) }))
+        .route("/deploy", get(|| async { Html(DEPLOY_PAGE) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let site = format!("http://localhost:{}", listener.local_addr().unwrap().port());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (site, server)
+}
+
+/// Every conversation besides the long one, each left in the state its screen shows.
+struct Seeded {
+    short: String,
+    streaming: String,
+    working: String,
+    failed: String,
+    ask_options: String,
+    ask_text: String,
+    secret: String,
+    otp: String,
+    takeover: String,
+    device: String,
+}
+
+/// A conversation on its own script, its first message submitted.
+async fn seed(harness: &Harness, title: &str, mode: &str, script: Value, message: &str) -> String {
+    harness.replace_script(&script);
+    let session = create_in(harness, title, mode).await;
+    submit(harness, &session, "s1", message, "now").await;
+    session
+}
+
+async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<()>) {
+    let wait_forever =
+        json!({"parts":[{"type":"wait_steer","timeout_ms":600_000},{"type":"text","text":"…"}]});
+
+    // An interrupted run first: kill_sidecar needs it to be the only live agent process.
+    harness.replace_script(&json!({"responses":[
+        tool("read", json!({"path":"logs/checkout-flake.txt"}), "read-log"),
+        wait_forever.clone(),
+    ]}));
+    let failed = create(harness, "Flaky checkout test triage").await;
+    let mut stream = harness.events(&failed, 0).await;
+    submit(
+        harness,
+        &failed,
+        "f1",
+        "Why does the checkout test fail on CI?",
+        "now",
+    )
+    .await;
+    until(&mut stream, "the failed read", |event| {
+        matches!(&event.kind, EventKind::ToolEnded { tool_call_id, .. } if tool_call_id == "read-log")
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    harness.kill_sidecar();
+    until(&mut stream, "the interruption", |event| {
+        matches!(&event.kind, EventKind::RuntimeError { .. })
+    })
+    .await;
+
+    let (site, server) = otp_site().await;
+    // OPENSIDE_SCREENS_SKIP_LIVE=1 leaves out the two states that drive a live agent tab (the code
+    // and secret cards), for runs where those hang the capture renderer.
+    let (otp, secret) = if std::env::var_os("OPENSIDE_SCREENS_SKIP_LIVE").is_some() {
+        (String::new(), String::new())
+    } else {
+        live_states(harness, &site).await
+    };
+
+    let ask_options = seed(
+        harness,
+        "Pick a release channel",
+        "guard",
+        json!({"responses":[
+            tool("ask_user", json!({"question":"Which channel should 0.4 ship to first?","options":["Stable","Beta","Nightly"]}), "ask-channel"),
+            text("Shipping it."),
+        ]}),
+        "Get 0.4 ready to ship.",
+    )
+    .await;
+    pending_ticket(harness, &ask_options, "info").await;
+
+    let ask_text = seed(
+        harness,
+        "Name the release",
+        "guard",
+        json!({"responses":[
+            tool("ask_user", json!({"question":"Should the notes go out with the tag?","options":["Yes","No"]}), "ask-notes"),
+            tool("ask_user", json!({"question":"What should this release be called?"}), "ask-name"),
+            text("Named."),
+        ]}),
+        "Tag the release once the notes are in.",
+    )
+    .await;
+    let first = pending_ticket(harness, &ask_text, "info").await;
+    let id = first["id"].as_str().unwrap();
+    harness
+        .request(
+            "POST",
+            &format!("/v1/tickets/{id}/resolve"),
+            Some(json!({"value":"Yes"})),
+        )
+        .await;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while pending_ticket(harness, &ask_text, "info").await["id"] == first["id"] {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("second question");
+
+    let takeover = seed(
+        harness,
+        "Book the team offsite venue",
+        "guard",
+        json!({"responses":[
+            tool("request_human_step", json!({"kind":"takeover","summary":"Solve the CAPTCHA on the booking page","instructions":"The venue's site wants a person to confirm the booking."}), "captcha"),
+            text("Booked."),
+        ]}),
+        "Book the venue we picked for the offsite.",
+    )
+    .await;
+    pending_ticket(harness, &takeover, "takeover").await;
+
+    let device = seed(
+        harness,
+        "Connect the analytics account",
+        "guard",
+        json!({"responses":[
+            tool("request_human_step", json!({"kind":"device_approval","summary":"Approve the sign-in prompt on your phone","instructions":"Google sent a prompt to your phone. Tap Yes there, then mark this done.","resume_when":{"manual":true}}), "device"),
+            text("Connected."),
+        ]}),
+        "Connect the analytics account to the dashboard.",
+    )
+    .await;
+    pending_ticket(harness, &device, "device_approval").await;
+
+    let short = seed(
+        harness,
+        "Trip planning: Lisbon",
+        "guard",
+        json!({"responses":[text("Three that hold up in the rain:\n\n1. **Gulbenkian Museum** for an unhurried afternoon.\n2. **LX Factory** for bookshops and lunch under one roof.\n3. **Time Out Market** when you want to try a bit of everything.")]}),
+        "Three things to do in Lisbon on a rainy afternoon?",
+    )
+    .await;
+
+    let streaming = seed(
+        harness,
+        "Weekly dependency updates",
+        "guard",
+        json!({
+            "responses":[{"parts":[
+                {"type":"text","text":"Seven crates have updates this week. I'm handing the lockfile review to a helper so the breaking changes get a careful read, and I'll summarize once it reports back."},
+                {"type":"tool_call","name":"delegate","args":{"task":"Review the Cargo.lock diff for breaking changes","tools":["read"]},"id":"review"},
+            ]}],
+            "subagents":{"review":[wait_forever]},
+        }),
+        "Check this week's dependency updates.",
+    )
+    .await;
+    let mut stream = harness.events(&streaming, 0).await;
+    until(&mut stream, "the running subagent", |event| {
+        matches!(&event.kind, EventKind::SubagentStarted { .. })
+    })
+    .await;
+
+    // A run between steps: its calls returned and the model has not answered yet (status line).
+    let working = seed(
+        harness,
+        "Release notes draft",
+        "guard",
+        json!({"responses":[
+            tool("read", json!({"path":"README.md"}), "read-notes"),
+            wait_forever.clone(),
+        ]}),
+        "Draft release notes from the README.",
+    )
+    .await;
+    let mut stream = harness.events(&working, 0).await;
+    until(&mut stream, "the returned read", |event| {
+        matches!(&event.kind, EventKind::ToolEnded { tool_call_id, .. } if tool_call_id == "read-notes")
+    })
+    .await;
+
+    // Settled conversations the short one waits on; it has no ticket to poll for.
+    let mut stream = harness.events(&short, 0).await;
+    until(&mut stream, "the short answer", |event| {
+        matches!(&event.kind, EventKind::SessionSettled {})
+    })
+    .await;
+
+    // Titles that must truncate rather than widen the sidebar: an unbroken URL and Korean.
+    create(
+        harness,
+        &format!("https://example.com/{}", "a1b2c3d4e5".repeat(18)),
+    )
+    .await;
+    create(
+        harness,
+        "다음 주 팀 워크숍 장소 예약과 참석자 일정 조율, 그리고 발표 자료 초안까지 한꺼번에 정리해 달라는 요청",
+    )
+    .await;
+
+    let archived = create(harness, "Old onboarding notes").await;
+    let archive = harness
+        .request(
+            "PATCH",
+            &format!("/v1/sessions/{archived}"),
+            Some(json!({"archived":true})),
+        )
+        .await;
+    assert!(archive.status < 300, "{}", archive.body);
+
+    (
+        Seeded {
+            short,
+            streaming,
+            working,
+            failed,
+            ask_options,
+            ask_text,
+            secret,
+            otp,
+            takeover,
+            device,
+        },
+        server,
+    )
+}
+
+/// The code and secret cards need a real tab: open it, find the field, then ask. Each step
+/// extends the script and restarts the agent so the session reads the new turns.
+async fn live_states(harness: &mut Harness, site: &str) -> (String, String) {
+    let mut responses = vec![
+        tool(
+            "browser_open_tab",
+            json!({"url":format!("{site}/login")}),
+            "open",
+        ),
+        text("The sign-in page is open."),
+    ];
+    harness.replace_script(&json!({ "responses": responses }));
+    let otp = create_in(harness, "Sign in to the vendor portal", "full").await;
+    let mut stream = harness.events(&otp, 0).await;
+    submit(
+        harness,
+        &otp,
+        "o1",
+        "Sign in to the vendor portal and download last month's invoice.",
+        "now",
+    )
+    .await;
+    let events = until_final(&mut stream, "The sign-in page is open.").await;
+    let tab = ended_ok(&events, "open")["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    responses.extend([
+        tool("browser_snapshot", json!({"tab_id":tab}), "fields"),
+        text("It wants the code from the sign-in email."),
+    ]);
+    harness.replace_script(&json!({ "responses": responses }));
+    harness.kill_sidecar();
+    stream.settled().await;
+    submit(harness, &otp, "o2", "Go ahead.", "now").await;
+    let events = until_final(&mut stream, "It wants the code from the sign-in email.").await;
+    let code = field(ended_ok(&events, "fields"), "Email code");
+    responses.extend([
+        tool("request_otp", json!({"tab_id":tab,"field_ref":code,"channel":"email","summary":"Code from the sign-in email"}), "otp"),
+        text("Signed in."),
+    ]);
+    harness.replace_script(&json!({ "responses": responses }));
+    harness.kill_sidecar();
+    stream.settled().await;
+    submit(harness, &otp, "o3", "The email just arrived.", "now").await;
+    pending_ticket(harness, &otp, "secret_input").await;
+
+    // A secret goes into a field of a real tab too. Other conversations' agents are live now,
+    // so only this conversation's agent is restarted between steps.
+    let others = agent_pids(harness);
+    let mut responses = vec![
+        tool(
+            "browser_open_tab",
+            json!({"url":format!("{site}/deploy")}),
+            "open-deploy",
+        ),
+        text("The deploy settings are open."),
+    ];
+    harness.replace_script(&json!({ "responses": responses }));
+    let secret = create_in(harness, "Rotate the staging deploy key", "full").await;
+    let mut stream = harness.events(&secret, 0).await;
+    submit(
+        harness,
+        &secret,
+        "k1",
+        "Rotate the staging deploy key.",
+        "now",
+    )
+    .await;
+    let events = until_final(&mut stream, "The deploy settings are open.").await;
+    let tab = ended_ok(&events, "open-deploy")["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    responses.extend([
+        tool("browser_snapshot", json!({"tab_id":tab}), "deploy-fields"),
+        text("Found the key field."),
+    ]);
+    harness.replace_script(&json!({ "responses": responses }));
+    restart_agent(harness, &others);
+    stream.settled().await;
+    submit(harness, &secret, "k2", "Go on.", "now").await;
+    let events = until_final(&mut stream, "Found the key field.").await;
+    let key = field(ended_ok(&events, "deploy-fields"), "Deploy key");
+    responses.extend([
+        json!({"parts":[
+            {"type":"text","text":"The new key goes in here; I'll wait for you."},
+            {"type":"tool_call","name":"request_human_step","args":{"kind":"secret_input","summary":"Paste the new deploy key for staging","instructions":"It goes straight into the Deploy key field; openside never sees or stores it.","tab_id":tab,"origin":site,"field_ref":key},"id":"secret"},
+        ]}),
+        text("Saved."),
+    ]);
+    harness.replace_script(&json!({ "responses": responses }));
+    restart_agent(harness, &others);
+    stream.settled().await;
+    submit(harness, &secret, "k3", "Fill it in.", "now").await;
+    pending_ticket(harness, &secret, "secret_input").await;
+    (otp, secret)
 }
 
 #[tokio::test]
@@ -433,7 +915,13 @@ async fn web_screens_capture() {
     ));
     let library = harness.root().join("skill-library");
     harness.append_config(&format!("[skills]\ndir = {}\n", json!(library)));
+    // The inline code card needs an agent tab to point at.
+    harness.append_config(&format!("[browser]\nexecutable = {}\n", json!(executable)));
     harness.launch().await;
+    let onboarding = harness
+        .request("PUT", "/v1/onboarding", Some(json!({"state":"skipped"})))
+        .await;
+    assert_eq!(onboarding.status, 200, "{}", onboarding.body);
     let workspace = harness.workspace();
     std::fs::create_dir_all(workspace.join("src")).unwrap();
     std::fs::write(
@@ -446,6 +934,7 @@ async fn web_screens_capture() {
         "pub fn version() -> &'static str { \"0.1\" }\n",
     )
     .unwrap();
+    let (seeded, site) = seed_states(&mut harness).await;
     let report = harness.root().join("release-report.md");
     harness.replace_script(&json!({
         "responses": [
@@ -463,14 +952,7 @@ async fn web_screens_capture() {
         }
     }));
 
-    // Other conversations fill the sidebar; one is pinned.
-    for title in [
-        "Flaky checkout test triage",
-        "Weekly dependency updates",
-        "Trip planning: Lisbon",
-    ] {
-        create(&harness, title).await;
-    }
+    // One more conversation fills the sidebar, pinned.
     let pinned = create(&harness, "Release checklist").await;
     let pin = harness
         .request(
@@ -506,22 +988,7 @@ async fn web_screens_capture() {
     )
     .await;
     // The child's write waits on an approval; follow-ups queue behind the blocked run.
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let pending = harness
-                .request("GET", "/v1/tickets?status=pending", None)
-                .await;
-            if pending.body["tickets"]
-                .as_array()
-                .is_some_and(|t| !t.is_empty())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .expect("pending approval");
+    pending_ticket(&harness, &session, "confirm").await;
     submit(
         &harness,
         &session,
@@ -670,6 +1137,44 @@ async fn web_screens_capture() {
                     eprintln!("skipped {screen}: no {selector} on the page");
                 }
             }
+            if wanted("long-thread-top") {
+                open_conversation().await;
+                ui.eval("document.querySelector('.conversation-scroll').scrollTop = 0; true")
+                    .await;
+                ui.snap(&file("long-thread-top")).await;
+            }
+            // One conversation per state, captured at its latest turn.
+            for (screen, session, ready) in [
+                ("short-thread", &seeded.short, "document.querySelectorAll('.bubble.assistant[data-final=\"true\"]').length === 1"),
+                ("streaming", &seeded.streaming, "document.body.innerText.includes('Seven crates') && !!document.querySelector('.subagent')"),
+                ("working", &seeded.working, "!!document.querySelector('.status-line')"),
+                ("failed", &seeded.failed, "!!document.querySelector('.runtime-error')"),
+                ("ask-options", &seeded.ask_options, "!!document.querySelector('section.ticket-pending')"),
+                ("ask-text", &seeded.ask_text, "!!document.querySelector('section.ticket-pending input')"),
+                ("secret", &seeded.secret, "!!document.querySelector('section.ticket-pending input[type=password]')"),
+                ("otp", &seeded.otp, "!!document.querySelector('section.ticket-otp')"),
+                ("takeover", &seeded.takeover, "!!document.querySelector('section.ticket-pending')"),
+                ("device", &seeded.device, "!!document.querySelector('section.ticket-pending')"),
+            ] {
+                if !wanted(screen) || session.is_empty() {
+                    continue;
+                }
+                ui.goto(&format!("/sessions/{session}")).await;
+                ui.wait(screen, ready).await;
+                if matches!(screen, "failed" | "streaming") {
+                    ui.eval("document.querySelectorAll('.activity:not(.status-line-group)').forEach((el) => { el.open = true }); true")
+                        .await;
+                }
+                ui.snap(&file(screen)).await;
+                if screen == "streaming" && wanted("stop-confirm") {
+                    ui.eval("document.querySelector('.composer-stop').click(); true").await;
+                    ui.wait("stop confirmation", "!!document.querySelector('.stop-task-dialog')")
+                        .await;
+                    ui.snap(&file("stop-confirm")).await;
+                    ui.eval("__qs.text(document.querySelector('.stop-task-dialog'), 'Keep running').click()")
+                        .await;
+                }
+            }
             if wanted("queue-menu") || wanted("queue-edit") {
                 open_conversation().await;
                 ui.eval("__qs.press(document.querySelector('.queue-item [aria-label=\"Message options\"]'))")
@@ -709,6 +1214,50 @@ async fn web_screens_capture() {
                 open_conversation().await;
                 open_drawer().await;
                 ui.snap(&file("drawer")).await;
+            }
+            // The sidebar's archived filter and search, results and none.
+            for (screen, query) in [
+                ("archived", None),
+                ("search", Some("release")),
+                ("search-empty", Some("quarterly tax filing")),
+            ] {
+                if !wanted(screen) {
+                    continue;
+                }
+                open_conversation().await;
+                let scope = if phone {
+                    open_drawer().await;
+                    ".ui-drawer"
+                } else {
+                    ".shell-sidebar"
+                };
+                match query {
+                    None => {
+                        ui.eval(&format!(
+                            "(() => {{ const scope = document.querySelector({}); \
+                               (scope.querySelector('[aria-label=\"Show archived\"]') || __qs.text(scope, 'Archived')).click(); return true }})()",
+                            json!(scope)
+                        ))
+                        .await;
+                        ui.wait(
+                            "archived list",
+                            "document.body.innerText.includes('Old onboarding notes')",
+                        )
+                        .await;
+                    }
+                    Some(query) => {
+                        ui.eval(&format!(
+                            "(() => {{ const el = document.querySelector({}).querySelector('input[type=search]'); \
+                               Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, {}); \
+                               el.dispatchEvent(new Event('input', {{ bubbles: true }})); return true }})()",
+                            json!(scope),
+                            json!(query)
+                        ))
+                        .await;
+                        tokio::time::sleep(Duration::from_millis(600)).await;
+                    }
+                }
+                ui.snap(&file(screen)).await;
             }
             if wanted("settings") || wanted("appearance") {
                 open_conversation().await;
@@ -758,9 +1307,37 @@ async fn web_screens_capture() {
                 let name = route.trim_matches('/').replace('/', "-");
                 let name = if name.is_empty() { "root".into() } else { name };
                 ui.snap(&file(&format!("route-{name}"))).await;
+                if route == "/devices" {
+                    ui.eval("Array.from(document.querySelectorAll('[role=radio]')).find(button => button.textContent === 'Connect an agent / CLI').click(); true").await;
+                    ui.snap(&file("route-devices-agent")).await;
+                }
+            }
+        }
+    }
+    // Last: the daemon goes away under an open conversation (nothing can be navigated after).
+    if wanted("offline") {
+        ui.goto(&conversation).await;
+        ui.wait(
+            "seeded conversation",
+            "!!document.querySelector('section.ticket-pending')",
+        )
+        .await;
+        harness.crash_daemon().await;
+        ui.wait(
+            "reconnecting",
+            "!!document.querySelector('.connection-banner') || document.body.innerText.includes('Reconnecting')",
+        )
+        .await;
+        for theme in ["light", "dark"] {
+            ui.emulation.lock().await.scheme(theme).await;
+            for viewport in &VIEWPORTS {
+                ui.emulation.lock().await.viewport(viewport).await;
+                ui.snap(&out.join(format!("{theme}-{}-offline.png", viewport.name)))
+                    .await;
             }
         }
     }
     ui.browser.shutdown().await.unwrap();
     harness.kill().await;
+    site.abort();
 }

@@ -562,7 +562,7 @@ async fn sensitive_payment_ask_expires_and_denies_original_call_without_clicking
     assert_eq!(pending.body["status"], "expired");
     assert_eq!(
         harness
-            .request(
+            .human_request(
                 "POST",
                 &format!("/v1/tickets/{}/resolve", ticket.id),
                 Some(json!({"value":true}))

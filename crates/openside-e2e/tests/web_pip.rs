@@ -1,4 +1,5 @@
-//! JPEG pixels, not merely WebSocket wiring, prove agent navigation reaches the read-only PiP.
+//! JPEG pixels, not merely WebSocket wiring, prove agent navigation reaches the read-only live
+//! browser card.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -128,15 +129,14 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     ui.navigate(OWNER, &tab, &format!("{origin}/sessions/{session}"))
         .await
         .unwrap();
-    wait(&ui,&tab,"Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Browser preview')").await;
-    ui.evaluate(&tab,"Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Browser preview').click(); true").await.unwrap();
+    // The live browser card docks by itself once the conversation has used the browser.
     wait(
         &ui,
         &tab,
-        "!!document.querySelector('.browser-preview img')?.naturalWidth",
+        "!!document.querySelector('.browser-card img')?.naturalWidth",
     )
     .await;
-    const PIXEL: &str = "(()=>{const i=document.querySelector('.browser-preview img');if(!i?.naturalWidth)return null;const c=document.createElement('canvas');c.width=i.naturalWidth;c.height=i.naturalHeight;const x=c.getContext('2d');x.drawImage(i,0,0);return Array.from(x.getImageData(500,300,1,1).data).slice(0,3)})()";
+    const PIXEL: &str = "(()=>{const i=document.querySelector('.browser-card img');if(!i?.naturalWidth)return null;const c=document.createElement('canvas');c.width=i.naturalWidth;c.height=i.naturalHeight;const x=c.getContext('2d');x.drawImage(i,0,0);return Array.from(x.getImageData(500,300,1,1).data).slice(0,3)})()";
     let red = ui.evaluate(&tab, PIXEL).await.unwrap();
     assert!(
         red[0].as_u64().unwrap() > 180 && red[2].as_u64().unwrap() < 30,
@@ -144,48 +144,48 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     );
     ui.evaluate(
         &tab,
-        "window.__previewBefore=document.querySelector('.browser-preview img').src; true",
+        "window.__previewBefore=document.querySelector('.browser-card img').src; true",
     )
     .await
     .unwrap();
     submit(&harness, &session, "navigate blue").await;
-    wait(&ui,&tab,"document.querySelector('.browser-preview img')?.src!==window.__previewBefore && document.querySelector('.browser-preview img')?.complete && !!document.querySelector('.browser-preview img')?.naturalWidth").await;
+    wait(&ui,&tab,"document.querySelector('.browser-card img')?.src!==window.__previewBefore && document.querySelector('.browser-card img')?.complete && !!document.querySelector('.browser-card img')?.naturalWidth").await;
     let blue = ui.evaluate(&tab, PIXEL).await.unwrap();
     assert!(
         blue[2].as_u64().unwrap() > 180 && blue[0].as_u64().unwrap() < 30,
         "{blue}"
     );
-    let size: Value = ui.evaluate(&tab,"[document.querySelector('.browser-preview img').naturalWidth,document.querySelector('.browser-preview img').naturalHeight]").await.unwrap();
+    let size: Value = ui.evaluate(&tab,"[document.querySelector('.browser-card img').naturalWidth,document.querySelector('.browser-card img').naturalHeight]").await.unwrap();
     assert_eq!(size, json!([720, 450]));
-    // The card is titled from the tab ledger. `ledger` fetches GET /v1/browser/tabs with this
-    // device's token and returns the title of the entry for the blue page, so each check compares
-    // the UI with the API's current answer.
+    // The card is named after the live tab from the tab ledger. `ledger` fetches
+    // GET /v1/browser/tabs with this device's token and returns the title of the entry for the
+    // blue page, so each check compares the UI with the API's current answer. The card may have
+    // folded to its slim pill after the run; both forms carry the expand button.
     let blue_url = format!("{site_origin}/blue");
     let ledger = format!(
         "fetch('/v1/browser/tabs',{{headers:{{Authorization:'Bearer '+localStorage.getItem('openside.token')}}}}).then(r=>r.json()).then(b=>b.tabs.find(t=>t.url==={})?.title)",
         json!(blue_url)
     );
-    wait(&ui, &tab, &format!("{ledger}.then(t => t !== undefined && document.querySelector('.browser-preview .pip-title')?.textContent === t)")).await;
+    const EXPAND: &str = "document.querySelector('.browser-card button[aria-label^=\"Expand \"]')";
+    wait(&ui, &tab, &format!("{ledger}.then(t => t !== undefined && {EXPAND}?.getAttribute('aria-label') === 'Expand ' + t)")).await;
     // The ledger follows Target.targetInfoChanged, so it converges to the document title.
     wait(&ui, &tab, &format!("{ledger}.then(t => t === 'Blue')")).await;
     wait(
         &ui,
         &tab,
-        "document.querySelector('.browser-preview .pip-title')?.textContent === 'Blue'",
+        &format!("{EXPAND}?.getAttribute('aria-label') === 'Expand Blue'"),
     )
     .await;
-    ui.evaluate(
-        &tab,
-        "document.querySelector('.browser-preview button[aria-label=\"Expand\"]').click(); true",
-    )
-    .await
-    .unwrap();
+    ui.evaluate(&tab, &format!("{EXPAND}.click(); true"))
+        .await
+        .unwrap();
     // Expanded: the browser sheet shows the ledger's title and sanitized URL with the live frames.
     wait(
         &ui,
         &tab,
         &format!(
-            "{ledger}.then(t => {{ const s = document.querySelector('.browser-sheet'); const i = s?.querySelector('.browser-sheet-screen img'); return t === 'Blue' && !document.querySelector('.browser-preview') && s?.querySelector('.browser-sheet-title')?.textContent === t && s?.querySelector('a.browser-sheet-open')?.getAttribute('href') === {} && !!i?.complete && i.naturalWidth === 720 }})",
+            "{ledger}.then(t => {{ const s = document.querySelector('.browser-sheet'); const i = s?.querySelector('.browser-sheet-screen img'); return t === 'Blue' && !document.querySelector('.browser-card') && s?.querySelector('.ui-dialog-title')?.textContent === t && s?.querySelector('.browser-sheet-url')?.textContent === {} && s?.querySelector('a.browser-sheet-open')?.getAttribute('href') === {} && !!i?.complete && i.naturalWidth === 720 }})",
+            json!(blue_url),
             json!(blue_url)
         ),
     )
@@ -213,23 +213,30 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     wait(
         &ui,
         &tab,
-        "!!document.querySelector('.browser-preview img')?.naturalWidth",
+        "!!document.querySelector('.browser-card img')?.naturalWidth",
     )
     .await;
+    // Minimize unless the finished run already folded the card.
     ui.evaluate(
         &tab,
-        "document.querySelector('.browser-preview button[aria-label=\"Minimize\"]').click(); true",
+        "document.querySelector('.browser-card button[aria-label=\"Minimize\"]')?.click(); true",
     )
     .await
     .unwrap();
-    wait(&ui, &tab, "!document.querySelector('.browser-preview img')").await;
+    wait(
+        &ui,
+        &tab,
+        "!!document.querySelector('.browser-card[data-minimized] .browser-card-thumb img')",
+    )
+    .await;
+    // Idle, × hides the card rather than cancelling anything.
     ui.evaluate(
         &tab,
-        "document.querySelector('.browser-preview button[aria-label=\"Close\"]').click(); true",
+        "document.querySelector('.browser-card button[aria-label=\"Close\"]').click(); true",
     )
     .await
     .unwrap();
-    wait(&ui, &tab, "!document.querySelector('.browser-preview')").await;
+    wait(&ui, &tab, "!document.querySelector('.browser-card')").await;
     ui.shutdown().await.unwrap();
     harness.kill().await;
 }

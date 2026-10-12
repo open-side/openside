@@ -10,9 +10,11 @@
 #[path = "../../openside-channels/tests/support/mod.rs"]
 mod support;
 
-use std::{net::SocketAddr, process::Stdio};
+use std::{net::SocketAddr, process::Stdio, time::Duration};
 
 use axum::{response::Html, routing::get, Router};
+use futures_util::{FutureExt, SinkExt, StreamExt};
+use openside_browser::{Browser, BrowserConfig};
 use openside_e2e::Harness;
 use rmcp::{
     model::{CallToolRequestParams, CallToolResult},
@@ -38,6 +40,7 @@ struct Rig {
     harness: Harness,
     proxy: RecordingProxy,
     mcp: RunningService<RoleClient, ()>,
+    token: String,
 }
 
 impl Rig {
@@ -75,6 +78,7 @@ impl Rig {
             harness,
             proxy,
             mcp,
+            token,
         })
     }
 
@@ -211,9 +215,25 @@ async fn mcp_client_lists_tools_sends_a_message_and_reads_the_reply() {
         "ticket_list",
         "ticket_resolve",
         "memory_search",
-        "browser_open",
+        "agent_run",
+        "agent_result",
+        "agent_status",
+        "agent_steer",
+        "agent_cancel",
+        "ticket_wait",
+        "browser_open_tab",
+        "browser_tabs",
+        "browser_navigate",
         "browser_snapshot",
         "browser_act",
+        "browser_pointer",
+        "browser_screenshot",
+        "browser_close_tab",
+        "request_login",
+        "request_choice",
+        "wait_for_approval",
+        "request_otp",
+        "request_human_step",
         "browser_repl",
     ] {
         assert!(
@@ -223,10 +243,7 @@ async fn mcp_client_lists_tools_sends_a_message_and_reads_the_reply() {
     }
 
     let session = rig
-        .ok(
-            "session_create",
-            json!({"title":"via mcp","mode":"full","workspace":rig.harness.workspace()}),
-        )
+        .ok("session_create", json!({"title":"via mcp","mode":"full"}))
         .await;
     let id = session["id"].as_str().unwrap().to_owned();
     let sent = rig
@@ -300,14 +317,15 @@ async fn read_only_token_reads_but_gets_clean_errors_on_every_write_tool() {
         ("session_create", json!({"title":"nope"})),
         ("session_send", json!({"session_id":id,"text":"hi"})),
         (
-            "browser_open",
+            "browser_open_tab",
             json!({"session_id":id,"url":"http://localhost/"}),
         ),
-        ("browser_snapshot", json!({"session_id":id})),
+        ("browser_snapshot", json!({"session_id":id,"tab_id":"t"})),
         (
             "browser_act",
-            json!({"session_id":id,"action":"click","ref":"e1"}),
+            json!({"session_id":id,"tab_id":"t","action":"click","target":"e1"}),
         ),
+        ("agent_run", json!({"session_id":id,"goal":"hi"})),
         ("browser_repl", json!({"session_id":id,"code":"1+1"})),
     ] {
         let result = rig.call(tool, arguments).await;
@@ -336,7 +354,7 @@ async fn read_only_token_reads_but_gets_clean_errors_on_every_write_tool() {
 }
 
 #[tokio::test]
-async fn approval_tickets_are_resolved_through_mcp_and_the_session_resumes() {
+async fn mcp_cannot_approve_its_own_session_but_a_person_device_resumes_it() {
     let Some(rig) = Rig::start_with(
         json!({"responses":[]}),
         true,
@@ -353,12 +371,7 @@ async fn approval_tickets_are_resolved_through_mcp_and_the_session_resumes() {
     else {
         return;
     };
-    let session = rig
-        .ok(
-            "session_create",
-            json!({"mode":"guard","workspace":rig.harness.workspace()}),
-        )
-        .await;
+    let session = rig.ok("session_create", json!({"mode":"guard"})).await;
     let id = session["id"].as_str().unwrap().to_owned();
     let sent = rig
         .ok(
@@ -377,13 +390,64 @@ async fn approval_tickets_are_resolved_through_mcp_and_the_session_resumes() {
 
     let pending = rig.ok("ticket_list", json!({})).await;
     assert_eq!(pending["tickets"][0]["id"], ticket_id.as_str());
-    let resolved = rig
-        .ok(
+    let refused = rig
+        .call(
             "ticket_resolve",
             json!({"ticket_id":ticket_id,"value":true}),
         )
         .await;
-    assert_eq!(resolved["status"], "resolved");
+    assert_eq!(refused.is_error, Some(true));
+    let message = body(&refused);
+    assert!(message.contains("person_approval_required"), "{message}");
+    assert!(message.contains("ticket_wait"), "{message}");
+    let cli_refused = rig
+        .harness
+        .cli_remote(
+            CLI,
+            &[
+                "--url",
+                &rig.proxy.url,
+                "ticket",
+                "resolve",
+                &ticket_id,
+                "true",
+            ],
+            &[("OPENSIDE_TOKEN", rig.token.as_str())],
+        )
+        .await;
+    assert!(!cli_refused.status.success());
+    let cli_error = String::from_utf8_lossy(&cli_refused.stderr);
+    assert!(
+        cli_error.contains("403") && cli_error.contains("person_approval_required"),
+        "{cli_error}"
+    );
+    assert!(cli_error.contains("ticket_wait"), "{cli_error}");
+    assert!(!cli_error.contains(&rig.token));
+    assert!(!outside.exists());
+    let pending = rig
+        .ok(
+            "ticket_wait",
+            json!({"ticket_id":ticket_id,"timeout_secs":1}),
+        )
+        .await;
+    assert_eq!(pending["status"], "pending");
+
+    let resolved = rig
+        .harness
+        .human_request(
+            "POST",
+            &format!("/v1/tickets/{ticket_id}/resolve"),
+            Some(json!({"value":true})),
+        )
+        .await;
+    assert_eq!(resolved.status, 200, "{}", resolved.body);
+    let observed = rig
+        .ok(
+            "ticket_wait",
+            json!({"ticket_id":ticket_id,"timeout_secs":1}),
+        )
+        .await;
+    assert_eq!(observed["status"], "resolved");
 
     let resumed = rig
         .ok(
@@ -399,6 +463,53 @@ async fn approval_tickets_are_resolved_through_mcp_and_the_session_resumes() {
     );
     rig.assert_public_api_only(&[
         ("GET", "/v1/tickets/{id}"),
+        ("POST", "/v1/tickets/{id}/resolve"),
+    ]);
+    rig.finish().await;
+}
+
+#[tokio::test]
+async fn mcp_direct_confirmations_refuse_approval_but_accept_its_own_denial() {
+    let Some(rig) = Rig::start(
+        json!({"responses":[]}),
+        true,
+        "",
+        &["read", "steer", "browse", "approve"],
+    )
+    .await
+    else {
+        return;
+    };
+    let session = rig.ok("session_create", json!({})).await;
+    let id = session["id"].as_str().unwrap();
+    let direct = rig.ok("request_human_step", json!({
+        "session_id":id,"kind":"confirm","summary":"Approve a sensitive operation?","wait":false
+    })).await;
+    assert_eq!(direct["status"], "deferred", "{direct}");
+    let ticket = direct["ticket_id"].as_str().unwrap();
+    let refused = rig
+        .call(
+            "ticket_resolve",
+            json!({"ticket_id":ticket,"value":"approve"}),
+        )
+        .await;
+    assert_eq!(refused.is_error, Some(true));
+    assert!(
+        body(&refused).contains("person_approval_required"),
+        "{}",
+        body(&refused)
+    );
+    let denied = rig
+        .ok("ticket_resolve", json!({"ticket_id":ticket,"value":false}))
+        .await;
+    assert_eq!(denied["resolution"]["approved"], false);
+    let observed = rig
+        .ok("ticket_wait", json!({"ticket_id":ticket,"timeout_secs":1}))
+        .await;
+    assert_eq!(observed["status"], "resolved");
+    assert_eq!(observed["resolution"]["approved"], false);
+    rig.assert_public_api_only(&[
+        ("POST", "/v1/sessions/{id}/tools/{name}"),
         ("POST", "/v1/tickets/{id}/resolve"),
     ]);
     rig.finish().await;
@@ -421,12 +532,7 @@ async fn secret_input_tickets_are_refused_by_mcp_and_stay_pending() {
     else {
         return;
     };
-    let session = rig
-        .ok(
-            "session_create",
-            json!({"mode":"full","workspace":rig.harness.workspace()}),
-        )
-        .await;
+    let session = rig.ok("session_create", json!({"mode":"full"})).await;
     let id = session["id"].as_str().unwrap().to_owned();
     let sent = rig
         .ok(
@@ -473,7 +579,7 @@ const PAGE: &str = r#"<!doctype html><title>MCP fixture</title><h1>Fixture page<
 const NEXT: &str = r#"<!doctype html><title>Next</title><h1>Reached the next page</h1>"#;
 
 #[tokio::test]
-async fn browser_tools_open_snapshot_and_act_on_a_loopback_page() {
+async fn browser_tools_and_a_repl_batch_drive_a_loopback_page() {
     let executable = match openside_config::discover_browser(&openside_config::Config::default()) {
         Ok(path) => path,
         Err(reason) => {
@@ -500,50 +606,287 @@ async fn browser_tools_open_snapshot_and_act_on_a_loopback_page() {
         site.abort();
         return;
     };
-    let session = rig
-        .ok(
-            "session_create",
-            json!({"mode":"full","workspace":rig.harness.workspace()}),
-        )
-        .await;
+    let session = rig.ok("session_create", json!({"mode":"full"})).await;
     let id = session["id"].as_str().unwrap().to_owned();
 
     let opened = rig
         .ok(
-            "browser_open",
+            "browser_open_tab",
             json!({"session_id":id,"url":format!("{origin}/")}),
         )
         .await;
-    assert_eq!(opened["url"], format!("{origin}/"));
-    let tab = opened["tab_id"].as_str().unwrap().to_owned();
+    assert_eq!(opened["status"], "done", "{opened}");
+    let tab = opened["result"]["tab_id"].as_str().unwrap().to_owned();
 
     let snapshot = rig
         .ok("browser_snapshot", json!({"session_id":id,"tab_id":tab}))
         .await;
-    let snapshot = snapshot.as_str().unwrap();
+    let snapshot = snapshot["result"].to_string();
     assert!(snapshot.contains("Fixture page"), "{snapshot}");
-    let line = snapshot
-        .lines()
-        .find(|line| line.contains("\"Continue\"") && line.contains("button"))
-        .unwrap_or_else(|| panic!("no Continue button: {snapshot}"));
-    let start = line.find('[').unwrap() + 1;
-    let reference = &line[start..line[start..].find(']').unwrap() + start];
 
-    let acted = rig
+    // One REPL call runs a batch of steps in the tab the catalog tools opened.
+    let batch = rig
         .ok(
-            "browser_act",
-            json!({"session_id":id,"tab_id":tab,"action":"click","ref":reference}),
+            "browser_repl",
+            json!({"session_id":id,"tab_id":tab,"code":
+                "await page.getByRole('button', { name: 'Continue' }).click();\n\
+                 await page.waitForURL('**/next');\n\
+                 await expect(page.getByRole('heading')).toHaveText('Reached the next page');\n\
+                 page.url()"}),
         )
         .await;
-    assert_eq!(acted["url"], format!("{origin}/next"));
-    let after = rig
-        .ok("browser_snapshot", json!({"session_id":id,"tab_id":tab}))
+    assert_eq!(batch["status"], "done", "{batch}");
+    assert_eq!(batch["result"]["return_value"], format!("{origin}/next"));
+
+    let tabs = rig.ok("browser_tabs", json!({"session_id":id})).await;
+    assert!(tabs["result"].to_string().contains("/next"), "{tabs}");
+    let shot = rig
+        .ok("browser_screenshot", json!({"session_id":id,"tab_id":tab}))
         .await;
     assert!(
-        after.as_str().unwrap().contains("Reached the next page"),
-        "{after}"
+        shot["artifacts"][0].as_str().unwrap().ends_with(".png"),
+        "{shot}"
     );
-    rig.assert_public_api_only(&[("POST", "/v1/sessions/{id}/repl")]);
+    rig.assert_public_api_only(&[
+        ("GET", "/v1/tools"),
+        ("POST", "/v1/sessions/{id}/tools/{name}"),
+        ("POST", "/v1/sessions/{id}/repl"),
+    ]);
     rig.finish().await;
     site.abort();
+}
+
+/// Event kinds of a session's first run, in order, with run-specific payloads dropped.
+async fn run_kinds(harness: &Harness, session: &str) -> Vec<String> {
+    harness
+        .events(session, 0)
+        .await
+        .settled()
+        .await
+        .iter()
+        .map(|event| {
+            serde_json::to_value(event).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn agent_run_records_the_same_events_as_an_in_app_run() {
+    let Some(rig) = Rig::start(
+        json!({"responses":[text("the cheapest is 42")]}),
+        false,
+        "",
+        &["read", "steer"],
+    )
+    .await
+    else {
+        return;
+    };
+    // The web composer's path: create a session and post a message over the local socket.
+    let in_app = rig
+        .harness
+        .request(
+            "POST",
+            "/v1/sessions",
+            Some(json!({"mode":"full","workspace":rig.harness.workspace()})),
+        )
+        .await;
+    let in_app = in_app.body["id"].as_str().unwrap().to_owned();
+    let posted = rig
+        .harness
+        .request(
+            "POST",
+            &format!("/v1/sessions/{in_app}/messages"),
+            Some(json!({"text":"find the cheapest","mode":"now"})),
+        )
+        .await;
+    assert!(posted.status < 300, "{}", posted.body);
+    let in_app_kinds = run_kinds(&rig.harness, &in_app).await;
+
+    let run = rig
+        .ok(
+            "agent_run",
+            json!({"goal":"find the cheapest","mode":"full","wait":true,"timeout_secs":60}),
+        )
+        .await;
+    assert_eq!(run["status"], "settled", "{run}");
+    assert_eq!(run["replies"], json!(["the cheapest is 42"]));
+    let id = run["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(run_kinds(&rig.harness, &id).await, in_app_kinds);
+
+    let status = rig.ok("agent_status", json!({"session_id":id})).await;
+    assert_eq!(status["status"], "idle", "{status}");
+    assert_eq!(status["pending_tickets"], json!([]));
+    rig.assert_public_api_only(&[
+        ("POST", "/v1/sessions"),
+        ("POST", "/v1/sessions/{id}/messages"),
+        ("GET", "/v1/sessions/{id}/events"),
+        ("GET", "/v1/sessions/{id}/subagents"),
+    ]);
+    rig.finish().await;
+}
+
+async fn ui_wait(browser: &Browser, tab: &str, predicate: &str) {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if browser.evaluate(tab, predicate).await.unwrap() == true {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("UI predicate failed: {predicate}"));
+}
+
+async fn phone_viewport(
+    browser: &Browser,
+    tab: &str,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    use tokio_tungstenite::tungstenite::Message;
+    let (mut socket, _) = tokio_tungstenite::connect_async(&browser.endpoint().ws_url)
+        .await
+        .unwrap();
+    async fn call(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        request: Value,
+    ) -> Value {
+        socket
+            .send(Message::Text(request.to_string().into()))
+            .await
+            .unwrap();
+        loop {
+            let message = tokio::time::timeout(Duration::from_secs(10), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            if let Message::Text(text) = message {
+                let reply: Value = serde_json::from_str(&text).unwrap();
+                if reply["id"] == request["id"] {
+                    assert!(reply["error"].is_null(), "{reply}");
+                    return reply["result"].clone();
+                }
+            }
+        }
+    }
+    let attached = call(
+        &mut socket,
+        json!({"id":1,"method":"Target.attachToTarget","params":{"targetId":tab,"flatten":true}}),
+    )
+    .await;
+    call(
+        &mut socket,
+        json!({"id":2,"sessionId":attached["sessionId"],
+        "method":"Emulation.setDeviceMetricsOverride",
+        "params":{"width":390,"height":844,"deviceScaleFactor":3,"mobile":true}}),
+    )
+    .await;
+    call(
+        &mut socket,
+        json!({"id":3,"sessionId":attached["sessionId"],
+        "method":"Emulation.setTouchEmulationEnabled",
+        "params":{"enabled":true,"maxTouchPoints":5}}),
+    )
+    .await;
+    socket
+}
+
+#[tokio::test]
+async fn delegated_cli_and_mcp_tickets_appear_live_on_desktop_and_phone_and_wait_for_approval() {
+    let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
+    assert!(
+        dist.join("index.html").is_file(),
+        "build the web UI before this acceptance test"
+    );
+    let executable = openside_config::discover_browser(&openside_config::Config::default())
+        .expect("Chromium is required for external-agent UI acceptance");
+    let rig = Rig::start_with(
+        json!({"responses":[]}), true,
+        &format!("[ui]\ndir = {}\n", json!(dist.canonicalize().unwrap())),
+        &["read", "steer", "approve"],
+        |root| Some(json!({"responses":[
+            tool("write", json!({"path":root.join("delegated.txt"),"content":"approved delegation"}), "external-write"),
+            text("external delegation finished")
+        ]})),
+    ).await.expect("scripted Python runtime is required");
+    let token = rig.harness.human_token().await;
+    let port = std::fs::read_to_string(rig.harness.data_dir.join("opensided.port")).unwrap();
+    let origin = format!("http://127.0.0.1:{}", port.trim());
+    let (browser, _events) = Browser::launch(BrowserConfig::new(executable))
+        .await
+        .unwrap();
+    let outcome = std::panic::AssertUnwindSafe(async {
+    let desktop = browser.create_agent_tab("external-ui", &origin).await.unwrap().id;
+    ui_wait(&browser, &desktop, "!!document.querySelector('.token-entry')").await;
+    browser.evaluate(&desktop, &format!("localStorage.setItem('openside.token', {}); true", json!(token)))
+        .await.unwrap();
+    let phone = browser.create_agent_tab("external-ui", &origin).await.unwrap().id;
+    let _phone_cdp = phone_viewport(&browser, &phone).await;
+    assert_eq!(browser.evaluate(&phone, "innerWidth").await.unwrap(), 390);
+    let pending = "!!document.querySelector('section.ticket-pending[aria-label=\"Approval needed\"]')";
+    let approve = "Array.from(document.querySelector('section.ticket-pending').querySelectorAll('button')).find(b => b.textContent.trim() === 'Approve').click(); true";
+
+    for caller in ["cli", "mcp"] {
+        let created = rig.harness.request("POST", "/v1/sessions",
+            Some(json!({"mode":"guard","workspace":rig.harness.workspace()}))).await;
+        assert_eq!(created.status, 201, "{}", created.body);
+        let id = created.body["id"].as_str().unwrap();
+        for tab in [&desktop, &phone] {
+            browser.navigate("external-ui", tab, &format!("{origin}/sessions/{id}")).await.unwrap();
+            ui_wait(&browser, tab, "!!document.querySelector('main.session .composer')").await;
+        }
+
+        if caller == "cli" {
+            let args = ["run", "--session", id, "--wait", "--timeout", "25", "write the file"];
+            let waiting = rig.harness.cli(CLI, &args, None);
+            tokio::pin!(waiting);
+            tokio::select! {
+                output = &mut waiting => panic!("CLI finished before approval: {output:?}"),
+                () = async {
+                    ui_wait(&browser, &desktop, pending).await;
+                    ui_wait(&browser, &phone, pending).await;
+                } => {}
+            }
+            assert!(!rig.harness.root().join("delegated.txt").exists());
+            browser.evaluate(&phone, approve).await.unwrap();
+            let output = waiting.await;
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("external delegation finished"));
+        } else {
+            let run = rig.ok("agent_run",
+                json!({"session_id":id,"goal":"write the file","wait":true,"timeout_secs":25})).await;
+            assert_eq!(run["status"], "waiting_human", "{run}");
+            let ticket = run["pending_tickets"][0]["id"].as_str().unwrap();
+            ui_wait(&browser, &desktop, pending).await;
+            ui_wait(&browser, &phone, pending).await;
+            let waiting = rig.ok("ticket_wait", json!({"ticket_id":ticket,"timeout_secs":25}));
+            tokio::pin!(waiting);
+            tokio::select! {
+                result = &mut waiting => panic!("MCP finished before approval: {result}"),
+                () = tokio::time::sleep(Duration::from_millis(150)) => {}
+            }
+            browser.evaluate(&desktop, approve).await.unwrap();
+            assert_eq!(waiting.await["status"], "resolved");
+            let result = rig.ok("agent_result",
+                json!({"session_id":id,"after_seq":run["last_seq"],"timeout_secs":25})).await;
+            assert_eq!(result["status"], "settled", "{result}");
+            assert_eq!(result["replies"], json!(["external delegation finished"]));
+        }
+        for tab in [&desktop, &phone] {
+            ui_wait(&browser, tab,
+                "document.querySelector('main.session')?.dataset.status === 'idle' && document.body.innerText.includes('external delegation finished')").await;
+        }
+    }
+    }).catch_unwind().await;
+    browser.shutdown().await.unwrap();
+    rig.finish().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
 }

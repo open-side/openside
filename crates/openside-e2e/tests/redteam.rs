@@ -222,11 +222,20 @@ async fn injected_pay_send_and_exfiltration_are_blocked_by_policy_and_audited() 
         Some(approved.origin.as_str())
     );
     events.extend(stream.settled().await);
+    let port = std::fs::read_to_string(harness.data_dir.join("opensided.port")).unwrap();
+    let origin = format!("http://127.0.0.1:{}", port.trim());
     let output = harness
-        .cli(
+        .cli_remote(
             env!("CARGO_BIN_EXE_e2e-openside"),
-            &["ticket", "resolve", second.id.as_str(), "true"],
-            None,
+            &[
+                "--url",
+                &origin,
+                "ticket",
+                "resolve",
+                second.id.as_str(),
+                "true",
+            ],
+            &[("OPENSIDE_TOKEN", harness.human_token().await)],
         )
         .await;
     assert!(output.status.success(), "{output:?}");

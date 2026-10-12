@@ -175,7 +175,7 @@ async fn child_waits_on_parent_ticket(harness: &Harness) -> (String, String, Tic
 async fn approve_and_finish(harness: &Harness, id: &str, subagent: &str, ticket: &Ticket) {
     let mut stream = harness.events(id, 0).await;
     let resolved = harness
-        .request(
+        .human_request(
             "POST",
             &format!("/v1/tickets/{}/resolve", ticket.id),
             Some(json!({"value":true})),

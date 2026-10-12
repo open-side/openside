@@ -95,6 +95,11 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
     };
     harness.append_config(&format!("[ui]\ndir = {}\n", json!(dist)));
     harness.launch().await;
+    // These conversation assertions start after the separately tested first-run guide.
+    let onboarding = harness
+        .request("PUT", "/v1/onboarding", Some(json!({"state":"skipped"})))
+        .await;
+    assert_eq!(onboarding.status, 200, "{}", onboarding.body);
     let port = std::fs::read_to_string(harness.data_dir.join("opensided.port"))
         .unwrap()
         .trim()

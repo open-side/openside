@@ -154,6 +154,10 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
         json!(unlock)
     ));
     harness.launch().await;
+    let onboarding = harness
+        .request("PUT", "/v1/onboarding", Some(json!({"state":"skipped"})))
+        .await;
+    assert_eq!(onboarding.status, 200, "{}", onboarding.body);
     let port = std::fs::read_to_string(harness.data_dir.join("opensided.port"))
         .unwrap()
         .trim()
@@ -212,7 +216,7 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
     .await;
     assert_eq!(
         page.eval(&format!(
-            "document.querySelector('li[data-device={}]').textContent.includes('this device')",
+            "document.querySelector('li[data-device={}]').textContent.includes('This device')",
             json!(device)
         ))
         .await,
@@ -229,9 +233,12 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
         "__os.fill(document.querySelector('[data-section=vault] article[data-item=fixture] select'), 'never')",
     )
     .await;
+    // Matching effective policies do not repeat the selector label; verify the saved metadata.
     page.wait(
-        "enforced policy",
-        "document.querySelector('[data-section=vault] article[data-item=fixture]').textContent.includes('enforced: never')",
+        "persisted and enforced item policy",
+        "fetch('/v1/vault/items', { headers: { Authorization: 'Bearer ' + localStorage.getItem('openside.token') } }) \
+         .then((r) => r.json()).then((data) => data.items.some((item) => item.id === 'fixture' && item.policy === 'never' && item.effective_policy === 'never') \
+         && document.querySelector('[data-section=vault] article[data-item=fixture] select').value === 'never')",
     )
     .await;
     page.eval(
@@ -242,7 +249,7 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
     page.wait(
         "audit record of the policy change",
         "Array.from(document.querySelectorAll('ol.audit-list li[data-item=fixture]')).some((r) => \
-         r.dataset.result === 'updated' && r.textContent.includes('policy_update') && r.textContent.includes('never'))",
+         r.dataset.result === 'updated' && r.textContent.includes('Policy change') && r.textContent.includes('never'))",
     )
     .await;
     assert_eq!(
@@ -388,6 +395,10 @@ async fn paired_phone_adds_an_authenticator_to_the_vault() {
         json!(dist)
     ));
     harness.launch().await;
+    let onboarding = harness
+        .request("PUT", "/v1/onboarding", Some(json!({"state":"skipped"})))
+        .await;
+    assert_eq!(onboarding.status, 200, "{}", onboarding.body);
     let port = std::fs::read_to_string(harness.data_dir.join("opensided.port"))
         .unwrap()
         .trim()

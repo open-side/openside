@@ -54,7 +54,9 @@ async fn tabs_opened_by_an_external_mcp_agent_join_the_agent_tabs_group() {
         Some(path) if std::path::Path::new(&path).is_file() => (path.into(), true),
         _ => match openside_config::discover_browser(&openside_config::Config::default()) {
             Ok(path) => {
-                eprintln!("note: OPENSIDE_PATCHED_BROWSER unset; checking the stock-Chromium ledger fallback only");
+                eprintln!(
+                    "note: OPENSIDE_PATCHED_BROWSER unset; checking the stock-Chromium ledger fallback only"
+                );
                 (path, false)
             }
             Err(reason) => {
@@ -122,30 +124,20 @@ async fn tabs_opened_by_an_external_mcp_agent_join_the_agent_tabs_group() {
         .unwrap();
     let mcp = ().serve(transport).await.unwrap();
 
-    let session = ok(
-        &mcp,
-        "session_create",
-        json!({"mode":"full","workspace":harness.workspace()}),
-    )
-    .await["id"]
+    let session = ok(&mcp, "session_create", json!({"mode":"full"})).await["id"]
         .as_str()
         .unwrap()
         .to_owned();
     let opened = ok(
         &mcp,
-        "browser_open",
+        "browser_open_tab",
         json!({"session_id":session,"url":format!("{origin}/")}),
     )
     .await;
-    let tab = opened["tab_id"].as_str().unwrap().to_owned();
+    let tab = opened["result"]["tab_id"].as_str().unwrap().to_owned();
 
     // Another session of the same external agent cannot drive this session's tab.
-    let other = ok(
-        &mcp,
-        "session_create",
-        json!({"mode":"full","workspace":harness.workspace()}),
-    )
-    .await["id"]
+    let other = ok(&mcp, "session_create", json!({"mode":"full"})).await["id"]
         .as_str()
         .unwrap()
         .to_owned();

@@ -10,6 +10,8 @@
 
 #![cfg(unix)]
 
+pub mod login_fixture;
+
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -51,6 +53,7 @@ pub struct Harness {
     daemon_bin: String,
     child: Option<Child>,
     client: reqwest::Client,
+    human_token: tokio::sync::OnceCell<String>,
     owned: Arc<Mutex<Owned>>,
     reaper: Option<tokio::task::JoinHandle<()>>,
 }
@@ -104,7 +107,11 @@ impl Harness {
         let socket = directory.path().join("run/opensided.sock");
         let data_dir = directory.path().join("data");
         let argv = serde_json::json!([python, "-m", "openside_agent"]);
-        let config = format!("[agent]\ncommand = {argv}\n[models]\ndefault = \"script\"\n[policy]\nmode = \"full\"\n");
+        // Scripts drive the session agent directly; front-agent tests opt in with
+        // `orchestration = "front"`.
+        let config = format!(
+            "[agent]\ncommand = {argv}\norchestration = \"single\"\n[models]\ndefault = \"script\"\n[policy]\nmode = \"full\"\n"
+        );
         std::fs::write(directory.path().join("config/openside/config.toml"), config)
             .unwrap_or_else(|e| panic!("test config: {e}"));
         // Python startup instrumentation captures raw stderr without changing the
@@ -123,6 +130,7 @@ impl Harness {
             daemon_bin: daemon_bin.into(),
             child: None,
             client,
+            human_token: tokio::sync::OnceCell::new(),
             owned: Arc::default(),
             reaper: None,
         };
@@ -174,6 +182,23 @@ impl Harness {
 
     fn command(&self, program: &str) -> Command {
         let mut command = Command::new(program);
+        // A harness child must die with the test process: a harness killed mid-test runs no
+        // Drop, and an orphaned daemon leaks its sidecar and browser tree. The signal binds
+        // to the spawning thread; the harness launches from its test runtime's threads, which
+        // live exactly as long as the test.
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: the hook runs only async-signal-safe work between fork and exec: one
+            // prctl(2) syscall through nix.
+            #[allow(unsafe_code)]
+            unsafe {
+                command.as_std_mut().pre_exec(|| {
+                    nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)
+                        .map_err(std::io::Error::from)
+                });
+            }
+        }
         command
             .env_clear()
             .current_dir(self.workspace())
@@ -190,6 +215,9 @@ impl Harness {
             .kill_on_drop(true);
         if let Some(path) = std::env::var_os("PATH") {
             command.env("PATH", path);
+        }
+        if std::env::var_os("OPENSIDE_TEST_DISABLE_PREWARM").is_some() {
+            command.env("OPENSIDE_TEST_DISABLE_PREWARM", "1");
         }
         command
     }
@@ -330,11 +358,26 @@ impl Harness {
 
     /// Execute the real CLI with hermetic settings and optional piped stdin.
     pub async fn cli(&self, binary: &str, args: &[&str], stdin: Option<&[u8]>) -> Output {
-        let mut child = self
-            .command(binary)
-            .arg("--socket")
-            .arg(&self.socket)
-            .args(args)
+        let mut command = self.command(binary);
+        command.arg("--socket").arg(&self.socket).args(args);
+        Self::piped_cli(command, stdin).await
+    }
+
+    /// Exercise the CLI as a paired person, including hidden stdin for login or enrollment.
+    pub async fn human_cli(&self, binary: &str, args: &[&str], stdin: Option<&[u8]>) -> Output {
+        let port = std::fs::read_to_string(self.data_dir.join("opensided.port"))
+            .unwrap_or_else(|error| panic!("daemon port file: {error}"));
+        let mut command = self.command(binary);
+        command
+            .arg("--url")
+            .arg(format!("http://127.0.0.1:{}", port.trim()))
+            .env("OPENSIDE_TOKEN", self.human_token().await)
+            .args(args);
+        Self::piped_cli(command, stdin).await
+    }
+
+    async fn piped_cli(mut command: Command, stdin: Option<&[u8]>) -> Output {
+        let mut child = command
             .stdin(if stdin.is_some() {
                 Stdio::piped()
             } else {
@@ -352,6 +395,24 @@ impl Harness {
             drop(pipe);
         }
         tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+            .await
+            .unwrap_or_else(|_| panic!("CLI deadline"))
+            .unwrap_or_else(|e| panic!("CLI output: {e}"))
+    }
+
+    /// Execute the real CLI without `--socket`, with extra environment such as
+    /// `OPENSIDE_REMOTE`: how a remote computer reaches this daemon through a saved profile.
+    pub async fn cli_remote(&self, binary: &str, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let child = self
+            .command(binary)
+            .envs(env.iter().copied())
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|e| panic!("CLI spawn: {e}"));
+        tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
             .await
             .unwrap_or_else(|_| panic!("CLI deadline"))
             .unwrap_or_else(|e| panic!("CLI output: {e}"))
@@ -397,6 +458,36 @@ impl Harness {
             .unwrap_or_else(|e| panic!("CLI wait: {e}"));
         let text = reader.await.unwrap_or_else(|e| panic!("pty reader: {e}"));
         (status, text)
+    }
+
+    /// A distinct paired person identity; Unix-socket clients are agent identities.
+    pub async fn human_token(&self) -> &str {
+        self.human_token
+            .get_or_init(|| async {
+                let paired = self
+                    .request(
+                        "POST",
+                        "/v1/devices/pair",
+                        Some(serde_json::json!({
+                            "name":"Fixture person","kind":"person_device",
+                            "scopes":["read","approve","human_step"]
+                        })),
+                    )
+                    .await;
+                assert_eq!(paired.status, 201, "{}", paired.body);
+                paired.body["token"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("person token missing"))
+                    .to_owned()
+            })
+            .await
+            .as_str()
+    }
+
+    /// Simulate a person's response without granting approval to the initiating local agent.
+    pub async fn human_request(&self, method: &str, path: &str, body: Option<Value>) -> Response {
+        self.tcp_request(method, path, Some(self.human_token().await), body)
+            .await
     }
 
     /// Send JSON HTTP over the loopback TCP listener as a remote client holding `token`.
@@ -751,7 +842,12 @@ pub struct SseReader {
 impl SseReader {
     /// Read the next event, failing on stalled or prematurely closed streams.
     pub async fn next(&mut self) -> Event {
-        tokio::time::timeout(Duration::from_secs(30), self.read())
+        self.next_with_timeout(Duration::from_secs(30)).await
+    }
+
+    /// Keep real-model QA bounded without imposing scripted-model latency on providers.
+    pub async fn next_with_timeout(&mut self, deadline: Duration) -> Event {
+        tokio::time::timeout(deadline, self.read())
             .await
             .unwrap_or_else(|_| panic!("SSE event deadline"))
     }

@@ -225,6 +225,33 @@ async fn install_makes_the_browser_skill_available_to_another_agent() {
         installed.contains("openside"),
         "teaches the agent to call openside"
     );
+    let delegation = installed
+        .split("## Delegate or drive?")
+        .nth(1)
+        .expect("installed skill distinguishes delegation from direct control")
+        .split("## Delegate a task")
+        .next()
+        .unwrap();
+    assert!(delegation.contains("**Delegate**") && delegation.contains("judgement"));
+    assert!(delegation.contains("**Drive**") && delegation.contains("exact steps"));
+    for command in [
+        "openside run --wait",
+        "openside tasks",
+        "openside steer",
+        "openside cancel",
+        "openside repl",
+        "openside browser",
+        "ticket_wait",
+        "--remote NAME",
+    ] {
+        assert!(
+            installed.contains(command),
+            "missing external-agent guidance: {command}"
+        );
+    }
+    assert!(installed.contains("keeps waiting while the"));
+    assert!(installed.contains("user answers tickets"));
+    assert!(installed.contains("Never put passwords, tokens or one-time codes"));
 
     // The same file works as a library skill: importing it back is accepted.
     let (ok, _, err) = cli(

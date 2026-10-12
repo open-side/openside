@@ -362,7 +362,7 @@ async fn totp_registered_once_through_the_cli_then_filled_from_the_vault_without
     );
     all.extend(stream.settled().await);
     let output = harness
-        .cli(
+        .human_cli(
             env!("CARGO_BIN_EXE_e2e-openside"),
             &["ticket", "resolve", ticket.id.as_str(), "-", "--totp"],
             Some(format!("{}\n", otpauth()).as_bytes()),
@@ -535,7 +535,7 @@ async fn emailed_code_entered_through_the_cli_fills_split_boxes_and_reaches_no_s
 
     // An authenticator is no answer to an emailed code; the ticket stays open.
     let refused = harness
-        .cli(
+        .human_cli(
             env!("CARGO_BIN_EXE_e2e-openside"),
             &["ticket", "resolve", ticket.id.as_str(), "-", "--totp"],
             Some(format!("{}\n", otpauth()).as_bytes()),

@@ -141,3 +141,23 @@ async fn cli_resume_after_daemon_restart_restores_history_and_script_cursor() {
         .contains("hello from the real sidecar"));
     harness.kill().await;
 }
+
+/// Every tool the daemon lets API callers invoke has a `openside browser` verb and the other
+/// way round, so the CLI cannot drift from the daemon's catalog.
+#[tokio::test]
+async fn cli_browser_verbs_match_the_daemon_tool_catalog() {
+    let Some(mut harness) = start().await else {
+        return;
+    };
+    let catalog = harness.request("GET", "/v1/tools", None).await;
+    assert_eq!(catalog.status, 200);
+    let mut daemon: Vec<&str> = catalog.body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    daemon.sort_unstable();
+    assert_eq!(openside_cli::browser_verb_tools(), daemon);
+    harness.kill().await;
+}
