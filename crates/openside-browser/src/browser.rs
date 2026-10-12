@@ -1083,6 +1083,11 @@ impl Browser {
                 "--gcm-checkin-url=http://127.0.0.1:9/checkin",
                 "--gcm-registration-url=http://127.0.0.1:9/register",
                 "--gcm-mcs-endpoint=https://127.0.0.1:9",
+                // --disable-component-update stops scheduled checks but not on-demand ones;
+                // Chromium 154's on-device model manifest broker requests one at startup
+                // (update.googleapis.com). A plain-HTTP loopback source makes the updater drop
+                // every such request before any lookup or connection.
+                "--component-updater=url-source=http://127.0.0.1:9/update",
                 "about:blank",
             ])
             .arg(format!("--user-data-dir={}", profile.display()))

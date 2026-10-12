@@ -231,8 +231,19 @@ fn owner(inode: u64) -> String {
 
 type Seen = Arc<Mutex<BTreeMap<SocketAddr, String>>>;
 
-fn sample(pid: u32, seen: &Seen) {
-    for (peer, inode) in remotes(pid) {
+/// `netns` is the namespace link of `pid` when sampling began: once the daemon has exited,
+/// its pid can be reused by a host process, whose sockets are not the namespace's. The link
+/// is checked after the read, so a table read from a reused pid is always discarded.
+fn sample(pid: u32, netns: &Path, seen: &Seen) {
+    let found = remotes(pid);
+    if std::fs::read_link(format!("/proc/{pid}/ns/net"))
+        .ok()
+        .as_deref()
+        != Some(netns)
+    {
+        return;
+    }
+    for (peer, inode) in found {
         seen.lock().entry(peer).or_insert_with(|| {
             if peer.ip().is_loopback() {
                 String::new()
@@ -274,13 +285,15 @@ impl Observer {
                     }
                     std::thread::sleep(Duration::from_millis(2));
                 };
-                sample(pid, &seen);
+                // The wrapper blocks on `netns.go`, so the namespace's process is alive here.
+                let netns = std::fs::read_link(format!("/proc/{pid}/ns/net")).unwrap();
+                sample(pid, &netns, &seen);
                 std::fs::write(&go, "").unwrap();
                 while !stop.load(Ordering::SeqCst) {
-                    sample(pid, &seen);
+                    sample(pid, &netns, &seen);
                     std::thread::sleep(Duration::from_millis(5));
                 }
-                sample(pid, &seen);
+                sample(pid, &netns, &seen);
             })
         };
         Self {

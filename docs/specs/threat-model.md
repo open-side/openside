@@ -21,7 +21,7 @@ openside 는 한 사용자의 로컬 데몬이다. 아래 표는 막는 위협�
 | 워크스페이스 밖 파일 접근(`..`, 심볼릭 링크, 절대 경로) | `guard` 는 승인을 묻는다. 끊긴 링크에 쓰기는 거부한다. `bash` 는 bubblewrap 안에서 실행한다 | `opensided/src/tests/policy.rs::sandbox_escape_suite_never_touches_outside_paths` |
 | 스코프가 좁은 토큰으로 권한 상승 | 라우트마다 스코프를 검사한다. 토큰 발급은 `admin` 이고 Unix 소켓으로만 된다. TCP 는 `admin` 토큰도 403 `local_socket_required` 다 | `tests/policy.rs::every_route_rejects_tokens_lacking_its_scope`, `::token_minting_is_socket_only`, `openside-e2e/tests/scopes.rs` |
 | 샌드박스 안 클라이언트의 소켓 접근 | 런타임 디렉터리를 샌드박스에 넣지 않으면 소켓에 닿지 않는다. TCP 는 토큰이 필요하다. 검증은 사용자 네임스페이스 안의 클라이언트로 한다(아래 한계 참고) | `scopes.rs` |
-| 기본 설치의 외부 통신 | 데몬에는 외부 클라이언트가 없다. 사이드카의 HTTP 전송, 채널 어댑터, 모델 다운로드는 `network.allow` 와 설정한 엔드포인트 밖으로 나가는 요청(리다이렉트 포함)을 거부한다. Chromium 백그라운드 통신은 끄고, 끌 수 없는 GCM 은 로컬 포트로 돌린다 | `openside-e2e/tests/egress.rs`, `agent/tests/providers/test_egress.py` |
+| 기본 설치의 외부 통신 | 데몬에는 외부 클라이언트가 없다. 사이드카의 HTTP 전송, 채널 어댑터, 모델 다운로드는 `network.allow` 와 설정한 엔드포인트 밖으로 나가는 요청(리다이렉트 포함)을 거부한다. Chromium 백그라운드 통신은 끄고, 끌 수 없는 GCM 및 컴포넌트 업데이트 요청은 로컬 포트로 돌린다 | `openside-e2e/tests/egress.rs`, `agent/tests/providers/test_egress.py` |
 | 텔레메트리 | 전송 코드를 두지 않는다. 알려진 SDK 이름 목록으로 의존성을 검사하고, 네트워크 관찰로 허용 밖 전송이 없음을 확인한다 | `egress.rs::telemetry_has_no_sender_in_rust_or_python_dependencies`, `egress.rs::default_install_contacts_only_loopback_and_allow_listed_peers` |
 | 정책 파일 손상 | 시작을 거부한다(fail closed) | `tests/policy.rs::policy_api_validates_persists_and_hot_reloads` |
 

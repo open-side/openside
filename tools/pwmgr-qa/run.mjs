@@ -47,6 +47,7 @@ const DAEMON_FLAGS = [
   "--disable-features=OptimizationHints,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,NetworkTimeServiceQuerying,Translate,AimEnabled,PreconnectToSearch,PreconnectFromKeyedService",
   "--openside-isolation=1",
   "--gcm-checkin-url=http://127.0.0.1:9/checkin", "--gcm-registration-url=http://127.0.0.1:9/register", "--gcm-mcs-endpoint=https://127.0.0.1:9",
+  "--component-updater=url-source=http://127.0.0.1:9/update",
 ];
 
 function assertFlagsMirrorSource() {
