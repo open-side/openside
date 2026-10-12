@@ -1,0 +1,143 @@
+//! Credential-free real CLI round trips through the Python sidecar daemon.
+
+#![cfg(unix)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use openside_e2e::Harness;
+use openside_proto::{Event, EventKind};
+use serde_json::{json, Value};
+
+async fn start() -> Option<Harness> {
+    Harness::start(
+        env!("CARGO_BIN_EXE_e2e-opensided"),
+        &json!({"responses":[
+            {"parts":[{"type":"text","text":"hello from the real sidecar"}]},
+            {"parts":[{"type":"text","text":"restored conversation reply"}]}
+        ]}),
+    )
+    .await
+}
+fn records(output: &std::process::Output) -> Vec<Value> {
+    assert!(
+        output.status.success(),
+        "CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.stdout.contains(&0x1b));
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("CLI JSONL"))
+        .collect()
+}
+
+/// PP-5: `openside "x" | cat` — stdout is a pipe, not a TTY — prints JSONL with a final
+/// summary even though `--json` was not passed.
+#[tokio::test]
+async fn cli_task_with_piped_stdout_emits_jsonl_without_json_flag() {
+    let Some(mut harness) = start().await else {
+        return;
+    };
+    let output = harness
+        .cli(env!("CARGO_BIN_EXE_e2e-openside"), &["x"], None)
+        .await;
+    let records = records(&output);
+    let (summary, events) = records.split_last().unwrap();
+    assert_eq!(summary["type"], "summary");
+    assert_eq!(summary["status"], "settled");
+    assert!(events.iter().any(|event| event["kind"] == "assistant.final"
+        && event["text"] == "hello from the real sidecar"));
+    harness.kill().await;
+}
+
+#[tokio::test]
+async fn cli_task_prints_real_sidecar_reply_and_json_roundtrip_settles() {
+    let Some(mut harness) = start().await else {
+        return;
+    };
+    // A terminal keeps human text; no JSON, no summary line.
+    let (status, plain) = harness
+        .cli_on_tty(env!("CARGO_BIN_EXE_e2e-openside"), &["task"])
+        .await;
+    assert!(status.success(), "{plain}");
+    assert!(plain.contains("hello from the real sidecar"), "{plain}");
+    assert!(
+        !plain.contains("\"type\":\"summary\"") && !plain.trim_start().starts_with('{'),
+        "{plain}"
+    );
+    let output = harness
+        .cli(
+            env!("CARGO_BIN_EXE_e2e-openside"),
+            &["--json", "another task"],
+            None,
+        )
+        .await;
+    let records = records(&output);
+    let (summary, events) = records.split_last().unwrap();
+    assert_eq!(summary["type"], "summary");
+    assert_eq!(summary["status"], "settled");
+    assert_eq!(summary["exit_code"], 0);
+    let events: Vec<Event> = events
+        .iter()
+        .map(|event| serde_json::from_value(event.clone()).unwrap())
+        .collect();
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "hello from the real sidecar")));
+    assert!(events.windows(2).all(|pair| pair[1].seq == pair[0].seq + 1));
+    assert!(matches!(
+        events.last().unwrap().kind,
+        EventKind::SessionSettled {}
+    ));
+    assert_eq!(summary["last_seq"], events.last().unwrap().seq);
+    let id = summary["session_id"].as_str().unwrap();
+    let listed = records_for(&harness, &["--json", "session", "list"]).await;
+    assert!(listed[0]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|session| session["id"] == id));
+    let stopped = records_for(&harness, &["--json", "session", "stop", id]).await;
+    assert_eq!(stopped[0]["status"], "stopped");
+    harness.kill().await;
+}
+
+async fn records_for(harness: &Harness, args: &[&str]) -> Vec<Value> {
+    records(
+        &harness
+            .cli(env!("CARGO_BIN_EXE_e2e-openside"), args, None)
+            .await,
+    )
+}
+
+#[tokio::test]
+async fn cli_resume_after_daemon_restart_restores_history_and_script_cursor() {
+    let Some(mut harness) = start().await else {
+        return;
+    };
+    let first = records_for(&harness, &["--json", "first task"]).await;
+    let summary = first.last().unwrap();
+    let id = summary["session_id"].as_str().unwrap();
+    let previous_seq = summary["last_seq"].as_u64().unwrap();
+    assert_eq!(harness.snapshot(id)["script_cursor"], 1);
+    harness.restart().await;
+    let idle = records_for(&harness, &["--json", "session", "resume", id]).await;
+    assert_eq!(idle.len(), 1);
+    assert_eq!(idle[0]["last_seq"], previous_seq);
+    let resumed = records_for(
+        &harness,
+        &["--json", "session", "resume", id, "second task"],
+    )
+    .await;
+    let (summary, events) = resumed.split_last().unwrap();
+    assert_eq!(summary["status"], "settled");
+    let events: Vec<Event> = events
+        .iter()
+        .map(|event| serde_json::from_value(event.clone()).unwrap())
+        .collect();
+    assert!(events.iter().all(|event| event.seq > previous_seq));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "restored conversation reply")));
+    let snapshot = harness.snapshot(id);
+    assert_eq!(snapshot["script_cursor"], 2);
+    assert!(snapshot["messages"]
+        .to_string()
+        .contains("hello from the real sidecar"));
+    harness.kill().await;
+}
