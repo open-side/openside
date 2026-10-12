@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><title>Form page</title></head>
+<body>
+<form action="/submitted" method="get">
+<label for="user">Username</label> <input id="user" name="user">
+<input name="email" placeholder="Email address">
+<label for="bio">Bio</label> <textarea id="bio" name="bio"></textarea>
+<label><input type="checkbox" name="subscribe" value="yes"> Subscribe</label>
+<fieldset><legend>Plan</legend>
+<label><input type="radio" name="plan" value="free" checked> Free</label>
+<label><input type="radio" name="plan" value="pro"> Pro</label>
+</fieldset>
+<label for="country">Country</label>
+<select id="country" name="country">
+<option value="kr">Korea</option>
+<option value="jp" disabled>Japan</option>
+<option value="us">United States</option>
+</select>
+<label for="locked">Locked</label> <input id="locked" name="locked" value="fixed" readonly>
+<button type="button" disabled>Disabled action</button>
+<button type="submit">Sign up</button>
+</form>
+</body>
+</html>

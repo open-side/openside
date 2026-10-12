@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><title>Openside REPL fixture</title></head>
+<body>
+<h1>Openside fixture</h1>
+<nav><a href="/form">Form page</a> <a href="/list">List page</a></nav>
+<p data-testid="greeting">Hello <b>world</b></p>
+<button id="inc" onclick="const c = document.getElementById('count'); c.textContent = String(Number(c.textContent) + 1)">Increment</button>
+<output id="count">0</output>
+<button id="dbl" ondblclick="this.textContent = 'Double clicked'">Double me</button>
+<div id="hover" onmouseover="this.textContent = 'Hovered'">Hover target</div>
+<div id="hidden" style="display:none">Secret panel</div>
+<div id="ghost" style="visibility:hidden">Ghost panel</div>
+<img alt="Openside logo" width="20" height="20">
+<span title="Tooltip text">hover me</span>
+<button id="late" onclick="setTimeout(() => { const p = document.createElement('p'); p.id = 'late-result'; p.textContent = 'Arrived late'; document.body.appendChild(p); }, 400)">Load later</button>
+<input id="keys" aria-label="Key log" onkeydown="document.getElementById('lastkey').textContent = event.key">
+<span id="lastkey"></span>
+<button id="buy" onclick="document.getElementById('bought').textContent = 'bought'">Buy now</button>
+<span id="bought">not bought</span>
+</body>
+</html>
