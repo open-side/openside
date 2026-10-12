@@ -1,0 +1,105 @@
+use std::sync::Arc;
+
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    Json,
+};
+use openside_proto::{
+    CreateRoutineRequest, Routine, RoutineDraft, RoutineList, RoutineSuggestionList, RunList,
+    RunRecord, UpdateRoutineRequest,
+};
+use openside_sched::{UserMessage, DEFAULT_RUN_LIMIT, ROUTINE_MESSAGE_PREFIX};
+use serde::Deserialize;
+
+use super::{ApiFailure, Sched};
+use crate::engine::Shared;
+
+type Result<T, E = ApiFailure> = std::result::Result<T, E>;
+
+fn scheduler(shared: &Shared) -> Result<Arc<Sched>> {
+    shared.routines.get().ok_or_else(ApiFailure::unavailable)
+}
+
+pub(crate) async fn list(State(s): State<Shared>) -> Result<Json<RoutineList>> {
+    Ok(Json(RoutineList {
+        routines: scheduler(&s)?.list()?,
+    }))
+}
+
+pub(crate) async fn create(
+    State(s): State<Shared>,
+    Json(request): Json<CreateRoutineRequest>,
+) -> Result<(StatusCode, Json<Routine>)> {
+    Ok((
+        StatusCode::CREATED,
+        Json(scheduler(&s)?.create(request).await?),
+    ))
+}
+
+pub(crate) async fn get(State(s): State<Shared>, Path(id): Path<String>) -> Result<Json<Routine>> {
+    Ok(Json(scheduler(&s)?.get(&id)?))
+}
+
+pub(crate) async fn patch(
+    State(s): State<Shared>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateRoutineRequest>,
+) -> Result<Json<Routine>> {
+    Ok(Json(scheduler(&s)?.update(&id, request).await?))
+}
+
+pub(crate) async fn delete(
+    State(s): State<Shared>,
+    Path(id): Path<String>,
+) -> Result<Json<Routine>> {
+    Ok(Json(scheduler(&s)?.delete(&id).await?))
+}
+
+pub(crate) async fn run(
+    State(s): State<Shared>,
+    Path(id): Path<String>,
+) -> Result<Json<RunRecord>> {
+    Ok(Json(scheduler(&s)?.run_now(&id).await?))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RunsQuery {
+    limit: Option<usize>,
+}
+
+pub(crate) async fn runs(
+    State(s): State<Shared>,
+    Path(id): Path<String>,
+    Query(query): Query<RunsQuery>,
+) -> Result<Json<RunList>> {
+    let runs = scheduler(&s)?
+        .runs(&id, query.limit.unwrap_or(DEFAULT_RUN_LIMIT))
+        .await?;
+    Ok(Json(RunList { runs }))
+}
+
+pub(crate) async fn suggestions(State(s): State<Shared>) -> Result<Json<RoutineSuggestionList>> {
+    let scheduler = scheduler(&s)?;
+    let queued =
+        s.db.store(|store| Ok(store.queued_messages(openside_sched::suggest::MAX_MESSAGES)?))
+            .await
+            .map_err(|_| ApiFailure::internal())?;
+    let messages: Vec<UserMessage> = queued
+        .into_iter()
+        .filter(|message| {
+            !message
+                .message_id
+                .as_str()
+                .starts_with(ROUTINE_MESSAGE_PREFIX)
+        })
+        .map(|message| UserMessage {
+            session_id: message.session_id,
+            message_id: message.message_id.to_string(),
+            text: message.text,
+            at: message.at,
+        })
+        .collect();
+    let suggestions: Vec<RoutineDraft> = scheduler.suggestions(&messages)?;
+    Ok(Json(RoutineSuggestionList { suggestions }))
+}

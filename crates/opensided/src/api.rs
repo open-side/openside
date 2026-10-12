@@ -1,0 +1,1034 @@
+use std::convert::Infallible;
+
+use axum::{
+    extract::{MatchedPath, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
+    response::{
+        sse::{Event as SseEvent, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
+    routing::{delete, get, patch, post},
+    Extension, Json, Router,
+};
+use chrono::Utc;
+use futures_util::Stream;
+use openside_core::{MessageId, TicketId};
+use openside_proto::*;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use zeroize::Zeroizing;
+
+use crate::{
+    engine::{Action, Shared},
+    persistence::{random_id, Error},
+};
+
+pub(crate) struct HttpError(pub(crate) StatusCode, pub(crate) &'static str);
+impl HttpError {
+    pub(crate) fn internal() -> Self {
+        Self(StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+    }
+    pub(crate) fn not_found() -> Self {
+        Self(StatusCode::NOT_FOUND, "not_found")
+    }
+    fn conflict() -> Self {
+        Self(StatusCode::CONFLICT, "invalid_transition")
+    }
+    pub(crate) fn invalid_value() -> Self {
+        Self(StatusCode::BAD_REQUEST, "invalid_value")
+    }
+}
+impl IntoResponse for HttpError {
+    fn into_response(self) -> Response {
+        (
+            self.0,
+            Json(ApiError {
+                code: self.1.into(),
+                message: self.1.replace('_', " "),
+            }),
+        )
+            .into_response()
+    }
+}
+impl From<Error> for HttpError {
+    fn from(_: Error) -> Self {
+        Self::conflict()
+    }
+}
+type Result<T, E = HttpError> = std::result::Result<T, E>;
+
+#[derive(Clone)]
+pub(crate) struct Access(Vec<CapabilityScope>);
+impl Access {
+    pub(crate) fn has(&self, scope: CapabilityScope) -> bool {
+        self.0.iter().any(|held| held.grants(scope))
+    }
+    fn ticket(&self, ticket: &Ticket) -> Result<()> {
+        let scope = match ticket.kind {
+            TicketKind::Confirm | TicketKind::Info => CapabilityScope::Approve,
+            TicketKind::SecretInput | TicketKind::DeviceApproval | TicketKind::Takeover => {
+                CapabilityScope::HumanStep
+            }
+        };
+        if self.has(scope) {
+            Ok(())
+        } else {
+            Err(HttpError(StatusCode::FORBIDDEN, "forbidden"))
+        }
+    }
+}
+
+/// Device id behind the request's token; `None` for the local Unix socket.
+#[derive(Clone)]
+pub(crate) struct Caller(pub(crate) Option<String>);
+
+pub(crate) fn router(shared: Shared, unix: bool) -> Router {
+    let ui = shared.config.loaded.config.ui.dir.clone();
+    let api = Router::new()
+        .route("/v1/health", get(health))
+        .route("/v1/accounts", get(crate::accounts::list))
+        .route("/v1/browser/tabs", get(crate::browser_tabs_api::list))
+        .route("/v1/settings", get(crate::session_meta::settings))
+        .route("/v1/sessions", get(crate::session_meta::list).post(create))
+        .route(
+            "/v1/sessions/{id}",
+            get(session)
+                .patch(crate::session_meta::update)
+                .delete(crate::session_delete::delete),
+        )
+        .route(
+            "/v1/sessions/{id}/messages",
+            post(submit).layer(axum::extract::DefaultBodyLimit::max(
+                crate::artifacts::SUBMIT_BODY_LIMIT,
+            )),
+        )
+        .route("/v1/sessions/{id}/artifacts", get(crate::artifacts::list))
+        .route(
+            "/v1/sessions/{id}/artifacts/{path}",
+            get(crate::artifacts::raw),
+        )
+        .route(
+            "/v1/sessions/{id}/artifacts/{path}/preview",
+            get(crate::artifacts::preview),
+        )
+        .route("/v1/sessions/{id}/visuals", get(crate::artifacts::visuals))
+        .route("/v1/sessions/{id}/queue/{mid}", patch(edit).delete(remove))
+        .route("/v1/sessions/{id}/queue/{mid}/promote", post(promote))
+        .route("/v1/sessions/{id}/queue/{mid}/move", post(reorder))
+        .route("/v1/sessions/{id}/stop", post(stop))
+        .route("/v1/sessions/{id}/events", get(events))
+        .route("/v1/sessions/{id}/repl", post(crate::tools::repl::route))
+        .route(
+            "/v1/sessions/{id}/subagents",
+            get(crate::subagents::list_route),
+        )
+        .route(
+            "/v1/sessions/{id}/subagents/{sid}/cancel",
+            post(crate::subagents::cancel_route),
+        )
+        .route(
+            "/v1/sessions/{id}/subagents/{sid}/steer",
+            post(crate::subagents::steer_route),
+        )
+        .route("/v1/tickets", get(tickets))
+        .route("/v1/tickets/{id}", get(ticket))
+        .route("/v1/tickets/{id}/resolve", post(resolve))
+        .route("/v1/tickets/{id}/done", post(done))
+        .route("/v1/tickets/{id}/reject", post(reject))
+        .route("/v1/tickets/{id}/takeover", get(crate::takeover::stream))
+        .route(
+            "/v1/sessions/{id}/browser/preview",
+            get(crate::preview::stream),
+        )
+        .route("/v1/devices/pair", post(pair))
+        .route("/v1/devices/{id}", delete(revoke))
+        .route(
+            "/v1/routines",
+            get(crate::routines::list).post(crate::routines::create),
+        )
+        .route(
+            "/v1/routines/suggestions",
+            get(crate::routines::suggestions),
+        )
+        .route(
+            "/v1/routines/{id}",
+            get(crate::routines::get)
+                .patch(crate::routines::patch)
+                .delete(crate::routines::delete),
+        )
+        .route("/v1/routines/{id}/run", post(crate::routines::run))
+        .route("/v1/routines/{id}/runs", get(crate::routines::runs))
+        .route(
+            "/v1/memory",
+            get(crate::memory::search).post(crate::memory::create),
+        )
+        .route("/v1/memory/health", get(crate::memory::health))
+        .route(
+            "/v1/memory/{id}",
+            get(crate::memory::get)
+                .patch(crate::memory::update)
+                .delete(crate::memory::delete),
+        )
+        .route("/v1/memory/{id}/history", get(crate::memory::history))
+        .route(
+            "/v1/skills",
+            get(crate::skills::list).post(crate::skills::create),
+        )
+        .route(
+            "/v1/skills/{name}",
+            get(crate::skills::get)
+                .patch(crate::skills::update)
+                .delete(crate::skills::delete),
+        )
+        .route(
+            "/v1/policy",
+            get(crate::policy_api::get).put(crate::policy_api::put),
+        )
+        .route("/v1/policy/test", post(crate::policy_api::test))
+        .route("/v1/vault", get(crate::vault_api::status))
+        .route("/v1/vault/setup", post(crate::vault_api::setup))
+        .route("/v1/vault/unlock", post(crate::vault_api::unlock))
+        .route("/v1/vault/lock", post(crate::vault_api::lock))
+        .route(
+            "/v1/vault/items",
+            get(crate::vault_api::items).post(crate::vault_api::create),
+        )
+        .route(
+            "/v1/vault/items/{id}",
+            patch(crate::vault_api::update).delete(crate::vault_api::delete),
+        )
+        .route("/v1/vault/audit", get(crate::vault_api::audit))
+        .route(
+            "/v1/pinned-tabs",
+            get(crate::sync::list_pinned).post(crate::sync::pin),
+        )
+        .route(
+            "/v1/pinned-tabs/{id}",
+            axum::routing::delete(crate::sync::unpin),
+        )
+        .route("/v1/sync", get(crate::sync::get_status))
+        .route("/v1/sync/setup", post(crate::sync::setup))
+        .route("/v1/sync/pair", post(crate::sync::pair))
+        .route("/v1/sync/run", post(crate::sync::run))
+        .route("/v1/pairing", post(crate::pairing::create))
+        .route("/v1/pairing/exchange", post(crate::pairing::exchange))
+        .route("/v1/devices", get(crate::pairing::list))
+        .route("/v1/push/vapid", get(crate::push::vapid))
+        .route(
+            "/v1/push/subscriptions",
+            get(crate::push::list).post(crate::push::create),
+        )
+        .route("/v1/push/subscriptions/{id}", delete(crate::push::delete))
+        .route("/v1/push/presence", post(crate::push::presence))
+        .route("/v1/otp", post(crate::otp_ingest::ingest))
+        .route(
+            "/v1/settings/config",
+            get(crate::settings_api::get).put(crate::settings_api::put),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            (shared.clone(), unix),
+            authorize,
+        ))
+        .with_state(shared);
+    crate::ui::attach(api, ui.as_deref())
+}
+
+/// Routes only Unix-socket callers may use, whatever scopes a TCP token holds.
+pub(crate) const SOCKET_ONLY: &[(&str, &str)] =
+    &[("POST", "/v1/devices/pair"), ("POST", "/v1/pairing")];
+
+/// WebSocket routes (GET templates) whose browser clients may authenticate by subprotocol.
+/// Browsers cannot set `Authorization` on a WebSocket handshake, so they offer
+/// `Sec-WebSocket-Protocol: openside.v1, openside.bearer.<token>` instead.
+pub(crate) const WEBSOCKET_ROUTES: &[&str] = &[
+    "/v1/tickets/{id}/takeover",
+    "/v1/sessions/{id}/browser/preview",
+];
+
+/// The subprotocol bearer of a genuine RFC 6455 handshake (GET, `Connection: upgrade`,
+/// `Upgrade: websocket`, version 13, a 16-byte key) to a [`WEBSOCKET_ROUTES`] route. The
+/// caller consults it only when no `Authorization` header is present; the bearer entry is
+/// never echoed.
+fn websocket_bearer<'a>(request: &'a axum::extract::Request, route: &str) -> Option<&'a str> {
+    use axum::http::header;
+    use base64::Engine;
+    let headers = request.headers();
+    let value = |name| headers.get(name).and_then(|v| v.to_str().ok());
+    let handshake = request.method() == axum::http::Method::GET
+        && WEBSOCKET_ROUTES.contains(&route)
+        && value(header::CONNECTION).is_some_and(|v| {
+            v.split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        && value(header::UPGRADE).is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+        && value(header::SEC_WEBSOCKET_VERSION) == Some("13")
+        && value(header::SEC_WEBSOCKET_KEY).is_some_and(|key| {
+            base64::engine::general_purpose::STANDARD
+                .decode(key)
+                .is_ok_and(|bytes| bytes.len() == 16)
+        });
+    if !handshake {
+        return None;
+    }
+    headers
+        .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .find_map(|p| p.trim().strip_prefix("openside.bearer."))
+        .filter(|t| {
+            !t.is_empty()
+                && t.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'))
+        })
+}
+
+pub(crate) async fn authorize(
+    State((shared, unix)): State<(Shared, bool)>,
+    mut request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if unix {
+        request
+            .extensions_mut()
+            .insert(Access(vec![CapabilityScope::Admin]));
+        request.extensions_mut().insert(Caller(None));
+        return next.run(request).await;
+    }
+    let template = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|p| p.as_str());
+    let route = ROUTES
+        .iter()
+        .find(|r| Some(r.path) == template && r.method.as_str() == request.method().as_str());
+    // A served route with no ROUTES entry has no reviewed scope, so TCP callers get none.
+    let Some(route) = route else {
+        return HttpError(StatusCode::FORBIDDEN, "forbidden").into_response();
+    };
+    if PUBLIC_ROUTES.contains(&(route.method.as_str(), route.path)) {
+        return next.run(request).await;
+    }
+    // Subscribe before the token check so a revocation racing this request still ends
+    // the stream it opens.
+    let mut revoked = shared.remote.revoked.subscribe();
+    // A present Authorization header is the only credential considered, even if malformed.
+    let token = match request.headers().get(axum::http::header::AUTHORIZATION) {
+        Some(value) => value.to_str().ok().and_then(|v| v.strip_prefix("Bearer ")),
+        None => websocket_bearer(&request, route.path),
+    };
+    let Some(token) = token else {
+        return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    };
+    let (device, access) = match shared.db.device(token.to_owned()).await {
+        Ok(Some((device, scopes))) => (device, Access(scopes)),
+        Ok(None) => return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+        Err(_) => return HttpError::internal().into_response(),
+    };
+    let kind_specific = matches!(
+        route.path,
+        "/v1/tickets/{id}/resolve" | "/v1/tickets/{id}/reject"
+    );
+    let allowed = if kind_specific {
+        access.has(CapabilityScope::Approve) || access.has(CapabilityScope::HumanStep)
+    } else {
+        access.has(route.scope)
+    };
+    if !allowed {
+        return HttpError(StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    // Minting credentials needs the local user (the 0600 socket). A leaked TCP token, even
+    // an admin one, must not be able to mint further tokens.
+    if SOCKET_ONLY.contains(&(route.method.as_str(), route.path)) {
+        return HttpError(StatusCode::FORBIDDEN, "local_socket_required").into_response();
+    }
+    if shared.remote.is_revoked(&device) {
+        return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    request.extensions_mut().insert(access);
+    request
+        .extensions_mut()
+        .insert(Caller(Some(device.clone())));
+    // Never admit a device-controlled, unfinished body into a commit gate.
+    let body_limit = if route.path == "/v1/sessions/{id}/messages" {
+        crate::artifacts::SUBMIT_BODY_LIMIT
+    } else {
+        2 * 1024 * 1024
+    };
+    let (parts, body) = request.into_parts();
+    let bytes = tokio::select! {
+        bytes = axum::body::to_bytes(body, body_limit) => match bytes {
+            Ok(bytes) => bytes,
+            Err(_) => return HttpError(StatusCode::PAYLOAD_TOO_LARGE, "body_too_large").into_response(),
+        },
+        () = crate::pairing::until_revoked(&shared, &mut revoked, &device) => {
+            return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+        }
+    };
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
+    // Exempt every revoke, not only self-revoke, to avoid reciprocal gate deadlocks.
+    let revoking = route.method.as_str() == "DELETE" && route.path == "/v1/devices/{id}";
+    let guard = if revoking {
+        None
+    } else {
+        Some(shared.remote.device_gate(&device).read_owned().await)
+    };
+    if shared.remote.is_revoked(&device) {
+        return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    // The handler, not its HTTP waiter, owns the commit and its audit/continuation.
+    // Streaming handlers return at stream start and release the gate there.
+    let response = match tokio::spawn(async move {
+        let response = next.run(request).await;
+        drop(guard);
+        response
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => return HttpError::internal().into_response(),
+    };
+    if !route.sse {
+        return response;
+    }
+    // A revoked device must not keep reading: end its streams the moment it is revoked.
+    let (parts, body) = response.into_parts();
+    let mut data = body.into_data_stream();
+    let stream = async_stream::stream! {
+        loop {
+            tokio::select! {
+                chunk = futures_util::StreamExt::next(&mut data) => match chunk {
+                    Some(chunk) => yield chunk,
+                    None => break,
+                },
+                () = crate::pairing::until_revoked(&shared, &mut revoked, &device) => break,
+            }
+        }
+    };
+    Response::from_parts(parts, axum::body::Body::from_stream(stream))
+}
+
+async fn health() -> Json<Health> {
+    Json(Health {
+        ok: true,
+        api_version: "v1".into(),
+    })
+}
+async fn create(
+    State(s): State<Shared>,
+    Json(request): Json<CreateSessionRequest>,
+) -> Result<(StatusCode, Json<Session>)> {
+    let id = SessionId::new(random_id());
+    let stored_id = id.clone();
+    let title = request.title.unwrap_or_else(|| "New session".into());
+    let model = request
+        .model
+        .or_else(|| s.config.loaded.config.models.default.clone())
+        .filter(|model| !model.trim().is_empty())
+        .ok_or(HttpError(StatusCode::BAD_REQUEST, "model_not_configured"))?;
+    let mode = request.mode.unwrap_or_else(|| s.policy.default_mode());
+    let workspace = match request.workspace {
+        Some(path) => {
+            if !std::path::Path::new(&path).is_absolute() {
+                return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_workspace"));
+            }
+            let canonical = tokio::fs::canonicalize(path)
+                .await
+                .map_err(|_| HttpError(StatusCode::BAD_REQUEST, "invalid_workspace"))?;
+            if !canonical.is_dir() {
+                return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_workspace"));
+            }
+            Some(canonical.to_string_lossy().into_owned())
+        }
+        None => None,
+    };
+    let incognito = request.incognito;
+    let event =
+        s.db.store(move |db| {
+            Ok(db
+                .create_session_with_privacy(stored_id, title, model, mode, workspace, incognito)?)
+        })
+        .await?;
+    let _ = s.events.send(event);
+    Ok((StatusCode::CREATED, Json(s.db.state(&id).await?.session())))
+}
+async fn session(State(s): State<Shared>, Path(id): Path<String>) -> Result<Json<Session>> {
+    Ok(Json(
+        s.db.state(&SessionId::new(id))
+            .await
+            .map_err(|_| HttpError::not_found())?
+            .session(),
+    ))
+}
+async fn submit(
+    State(s): State<Shared>,
+    Path(id): Path<String>,
+    Json(request): Json<SubmitMessageRequest>,
+) -> Result<(StatusCode, Json<Message>)> {
+    if request.text.len() > openside_agent_sidecar::MAX_USER_TEXT_BYTES {
+        return Err(HttpError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "message_too_large",
+        ));
+    }
+    let id = SessionId::new(id);
+    // Existence check, attachment publication and the append are one step per session:
+    // concurrent retries of one message id cannot both publish, and a deleted session
+    // cannot gain uploads.
+    let gate = crate::artifacts::lifecycle(&s, &id).await;
+    let state = s.db.state(&id).await.map_err(|_| HttpError::not_found())?;
+    if s.auth_failed(&id).await? {
+        return Err(HttpError::conflict());
+    }
+    let mid = request
+        .message_id
+        .unwrap_or_else(|| MessageId::new(random_id()));
+    // A retry of an accepted message keeps the original files and event.
+    let attachments = if state.queue.status(&mid).is_some() {
+        Vec::new()
+    } else {
+        crate::artifacts::store_attachments(&s, &id, &mid, request.attachments).await?
+    };
+    s.emit(
+        &id,
+        None,
+        EventKind::MessageQueued {
+            message_id: mid.clone(),
+            text: request.text,
+            mode: request.mode.into(),
+            attachments,
+        },
+    )
+    .await?;
+    drop(gate);
+    s.command(&id, Action::Deliver).await?;
+    Ok((StatusCode::ACCEPTED, Json(s.message(&id, &mid).await?)))
+}
+async fn edit(
+    State(s): State<Shared>,
+    Path((id, mid)): Path<(String, String)>,
+    Json(request): Json<EditMessageRequest>,
+) -> Result<Json<Message>> {
+    if request.text.len() > openside_agent_sidecar::MAX_USER_TEXT_BYTES {
+        return Err(HttpError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "message_too_large",
+        ));
+    }
+    let id = SessionId::new(id);
+    let mid = MessageId::new(mid);
+    s.command(&id, Action::Edit(mid.clone(), request.text))
+        .await?;
+    Ok(Json(s.message(&id, &mid).await?))
+}
+async fn remove(
+    State(s): State<Shared>,
+    Path((id, mid)): Path<(String, String)>,
+) -> Result<Json<Message>> {
+    let id = SessionId::new(id);
+    let mid = MessageId::new(mid);
+    s.command(&id, Action::Delete(mid.clone())).await?;
+    Ok(Json(s.message(&id, &mid).await?))
+}
+async fn promote(
+    State(s): State<Shared>,
+    Path((id, mid)): Path<(String, String)>,
+) -> Result<Json<Message>> {
+    let id = SessionId::new(id);
+    let mid = MessageId::new(mid);
+    s.command(&id, Action::Promote(mid.clone())).await?;
+    Ok(Json(s.message(&id, &mid).await?))
+}
+async fn reorder(
+    State(s): State<Shared>,
+    Path((id, mid)): Path<(String, String)>,
+    Json(request): Json<MoveMessageRequest>,
+) -> Result<Json<Message>> {
+    let id = SessionId::new(id);
+    let mid = MessageId::new(mid);
+    s.command(&id, Action::Move(mid.clone(), request.position))
+        .await?;
+    Ok(Json(s.message(&id, &mid).await?))
+}
+async fn stop(State(s): State<Shared>, Path(id): Path<String>) -> Result<Json<Session>> {
+    let id = SessionId::new(id);
+    s.command(&id, Action::Stop).await?;
+    Ok(Json(s.db.state(&id).await?.session()))
+}
+#[derive(Deserialize)]
+struct EventsQuery {
+    subagents: Option<bool>,
+}
+async fn events(
+    State(s): State<Shared>,
+    Path(id): Path<String>,
+    Query(query): Query<EventsQuery>,
+    headers: HeaderMap,
+) -> Result<Sse<impl Stream<Item = std::result::Result<SseEvent, Infallible>>>> {
+    let subagents = query.subagents.unwrap_or(true);
+    let id = SessionId::new(id);
+    let last_seq =
+        s.db.state(&id)
+            .await
+            .map_err(|_| HttpError::not_found())?
+            .last_seq;
+    let mut after = match headers.get("last-event-id") {
+        Some(value) => value
+            .to_str()
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .ok_or(HttpError(StatusCode::BAD_REQUEST, "invalid_event_id"))?,
+        None => 0,
+    };
+    // A cursor beyond the durable log can never be satisfied, so the stream would wait
+    // forever even after the session is deleted.
+    if after > last_seq {
+        return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_event_id"));
+    }
+    // Subscribe before replay; notifications wake a durable cursor, so broadcast
+    // lag never creates event gaps or a replay/live race.
+    let mut live = s.events.subscribe();
+    let stream = async_stream::stream! {
+        loop {
+            match s.db.events(&id, after).await {
+                Ok(page) if !page.is_empty() => {
+                    for event in page {
+                        after = event.seq;
+                        let child = matches!(
+                            event.kind,
+                            EventKind::SubagentStarted { .. }
+                                | EventKind::SubagentLifecycle { .. }
+                                | EventKind::SubagentProgress { .. }
+                                | EventKind::SubagentEnded { .. }
+                        );
+                        if subagents || !child {
+                            if let Ok(data) = serde_json::to_string(&event) { yield Ok(SseEvent::default().id(event.seq.to_string()).data(data)); }
+                        }
+                        if matches!(event.kind, EventKind::SessionDeleted {}) { return; }
+                    }
+                    continue;
+                }
+                Err(_) => break,
+                Ok(_) => {
+                    // Replay is exhausted. A deleted session never produces more events, so
+                    // end the stream. Look once more first: the tombstone may have been
+                    // committed after the read above.
+                    if s.db.state(&id).await.is_err() {
+                        match s.db.events(&id, after).await {
+                            Ok(page) if !page.is_empty() => continue,
+                            _ => break,
+                        }
+                    }
+                }
+            }
+            match live.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {},
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+#[derive(Deserialize)]
+struct TicketQuery {
+    status: Option<TicketStatus>,
+}
+async fn tickets(
+    State(s): State<Shared>,
+    Query(query): Query<TicketQuery>,
+) -> Result<Json<TicketList>> {
+    Ok(Json(TicketList {
+        tickets: s
+            .tickets()
+            .await?
+            .into_iter()
+            .filter(|ticket| query.status.map_or(true, |status| status == ticket.status))
+            .collect(),
+    }))
+}
+async fn find(s: &Shared, id: String) -> Result<Ticket> {
+    crate::tickets::get(s, &TicketId::new(id))
+        .await?
+        .ok_or_else(HttpError::not_found)
+}
+async fn ticket(State(s): State<Shared>, Path(id): Path<String>) -> Result<Json<Ticket>> {
+    Ok(Json(find(&s, id).await?))
+}
+fn pending(ticket: &Ticket) -> Result<()> {
+    if ticket.status != TicketStatus::Pending || ticket.expires_at <= Utc::now() {
+        Err(HttpError::conflict())
+    } else {
+        Ok(())
+    }
+}
+
+enum SecretAnswer {
+    Code(Zeroizing<String>),
+    Authenticator(openside_vault::Totp),
+}
+
+/// The live policy decides at release time, not only when the step was opened: a Deny added
+/// since then (origin list, rule, read-only session) refuses releasing a code or key into
+/// `origin`, and the human's answer cannot override it.
+async fn release_denied(s: &Shared, ticket: &Ticket, origin: &str) -> Result<()> {
+    let state = s.db.state(&ticket.session_id).await?;
+    let policy =
+        crate::policy_api::effective(s, &crate::tools::ToolEnv::new(s.clone(), &state).policy);
+    if [
+        openside_policy::Capability::Browse,
+        openside_policy::Capability::VaultUse,
+    ]
+    .into_iter()
+    .any(|capability| {
+        policy
+            .decide(&openside_policy::Action::new(capability, origin))
+            .effect
+            == openside_policy::Effect::Deny
+    }) {
+        return Err(HttpError(StatusCode::FORBIDDEN, "policy_denied"));
+    }
+    Ok(())
+}
+
+fn refused(code: &str) -> HttpError {
+    match code {
+        "origin_mismatch" => HttpError(StatusCode::CONFLICT, "origin_mismatch"),
+        "otp_already_registered" => HttpError(StatusCode::CONFLICT, "otp_already_registered"),
+        "unavailable" => HttpError(StatusCode::SERVICE_UNAVAILABLE, "secret_input_unavailable"),
+        "vault_unavailable" => HttpError(StatusCode::SERVICE_UNAVAILABLE, "vault_unavailable"),
+        "vault_denied" => HttpError(StatusCode::FORBIDDEN, "vault_denied"),
+        _ => HttpError(StatusCode::CONFLICT, "secret_input_failed"),
+    }
+}
+
+async fn resolve(
+    State(s): State<Shared>,
+    Extension(access): Extension<Access>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(request): Json<ResolveTicketRequest>,
+) -> Result<Json<Ticket>> {
+    let ticket;
+    let who = crate::tools::otp::approver(caller.0.as_deref());
+    {
+        let _gate = s.ticket_gate.lock().await;
+        ticket = find(&s, id).await?;
+        access.ticket(&ticket)?;
+        pending(&ticket)?;
+        let value = match ticket.kind {
+            TicketKind::Confirm => {
+                if request.value != true
+                    && request.value != false
+                    && request.value != "approve"
+                    && request.value != "reject"
+                {
+                    return Err(HttpError::invalid_value());
+                }
+                let approved = crate::tickets::approved(&request.value);
+                match &ticket.otp_register {
+                    None => json!({"approved":approved}),
+                    Some(register) => {
+                        match crate::tools::otp::interrupted_registration(&s, &ticket).await {
+                            // An earlier approval may have saved the factor and never
+                            // committed: the answer cannot undo it, so the truthful outcome
+                            // (registered, or indeterminate) is reported.
+                            Some(outcome) => outcome,
+                            None if !approved => {
+                                crate::tools::otp::discard(&ticket);
+                                json!({"approved":false,"status":"declined"})
+                            }
+                            None => {
+                                release_denied(&s, &ticket, &register.origin).await?;
+                                let sink = s.registry.secret_sink.read().clone();
+                                crate::tools::otp::approve_registration(&s, &ticket, &who, sink)
+                                    .await
+                                    .map_err(|error| refused(error.code))?
+                            }
+                        }
+                    }
+                }
+            }
+            TicketKind::Info => {
+                let Value::String(answer) = request.value else {
+                    return Err(HttpError::invalid_value());
+                };
+                if !ticket.options.is_empty()
+                    && !ticket.options.iter().any(|option| option.value == answer)
+                {
+                    return Err(HttpError::invalid_value());
+                }
+                json!({"answer":answer})
+            }
+            TicketKind::SecretInput => {
+                // A `request_otp` ticket that offers registration may carry the site's
+                // authenticator instead of a code; it is parsed before anything is touched.
+                let value = match request.value {
+                    Value::String(value) => SecretAnswer::Code(Zeroizing::new(value)),
+                    Value::Object(mut object)
+                        if object.len() == 1
+                            && ticket.otp.as_ref().is_some_and(|otp| otp.can_register) =>
+                    {
+                        // Keeping a permanent vault factor is an approval, like a
+                        // register_authenticator ticket; a code alone needs only HumanStep.
+                        if !access.has(CapabilityScope::Approve) {
+                            return Err(HttpError(StatusCode::FORBIDDEN, "forbidden"));
+                        }
+                        let Some(Value::String(text)) = object.remove("totp") else {
+                            return Err(HttpError::invalid_value());
+                        };
+                        let totp =
+                            openside_vault::Totp::parse(openside_vault::Secret::new(text))
+                                .map_err(|_| HttpError(StatusCode::BAD_REQUEST, "invalid_totp"))?;
+                        if !s.registry.vault.available() {
+                            return Err(HttpError(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "vault_unavailable",
+                            ));
+                        }
+                        SecretAnswer::Authenticator(totp)
+                    }
+                    _ => return Err(HttpError::invalid_value()),
+                };
+                if let Some(outcome) =
+                    crate::tools::otp::interrupted_registration(&s, &ticket).await
+                {
+                    // An earlier authenticator answer may have saved the factor and never
+                    // committed; this answer is not applied over it.
+                    outcome
+                } else {
+                    let sink = s.registry.secret_sink.read().clone().ok_or(HttpError(
+                        StatusCode::NOT_IMPLEMENTED,
+                        "secret_input_unavailable",
+                    ))?;
+                    let target = ticket
+                        .target
+                        .as_ref()
+                        .ok_or_else(HttpError::invalid_value)?;
+                    let browser = &s.registry.browser;
+                    // A browser mutation and the TicketResolved commit cannot be made atomic,
+                    // even under ticket_gate. An intent left by a crash or a failed commit means
+                    // the page may already hold the secret, so a blind retry could insert it a
+                    // second time; the ticket stays pending until the user rejects it or the
+                    // agent opens a new step.
+                    if browser.fill_intent_pending(&s, &ticket.id).await? {
+                        return Err(HttpError(
+                            StatusCode::CONFLICT,
+                            "secret_input_indeterminate",
+                        ));
+                    }
+                    let origin = target
+                        .origin
+                        .as_deref()
+                        .ok_or_else(HttpError::invalid_value)?;
+                    release_denied(&s, &ticket, origin).await?;
+                    browser
+                        .mark_ticket_secret(&s, &ticket.id, &ticket.session_id, target)
+                        .await
+                        .map_err(|error| refused(error.code))?;
+                    // The vault item an authenticator answer creates carries this id, so a
+                    // later recovery recognizes exactly that save.
+                    let operation = crate::persistence::random_id();
+                    let registers = matches!(value, SecretAnswer::Authenticator(_));
+                    browser
+                        .record_fill_intent(&s, &ticket.id, registers.then_some(operation.as_str()))
+                        .await?;
+                    let filled = match value {
+                        SecretAnswer::Code(value) => sink
+                            .fill(&ticket.id, &ticket.session_id, target, value)
+                            .await
+                            .map(|()| json!({"status":"filled"})),
+                        SecretAnswer::Authenticator(totp) => crate::tools::otp::register_and_fill(
+                            &s,
+                            &ticket,
+                            target,
+                            origin,
+                            totp,
+                            &operation,
+                            sink.clone(),
+                            &who,
+                        )
+                        .await
+                        .map(|registered| match registered {
+                            crate::tools::otp::Registered::Filled => {
+                                json!({"status":"filled","registered":true})
+                            }
+                            // Saved, so the ticket ends here; a later request_otp fills from
+                            // the vault.
+                            crate::tools::otp::Registered::Unfilled => {
+                                json!({"status":"registered","filled":false})
+                            }
+                        }),
+                    };
+                    let value = match filled {
+                        Ok(value) => value,
+                        Err(error) => {
+                            // Only `fill_failed` may have reached the page; every other code is
+                            // decided before any write.
+                            if error.code != "fill_failed" {
+                                browser.clear_fill_intent(&s, &ticket.id).await?;
+                            }
+                            return Err(refused(error.code));
+                        }
+                    };
+                    browser.persist(&s).await?;
+                    value
+                }
+            }
+            TicketKind::DeviceApproval | TicketKind::Takeover => {
+                return Err(HttpError(StatusCode::BAD_REQUEST, "use_done"))
+            }
+        };
+        // Statuses are daemon constants; a free-text answer is scrubbed.
+        let value = s.registry.redact_except(value, &[&["status"]])?;
+        crate::tickets::audit(
+            &s,
+            &ticket.session_id,
+            &ticket.tool_call_id,
+            "ticket",
+            "resolved",
+            0,
+        )
+        .await?;
+        s.emit(
+            &ticket.session_id,
+            None,
+            EventKind::TicketResolved {
+                ticket_id: ticket.id.clone(),
+                resolution: value,
+            },
+        )
+        .await?;
+        if ticket.kind == TicketKind::SecretInput || ticket.otp_register.is_some() {
+            // The ticket is no longer pending, so a stale intent can never block anything.
+            let _ = s.registry.browser.clear_fill_intent(&s, &ticket.id).await;
+        }
+    }
+    resume(&s, &ticket).await;
+    Ok(Json(find(&s, ticket.id.as_str().into()).await?))
+}
+async fn done(
+    State(s): State<Shared>,
+    Extension(access): Extension<Access>,
+    Path(id): Path<String>,
+) -> Result<Json<Ticket>> {
+    let ticket;
+    {
+        let _gate = s.ticket_gate.lock().await;
+        ticket = find(&s, id).await?;
+        access.ticket(&ticket)?;
+        pending(&ticket)?;
+        if !matches!(
+            ticket.kind,
+            TicketKind::DeviceApproval | TicketKind::Takeover
+        ) {
+            return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_ticket_kind"));
+        }
+        crate::takeover::finish(&s, &ticket, openside_proto::TakeoverEndReason::Done).await;
+        let resolution = if ticket.kind == TicketKind::Takeover {
+            crate::takeover::done_result(&s, &ticket).await
+        } else {
+            json!({"status":"done"})
+        };
+        crate::tickets::audit(
+            &s,
+            &ticket.session_id,
+            &ticket.tool_call_id,
+            "ticket",
+            "resolved",
+            0,
+        )
+        .await?;
+        s.emit(
+            &ticket.session_id,
+            None,
+            EventKind::TicketResolved {
+                ticket_id: ticket.id.clone(),
+                resolution,
+            },
+        )
+        .await?;
+    }
+    resume(&s, &ticket).await;
+    Ok(Json(find(&s, ticket.id.as_str().into()).await?))
+}
+async fn reject(
+    State(s): State<Shared>,
+    Extension(access): Extension<Access>,
+    Path(id): Path<String>,
+    Json(request): Json<RejectTicketRequest>,
+) -> Result<Json<Ticket>> {
+    let ticket;
+    {
+        let _gate = s.ticket_gate.lock().await;
+        ticket = find(&s, id).await?;
+        access.ticket(&ticket)?;
+        pending(&ticket)?;
+        let reason = s
+            .registry
+            .redact(Value::String(
+                request.reason.unwrap_or_else(|| "rejected".into()),
+            ))?
+            .as_str()
+            .unwrap_or("rejected")
+            .to_owned();
+        crate::tickets::close_unanswered(&s, &ticket, Some(&reason)).await?;
+    }
+    resume(&s, &ticket).await;
+    Ok(Json(find(&s, ticket.id.as_str().into()).await?))
+}
+async fn resume(s: &Shared, ticket: &Ticket) {
+    // Persistence is the commit point; transient runtime failure cannot turn a
+    // successful human response into a retry that inserts a secret twice.
+    let _ = s
+        .command(&ticket.session_id, Action::Resume(ticket.id.clone()))
+        .await;
+}
+async fn pair(
+    State(s): State<Shared>,
+    Json(request): Json<PairDeviceRequest>,
+) -> Result<(StatusCode, Json<PairDeviceResponse>)> {
+    let (device_id, token) =
+        s.db.pair_named(request.name.clone(), request.scopes.clone())
+            .await?;
+    crate::pairing::audit(
+        &s,
+        "device",
+        "paired",
+        json!({"device_id": device_id, "name": request.name, "scopes": request.scopes, "via": "socket"}),
+    )
+    .await;
+    Ok((
+        StatusCode::CREATED,
+        Json(PairDeviceResponse {
+            device_id,
+            token,
+            scopes: request.scopes,
+        }),
+    ))
+}
+async fn revoke(State(s): State<Shared>, Path(id): Path<String>) -> Result<StatusCode> {
+    crate::pairing::revoke(&s, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Resolve a ticket with a string value exactly as a `human_step` client would, for
+/// daemon-side helpers (OTP ingest). The value is zeroized by the secret-input path.
+pub(crate) async fn resolve_as_human_step(
+    s: &Shared,
+    id: &str,
+    value: Zeroizing<String>,
+) -> Result<Json<Ticket>> {
+    resolve(
+        State(s.clone()),
+        Extension(Access(vec![CapabilityScope::HumanStep])),
+        // A plain code only: nothing is registered, so no approver is recorded.
+        Extension(Caller(None)),
+        Path(id.to_owned()),
+        Json(ResolveTicketRequest {
+            value: Value::String(value.as_str().to_owned()),
+        }),
+    )
+    .await
+}
