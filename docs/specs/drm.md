@@ -1,0 +1,9 @@
+# Widevine / DRM diagnostics (PP-21)
+
+DRM playback is outside openside's acceptance scope (`docs/05-roadmap.md` §1). Documentation and installation diagnostics are in scope.
+
+`openside doctor --json` includes `browser.widevine` for the browser selected by the normal configuration/discovery precedence. It resolves the executable symlink, inspects nearby `WidevineCdm` directories (including versioned macOS framework layouts), and looks for `libwidevinecdm.so`, `widevinecdm.dll` or `libwidevinecdm.dylib`. It does not start the browser, load the proprietary library, inspect a user's browser profile or perform a playback/network request. Empty CDM directories are not reported as an installed library. Missing browser/CDM produces `warn` with a next step.
+
+The openside patched Chromium build does **not** bundle or license Widevine. Library presence is only an installation observation, not proof of a valid CDM license, supported codec, signed/certified browser, streaming-service entitlement or successful DRM playback. Do not redistribute proprietary CDMs with openside or copy one from a personal profile. For DRM playback use an officially supported browser and that browser's licensed installation; openside does not work around certification or licensing requirements.
+
+Evidence: `crates/openside-config/src/drm.rs::tests::widevine_reports_library_presence_and_patched_build_limitations` uses disposable directories for Linux/macOS/Windows library names; `widevine_finds_distribution_windows_and_macos_install_layouts` covers a distribution wrapper, a versioned Windows installation and a macOS framework installation; `missing_browser_has_an_actionable_drm_warning` proves the missing-browser guidance. `unrelated_entry_metadata_error_does_not_hide_a_cdm` proves that a sibling's file-type inspection error does not abort discovery of a valid library. No real streaming service has been tested.

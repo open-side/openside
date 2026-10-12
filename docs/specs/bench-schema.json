@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openside.dev/specs/bench-schema.json",
+  "title": "Aside-compatible benchmark task result or run summary",
+  "$comment": "Reconstructed from public at-inc/aside-benchmarks commit 7cde728f6af4ba10065fc9e0557762d0e156d3dd, bu-bench-v1/runner/types.ts (TaskResult, ModelSelection, RunSummary) and published result.json/run_summary.json artifacts. Source: https://github.com/at-inc/aside-benchmarks/blob/7cde728f6af4ba10065fc9e0557762d0e156d3dd/bu-bench-v1/runner/types.ts . Upstream publishes TypeScript interfaces, not a JSON Schema. The single openside extension carries local-suite measurements; this is not an upstream-authored schema or a live benchmark score.",
+  "oneOf": [{"$ref": "#/$defs/task"}, {"$ref": "#/$defs/summary"}],
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "duration": {"type": "number", "minimum": 0},
+    "thinking": {"enum": ["off", "minimal", "low", "medium", "high", "xhigh"]},
+    "model": {
+      "type": "object",
+      "required": ["provider", "modelId", "thinkingLevel", "fastMode"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1},
+        "modelId": {"type": "string", "minLength": 1},
+        "thinkingLevel": {"$ref": "#/$defs/thinking"},
+        "fastMode": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["stdout", "stderr", "cliEvents", "trajectory", "result"],
+      "properties": {
+        "stdout": {"type": "string"},
+        "stderr": {"type": "string"},
+        "cliEvents": {"type": "string"},
+        "trajectory": {"type": "string"},
+        "result": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "extension": {
+      "type": "object",
+      "required": ["suite", "mode", "grader", "steps", "tokens", "browserBytes", "ticketsResolved"],
+      "properties": {
+        "suite": {"const": "openside-local-web-v1"},
+        "mode": {"enum": ["scripted", "live"]},
+        "grader": {"const": "fixture-state-v1"},
+        "steps": {"$ref": "#/$defs/count"},
+        "tokens": {
+          "type": "object",
+          "required": ["input", "output", "source"],
+          "properties": {
+            "input": {"$ref": "#/$defs/count"},
+            "output": {"$ref": "#/$defs/count"},
+            "source": {"enum": ["scripted-function-model-estimate", "provider-usage"]}
+          },
+          "additionalProperties": false
+        },
+        "browserBytes": {"$ref": "#/$defs/count"},
+        "ticketsResolved": {"$ref": "#/$defs/count"}
+      },
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "required": ["task_id", "category", "task", "outcome", "graderVerdict", "graderReasoning", "agentStatus", "sessionId", "model", "provider", "durationMs", "graderDurationMs", "tabCount", "messageCount", "artifacts"],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1},
+        "category": {"enum": ["WebBenchREAD", "OM2W2", "InteractionTests", "GAIA", "BrowseComp"]},
+        "task": {"type": "string", "minLength": 1},
+        "outcome": {"enum": ["success", "failure", "impossible", "error"]},
+        "graderVerdict": {"enum": ["pass", "fail", "impossible", "error"]},
+        "graderReasoning": {"type": "string"},
+        "agentStatus": {"type": "string"},
+        "sessionId": {"type": "string"},
+        "model": {"$ref": "#/$defs/model"},
+        "provider": {"type": "string"},
+        "durationMs": {"$ref": "#/$defs/duration"},
+        "graderDurationMs": {"$ref": "#/$defs/duration"},
+        "tabCount": {"$ref": "#/$defs/count"},
+        "messageCount": {"$ref": "#/$defs/count"},
+        "artifacts": {"$ref": "#/$defs/artifacts"},
+        "openside": {"$ref": "#/$defs/extension"}
+      },
+      "additionalProperties": false
+    },
+    "categorySummary": {
+      "type": "object",
+      "required": ["total", "passed", "failed", "impossible", "errors"],
+      "properties": {
+        "total": {"$ref": "#/$defs/count"},
+        "passed": {"$ref": "#/$defs/count"},
+        "failed": {"$ref": "#/$defs/count"},
+        "impossible": {"$ref": "#/$defs/count"},
+        "errors": {"$ref": "#/$defs/count"}
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total", "ran", "passed", "failed", "impossible", "errors", "skipped", "byCategory", "passRate", "passRateExcludingImpossible", "avgDurationMs", "totalDurationMs", "model", "provider", "thinkingLevel", "fastMode", "concurrency", "timestamp"],
+      "properties": {
+        "total": {"$ref": "#/$defs/count"},
+        "ran": {"$ref": "#/$defs/count"},
+        "passed": {"$ref": "#/$defs/count"},
+        "failed": {"$ref": "#/$defs/count"},
+        "impossible": {"$ref": "#/$defs/count"},
+        "errors": {"$ref": "#/$defs/count"},
+        "skipped": {"$ref": "#/$defs/count"},
+        "byCategory": {"type": "object", "additionalProperties": {"$ref": "#/$defs/categorySummary"}},
+        "passRate": {"type": "number", "minimum": 0, "maximum": 1},
+        "passRateExcludingImpossible": {"type": "number", "minimum": 0, "maximum": 1},
+        "avgDurationMs": {"$ref": "#/$defs/duration"},
+        "totalDurationMs": {"$ref": "#/$defs/duration"},
+        "model": {"type": "string"},
+        "provider": {"type": "string"},
+        "thinkingLevel": {"$ref": "#/$defs/thinking"},
+        "fastMode": {"const": false},
+        "concurrency": {"type": "integer", "minimum": 1},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "openside": {"$ref": "#/$defs/extension"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

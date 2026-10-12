@@ -1,0 +1,6601 @@
+{
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "description": "JSON error response for non-successful HTTP requests.",
+        "properties": {
+          "code": {
+            "description": "Machine-readable failure code.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Sanitized human-facing detail.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ApiError",
+        "type": "object"
+      },
+      "CapabilityScope": {
+        "description": "Capability required to access an HTTP operation.",
+        "oneOf": [
+          {
+            "const": "read",
+            "description": "Inspect sessions, events, and tickets.",
+            "type": "string"
+          },
+          {
+            "const": "steer",
+            "description": "Create sessions and modify or deliver messages.",
+            "type": "string"
+          },
+          {
+            "const": "approve",
+            "description": "Resolve or reject confirmation and information tickets.",
+            "type": "string"
+          },
+          {
+            "const": "human_step",
+            "description": "Resolve, complete, or reject secret-input, device-approval, and takeover tickets.",
+            "type": "string"
+          },
+          {
+            "const": "admin",
+            "description": "Pair and revoke devices.",
+            "type": "string"
+          },
+          {
+            "const": "browse",
+            "description": "Drive session browser routes (`browser_repl`) without steering the agent; for\nsandboxed tools, MCP servers and extensions.",
+            "type": "string"
+          },
+          {
+            "const": "vault_use",
+            "description": "Use saved vault credentials through vault routes; never reveals values.",
+            "type": "string"
+          },
+          {
+            "const": "otp_ingest",
+            "description": "Deliver one-time codes to the OTP ingest route.",
+            "type": "string"
+          }
+        ],
+        "title": "CapabilityScope"
+      },
+      "CreateMemoryRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/memory` body; creates a note.",
+        "properties": {
+          "content": {
+            "description": "Text to remember; rejected with `secret_detected` when it looks like a secret.",
+            "type": "string"
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Retention"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Defaults to `memory.default_retention`."
+          },
+          "tags": {
+            "default": [],
+            "description": "Optional labels.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "CreateMemoryRequest",
+        "type": "object"
+      },
+      "CreateRoutineRequest": {
+        "additionalProperties": false,
+        "description": "Routine creation request.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/RoutineAction",
+            "description": "Action performed on each run."
+          },
+          "catch_up": {
+            "description": "Run once for the latest occurrence missed while the daemon was down; defaults to false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Start enabled; defaults to true.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Human-readable name; must not be blank.",
+            "type": "string"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/RoutineSchedule",
+            "description": "Firing schedule."
+          }
+        },
+        "required": [
+          "name",
+          "schedule",
+          "action"
+        ],
+        "title": "CreateRoutineRequest",
+        "type": "object"
+      },
+      "CreateSessionRequest": {
+        "additionalProperties": false,
+        "description": "Session creation request.",
+        "properties": {
+          "incognito": {
+            "description": "Create a private session; immutable afterwards. Browsing history is not indexed.",
+            "type": "boolean"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolicyMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Permission override, or settings default when omitted."
+          },
+          "model": {
+            "description": "Model override, or settings default when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "Conversation title, or a daemon-generated title when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "description": "Absolute workspace path, canonicalized by the daemon before session creation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "CreateSessionRequest",
+        "type": "object"
+      },
+      "CreateSkillRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/skills` body; creates a user skill.",
+        "properties": {
+          "body": {
+            "default": "",
+            "description": "Markdown instructions.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Required, at most 1024 characters.",
+            "type": "string"
+          },
+          "license": {
+            "description": "Optional license text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Skill name: 1-64 lowercase letters, digits and single hyphens.",
+            "type": "string"
+          },
+          "resources": {
+            "default": [],
+            "description": "Optional text resources (at most 64 files, 512 KiB in total). Executable\nscripts cannot be uploaded; use `openside skills import --allow-scripts`.",
+            "items": {
+              "$ref": "#/components/schemas/SkillFile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "CreateSkillRequest",
+        "type": "object"
+      },
+      "DropReason": {
+        "description": "Why a message was dropped (never silent).",
+        "oneOf": [
+          {
+            "const": "removed",
+            "description": "The user removed it before delivery.",
+            "type": "string"
+          },
+          {
+            "const": "session_reset",
+            "description": "The session was reset or deleted.",
+            "type": "string"
+          }
+        ],
+        "title": "DropReason"
+      },
+      "EditMessageRequest": {
+        "additionalProperties": false,
+        "description": "Pending message text replacement.",
+        "properties": {
+          "text": {
+            "description": "Replacement text; only pending messages may be edited.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "EditMessageRequest",
+        "type": "object"
+      },
+      "Event": {
+        "description": "Immutable durable record, with a gapless per-session sequence starting at one.",
+        "oneOf": [
+          {
+            "description": "Message accepted durably into the queue.",
+            "properties": {
+              "kind": {
+                "const": "message.queued",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Durable idempotency key."
+              },
+              "mode": {
+                "$ref": "#/components/schemas/QueueMode",
+                "description": "Queue lane; `now` is normalized to `steer`."
+              },
+              "text": {
+                "description": "Original text.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message_id",
+              "text",
+              "mode"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending message text replaced.",
+            "properties": {
+              "kind": {
+                "const": "message.edited",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Pending message identifier."
+              },
+              "text": {
+                "description": "Replacement text.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message_id",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending follow-up promoted to the steering lane.",
+            "properties": {
+              "kind": {
+                "const": "message.promoted",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Pending message identifier."
+              }
+            },
+            "required": [
+              "kind",
+              "message_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Queue head reserved for at-most-once runtime dispatch.",
+            "properties": {
+              "kind": {
+                "const": "message.injected",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Message durably marked dispatched before runtime I/O."
+              }
+            },
+            "required": [
+              "kind",
+              "message_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Terminal result for a previously injected message.",
+            "properties": {
+              "kind": {
+                "const": "message.completed",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Previously injected message identifier."
+              },
+              "outcome": {
+                "$ref": "#/components/schemas/MessageOutcome",
+                "description": "Successful, aborted, failed, or deferred run completion."
+              },
+              "reason": {
+                "description": "Sanitized failure or cancellation detail, when available.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "message_id",
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending message explicitly dropped with a terminal reason.",
+            "properties": {
+              "kind": {
+                "const": "message.dropped",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Pending message identifier."
+              },
+              "reason": {
+                "$ref": "#/components/schemas/DropReason",
+                "description": "Why delivery will not occur."
+              }
+            },
+            "required": [
+              "kind",
+              "message_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Agent turn began.",
+            "properties": {
+              "kind": {
+                "const": "turn.started",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Agent turn ended.",
+            "properties": {
+              "kind": {
+                "const": "turn.ended",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Incremental assistant output.",
+            "properties": {
+              "kind": {
+                "const": "assistant.delta",
+                "type": "string"
+              },
+              "text": {
+                "description": "Text fragment, appended in sequence order.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Complete assistant response.",
+            "properties": {
+              "kind": {
+                "const": "assistant.final",
+                "type": "string"
+              },
+              "text": {
+                "description": "Full final text.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Incremental model thinking output.",
+            "properties": {
+              "kind": {
+                "const": "thinking.delta",
+                "type": "string"
+              },
+              "text": {
+                "description": "Text fragment, appended in sequence order.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Token usage for a model request.",
+            "properties": {
+              "input_tokens": {
+                "description": "Input token count.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "usage",
+                "type": "string"
+              },
+              "model": {
+                "description": "Provider-qualified model selector.",
+                "type": "string"
+              },
+              "output_tokens": {
+                "description": "Output token count.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "model",
+              "input_tokens",
+              "output_tokens"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tool call began.",
+            "properties": {
+              "args": {
+                "description": "Redacted invocation arguments."
+              },
+              "kind": {
+                "const": "tool.started",
+                "type": "string"
+              },
+              "name": {
+                "description": "Registered tool name.",
+                "type": "string"
+              },
+              "tool_call_id": {
+                "description": "Runtime call identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tool_call_id",
+              "name",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tool produced intermediate progress.",
+            "properties": {
+              "kind": {
+                "const": "tool.updated",
+                "type": "string"
+              },
+              "tool_call_id": {
+                "description": "Runtime call identifier.",
+                "type": "string"
+              },
+              "update": {
+                "description": "Redacted progress payload."
+              }
+            },
+            "required": [
+              "kind",
+              "tool_call_id",
+              "update"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tool completed or failed.",
+            "properties": {
+              "is_error": {
+                "description": "Whether the invocation failed.",
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "tool.ended",
+                "type": "string"
+              },
+              "result": {
+                "description": "Redacted final result."
+              },
+              "tool_call_id": {
+                "description": "Runtime call identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tool_call_id",
+              "result",
+              "is_error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A durable pending human-intervention ticket was created.",
+            "properties": {
+              "kind": {
+                "const": "ticket.opened",
+                "type": "string"
+              },
+              "ticket": {
+                "$ref": "#/components/schemas/Ticket",
+                "description": "Full redacted ticket needed to rebuild pending state."
+              }
+            },
+            "required": [
+              "kind",
+              "ticket"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending ticket resolved.",
+            "properties": {
+              "kind": {
+                "const": "ticket.resolved",
+                "type": "string"
+              },
+              "resolution": {
+                "description": "Redacted resolution; never a secret-input value."
+              },
+              "ticket_id": {
+                "$ref": "#/components/schemas/TicketId",
+                "description": "Ticket identifier."
+              }
+            },
+            "required": [
+              "kind",
+              "ticket_id",
+              "resolution"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending ticket rejected.",
+            "properties": {
+              "kind": {
+                "const": "ticket.rejected",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Sanitized rejection detail.",
+                "type": "string"
+              },
+              "ticket_id": {
+                "$ref": "#/components/schemas/TicketId",
+                "description": "Ticket identifier."
+              }
+            },
+            "required": [
+              "kind",
+              "ticket_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending ticket expired.",
+            "properties": {
+              "kind": {
+                "const": "ticket.expired",
+                "type": "string"
+              },
+              "ticket_id": {
+                "$ref": "#/components/schemas/TicketId",
+                "description": "Ticket identifier."
+              }
+            },
+            "required": [
+              "kind",
+              "ticket_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The parent's `delegate` call was admitted and a child agent started.",
+            "properties": {
+              "kind": {
+                "const": "subagent.started",
+                "type": "string"
+              },
+              "model": {
+                "description": "Model selector the child runs on.",
+                "type": "string"
+              },
+              "parent_tool_call_id": {
+                "description": "The parent's pending `delegate` tool call.",
+                "type": "string"
+              },
+              "subagent_id": {
+                "description": "Daemon-assigned child identifier.",
+                "type": "string"
+              },
+              "task": {
+                "description": "Delegated task, truncated for display.",
+                "type": "string"
+              },
+              "tools": {
+                "description": "Tools the child may call.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "subagent_id",
+              "parent_tool_call_id",
+              "task",
+              "model",
+              "tools"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A child agent reached a terminal state; its result went to the parent.",
+            "properties": {
+              "kind": {
+                "const": "subagent.ended",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Sanitized detail for failed or cancelled children.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "$ref": "#/components/schemas/SubagentStatus",
+                "description": "Terminal state."
+              },
+              "subagent_id": {
+                "description": "Child agent identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "subagent_id",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Subagent lifecycle transition.",
+            "properties": {
+              "kind": {
+                "const": "subagent.lifecycle",
+                "type": "string"
+              },
+              "status": {
+                "description": "Non-terminal state: `running` or `waiting_human`.",
+                "type": "string"
+              },
+              "subagent_id": {
+                "description": "Child agent identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "subagent_id",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Subagent progress update.",
+            "properties": {
+              "kind": {
+                "const": "subagent.progress",
+                "type": "string"
+              },
+              "progress": {
+                "description": "Redacted progress payload."
+              },
+              "subagent_id": {
+                "description": "Child agent identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "subagent_id",
+              "progress"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Agent-owned browser tab created.",
+            "properties": {
+              "kind": {
+                "const": "tab.opened",
+                "type": "string"
+              },
+              "tab_id": {
+                "description": "Browser target identifier.",
+                "type": "string"
+              },
+              "url": {
+                "description": "Initial URL with sensitive components redacted.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tab_id",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Browser tab closed.",
+            "properties": {
+              "kind": {
+                "const": "tab.closed",
+                "type": "string"
+              },
+              "tab_id": {
+                "description": "Browser target identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tab_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Browser tab discarded or unloaded.",
+            "properties": {
+              "kind": {
+                "const": "tab.asleep",
+                "type": "string"
+              },
+              "tab_id": {
+                "description": "Browser target identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tab_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "First event in a session log.",
+            "properties": {
+              "incognito": {
+                "description": "Private session; historical events are not private.",
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "session.created",
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/components/schemas/PolicyMode",
+                "default": "guard",
+                "description": "Initial permission ceiling; historical events default to Guard."
+              },
+              "model": {
+                "description": "Provider-qualified model.",
+                "type": "string"
+              },
+              "title": {
+                "description": "Initial conversation title.",
+                "type": "string"
+              },
+              "workspace": {
+                "default": null,
+                "description": "Canonical absolute workspace path; historical events have no workspace.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "model"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Runtime has no active turn.",
+            "properties": {
+              "kind": {
+                "const": "session.settled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "User explicitly stopped the session; pending messages are retained.",
+            "properties": {
+              "kind": {
+                "const": "session.stopped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Session removed by an administrator; the log remains as a tombstone and nothing\ncan be appended after it.",
+            "properties": {
+              "kind": {
+                "const": "session.deleted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "User-visible list metadata changed; omitted fields are unchanged.",
+            "properties": {
+              "archived": {
+                "description": "New archived flag.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "session.updated",
+                "type": "string"
+              },
+              "pinned": {
+                "description": "New pinned flag.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "Replacement title.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sidecar ready handshake completed with an exact tool-gate match.",
+            "properties": {
+              "kind": {
+                "const": "runtime.started",
+                "type": "string"
+              },
+              "startup_ms": {
+                "description": "Measured startup latency in milliseconds.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tools": {
+                "description": "Actually exposed tool names.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "tools",
+              "startup_ms"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sanitized runtime failure; credentials and secrets must not appear here.",
+            "properties": {
+              "code": {
+                "description": "Machine-readable error code.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "runtime.error",
+                "type": "string"
+              },
+              "message": {
+                "description": "Redacted failure detail.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "code",
+              "message"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "run_id": {
+            "description": "Runtime turn/run correlation, if applicable.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "description": "Assigned transactionally by the store, never by clients.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/SessionId",
+            "description": "Session whose event log owns the record."
+          },
+          "ts": {
+            "description": "Recording timestamp in RFC 3339 UTC.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "seq",
+          "ts"
+        ],
+        "title": "Event",
+        "type": "object"
+      },
+      "EventKind": {
+        "description": "Public event payloads with stable `kind` identifiers, dotted except for `usage`.",
+        "oneOf": [
+          {
+            "description": "Message accepted durably into the queue.",
+            "properties": {
+              "kind": {
+                "const": "message.queued",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Durable idempotency key."
+              },
+              "mode": {
+                "$ref": "#/components/schemas/QueueMode",
+                "description": "Queue lane; `now` is normalized to `steer`."
+              },
+              "text": {
+                "description": "Original text.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message_id",
+              "text",
+              "mode"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending message text replaced.",
+            "properties": {
+              "kind": {
+                "const": "message.edited",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Pending message identifier."
+              },
+              "text": {
+                "description": "Replacement text.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message_id",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending follow-up promoted to the steering lane.",
+            "properties": {
+              "kind": {
+                "const": "message.promoted",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Pending message identifier."
+              }
+            },
+            "required": [
+              "kind",
+              "message_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Queue head reserved for at-most-once runtime dispatch.",
+            "properties": {
+              "kind": {
+                "const": "message.injected",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Message durably marked dispatched before runtime I/O."
+              }
+            },
+            "required": [
+              "kind",
+              "message_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Terminal result for a previously injected message.",
+            "properties": {
+              "kind": {
+                "const": "message.completed",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Previously injected message identifier."
+              },
+              "outcome": {
+                "$ref": "#/components/schemas/MessageOutcome",
+                "description": "Successful, aborted, failed, or deferred run completion."
+              },
+              "reason": {
+                "description": "Sanitized failure or cancellation detail, when available.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "message_id",
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending message explicitly dropped with a terminal reason.",
+            "properties": {
+              "kind": {
+                "const": "message.dropped",
+                "type": "string"
+              },
+              "message_id": {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Pending message identifier."
+              },
+              "reason": {
+                "$ref": "#/components/schemas/DropReason",
+                "description": "Why delivery will not occur."
+              }
+            },
+            "required": [
+              "kind",
+              "message_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Agent turn began.",
+            "properties": {
+              "kind": {
+                "const": "turn.started",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Agent turn ended.",
+            "properties": {
+              "kind": {
+                "const": "turn.ended",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Incremental assistant output.",
+            "properties": {
+              "kind": {
+                "const": "assistant.delta",
+                "type": "string"
+              },
+              "text": {
+                "description": "Text fragment, appended in sequence order.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Complete assistant response.",
+            "properties": {
+              "kind": {
+                "const": "assistant.final",
+                "type": "string"
+              },
+              "text": {
+                "description": "Full final text.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Incremental model thinking output.",
+            "properties": {
+              "kind": {
+                "const": "thinking.delta",
+                "type": "string"
+              },
+              "text": {
+                "description": "Text fragment, appended in sequence order.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Token usage for a model request.",
+            "properties": {
+              "input_tokens": {
+                "description": "Input token count.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "usage",
+                "type": "string"
+              },
+              "model": {
+                "description": "Provider-qualified model selector.",
+                "type": "string"
+              },
+              "output_tokens": {
+                "description": "Output token count.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "model",
+              "input_tokens",
+              "output_tokens"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tool call began.",
+            "properties": {
+              "args": {
+                "description": "Redacted invocation arguments."
+              },
+              "kind": {
+                "const": "tool.started",
+                "type": "string"
+              },
+              "name": {
+                "description": "Registered tool name.",
+                "type": "string"
+              },
+              "tool_call_id": {
+                "description": "Runtime call identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tool_call_id",
+              "name",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tool produced intermediate progress.",
+            "properties": {
+              "kind": {
+                "const": "tool.updated",
+                "type": "string"
+              },
+              "tool_call_id": {
+                "description": "Runtime call identifier.",
+                "type": "string"
+              },
+              "update": {
+                "description": "Redacted progress payload."
+              }
+            },
+            "required": [
+              "kind",
+              "tool_call_id",
+              "update"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tool completed or failed.",
+            "properties": {
+              "is_error": {
+                "description": "Whether the invocation failed.",
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "tool.ended",
+                "type": "string"
+              },
+              "result": {
+                "description": "Redacted final result."
+              },
+              "tool_call_id": {
+                "description": "Runtime call identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tool_call_id",
+              "result",
+              "is_error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A durable pending human-intervention ticket was created.",
+            "properties": {
+              "kind": {
+                "const": "ticket.opened",
+                "type": "string"
+              },
+              "ticket": {
+                "$ref": "#/components/schemas/Ticket",
+                "description": "Full redacted ticket needed to rebuild pending state."
+              }
+            },
+            "required": [
+              "kind",
+              "ticket"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending ticket resolved.",
+            "properties": {
+              "kind": {
+                "const": "ticket.resolved",
+                "type": "string"
+              },
+              "resolution": {
+                "description": "Redacted resolution; never a secret-input value."
+              },
+              "ticket_id": {
+                "$ref": "#/components/schemas/TicketId",
+                "description": "Ticket identifier."
+              }
+            },
+            "required": [
+              "kind",
+              "ticket_id",
+              "resolution"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending ticket rejected.",
+            "properties": {
+              "kind": {
+                "const": "ticket.rejected",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Sanitized rejection detail.",
+                "type": "string"
+              },
+              "ticket_id": {
+                "$ref": "#/components/schemas/TicketId",
+                "description": "Ticket identifier."
+              }
+            },
+            "required": [
+              "kind",
+              "ticket_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pending ticket expired.",
+            "properties": {
+              "kind": {
+                "const": "ticket.expired",
+                "type": "string"
+              },
+              "ticket_id": {
+                "$ref": "#/components/schemas/TicketId",
+                "description": "Ticket identifier."
+              }
+            },
+            "required": [
+              "kind",
+              "ticket_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The parent's `delegate` call was admitted and a child agent started.",
+            "properties": {
+              "kind": {
+                "const": "subagent.started",
+                "type": "string"
+              },
+              "model": {
+                "description": "Model selector the child runs on.",
+                "type": "string"
+              },
+              "parent_tool_call_id": {
+                "description": "The parent's pending `delegate` tool call.",
+                "type": "string"
+              },
+              "subagent_id": {
+                "description": "Daemon-assigned child identifier.",
+                "type": "string"
+              },
+              "task": {
+                "description": "Delegated task, truncated for display.",
+                "type": "string"
+              },
+              "tools": {
+                "description": "Tools the child may call.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "subagent_id",
+              "parent_tool_call_id",
+              "task",
+              "model",
+              "tools"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A child agent reached a terminal state; its result went to the parent.",
+            "properties": {
+              "kind": {
+                "const": "subagent.ended",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Sanitized detail for failed or cancelled children.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "$ref": "#/components/schemas/SubagentStatus",
+                "description": "Terminal state."
+              },
+              "subagent_id": {
+                "description": "Child agent identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "subagent_id",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Subagent lifecycle transition.",
+            "properties": {
+              "kind": {
+                "const": "subagent.lifecycle",
+                "type": "string"
+              },
+              "status": {
+                "description": "Non-terminal state: `running` or `waiting_human`.",
+                "type": "string"
+              },
+              "subagent_id": {
+                "description": "Child agent identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "subagent_id",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Subagent progress update.",
+            "properties": {
+              "kind": {
+                "const": "subagent.progress",
+                "type": "string"
+              },
+              "progress": {
+                "description": "Redacted progress payload."
+              },
+              "subagent_id": {
+                "description": "Child agent identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "subagent_id",
+              "progress"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Agent-owned browser tab created.",
+            "properties": {
+              "kind": {
+                "const": "tab.opened",
+                "type": "string"
+              },
+              "tab_id": {
+                "description": "Browser target identifier.",
+                "type": "string"
+              },
+              "url": {
+                "description": "Initial URL with sensitive components redacted.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tab_id",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Browser tab closed.",
+            "properties": {
+              "kind": {
+                "const": "tab.closed",
+                "type": "string"
+              },
+              "tab_id": {
+                "description": "Browser target identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tab_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Browser tab discarded or unloaded.",
+            "properties": {
+              "kind": {
+                "const": "tab.asleep",
+                "type": "string"
+              },
+              "tab_id": {
+                "description": "Browser target identifier.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tab_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "First event in a session log.",
+            "properties": {
+              "incognito": {
+                "description": "Private session; historical events are not private.",
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "session.created",
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/components/schemas/PolicyMode",
+                "default": "guard",
+                "description": "Initial permission ceiling; historical events default to Guard."
+              },
+              "model": {
+                "description": "Provider-qualified model.",
+                "type": "string"
+              },
+              "title": {
+                "description": "Initial conversation title.",
+                "type": "string"
+              },
+              "workspace": {
+                "default": null,
+                "description": "Canonical absolute workspace path; historical events have no workspace.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "model"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Runtime has no active turn.",
+            "properties": {
+              "kind": {
+                "const": "session.settled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "User explicitly stopped the session; pending messages are retained.",
+            "properties": {
+              "kind": {
+                "const": "session.stopped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Session removed by an administrator; the log remains as a tombstone and nothing\ncan be appended after it.",
+            "properties": {
+              "kind": {
+                "const": "session.deleted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "User-visible list metadata changed; omitted fields are unchanged.",
+            "properties": {
+              "archived": {
+                "description": "New archived flag.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "session.updated",
+                "type": "string"
+              },
+              "pinned": {
+                "description": "New pinned flag.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "Replacement title.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sidecar ready handshake completed with an exact tool-gate match.",
+            "properties": {
+              "kind": {
+                "const": "runtime.started",
+                "type": "string"
+              },
+              "startup_ms": {
+                "description": "Measured startup latency in milliseconds.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tools": {
+                "description": "Actually exposed tool names.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "tools",
+              "startup_ms"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sanitized runtime failure; credentials and secrets must not appear here.",
+            "properties": {
+              "code": {
+                "description": "Machine-readable error code.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "runtime.error",
+                "type": "string"
+              },
+              "message": {
+                "description": "Redacted failure detail.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "code",
+              "message"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "EventKind"
+      },
+      "Health": {
+        "description": "Health response without environment or credential details.",
+        "properties": {
+          "api_version": {
+            "description": "Public API version, currently `v1`.",
+            "type": "string"
+          },
+          "ok": {
+            "description": "Whether the daemon is ready to serve requests.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "api_version"
+        ],
+        "title": "Health",
+        "type": "object"
+      },
+      "Memory": {
+        "description": "One stored memory. Content never contains a value matched by secret detection.",
+        "properties": {
+          "content": {
+            "description": "Remembered text.",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "First write.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Purge deadline; absent for permanent memories.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Opaque memory identifier.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MemoryKind",
+            "description": "Memory origin."
+          },
+          "retention": {
+            "$ref": "#/components/schemas/Retention",
+            "description": "Retention policy."
+          },
+          "tags": {
+            "description": "Free-form labels.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "Page title, for history memories.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "description": "Last write; retention counts from here.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "url": {
+            "description": "Public page URL, for history memories.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "Current version number, starting at one.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "content",
+          "tags",
+          "retention",
+          "created_at",
+          "updated_at",
+          "version"
+        ],
+        "type": "object"
+      },
+      "MemoryHealth": {
+        "description": "Response of `GET /v1/memory/health`.",
+        "properties": {
+          "count": {
+            "description": "Live (unexpired) memories.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/MemorySearchMode",
+            "description": "Search strategy in effect."
+          },
+          "model_id": {
+            "description": "Content-derived identifier of the loaded local embedding model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_step": {
+            "description": "Action that enables hybrid search.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "problem": {
+            "description": "Why embeddings are unavailable, without file contents.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "count"
+        ],
+        "title": "MemoryHealth",
+        "type": "object"
+      },
+      "MemoryHistory": {
+        "description": "Response of `GET /v1/memory/{id}/history`, oldest first.",
+        "properties": {
+          "id": {
+            "description": "Memory identifier.",
+            "type": "string"
+          },
+          "versions": {
+            "description": "Changes, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/MemoryVersion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "versions"
+        ],
+        "title": "MemoryHistory",
+        "type": "object"
+      },
+      "MemoryHit": {
+        "description": "Ranked memory.",
+        "properties": {
+          "matched": {
+            "$ref": "#/components/schemas/MemoryMatch",
+            "description": "Index that matched."
+          },
+          "memory": {
+            "$ref": "#/components/schemas/Memory",
+            "description": "The memory."
+          },
+          "score": {
+            "description": "Fused rank score; larger is better and only comparable within one response.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "memory",
+          "score",
+          "matched"
+        ],
+        "type": "object"
+      },
+      "MemoryKind": {
+        "description": "Origin of a memory: agent/user notes or automatically indexed browsing history.",
+        "oneOf": [
+          {
+            "const": "note",
+            "description": "Written by the agent (`memory_write`) or a user (API/CLI).",
+            "type": "string"
+          },
+          {
+            "const": "history",
+            "description": "Indexed page visit: public URL (no query/fragment/userinfo), title, short text.",
+            "type": "string"
+          }
+        ]
+      },
+      "MemoryMatch": {
+        "description": "Which index produced a search hit.",
+        "oneOf": [
+          {
+            "const": "lexical",
+            "description": "Full-text match only.",
+            "type": "string"
+          },
+          {
+            "const": "vector",
+            "description": "Embedding similarity only.",
+            "type": "string"
+          },
+          {
+            "const": "both",
+            "description": "Both indexes.",
+            "type": "string"
+          },
+          {
+            "const": "recent",
+            "description": "No query: most recently updated memories.",
+            "type": "string"
+          }
+        ]
+      },
+      "MemoryOp": {
+        "description": "Change recorded in memory history.",
+        "oneOf": [
+          {
+            "const": "create",
+            "description": "First write.",
+            "type": "string"
+          },
+          {
+            "const": "update",
+            "description": "Edit.",
+            "type": "string"
+          },
+          {
+            "const": "delete",
+            "description": "Explicit deletion.",
+            "type": "string"
+          },
+          {
+            "const": "purge",
+            "description": "Removal by the retention job.",
+            "type": "string"
+          }
+        ]
+      },
+      "MemorySearchMode": {
+        "description": "Search strategy in effect.",
+        "oneOf": [
+          {
+            "const": "hybrid",
+            "description": "FTS5 bm25 and local-embedding cosine, fused by reciprocal rank.",
+            "type": "string"
+          },
+          {
+            "const": "lexical_only",
+            "description": "FTS5 bm25 only, because no local embedding model is loaded.",
+            "type": "string"
+          }
+        ]
+      },
+      "MemorySearchResponse": {
+        "description": "Response of `GET /v1/memory`.",
+        "properties": {
+          "hits": {
+            "description": "Hits, best first.",
+            "items": {
+              "$ref": "#/components/schemas/MemoryHit"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/MemorySearchMode",
+            "description": "Strategy used for this query."
+          }
+        },
+        "required": [
+          "mode",
+          "hits"
+        ],
+        "title": "MemorySearchResponse",
+        "type": "object"
+      },
+      "MemoryVersion": {
+        "description": "One history entry. After delete/purge every earlier snapshot is scrubbed and\nonly operation, actor and timestamp remain.",
+        "properties": {
+          "actor": {
+            "description": "Who made the change, e.g. `api`, `agent:<session>`, `retention`.",
+            "type": "string"
+          },
+          "at": {
+            "description": "When the change happened.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "content": {
+            "description": "Content after the change; absent once scrubbed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "op": {
+            "$ref": "#/components/schemas/MemoryOp",
+            "description": "Operation."
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Retention"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Retention after the change."
+          },
+          "tags": {
+            "description": "Labels after the change; absent once scrubbed.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "Version number this change produced.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "op",
+          "actor",
+          "at"
+        ],
+        "type": "object"
+      },
+      "Message": {
+        "description": "A message with durable lifecycle status.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/MessageId",
+            "description": "Idempotency key, assigned by the client or daemon."
+          },
+          "status": {
+            "$ref": "#/components/schemas/MessageStatus",
+            "description": "Pending or terminal disposition."
+          },
+          "text": {
+            "description": "Latest text, including edits made before delivery.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "status"
+        ],
+        "title": "Message",
+        "type": "object"
+      },
+      "MessageId": {
+        "description": "Identifies one user message. Assigned by the client or daemon and used for\nidempotent delivery.",
+        "type": "string"
+      },
+      "MessageMode": {
+        "description": "Public delivery mode; `now` is queued durably before immediate steering.",
+        "oneOf": [
+          {
+            "const": "queue",
+            "description": "Follow-up after the current turn.",
+            "type": "string"
+          },
+          {
+            "const": "steer",
+            "description": "Inject at the running turn's next boundary.",
+            "type": "string"
+          },
+          {
+            "const": "now",
+            "description": "Start or steer immediately.",
+            "type": "string"
+          }
+        ],
+        "title": "MessageMode"
+      },
+      "MessageOutcome": {
+        "description": "Terminal runtime disposition, distinct from dispatch to the runtime.",
+        "oneOf": [
+          {
+            "const": "completed",
+            "description": "The run completed successfully.",
+            "type": "string"
+          },
+          {
+            "const": "aborted",
+            "description": "The user or runtime cancelled the message.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "Runtime failure or an interrupted, ambiguous dispatch.",
+            "type": "string"
+          },
+          {
+            "const": "deferred",
+            "description": "The run paused on tickets; resolution resumes without a new message.",
+            "type": "string"
+          }
+        ]
+      },
+      "MessageStatus": {
+        "description": "Lifecycle of one message.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Waiting for delivery.",
+            "properties": {
+              "queued": {
+                "$ref": "#/components/schemas/QueueMode"
+              }
+            },
+            "required": [
+              "queued"
+            ],
+            "type": "object"
+          },
+          {
+            "const": "delivered",
+            "description": "Handed to the agent runtime.",
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Will never be delivered.",
+            "properties": {
+              "dropped": {
+                "$ref": "#/components/schemas/DropReason"
+              }
+            },
+            "required": [
+              "dropped"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "MessageStatus"
+      },
+      "PairDeviceRequest": {
+        "additionalProperties": false,
+        "description": "Administrative device pairing request.",
+        "properties": {
+          "name": {
+            "description": "User-visible device label.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "Explicit capabilities to grant.",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "title": "PairDeviceRequest",
+        "type": "object"
+      },
+      "PairDeviceResponse": {
+        "description": "Administrative pairing result; the secret token is returned once.",
+        "properties": {
+          "device_id": {
+            "description": "Stable revocation identifier.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "Granted capabilities.",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityScope"
+            },
+            "type": "array"
+          },
+          "token": {
+            "description": "Bearer capability token; never persist in event or application logs.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "token",
+          "scopes"
+        ],
+        "title": "PairDeviceResponse",
+        "type": "object"
+      },
+      "PolicyCapability": {
+        "description": "What an action does; targets are absolute paths for `fs_*`/`exec`, URLs or origins\notherwise.",
+        "oneOf": [
+          {
+            "const": "fs_read",
+            "description": "Read a file or directory.",
+            "type": "string"
+          },
+          {
+            "const": "fs_write",
+            "description": "Write, delete or rename a file.",
+            "type": "string"
+          },
+          {
+            "const": "exec",
+            "description": "Run a command (target: working directory).",
+            "type": "string"
+          },
+          {
+            "const": "browse",
+            "description": "Drive a browser page.",
+            "type": "string"
+          },
+          {
+            "const": "fetch",
+            "description": "Network fetch outside the browser.",
+            "type": "string"
+          },
+          {
+            "const": "vault_use",
+            "description": "Use a saved credential through the vault.",
+            "type": "string"
+          },
+          {
+            "const": "sensitive",
+            "description": "Payment, purchase, posting or sending a message.",
+            "type": "string"
+          }
+        ]
+      },
+      "PolicyDecision": {
+        "description": "Result of a [`PolicyTestRequest`].",
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/PolicyEffect",
+            "description": "Final effect."
+          },
+          "reason": {
+            "description": "`deny_rule`, `origin_denied`, `origin_not_allowed`, `rule`, `mode` or\n`sensitive_floor`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "effect",
+          "reason"
+        ],
+        "title": "PolicyDecision",
+        "type": "object"
+      },
+      "PolicyEffect": {
+        "description": "Rule or decision outcome, ordered `allow < ask < deny`.",
+        "oneOf": [
+          {
+            "const": "allow",
+            "description": "Proceed without asking.",
+            "type": "string"
+          },
+          {
+            "const": "ask",
+            "description": "Open a confirm ticket first.",
+            "type": "string"
+          },
+          {
+            "const": "deny",
+            "description": "Block; approval cannot override it.",
+            "type": "string"
+          }
+        ]
+      },
+      "PolicyMode": {
+        "description": "Public permission modes, mirroring `openside_policy::Mode`.",
+        "oneOf": [
+          {
+            "const": "read-only",
+            "description": "Read only; deny mutations.",
+            "type": "string"
+          },
+          {
+            "const": "guard",
+            "description": "Guard; work inside approved roots, ask elsewhere.",
+            "type": "string"
+          },
+          {
+            "const": "full",
+            "description": "Full access; sensitive operations still require approval.",
+            "type": "string"
+          }
+        ]
+      },
+      "PolicyRule": {
+        "additionalProperties": false,
+        "description": "One Allow/Ask/Deny rule.",
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/PolicyCapability",
+            "description": "Capability the rule applies to."
+          },
+          "effect": {
+            "$ref": "#/components/schemas/PolicyEffect",
+            "description": "Outcome when the rule matches."
+          },
+          "pattern": {
+            "description": "Glob over the action target: `*` within a `/` segment, `**` across segments.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "effect",
+          "capability",
+          "pattern"
+        ],
+        "title": "PolicyRule",
+        "type": "object"
+      },
+      "PolicySettings": {
+        "additionalProperties": false,
+        "description": "Live daemon policy: `GET`/`PUT /v1/policy`. A `PUT` replaces the whole document and\napplies to the next tool call of every session, including running ones.",
+        "properties": {
+          "allow_origins": {
+            "default": [],
+            "description": "When non-empty, browser/fetch/vault/sensitive actions may only target these origin\nglobs (`https://*.example.com`, `http://127.0.0.1:*`). Never grants anything.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default_mode": {
+            "$ref": "#/components/schemas/PolicyMode",
+            "description": "Mode for sessions created without an explicit mode."
+          },
+          "deny_origins": {
+            "default": [],
+            "description": "Origin globs that are always denied for browser/fetch/vault/sensitive actions.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rules": {
+            "default": [],
+            "description": "Agent-level rules beneath each session's rules. A matching `deny` anywhere wins;\n`sensitive` actions can be tightened to `deny` but never allowed.",
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "default_mode"
+        ],
+        "title": "PolicySettings",
+        "type": "object"
+      },
+      "PolicyTestRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/policy/test`: evaluate one action against the live policy without running it.",
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/PolicyCapability",
+            "description": "Capability to evaluate."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolicyMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session mode to evaluate under; defaults to `default_mode`."
+          },
+          "target": {
+            "description": "Path, URL or origin the action touches.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Approved workspace root for Guard mode (absolute).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "target",
+          "capability"
+        ],
+        "title": "PolicyTestRequest",
+        "type": "object"
+      },
+      "QueueMode": {
+        "description": "How a message should be delivered while a turn is running.",
+        "oneOf": [
+          {
+            "const": "queue",
+            "description": "After the current turn finishes.",
+            "type": "string"
+          },
+          {
+            "const": "steer",
+            "description": "Into the running turn at its next boundary.",
+            "type": "string"
+          }
+        ]
+      },
+      "RejectTicketRequest": {
+        "additionalProperties": false,
+        "description": "Explicit ticket rejection.",
+        "properties": {
+          "reason": {
+            "description": "Optional sanitized rejection detail.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "RejectTicketRequest",
+        "type": "object"
+      },
+      "ReplRequest": {
+        "additionalProperties": false,
+        "description": "Run one Playwright-syntax snippet in a session-owned agent tab (`browser_repl`).",
+        "properties": {
+          "approval_ticket": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Approved `confirm` ticket from an earlier `deferred` response; the identical `code` and\n`tab_id` are rerun from the start under that approval."
+          },
+          "code": {
+            "description": "JavaScript using `page`, `expect`, and `console`; top-level `await` is allowed and the\nlast expression statement is the return value. Each request gets a fresh context.",
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "Agent tab to drive; optional when the session owns exactly one tab or none (a blank\ntab is opened).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "ReplRequest",
+        "type": "object"
+      },
+      "ReplResponse": {
+        "description": "Result of a [`ReplRequest`], recorded as a `browser_repl` tool call in the session.",
+        "properties": {
+          "hint": {
+            "description": "How to proceed after a denial.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Denial reason or failure message.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "Redacted, size-limited tool result when `status` is `done`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReplStatus",
+            "description": "Outcome category."
+          },
+          "ticket_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Approval ticket when `status` is `deferred`."
+          },
+          "tool_call_id": {
+            "description": "Tool call identifier recorded in the session's `tool.started`/`tool.ended` events.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_call_id",
+          "status"
+        ],
+        "title": "ReplResponse",
+        "type": "object"
+      },
+      "ReplStatus": {
+        "description": "Outcome category of a [`ReplRequest`].",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "The snippet ran; `result` holds `return_value`, `console`, optional `error`, `tab_id`.",
+            "type": "string"
+          },
+          {
+            "const": "deferred",
+            "description": "Human approval is pending in `ticket_id`; rerun with `approval_ticket` once approved.",
+            "type": "string"
+          },
+          {
+            "const": "denied",
+            "description": "Policy or validation refused the call; see `reason` and `hint`.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The daemon could not run the snippet.",
+            "type": "string"
+          }
+        ]
+      },
+      "ResolveTicketRequest": {
+        "additionalProperties": false,
+        "description": "Human response interpreted according to the ticket kind.\n\nSecret-input values are daemon-only and must never be persisted or sent to the model.",
+        "properties": {
+          "value": {
+            "description": "Confirmation, non-secret information, or transient daemon-only secret input."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "ResolveTicketRequest",
+        "type": "object"
+      },
+      "Retention": {
+        "description": "How long a memory is kept after its last write.",
+        "oneOf": [
+          {
+            "const": "permanent",
+            "description": "Never purged automatically.",
+            "type": "string"
+          },
+          {
+            "const": "days_90",
+            "description": "Purged 90 days after the last write.",
+            "type": "string"
+          },
+          {
+            "const": "days_30",
+            "description": "Purged 30 days after the last write.",
+            "type": "string"
+          }
+        ]
+      },
+      "Routine": {
+        "description": "A scheduled routine.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/RoutineAction",
+            "description": "Action performed on each run."
+          },
+          "catch_up": {
+            "description": "Run once for the latest occurrence missed while the daemon was down.",
+            "type": "boolean"
+          },
+          "created_at": {
+            "description": "Creation time.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Whether the scheduler fires this routine; automatic pauses clear it too.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Opaque routine identifier assigned by the daemon.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Human-readable name.",
+            "type": "string"
+          },
+          "next_run_at": {
+            "description": "Next scheduled occurrence; absent while the routine is not enabled.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paused_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutinePauseReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the daemon paused the routine on its own; cleared by resuming."
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/RoutineSchedule",
+            "description": "Firing schedule."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "schedule",
+          "action",
+          "enabled",
+          "catch_up",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "RoutineAction": {
+        "description": "What a routine does when it fires.",
+        "oneOf": [
+          {
+            "description": "Create a fresh session and submit the prompt as its first message.",
+            "properties": {
+              "mode": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PolicyMode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Permission mode override, or the daemon default when omitted."
+              },
+              "model": {
+                "description": "Model override, or the configured default when omitted.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "prompt": {
+                "description": "Prompt submitted to the new session.",
+                "type": "string"
+              },
+              "type": {
+                "const": "new_session",
+                "type": "string"
+              },
+              "workspace": {
+                "description": "Absolute workspace path, canonicalized by the daemon when the run starts.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "prompt"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Inject a follow-up (queue lane) message into an existing session.",
+            "properties": {
+              "prompt": {
+                "description": "Message text.",
+                "type": "string"
+              },
+              "session_id": {
+                "$ref": "#/components/schemas/SessionId",
+                "description": "Session that receives the message."
+              },
+              "type": {
+                "const": "heartbeat",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "session_id",
+              "prompt"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RoutineDraft": {
+        "description": "A repeated task found in the user's messages; never persisted until the user creates it.",
+        "properties": {
+          "first_seen": {
+            "description": "First occurrence.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "last_seen": {
+            "description": "Latest occurrence.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "description": "Suggested routine name.",
+            "type": "string"
+          },
+          "occurrences": {
+            "description": "Number of occurrences the guess is based on.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "Most recent wording of the repeated prompt.",
+            "type": "string"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/RoutineSchedule",
+            "description": "Guessed schedule: cron when the spacing fits one, otherwise an interval."
+          },
+          "session_ids": {
+            "description": "Sessions the occurrences came from.",
+            "items": {
+              "$ref": "#/components/schemas/SessionId"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "prompt",
+          "schedule",
+          "occurrences",
+          "session_ids",
+          "first_seen",
+          "last_seen"
+        ],
+        "type": "object"
+      },
+      "RoutineList": {
+        "description": "Routine listing response, sorted by creation time.",
+        "properties": {
+          "routines": {
+            "description": "All routines.",
+            "items": {
+              "$ref": "#/components/schemas/Routine"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "routines"
+        ],
+        "title": "RoutineList",
+        "type": "object"
+      },
+      "RoutinePauseReason": {
+        "description": "Why a routine is not firing although the user did not disable it.",
+        "oneOf": [
+          {
+            "const": "target_missing",
+            "description": "The heartbeat target session no longer exists.",
+            "type": "string"
+          }
+        ],
+        "title": "RoutinePauseReason"
+      },
+      "RoutineSchedule": {
+        "description": "When a routine fires.",
+        "oneOf": [
+          {
+            "description": "POSIX five-field cron expression (minute hour day-of-month month day-of-week).",
+            "properties": {
+              "expr": {
+                "description": "Cron expression; `@hourly`/`@daily`-style aliases are accepted.",
+                "type": "string"
+              },
+              "timezone": {
+                "description": "IANA time zone name; UTC when omitted.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "cron",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "expr"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Fixed period anchored at the moment the routine was created or last rescheduled.",
+            "properties": {
+              "secs": {
+                "description": "Seconds between runs; at least one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "const": "interval",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "secs"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RoutineSuggestionList": {
+        "description": "Repetition candidates response.",
+        "properties": {
+          "suggestions": {
+            "description": "Draft routines, most frequent first; none of them exists yet.",
+            "items": {
+              "$ref": "#/components/schemas/RoutineDraft"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions"
+        ],
+        "title": "RoutineSuggestionList",
+        "type": "object"
+      },
+      "RunList": {
+        "description": "Run history response, newest first.",
+        "properties": {
+          "runs": {
+            "description": "Runs, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/RunRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "RunList",
+        "type": "object"
+      },
+      "RunRecord": {
+        "description": "One entry of a routine's run history.",
+        "properties": {
+          "detail": {
+            "description": "Short sanitized explanation, e.g. why a run was skipped or failed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "description": "When the run reached a terminal status.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Monotonic run identifier, unique across routines.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Message that carried the prompt, used to decide when the run has settled."
+          },
+          "routine_id": {
+            "description": "Routine that produced the run.",
+            "type": "string"
+          },
+          "scheduled_at": {
+            "description": "Occurrence the run was scheduled for; the request time for manual runs.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session that received the prompt, when one did."
+          },
+          "started_at": {
+            "description": "When the prompt was dispatched; absent for runs that never started.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus",
+            "description": "Current disposition."
+          }
+        },
+        "required": [
+          "id",
+          "routine_id",
+          "scheduled_at",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RunStatus": {
+        "description": "Disposition of one scheduled or manual run.",
+        "oneOf": [
+          {
+            "const": "started",
+            "description": "The prompt was handed to a session that has not settled yet.",
+            "type": "string"
+          },
+          {
+            "const": "completed",
+            "description": "The session finished the run's message successfully.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The run could not start, or its message failed, was aborted or dropped.",
+            "type": "string"
+          },
+          {
+            "const": "skipped_overlap",
+            "description": "The previous run was still in progress, so this one was skipped.",
+            "type": "string"
+          },
+          {
+            "const": "paused_target_missing",
+            "description": "The heartbeat target no longer exists; the routine was paused.",
+            "type": "string"
+          },
+          {
+            "const": "missed",
+            "description": "The daemon was not running at the scheduled time and the run was not replayed.",
+            "type": "string"
+          }
+        ]
+      },
+      "Session": {
+        "description": "Session metadata and pending queue, in delivery order.",
+        "properties": {
+          "archived": {
+            "default": false,
+            "description": "Hidden from the default session list.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/SessionId",
+            "description": "Stable session identifier."
+          },
+          "incognito": {
+            "default": false,
+            "description": "Private session fixed at creation: its browsing is never written to memory.",
+            "type": "boolean"
+          },
+          "last_seq": {
+            "description": "Latest durable sequence, or zero before creation.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PolicyMode",
+            "description": "Permission ceiling selected when the session was created."
+          },
+          "model": {
+            "description": "Provider-qualified model.",
+            "type": "string"
+          },
+          "pinned": {
+            "default": false,
+            "description": "Listed before unpinned sessions.",
+            "type": "boolean"
+          },
+          "queue": {
+            "description": "Steering first, then follow-up messages.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus",
+            "description": "Rebuilt from turn and session events."
+          },
+          "title": {
+            "description": "User-visible conversation title.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Canonical absolute workspace path used as the Guard root and file-tool cwd.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "model",
+          "mode",
+          "status",
+          "last_seq",
+          "queue"
+        ],
+        "type": "object"
+      },
+      "SessionId": {
+        "description": "Identifies a session (one conversation / task).",
+        "type": "string"
+      },
+      "SessionList": {
+        "description": "Session listing response.",
+        "properties": {
+          "sessions": {
+            "description": "Sessions sorted by identifier for stable results.",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "SessionList",
+        "type": "object"
+      },
+      "SessionStatus": {
+        "description": "Durable session lifecycle.",
+        "oneOf": [
+          {
+            "const": "idle",
+            "description": "No running turn.",
+            "type": "string"
+          },
+          {
+            "const": "running",
+            "description": "A turn has started but not ended.",
+            "type": "string"
+          },
+          {
+            "const": "waiting_human",
+            "description": "Idle with at least one pending human-intervention ticket.",
+            "type": "string"
+          },
+          {
+            "const": "stopped",
+            "description": "Explicitly stopped.",
+            "type": "string"
+          }
+        ],
+        "title": "SessionStatus"
+      },
+      "Settings": {
+        "description": "Minimal daemon settings, with no credentials.",
+        "properties": {
+          "default_model": {
+            "description": "Provider-qualified default model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fallback_models": {
+            "description": "Configured fallback model selectors, in priority order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "policy_mode": {
+            "$ref": "#/components/schemas/PolicyMode",
+            "description": "Default permission ceiling for new sessions."
+          }
+        },
+        "required": [
+          "fallback_models",
+          "policy_mode"
+        ],
+        "title": "Settings",
+        "type": "object"
+      },
+      "SkillDetail": {
+        "description": "Response of `GET /v1/skills/{name}` and the write endpoints.",
+        "properties": {
+          "allowed_tools": {
+            "description": "`allowed-tools` frontmatter; informational, never grants anything.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "body": {
+            "description": "Markdown instructions after the frontmatter.",
+            "type": "string"
+          },
+          "compatibility": {
+            "description": "`compatibility` frontmatter.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "description": "What the skill does and when to use it.",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Whether the skill is offered to sessions.",
+            "type": "boolean"
+          },
+          "license": {
+            "description": "`license` frontmatter.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Skill name.",
+            "type": "string"
+          },
+          "resources": {
+            "description": "Bundled files, at most 200.",
+            "items": {
+              "$ref": "#/components/schemas/SkillResource"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SkillSource",
+            "description": "Where the skill lives."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "source",
+          "enabled",
+          "allowed_tools",
+          "body",
+          "resources"
+        ],
+        "title": "SkillDetail",
+        "type": "object"
+      },
+      "SkillFile": {
+        "additionalProperties": false,
+        "description": "A text file bundled into a new skill.",
+        "properties": {
+          "content": {
+            "description": "UTF-8 text of at most 24 KiB.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Relative path inside the skill: no `..`, no hidden components, not `SKILL.md`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "SkillList": {
+        "description": "Response of `GET /v1/skills`.",
+        "properties": {
+          "problems": {
+            "description": "Rejected directories, so a settings screen can show them without failing.",
+            "items": {
+              "$ref": "#/components/schemas/SkillProblem"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "description": "Valid skills sorted by name (or by match quality when `q` is given).",
+            "items": {
+              "$ref": "#/components/schemas/SkillSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "skills",
+          "problems"
+        ],
+        "title": "SkillList",
+        "type": "object"
+      },
+      "SkillProblem": {
+        "description": "A skill directory that failed validation. The rest of the list is unaffected.",
+        "properties": {
+          "error": {
+            "description": "Why it was rejected; never contains file content.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Directory name.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SkillSource",
+            "description": "Where the directory is."
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "error"
+        ],
+        "type": "object"
+      },
+      "SkillResource": {
+        "description": "A bundled file next to `SKILL.md`.",
+        "properties": {
+          "path": {
+            "description": "Path relative to the skill directory.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Size in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "size"
+        ],
+        "type": "object"
+      },
+      "SkillSource": {
+        "description": "Where a skill is stored.",
+        "oneOf": [
+          {
+            "const": "user",
+            "description": "The user's library; editable.",
+            "type": "string"
+          },
+          {
+            "const": "project",
+            "description": "`<workspace>/.openside/skills`; read-only.",
+            "type": "string"
+          }
+        ]
+      },
+      "SkillSummary": {
+        "description": "Name and description of one skill, as shown in lists and the `/` mention picker.",
+        "properties": {
+          "description": {
+            "description": "What the skill does and when to use it.",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Disabled skills are neither offered to the model nor loadable by the `skill` tool.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Lowercase letters, digits and hyphens; also the directory name and the `/name` mention.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SkillSource",
+            "description": "Where the skill lives."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "source",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "SteerSubagentRequest": {
+        "additionalProperties": false,
+        "description": "Steering text delivered at the child's next model-request boundary.",
+        "properties": {
+          "text": {
+            "description": "Steering text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SteerSubagentRequest",
+        "type": "object"
+      },
+      "Subagent": {
+        "description": "One child agent started by the parent session's `delegate` tool.",
+        "properties": {
+          "ended_at": {
+            "description": "When the child reached a terminal state.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Daemon-assigned subagent identifier, also used as `ticket.origin.subagent_id`.",
+            "type": "string"
+          },
+          "last_progress": {
+            "description": "Latest `subagent.progress` payload."
+          },
+          "model": {
+            "description": "Model selector the child runs on.",
+            "type": "string"
+          },
+          "parent_tool_call_id": {
+            "description": "The parent's `delegate` tool call, which stays pending until the child ends.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Sanitized detail for failed or cancelled children.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "description": "When the daemon admitted the child.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SubagentStatus",
+            "description": "Current state."
+          },
+          "task": {
+            "description": "Delegated task, truncated for display.",
+            "type": "string"
+          },
+          "tools": {
+            "description": "Tools the child may call; a subset of the parent's tools.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "parent_tool_call_id",
+          "task",
+          "model",
+          "tools",
+          "status",
+          "started_at"
+        ],
+        "type": "object"
+      },
+      "SubagentList": {
+        "description": "Subagent listing response, in start order.",
+        "properties": {
+          "subagents": {
+            "description": "Every subagent the session started.",
+            "items": {
+              "$ref": "#/components/schemas/Subagent"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "subagents"
+        ],
+        "title": "SubagentList",
+        "type": "object"
+      },
+      "SubagentStatus": {
+        "description": "Subagent state as projected from the parent session's event log.",
+        "oneOf": [
+          {
+            "const": "running",
+            "description": "The child is running a model turn or tool.",
+            "type": "string"
+          },
+          {
+            "const": "waiting_human",
+            "description": "The child waits on a ticket listed under the parent session.",
+            "type": "string"
+          },
+          {
+            "const": "completed",
+            "description": "The child finished; its output was returned to the parent's `delegate` call.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The child failed or was interrupted; the parent received a failed result.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "The child was cancelled; the parent received a cancelled result.",
+            "type": "string"
+          }
+        ],
+        "title": "SubagentStatus"
+      },
+      "SubmitMessageRequest": {
+        "additionalProperties": false,
+        "description": "Message submission with an optional client-generated idempotency key.",
+        "properties": {
+          "message_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reusing this id never changes or redelivers the existing message."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/MessageMode",
+            "description": "Requested delivery timing."
+          },
+          "text": {
+            "description": "User-authored text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "mode"
+        ],
+        "title": "SubmitMessageRequest",
+        "type": "object"
+      },
+      "Ticket": {
+        "description": "Durable human-intervention ticket correlated with the same deferred tool call.",
+        "properties": {
+          "created_at": {
+            "description": "Creation time in RFC 3339 UTC.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "deferral": {
+            "$ref": "#/components/schemas/TicketDeferral",
+            "description": "Approval or external-result resumption semantics."
+          },
+          "expires_at": {
+            "description": "Deadline in RFC 3339 UTC.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/TicketId",
+            "description": "Stable ticket identifier."
+          },
+          "instructions": {
+            "description": "Optional redacted instructions for completing the action.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TicketKind",
+            "description": "Requested human action."
+          },
+          "options": {
+            "description": "Allowed non-secret responses; empty allows free-form information input.",
+            "items": {
+              "$ref": "#/components/schemas/TicketOption"
+            },
+            "type": "array"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/TicketOrigin",
+            "description": "Originating agent."
+          },
+          "resolution": {
+            "description": "Redacted resolution; never a secret-input value."
+          },
+          "resume_when": {
+            "description": "Optional condition for detecting completion."
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/SessionId",
+            "description": "Parent session, including for subagent requests."
+          },
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus",
+            "description": "Pending or terminal state."
+          },
+          "summary": {
+            "description": "Redacted human-facing reason for asking.",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Browser destination, when applicable."
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TicketTool"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Redacted invocation, required for approval deferrals."
+          },
+          "tool_call_id": {
+            "description": "Stable model tool-call identifier preserved during resumption.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "tool_call_id",
+          "deferral",
+          "kind",
+          "summary",
+          "options",
+          "origin",
+          "created_at",
+          "expires_at",
+          "status"
+        ],
+        "type": "object"
+      },
+      "TicketDeferral": {
+        "description": "Resumption semantics for the suspended tool call.",
+        "oneOf": [
+          {
+            "const": "approval",
+            "description": "Approval permits the original tool call to execute again.",
+            "type": "string"
+          },
+          {
+            "const": "external",
+            "description": "An external action supplies the original tool call's result.",
+            "type": "string"
+          }
+        ],
+        "title": "TicketDeferral"
+      },
+      "TicketId": {
+        "description": "Identifies a durable human-intervention ticket.",
+        "type": "string"
+      },
+      "TicketKind": {
+        "description": "Human action required to resolve a suspended tool call.",
+        "oneOf": [
+          {
+            "const": "confirm",
+            "description": "Authorize or reject a sensitive operation.",
+            "type": "string"
+          },
+          {
+            "const": "secret_input",
+            "description": "Provide a secret directly to the daemon, never to the model or event log.",
+            "type": "string"
+          },
+          {
+            "const": "device_approval",
+            "description": "Complete approval on another device.",
+            "type": "string"
+          },
+          {
+            "const": "info",
+            "description": "Answer a non-secret question.",
+            "type": "string"
+          },
+          {
+            "const": "takeover",
+            "description": "Perform an action directly in the browser.",
+            "type": "string"
+          }
+        ],
+        "title": "TicketKind"
+      },
+      "TicketList": {
+        "description": "Ticket list, optionally filtered by status.",
+        "properties": {
+          "tickets": {
+            "description": "Matching durable tickets.",
+            "items": {
+              "$ref": "#/components/schemas/Ticket"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tickets"
+        ],
+        "title": "TicketList",
+        "type": "object"
+      },
+      "TicketOption": {
+        "description": "One selectable non-secret response.",
+        "properties": {
+          "label": {
+            "description": "Human-facing label.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Stable machine-facing answer value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "TicketOption",
+        "type": "object"
+      },
+      "TicketOrigin": {
+        "description": "Identity of the agent that requested human intervention.",
+        "properties": {
+          "subagent_id": {
+            "description": "Absent for the parent agent, otherwise the originating subagent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "TicketOrigin",
+        "type": "object"
+      },
+      "TicketStatus": {
+        "description": "Durable ticket lifecycle; only pending tickets accept a terminal transition.",
+        "oneOf": [
+          {
+            "const": "pending",
+            "description": "Awaiting human intervention.",
+            "type": "string"
+          },
+          {
+            "const": "resolved",
+            "description": "The requested intervention completed.",
+            "type": "string"
+          },
+          {
+            "const": "rejected",
+            "description": "The user or daemon rejected the intervention.",
+            "type": "string"
+          },
+          {
+            "const": "expired",
+            "description": "The deadline passed.",
+            "type": "string"
+          },
+          {
+            "const": "needs_desktop",
+            "description": "The intervention requires local desktop access.",
+            "type": "string"
+          }
+        ],
+        "title": "TicketStatus"
+      },
+      "TicketTarget": {
+        "description": "Browser destination for human intervention and origin validation.",
+        "properties": {
+          "field_ref": {
+            "description": "Snapshot field reference receiving daemon-only input.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "Expected page origin, verified before secret input.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tab_id": {
+            "description": "Browser target identifier.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "TicketTarget",
+        "type": "object"
+      },
+      "TicketTool": {
+        "description": "Redacted invocation displayed for an approval deferral.",
+        "properties": {
+          "args": {
+            "description": "Invocation arguments with secrets already removed."
+          },
+          "name": {
+            "description": "Registered tool name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "args"
+        ],
+        "title": "TicketTool",
+        "type": "object"
+      },
+      "UpdateMemoryRequest": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/memory/{id}` body; absent fields are unchanged.",
+        "properties": {
+          "content": {
+            "description": "Replacement text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Retention"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Replacement retention; the purge deadline restarts from this write."
+          },
+          "tags": {
+            "description": "Replacement labels.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "UpdateMemoryRequest",
+        "type": "object"
+      },
+      "UpdateRoutineRequest": {
+        "additionalProperties": false,
+        "description": "Partial routine update; omitted fields are unchanged.",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutineAction"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New action."
+          },
+          "catch_up": {
+            "description": "New catch-up policy.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Pause (`false`) or resume (`true`); resuming clears `paused_reason`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "New name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutineSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New schedule; the next run is recomputed from now."
+          }
+        },
+        "title": "UpdateRoutineRequest",
+        "type": "object"
+      },
+      "UpdateSessionRequest": {
+        "additionalProperties": false,
+        "description": "Partial session metadata update; omitted fields keep their current value.\n\nApplied as one durable `session.updated` event, so list state replays from the log.",
+        "properties": {
+          "archived": {
+            "description": "Archived sessions are hidden from the default session list.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "pinned": {
+            "description": "Pinned sessions are listed before unpinned ones.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "New non-blank title, at most [`MAX_SESSION_TITLE_CHARS`] characters after trimming.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "UpdateSessionRequest",
+        "type": "object"
+      },
+      "UpdateSkillRequest": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/skills/{name}` body; absent fields are unchanged.",
+        "properties": {
+          "body": {
+            "description": "Replacement Markdown instructions.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "description": "Replacement description.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Switch the skill on or off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "UpdateSkillRequest",
+        "type": "object"
+      },
+      "UpdateVaultItemRequest": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/vault/items/{id}`.",
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/VaultPolicyOverride",
+            "description": "New override."
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "title": "UpdateVaultItemRequest",
+        "type": "object"
+      },
+      "VaultAuditList": {
+        "description": "`GET /v1/vault/audit`, oldest first.",
+        "properties": {
+          "records": {
+            "description": "Matching records.",
+            "items": {
+              "$ref": "#/components/schemas/VaultAuditRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "records"
+        ],
+        "title": "VaultAuditList",
+        "type": "object"
+      },
+      "VaultAuditRecord": {
+        "description": "One vault audit record. Never contains a secret value.",
+        "properties": {
+          "at": {
+            "description": "When the decision was recorded (second precision).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "detail": {
+            "description": "Denial reason (e.g. `origin_mismatch`, `policy_never`) or new policy.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item": {
+            "description": "Item id, `unknown-site`, or `*` for listings.",
+            "type": "string"
+          },
+          "origin": {
+            "description": "Normalized page origin, `invalid-origin`, or `-` when not page-bound.",
+            "type": "string"
+          },
+          "result": {
+            "description": "`allowed`, `denied`, `filled`, `fill-failed`, `completed`, `failed` or `updated`.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Agent session (task) id for tool calls.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool_call_id": {
+            "description": "Model tool-call id for tool calls.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "what": {
+            "description": "`fill`, `otp`, `passkey_register`, `passkey_login`, `get` or `policy_update`.",
+            "type": "string"
+          },
+          "who": {
+            "description": "Caller label (`opensided` for tools, `api` for API calls).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "who",
+          "what",
+          "item",
+          "origin",
+          "result"
+        ],
+        "type": "object"
+      },
+      "VaultItem": {
+        "description": "Value-free metadata of one vault item. Usernames, passwords, TOTP seeds and passkey\nprivate keys are never part of the API.",
+        "properties": {
+          "effective_policy": {
+            "$ref": "#/components/schemas/VaultPolicy",
+            "description": "Policy actually enforced."
+          },
+          "has_totp": {
+            "description": "Whether a TOTP seed is stored.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Item id used by `vault_*` tools (`site`).",
+            "type": "string"
+          },
+          "origins": {
+            "description": "Allowed origins, normalized `scheme://[*.]host:port`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "passkey_rp_ids": {
+            "description": "RP IDs of stored passkeys.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VaultPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-item override; null inherits `default_policy`."
+          }
+        },
+        "required": [
+          "id",
+          "origins",
+          "effective_policy",
+          "has_totp",
+          "passkey_rp_ids"
+        ],
+        "type": "object"
+      },
+      "VaultItemList": {
+        "description": "`GET /v1/vault/items`.",
+        "properties": {
+          "available": {
+            "description": "Whether the daemon has an unlocked vault; false lists no items.",
+            "type": "boolean"
+          },
+          "default_policy": {
+            "$ref": "#/components/schemas/VaultPolicy",
+            "description": "Policy for items without an override (`vault.default_policy`)."
+          },
+          "items": {
+            "description": "Items, in vault order.",
+            "items": {
+              "$ref": "#/components/schemas/VaultItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "available",
+          "default_policy",
+          "items"
+        ],
+        "title": "VaultItemList",
+        "type": "object"
+      },
+      "VaultPolicy": {
+        "description": "Vault access policy: when an item's secrets may be released to a fill/OTP/passkey tool.",
+        "oneOf": [
+          {
+            "const": "always",
+            "description": "Whenever the vault file is decrypted.",
+            "type": "string"
+          },
+          {
+            "const": "while_unlocked",
+            "description": "Only while the platform lock (keyring/passphrase session) is unlocked.",
+            "type": "string"
+          },
+          {
+            "const": "never",
+            "description": "Never.",
+            "type": "string"
+          }
+        ]
+      },
+      "VaultPolicyOverride": {
+        "description": "Per-item policy change; `default` removes the override so the vault default applies.",
+        "oneOf": [
+          {
+            "const": "always",
+            "description": "Override to `always`.",
+            "type": "string"
+          },
+          {
+            "const": "while_unlocked",
+            "description": "Override to `while_unlocked`.",
+            "type": "string"
+          },
+          {
+            "const": "never",
+            "description": "Override to `never`.",
+            "type": "string"
+          },
+          {
+            "const": "default",
+            "description": "Inherit the vault default.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "securitySchemes": {
+      "capabilityToken": {
+        "description": "Device token from POST /v1/devices/pair or `openside token create --scope <scope>`. Each operation's x-required-capability names the scope it needs.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "openside API",
+    "version": "v1"
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/devices/pair": {
+      "post": {
+        "description": "Unix-socket callers are implicitly admin (local user), enabling first-device pairing. Grant the narrowest scopes: read, steer, approve, human_step, browse, vault_use, otp_ingest or admin. admin grants every scope and steer also grants browse; no other scope implies another.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairDeviceResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/devices/{id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/memory": {
+      "get": {
+        "description": "Hybrid search: FTS5 bm25 and local-embedding cosine ranks fused by reciprocal rank (k=60); lexical-only without a local model. An empty q lists recent memories.",
+        "parameters": [
+          {
+            "description": "Search text; omit to list the most recently updated memories.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only memories of this kind.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MemoryKind"
+            }
+          },
+          {
+            "description": "Maximum hits; defaults to 20, capped at 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySearchResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "post": {
+        "description": "Create a note. Content, tags or values matching secret patterns (API keys, tokens, private keys, JWTs, password= pairs, Luhn-valid card numbers, unlocked vault values) are rejected with 400 secret_detected and never stored.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Memory"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/memory/health": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryHealth"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/memory/{id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Memory"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Memory"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Memory"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/memory/{id}/history": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryHistory"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/policy": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicySettings"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "put": {
+        "description": "Replace the live policy. Invalid globs or a sensitive allow rule return 400 invalid_policy and change nothing. Applies to the next tool call of every session and is persisted in <data_dir>/policy.json, which overrides [policy] in config.toml.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicySettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicySettings"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/policy/test": {
+      "post": {
+        "description": "Evaluate one capability/target against the live policy without running anything.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyDecision"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/routines": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutineList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoutineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Routine"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/routines/suggestions": {
+      "get": {
+        "description": "Draft routines inferred from repeated user messages; nothing is created.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutineSuggestionList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/routines/{id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Routine"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Routine"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRoutineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Routine"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/routines/{id}/run": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRecord"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/routines/{id}/runs": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum runs to return, newest first; defaults to 100, capped at 500.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/sessions": {
+      "get": {
+        "parameters": [
+          {
+            "description": "Case-insensitive substring of the title or first message.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "List archived (true) or unarchived (false, default) sessions; pinned sessions come first.",
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}": {
+      "delete": {
+        "description": "Stop the session, record a durable session.deleted tombstone and hide it; later requests for the id return 404.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "patch": {
+        "description": "Update title/pinned/archived as a durable session.updated event.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}/events": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "description": "Last seen per-session sequence; only later events are returned.",
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Set false to omit subagent.* events from the stream.",
+            "in": "query",
+            "name": "subagents",
+            "required": false,
+            "schema": {
+              "default": true,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "x-sse-event-schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/sessions/{id}/messages": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}/queue/{mid}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "mid",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/MessageId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      },
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "mid",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/MessageId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}/queue/{mid}/promote": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "mid",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/MessageId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}/repl": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-capability-also-granted-by": [
+          "steer"
+        ],
+        "x-required-capability": "browse"
+      }
+    },
+    "/v1/sessions/{id}/stop": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}/subagents": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubagentList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/sessions/{id}/subagents/{sid}/cancel": {
+      "post": {
+        "description": "Cancel a running or waiting child; its pending tickets are rejected and the parent's delegate call returns a cancelled result. Cancelling a finished child returns 409.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "description": "Subagent identifier from subagent.started.",
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subagent"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/sessions/{id}/subagents/{sid}/steer": {
+      "post": {
+        "description": "Queue steering text for the child's next model request; a waiting child receives it when it resumes.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "description": "Subagent identifier from subagent.started.",
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SteerSubagentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subagent"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
+    "/v1/settings": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/skills": {
+      "get": {
+        "description": "Skills visible to a session. With q this is the data source of the `/` mention picker: name-prefix matches first, then name, then description matches. Invalid skill directories are listed under problems instead of failing the request.",
+        "parameters": [
+          {
+            "description": "Case-insensitive text matched against name and description.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Session whose workspace supplies project skills; without it only the user library is listed.",
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "description": "Only enabled (true) or only disabled (false) skills.",
+            "in": "query",
+            "name": "enabled",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "post": {
+        "description": "Create a user skill from a name, description, Markdown body and optional text resources; the content is validated like any SKILL.md. 409 `exists` if the name is taken.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSkillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDetail"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/skills/{name}": {
+      "delete": {
+        "parameters": [
+          {
+            "description": "Skill name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Session whose workspace supplies project skills.",
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDetail"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      },
+      "get": {
+        "parameters": [
+          {
+            "description": "Skill name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Session whose workspace supplies project skills.",
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDetail"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      },
+      "patch": {
+        "description": "Edit the description or body, or switch the skill on or off. Project skills are read-only (403 `read_only`).",
+        "parameters": [
+          {
+            "description": "Skill name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Session whose workspace supplies project skills.",
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSkillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDetail"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/tickets": {
+      "get": {
+        "parameters": [
+          {
+            "description": "Return only tickets with the selected lifecycle status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TicketStatus"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/tickets/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TicketId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ticket"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "read"
+      }
+    },
+    "/v1/tickets/{id}/done": {
+      "post": {
+        "description": "Complete a device_approval or takeover ticket.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TicketId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ticket"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "human_step"
+      }
+    },
+    "/v1/tickets/{id}/reject": {
+      "post": {
+        "description": "The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TicketId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ticket"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-capability-by-ticket-kind": {
+          "confirm": "approve",
+          "device_approval": "human_step",
+          "info": "approve",
+          "secret_input": "human_step",
+          "takeover": "human_step"
+        },
+        "x-required-capability": "approve"
+      }
+    },
+    "/v1/tickets/{id}/resolve": {
+      "post": {
+        "description": "The daemon checks the ticket kind: confirm/info require approve; secret_input/device_approval/takeover require human_step.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TicketId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ticket"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-capability-by-ticket-kind": {
+          "confirm": "approve",
+          "device_approval": "human_step",
+          "info": "approve",
+          "secret_input": "human_step",
+          "takeover": "human_step"
+        },
+        "x-required-capability": "approve"
+      }
+    },
+    "/v1/tickets/{id}/takeover": {
+      "get": {
+        "description": "v1 requires local desktop access; remote frame streaming is not available.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TicketId"
+            }
+          }
+        ],
+        "responses": {
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "needs_desktop",
+                  "message": "Complete this step on the desktop."
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Desktop access required"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "human_step"
+      }
+    },
+    "/v1/vault/audit": {
+      "get": {
+        "description": "Vault audit records (who, what, item, origin, session/tool-call id, time, result), oldest first; never values.",
+        "parameters": [
+          {
+            "description": "Only records at or after this RFC 3339 time.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only records for this item id.",
+            "in": "query",
+            "name": "item",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only records for this session (task) id.",
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "description": "Newest N matches; defaults to 200, capped at 1000.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultAuditList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/vault/items": {
+      "get": {
+        "description": "Value-free item metadata (ids, allowed origins, policy, TOTP/passkey presence). Usernames, passwords, seeds and private keys are never returned.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultItemList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/vault/items/{id}": {
+      "patch": {
+        "description": "Set or clear (`default`) the item's access-policy override; the change is saved encrypted and audited. 404 unknown_item, 409 vault_unavailable.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVaultItemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultItem"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    }
+  }
+}

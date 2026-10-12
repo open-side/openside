@@ -1,0 +1,4 @@
+# Portability gate allowlist (tools/check-portability.sh). Format: <path>:<line|*>  # reason
+# Entries describe documented, optional omp-user defaults or quote the gate itself.
+agent/src/openside_agent/providers/broker.py:31  # optional omp auth broker default URL (used only when the broker source is configured/token present)
+tools/check-portability.sh:*  # defines the gate regex

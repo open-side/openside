@@ -1,0 +1,12 @@
+[
+  "ask_user",
+  "browser_act",
+  "browser_close_tab",
+  "browser_navigate",
+  "browser_open_tab",
+  "browser_repl",
+  "browser_snapshot",
+  "browser_tabs",
+  "request_human_step",
+  "request_otp"
+]

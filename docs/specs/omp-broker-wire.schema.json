@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openside.dev/specs/omp-broker-wire.schema.json",
+  "$comment": "Consumed-field contract from can1357/oh-my-pi commit eec114a9226da698ebc015fd8996a8ca3bc4625c: docs/auth-broker-gateway.md, packages/ai/src/auth-broker/types.ts and wire-schemas.ts, packages/ai/src/usage.ts. Only the snapshot, usage and scoped block messages consumed by openside are defined. Unconsumed/additive broker fields remain allowed. Validation failures must not display response values, credentials or metadata.",
+  "oneOf": [
+    {"$ref": "#/$defs/snapshot"},
+    {"$ref": "#/$defs/usage"},
+    {"$ref": "#/$defs/block_request"},
+    {"$ref": "#/$defs/block_response"}
+  ],
+  "$defs": {
+    "oauth": {
+      "type": "object",
+      "required": ["type", "access", "expires"],
+      "properties": {
+        "type": {"const": "oauth"},
+        "access": {"type": "string", "minLength": 1},
+        "expires": {"type": "number"},
+        "accountId": {"type": "string"},
+        "email": {"type": "string"},
+        "orgId": {"type": "string"}
+      }
+    },
+    "api_key": {
+      "type": "object",
+      "required": ["type", "key"],
+      "properties": {"type": {"const": "api_key"}, "key": {"type": "string", "minLength": 1}}
+    },
+    "block_request": {
+      "type": "object",
+      "required": ["providerKey", "blockScope", "blockedUntilMs"],
+      "properties": {
+        "providerKey": {"type": "string", "minLength": 1},
+        "blockScope": {"type": "string"},
+        "blockedUntilMs": {"type": "number"},
+        "updatedAtMs": {"type": "number"}
+      }
+    },
+    "block_response": {
+      "type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}
+    },
+    "entry": {
+      "type": "object",
+      "required": ["id", "provider", "credential"],
+      "properties": {
+        "id": {"type": "integer"},
+        "provider": {"type": "string", "minLength": 1},
+        "credential": {"oneOf": [{"$ref": "#/$defs/oauth"}, {"$ref": "#/$defs/api_key"}]},
+        "blocks": {"type": "array", "items": {"$ref": "#/$defs/block_request"}}
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["generation", "serverNowMs", "credentials"],
+      "properties": {
+        "generation": {"type": "integer"},
+        "serverNowMs": {"type": "number"},
+        "credentials": {"type": "array", "items": {"$ref": "#/$defs/entry"}}
+      }
+    },
+    "amount": {
+      "type": "object",
+      "properties": {
+        "used": {"type": "number"}, "limit": {"type": "number"},
+        "remaining": {"type": "number"}, "usedFraction": {"type": "number"},
+        "remainingFraction": {"type": "number"},
+        "unit": {"enum": ["percent", "tokens", "requests", "credits", "usd", "minutes", "bytes", "unknown"]}
+      }
+    },
+    "scope": {
+      "type": "object",
+      "properties": {"accountId": {"type": "string"}, "orgId": {"type": "string"}}
+    },
+    "window": {
+      "type": "object",
+      "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "resetsAt": {"type": "number"}}
+    },
+    "usage_limit": {
+      "type": "object",
+      "required": ["scope", "amount"],
+      "properties": {
+        "scope": {"$ref": "#/$defs/scope"},
+        "amount": {"$ref": "#/$defs/amount"},
+        "window": {"$ref": "#/$defs/window"}
+      }
+    },
+    "usage_report": {
+      "type": "object",
+      "required": ["provider", "limits"],
+      "properties": {
+        "provider": {"type": "string"},
+        "limits": {"type": "array", "items": {"$ref": "#/$defs/usage_limit"}},
+        "metadata": {"type": "object", "properties": {"credentialId": {"type": "integer"}, "accountId": {"type": "string"}, "email": {"type": "string"}, "orgId": {"type": "string"}}}
+      }
+    },
+    "usage": {
+      "type": "object", "required": ["reports"],
+      "properties": {"reports": {"type": "array", "items": {"$ref": "#/$defs/usage_report"}}}
+    }
+  }
+}
