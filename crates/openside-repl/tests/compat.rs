@@ -1,7 +1,7 @@
 //! Playwright compatibility suite for the openside REPL against a local mock site.
 //!
 //! The per-case table and pass rate published in `docs/specs/browser-repl.md` must equal what
-//! this suite computes, and the controller must never issue a page-script CDP command.
+//! this suite computes, and the controller must never write the DOM bypassing input events.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,16 +14,8 @@ use serde_json::{json, Value};
 use tokio::{sync::Mutex, task::JoinHandle};
 
 const OWNER: &str = "repl-compat";
-const SCRIPT_METHODS: &[&str] = &[
-    "Runtime.evaluate",
-    "Runtime.callFunctionOn",
-    "Runtime.compileScript",
-    "Runtime.runScript",
-    "Page.addScriptToEvaluateOnNewDocument",
-    "Page.createIsolatedWorld",
-    "DOM.setAttributeValue",
-    "DOM.setOuterHTML",
-];
+// Page mutations that bypass input events; the locator operations never need them.
+const DOM_WRITE_METHODS: &[&str] = &["DOM.setAttributeValue", "DOM.setOuterHTML"];
 const DOC: &str = include_str!("../../../docs/specs/browser-repl.md");
 static SERIAL: Mutex<()> = Mutex::const_new(());
 
@@ -210,6 +202,9 @@ const CASES: &[Case] = &[
     Case { id: "page-shorthands", api: "page.fill · page.inputValue · page.click", code: "await page.goto(BASE + '/form'); await page.fill('#user', 'short'); await page.click('text=Subscribe'); [await page.inputValue('#user'), await page.isChecked('input[name=subscribe]')]", expect: Expect::Value(r#"["short",true]"#) },
     Case { id: "role-regex-name", api: "getByRole({name: RegExp})", code: "await page.getByRole('button', { name: /sign/i }).textContent()", expect: Expect::Value(r#""Sign up""#) },
     Case { id: "locator-all", api: "locator.all · first", code: "const radios = await page.getByRole('radio').all(); [radios.length, await page.getByRole('radio').first().getAttribute('value')]", expect: Expect::Value(r#"[2,"free"]"#) },
+    Case { id: "evaluate-arg", api: "page.evaluate(fn, arg)", code: "await page.evaluate(([a, b]) => document.title + ' ' + (a + b), [1, 2])", expect: Expect::Value(r#""Form page 3""#) },
+    Case { id: "eval-selectors", api: "page.$eval · page.$$eval", code: "[await page.$eval('#user', (e) => e.value), await page.$$eval('option', (options) => options.map((o) => o.value))]", expect: Expect::Value(r#"["short",["kr","jp","us"]]"#) },
+    Case { id: "locator-evaluate", api: "locator.evaluate · evaluateAll", code: "[await page.getByLabel('Locked').evaluate((e) => e.readOnly), await page.getByRole('radio').evaluateAll((radios) => radios.map((r) => r.value))]", expect: Expect::Value(r#"[true,["free","pro"]]"#) },
 ];
 
 fn expected(case: &Case, base: &str) -> Result<Value, String> {
@@ -259,7 +254,7 @@ fn published_table() -> &'static str {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn playwright_compat_suite_matches_published_table_without_page_scripts() {
+async fn playwright_compat_suite_matches_published_table() {
     let _serial = SERIAL.lock().await;
     let Some(fixture) = Fixture::start().await else {
         return;
@@ -293,10 +288,10 @@ async fn playwright_compat_suite_matches_published_table_without_page_scripts() 
     let computed = table(&results);
     eprintln!("computed compat table:\n{computed}");
     assert!(!log.is_empty(), "protocol recording captured the suite");
-    for forbidden in SCRIPT_METHODS {
+    for forbidden in DOM_WRITE_METHODS {
         assert!(
             !methods.contains(forbidden),
-            "the REPL issued page-script command {forbidden}"
+            "the REPL issued DOM write command {forbidden}"
         );
     }
     assert_eq!(
@@ -329,20 +324,17 @@ async fn sandbox_limits_errors_and_policy_stops() {
     assert_eq!(console.return_value, json!(7));
     assert_eq!(console.console, vec!["hello {\"a\":1} [2]", "[error] bad"]);
 
-    let unsupported = fixture
-        .run("await page.evaluate(() => document.title)")
-        .await;
+    let unsupported = fixture.run("await page.exposeFunction('f', () => 1)").await;
     assert!(
         unsupported
             .error
             .as_deref()
-            .is_some_and(|error| error.starts_with("NotSupported: page.evaluate is not supported by the openside REPL (page scripts are never injected)")),
+            .is_some_and(|error| error.starts_with("NotSupported: page.exposeFunction is not supported by the openside REPL (page code cannot call back into the REPL)")),
         "{unsupported:?}"
     );
     for code in [
-        "page.locator('xpath=//h1')",
-        "await page.locator('h1').evaluate(e => e.id)",
-        "page.mouse.click(1, 1)",
+        "await page.pdf()",
+        "page.touchscreen.tap(1, 1)",
         "await page.route('**', r => r.abort())",
     ] {
         let output = fixture.run(code).await;
@@ -481,7 +473,7 @@ async fn sandbox_limits_errors_and_policy_stops() {
     let log = fixture.browser.take_protocol_log();
     for (method, _) in &log {
         assert!(
-            !SCRIPT_METHODS.contains(&method.as_str()),
+            !DOM_WRITE_METHODS.contains(&method.as_str()),
             "issued {method}"
         );
     }

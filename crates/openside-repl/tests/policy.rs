@@ -53,6 +53,8 @@ impl Guard for SiteGuard {
                 }
             }
             Gate::Page { .. } => Verdict::Allow,
+            Gate::Script { .. } => Verdict::Allow,
+            Gate::Upload { .. } | Gate::Download { .. } => Verdict::Deny("file transfer".into()),
         }
     }
 }
@@ -460,23 +462,16 @@ async fn input_reaches_only_the_authorized_target() {
         json!("3")
     );
 
-    // Keys aimed at another frame are refused, not sent unchecked.
+    // Keys aimed at another frame reach the element focused there, authorized in that frame.
     fixture
         .value("await page.goto(BASE + '/frame'); await page.waitForTimeout(300)")
         .await;
-    let output = fixture.run("await page.keyboard.type('x')").await;
-    assert!(
-        output
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("top frame")),
-        "{output:?}"
-    );
+    fixture.value("await page.keyboard.type('x')").await;
     assert_eq!(
         fixture
-            .value("await page.locator('#top').inputValue()")
+            .value("[await page.locator('#top').inputValue(), await page.frameLocator('iframe').locator('#inner').inputValue()]")
             .await,
-        json!("")
+        json!(["", "x"])
     );
     fixture.stop().await;
 }

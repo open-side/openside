@@ -5,8 +5,9 @@
 //! no module loader, `require`, process, filesystem, network, or Vault API. The Playwright
 //! prelude is JavaScript inside QuickJS whose operations are Rust host functions: locators are
 //! resolved from CDP DOM and accessibility trees in Rust, and actions are CDP Input/DOM/Page
-//! commands from [`openside_browser::PAGE_COMMANDS`]. Nothing is injected into or evaluated in
-//! the page. `page.locator('aria-ref=eN')` resolves the same node as snapshot reference `eN`.
+//! commands from [`openside_browser::PAGE_COMMANDS`]. Page script (`page.evaluate`, handles,
+//! init scripts, raw `page.cdp`) is allowed and gated as [`Gate::Script`]; see ADR-022.
+//! `page.locator('aria-ref=eN')` resolves the same node as snapshot reference `eN`.
 //!
 //! Every page operation first authorizes the current top-frame document with the caller's
 //! [`Guard`] and re-checks that the document did not change before returning page data.
@@ -29,6 +30,7 @@ mod driver;
 mod keys;
 
 use std::{
+    future::Future,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -46,6 +48,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use driver::Driver;
+pub use driver::{InternalPrimitive, INTERNAL_PRIMITIVES, SETUP_SCREENING};
 
 const PRELUDE: &str = include_str!("prelude.js");
 
@@ -96,13 +99,55 @@ pub enum Gate<'a> {
         /// Absolute destination URL.
         url: &'a str,
     },
-    /// Reading or acting on the current document.
+    /// Reading or acting on the current document, or on a frame inside it.
     Page {
         /// Current top-frame security origin (`null` when opaque).
         origin: &'a str,
+        /// The frame the operation reads or acts in, when it is not the top frame. A guard must
+        /// deny the operation if either `origin` or `frame.origin` is denied, and judges the
+        /// interaction `target` against `frame.origin`.
+        frame: Option<Frame<'a>>,
         /// Interaction target; `None` for reads.
         target: Option<Target<'a>>,
     },
+    /// Running page script or a raw CDP method on the current document or one of its frames:
+    /// `page.evaluate`, `locator.evaluate`, `page.addInitScript`, `page.cdp`.
+    Script {
+        /// Current top-frame security origin (`null` when opaque).
+        origin: &'a str,
+        /// The frame the script runs in, when it is not the top frame; judged like
+        /// [`Gate::Page`]'s `frame`.
+        frame: Option<Frame<'a>>,
+        /// What is being run: `evaluate`, `evaluateHandle`, `addInitScript`, or `cdp:<method>`.
+        api: &'a str,
+    },
+    /// Attach a local file to a page file input (`setInputFiles`, file chooser).
+    Upload {
+        /// Absolute path of the file, as the script supplied it.
+        path: &'a str,
+        /// Security origin of the document receiving the file; `null` when opaque.
+        origin: &'a str,
+        /// Frame holding the input when it is not the top frame.
+        frame: Option<Frame<'a>>,
+    },
+    /// Save a download the page produced (`download.saveAs`, `waitForEvent('download')`).
+    Download {
+        /// Final URL of the download.
+        url: &'a str,
+        /// File name the page suggested.
+        suggested_name: &'a str,
+        /// Security origin of the document that started it; `null` when opaque.
+        origin: &'a str,
+    },
+}
+
+/// A frame other than the top frame, for [`Gate`] decisions made on its own origin.
+#[derive(Debug, Clone, Copy)]
+pub struct Frame<'a> {
+    /// CDP frame id.
+    pub id: &'a str,
+    /// The frame's security origin (`null` when opaque).
+    pub origin: &'a str,
 }
 
 /// A [`Guard`] decision.
@@ -178,6 +223,28 @@ pub async fn run(
     guard: Arc<dyn Guard>,
     limits: Limits,
 ) -> Output {
+    run_cancellable(
+        browser,
+        owner,
+        tab_id,
+        code,
+        guard,
+        limits,
+        std::future::pending(),
+    )
+    .await
+}
+
+/// Cancel an execution and wait for its renderer/input cleanup before returning.
+pub async fn run_cancellable(
+    browser: Arc<Browser>,
+    owner: String,
+    tab_id: String,
+    code: String,
+    guard: Arc<dyn Guard>,
+    limits: Limits,
+    cancellation: impl Future<Output = ()>,
+) -> Output {
     let cancel = Arc::new(AtomicBool::new(false));
     let thread_cancel = Arc::clone(&cancel);
     let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -206,7 +273,15 @@ pub async fn run(
     if spawned.is_err() {
         return Output::failed("Error: REPL thread unavailable");
     }
-    let _cancel = CancelOnDrop(cancel);
+    let _cancel = CancelOnDrop(Arc::clone(&cancel));
+    tokio::pin!(receiver);
+    tokio::select! {
+        biased;
+        () = cancellation => cancel.store(true, Ordering::Release),
+        result = &mut receiver => {
+            return result.unwrap_or_else(|_| Output::failed("Error: REPL thread ended unexpectedly"));
+        }
+    }
     receiver
         .await
         .unwrap_or_else(|_| Output::failed("Error: REPL thread ended unexpectedly"))
@@ -272,12 +347,18 @@ async fn execute(
         },
         () = watch => Err("Error: REPL execution cancelled".into()),
     };
-    driver
-        .cleanup_cmd(
-            "Emulation.setFocusEmulationEnabled",
-            json!({"enabled": false}),
-        )
-        .await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        driver.cleanup_scripts().await;
+        driver.end_events().await;
+        driver.release_input().await;
+        driver
+            .cleanup_cmd(
+                "Emulation.setFocusEmulationEnabled",
+                json!({"enabled": false}),
+            )
+            .await;
+    })
+    .await;
     let stop = driver.stops().current();
     let console = std::mem::take(&mut driver.console.borrow_mut().lines);
     let (return_value, mut error) = match outcome {
