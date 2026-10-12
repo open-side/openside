@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Ask openside</title>
+<link rel="stylesheet" href="fonts/wanted-sans/WantedSansVariable.css">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="otp.css">
+</head>
+<body class="panel">
+<header class="bar">
+<h1>Ask</h1>
+<label class="pill-select"><span class="sr-only">Sessions for this tab</span><select id="sessions"><option value="">New session</option></select><span class="pill-select-chevron" data-icon="chevron-down" data-size="16"></span></label>
+<button id="pair" type="button" class="icon-button outlined" aria-label="Pair" title="Pair openside"><span data-icon="key-round"></span></button>
+</header>
+<div class="toast" data-tone="info"><span class="toast-icon" data-icon="circle-alert" data-size="18"></span><p id="status" role="status"></p><button type="button" class="toast-close" aria-label="Dismiss"><span data-icon="x" data-size="16"></span></button></div>
+<main class="scroll">
+<div class="column">
+<section id="transcript" class="timeline" aria-live="polite"></section>
+<section id="tickets" class="tickets"></section>
+<div class="empty"><span class="empty-icon" data-icon="message-square" data-size="22"></span><h2>Ask about this tab</h2><p>Type <kbd>@</kbd> in your message to attach the page you are looking at, or pick an earlier session above.</p></div>
+</div>
+</main>
+<div class="dock">
+<form id="compose" class="composer">
+<p id="context" class="context-chip"></p>
+<div class="composer-row">
+<label class="composer-field"><span class="sr-only">Message</span><textarea id="message" rows="1" required placeholder="Ask · @ attaches this tab"></textarea></label>
+<button id="attach" type="button" class="icon-button" aria-label="@ This tab" title="Attach this tab (@)"><span data-icon="at-sign"></span></button>
+<button type="submit" class="icon-button primary" aria-label="Send" title="Send"><span data-icon="arrow-up"></span></button>
+</div>
+</form>
+</div>
+<script src="panel.js"></script>
+</body>
+</html>
