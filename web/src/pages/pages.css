@@ -1,0 +1,557 @@
+/*
+ * Settings, Workspace sections, sign-in and pairing. Layout and component language follow
+ * aside-relay's Settings.tsx / Workspace.tsx (MIT; see NOTICE). Tokens live in styles.css.
+ */
+
+/* ---- Dialog content ---- */
+
+.manage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  padding-bottom: 4px;
+}
+
+.settings-heading {
+  margin: 0 0 12px;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+.settings-text {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.settings-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.status-row-value {
+  color: var(--muted);
+}
+
+/* The "Workspace" entry at the top of Settings and the section tiles of Workspace. */
+.workspace-entry,
+.workspace-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--fast) var(--ease);
+}
+.workspace-entry {
+  min-height: 64px;
+  padding: 12px 14px;
+  border-radius: 16px;
+}
+.workspace-entry:hover,
+.workspace-tile:hover {
+  background: var(--hover);
+}
+.workspace-entry > svg:last-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.tile-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tile-copy strong {
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+.tile-copy span {
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 520px) {
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.workspace-tile {
+  min-height: 82px;
+  padding: 14px;
+  border-radius: 18px;
+}
+.tile-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--hover);
+  color: var(--primary);
+}
+
+/* ---- Section building blocks ---- */
+
+.section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.section-list-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.section-list-header--actions {
+  justify-content: flex-end;
+}
+.section-list-title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+.section-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.section-list-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.resource-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.resource-card {
+  min-width: 0;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--canvas);
+}
+.resource-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.resource-card-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.resource-card-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 620;
+  line-height: 1.4;
+}
+.resource-card-detail {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.resource-card-body {
+  margin: 10px 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.resource-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.badge {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--hover);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge--accent {
+  color: var(--primary);
+}
+.badge--muted {
+  color: var(--muted);
+}
+.badge--attention {
+  color: var(--warn);
+}
+
+.tag {
+  max-width: 100%;
+  padding: 4px 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.card-history {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+.card-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+  min-width: 0;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.card-history p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+/* The policy row of a vault item (aside-relay's tool-permission row). */
+.select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  font-size: 0.8125rem;
+}
+.select-row select {
+  width: auto;
+  max-width: 60%;
+  min-height: 36px;
+  padding: 4px 10px;
+  border-radius: 11px;
+  font-size: 0.8125rem;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 160px;
+  padding: 24px;
+  border: 1px dashed var(--border);
+  border-radius: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+.empty-state strong {
+  color: var(--text);
+  font-weight: 620;
+}
+.empty-state p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.error-note {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.ui-button.confirm-danger {
+  background: var(--danger);
+  color: var(--canvas);
+}
+.ui-button.confirm-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 86%, var(--text));
+}
+
+.section-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.section-toolbar .search-field {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* ---- Accounts ---- */
+
+.usage {
+  display: grid;
+  grid-template-columns: minmax(5rem, auto) minmax(6rem, 1fr);
+  align-items: center;
+  gap: 2px 10px;
+  margin-top: 10px;
+  font-size: 0.8125rem;
+}
+.usage-name {
+  font-weight: 550;
+}
+.usage-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--hover);
+}
+.usage-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+.usage-bar[data-level="high"] > span {
+  background: var(--warn);
+}
+.usage-bar[data-level="full"] > span {
+  background: var(--danger);
+}
+.usage-text {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* ---- Vault audit ---- */
+
+.audit-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 8px;
+}
+@media (max-width: 640px) {
+  .audit-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.audit-list li[data-result="denied"] .badge {
+  color: var(--danger);
+}
+
+/* ---- Configuration ---- */
+
+.config-notice {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--hover);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.config-group {
+  margin: 0;
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--canvas);
+}
+.config-group legend {
+  padding: 0 6px;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+.config-field {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.config-field:last-child {
+  border-bottom: 0;
+}
+.config-field label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+}
+.config-field code {
+  font-family: var(--font-code);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.config-field p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.config-json textarea {
+  font-family: var(--font-code);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.config-save {
+  position: sticky;
+  bottom: -22px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 -22px -22px;
+  padding: 12px 22px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pair-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.pair-steps code,
+.resource-card code {
+  font-family: var(--font-code);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Sign-in and pairing ---- */
+
+.token-entry {
+  display: grid;
+  min-height: var(--app-height, 100dvh);
+  place-items: center;
+  padding: max(env(safe-area-inset-top), 24px) 20px max(env(safe-area-inset-bottom), 24px);
+  background: var(--canvas);
+}
+.token-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(400px, 100%);
+}
+.token-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.token-brand h1 {
+  margin: 0;
+  font-size: 1.1875rem;
+  font-weight: 650;
+}
+.token-card > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+.token-card > .error-note {
+  color: var(--danger);
+}
+.token-card form {
+  display: grid;
+  gap: 12px;
+}
+.token-card .ui-button {
+  width: 100%;
+}
+.token-card a {
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+/* ---- Not found ---- */
+
+.page-frame {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+.not-found {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  max-width: var(--content-width);
+  margin: 0 auto;
+  padding: calc(var(--header-height) + 24px) 20px 24px;
+}
+.not-found p {
+  margin: 0;
+  color: var(--muted);
+}

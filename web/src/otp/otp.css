@@ -1,0 +1,195 @@
+/* Shared by the web app and the extension side panel (copied into extension/dist by its
+   build); only the design tokens both define are used here. */
+.otp-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.otp-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.otp-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 14%, var(--canvas));
+  color: var(--primary);
+  font-size: 1.125rem;
+  font-weight: 650;
+}
+.otp-heading {
+  display: grid;
+  min-width: 0;
+}
+.otp-title {
+  font-size: 0.9375rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.otp-site {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.otp-summary {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.otp-label {
+  margin: 4px 0 -4px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.otp-help,
+.otp-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+.otp-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.875rem;
+}
+.otp-error[hidden] {
+  display: none;
+}
+.otp-form .otp-input,
+.otp-form .otp-key {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--control-border);
+  border-radius: 14px;
+  background: var(--canvas);
+  color: var(--text);
+  /* 16px keeps iOS from zooming into the field. */
+  font: inherit;
+  font-size: 1rem;
+}
+.otp-form .otp-input:focus-visible,
+.otp-form .otp-key:focus-visible {
+  border-color: var(--primary);
+  outline: 2px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  outline-offset: 0;
+}
+
+/* Segmented look over one real input: six decorative cells behind a monospaced field whose
+   letter spacing lands each digit in a cell, so paste, autofill and screen readers see a
+   single text box. */
+.otp-digits {
+  --cell: 44px;
+  --gap: 8px;
+  position: relative;
+  width: calc(var(--cell) * 6 + var(--gap) * 5);
+  max-width: 100%;
+  height: 52px;
+}
+.otp-cells {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(6, var(--cell));
+  gap: var(--gap);
+  pointer-events: none;
+}
+.otp-cells span {
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  background: var(--canvas);
+}
+.otp-digits:focus-within .otp-cells span {
+  border-color: color-mix(in srgb, var(--primary) 60%, var(--control-border));
+}
+.otp-form .otp-input--digits {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  padding: 0 0 0 calc((var(--cell) - 1ch) / 2);
+  border: 0;
+  background: transparent;
+  font-family: var(--font-code);
+  font-size: 1.5rem;
+  letter-spacing: calc(var(--cell) + var(--gap) - 1ch);
+  caret-color: var(--primary);
+}
+.otp-form .otp-input--digits:focus-visible {
+  outline: none;
+}
+
+.otp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.otp-register {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.otp-register[open] {
+  gap: 10px;
+}
+.otp-register > summary {
+  width: fit-content;
+  color: var(--primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.otp-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+}
+.otp-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.otp-form--sheet {
+  gap: 14px;
+}
+.otp-form--sheet .otp-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  font-size: 1.375rem;
+}
+.otp-form--sheet .otp-title {
+  font-size: 1.25rem;
+}
+.otp-form--sheet .otp-digits {
+  --cell: 48px;
+  height: 60px;
+}
+.otp-form--sheet .otp-actions > [type="submit"] {
+  flex: 1 1 100%;
+  min-height: 52px;
+  font-size: 1.0625rem;
+}
+.otp-form--sheet .otp-actions > [type="button"] {
+  flex: 1 1 100%;
+}
+@media (max-width: 380px) {
+  .otp-digits {
+    --cell: 40px;
+    --gap: 6px;
+  }
+}
