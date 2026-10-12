@@ -1,0 +1,82 @@
+import asyncio
+import json
+import os
+import sys
+
+from runtime_helpers import FakeDaemon, install_script, text_response
+
+
+async def test_doctor_subprocess_one_json_without_canary(monkeypatch):
+    canary = "broker-token-canary-process-852124"
+    monkeypatch.setenv("OPENSIDE_BROKER_TOKEN", canary)
+    monkeypatch.setenv(
+        "OPENSIDE_DOCTOR_CONFIG", json.dumps({"credentials": {}, "models": {}})
+    )
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "openside_agent",
+        "doctor",
+        "--json",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
+    assert process.returncode == 0
+    assert len(stdout.splitlines()) == 1
+    value = json.loads(stdout)
+    assert {"python", "packages", "credentials", "models"} == set(value)
+    assert value["models"]["default"] is None
+    assert canary.encode() not in stdout + stderr
+
+
+async def test_real_sidecar_process_handshake_run_shutdown(tmp_path, monkeypatch):
+    install_script(tmp_path, monkeypatch, [text_response("real process answer")])
+    canary = "vault-canary-real-sidecar-581239"
+    monkeypatch.setenv("OPENSIDE_BROKER_TOKEN", canary)
+    socket_path = tmp_path / "sidecar.sock"
+    connected = asyncio.get_running_loop().create_future()
+
+    def accept(reader, writer):
+        connected.set_result(FakeDaemon(reader, writer))
+
+    server = await asyncio.start_unix_server(accept, path=str(socket_path))
+    environment = {
+        **os.environ,
+        "OPENSIDE_SIDECAR_SOCKET": str(socket_path),
+        "OPENSIDE_SIDECAR_NONCE": "test-nonce",
+    }
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "openside_agent",
+        env=environment,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    daemon = None
+    try:
+        daemon = await asyncio.wait_for(connected, 15)
+        hello = await daemon.receive()
+        assert hello["type"] == "hello" and hello["nonce"] == "test-nonce"
+        assert hello["pid"] == process.pid and hello["protocol"] == 1
+        await daemon.open()
+        await daemon.user()
+        final = await daemon.until("event", kind="assistant.final")
+        assert final["event"]["text"] == "real process answer"
+        await daemon.until("settled")
+        await daemon.send("shutdown")
+        await daemon.until("bye")
+        stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
+        assert process.returncode == 0 and stdout == b""
+        assert canary.encode() not in stdout + stderr
+        assert canary not in json.dumps(daemon.outputs)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        if daemon is not None:
+            daemon.writer.close()
+            await daemon.writer.wait_closed()
+        server.close()
+        await server.wait_closed()

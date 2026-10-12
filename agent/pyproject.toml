@@ -1,0 +1,49 @@
+[project]
+name = "openside-agent"
+version = "0.1.0"
+description = "Pydantic AI sidecar for openside's daemon-owned agent sessions and tools"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "httpx2>=2.13.1",
+    "pydantic-ai-harness[prompt-injection-defender]>=0.55.0",
+    "pydantic-ai-slim[anthropic,google,openai]>=2.55.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.22,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.169.0",
+    "jsonschema>=4.26.0",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "live: explicitly opt-in real provider smoke test",
+    "live_broker: explicitly configured GET-only broker wire upgrade check",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["src/openside_agent"]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
