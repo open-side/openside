@@ -96,7 +96,7 @@ async fn assert_actionable_addressable(browser: &Browser, tab: &str, text: &str,
     {
         if text.contains(&format!("[{reference}] ")) {
             if let Ok(node) = browser.reference_node(OWNER, tab, reference).await {
-                addressed.insert(node);
+                addressed.insert(node.backend);
             }
         }
     }
@@ -237,6 +237,72 @@ async fn snapshot_bench_workflow_ratio_raw_ratio_and_accuracy() {
         sum_ab_flow / 4
     );
     assert!(workflow_ratio <= WORKFLOW_RATIO_LIMIT);
+    let profile = browser.profile_path().to_string_lossy().into_owned();
+    let pid = browser.process_id();
+    browser.shutdown().await.unwrap();
+    gone(&profile, pid).await;
+    server.abort();
+}
+
+/// `scope: "viewport"` against the full snapshot on three tall bench pages, at the top and at
+/// the middle of each; the printed table is what docs/specs/browser-snapshot.md publishes.
+#[tokio::test]
+async fn viewport_snapshot_is_a_fraction_of_the_full_snapshot_on_tall_pages() {
+    let _serial = serial().await;
+    let Some(config) = browser_config() else {
+        return;
+    };
+    let (origin, server) = serve().await;
+    let (browser, _events) = Browser::launch(config).await.unwrap();
+    println!("| page | scroll | full bytes | full lines | viewport bytes | viewport lines | viewport/full bytes |");
+    println!("|---|---:|---:|---:|---:|---:|---:|");
+    let (mut sum_full, mut sum_viewport) = (0, 0);
+    for page in [
+        "product-listing.html",
+        "wiki-article.html",
+        "email-inbox.html",
+    ] {
+        let tab = browser
+            .create_agent_tab(OWNER, &format!("{origin}/{page}"))
+            .await
+            .unwrap();
+        ready(&browser, &tab).await;
+        let full = browser.snapshot(&tab.id).await.unwrap();
+        for fraction in [0.0, 0.5] {
+            let script = format!(
+                "window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - innerHeight) * {fraction}); true"
+            );
+            assert_eq!(browser.evaluate(&tab.id, &script).await.unwrap(), true);
+            let scroll = browser
+                .evaluate(&tab.id, "Math.round(scrollY)")
+                .await
+                .unwrap();
+            let viewport = browser.snapshot_viewport(&tab.id).await.unwrap();
+            println!(
+                "| {page} | {scroll} | {} | {} | {} | {} | {:.3} |",
+                full.text.len(),
+                full.nodes.len(),
+                viewport.text.len(),
+                viewport.nodes.len(),
+                viewport.text.len() as f64 / full.text.len() as f64
+            );
+            assert!(
+                !viewport.nodes.is_empty() && viewport.text.len() < full.text.len(),
+                "{page}: a tall page's viewport is smaller than the page"
+            );
+            sum_full += full.text.len();
+            sum_viewport += viewport.text.len();
+        }
+        browser.close_agent_tab(OWNER, &tab.id).await.unwrap();
+    }
+    println!(
+        "| total | | {sum_full} | | {sum_viewport} | | {:.3} |",
+        sum_viewport as f64 / sum_full as f64
+    );
+    assert!(
+        sum_viewport * 2 < sum_full,
+        "viewport captures of the three pages total under half of their full snapshots"
+    );
     let profile = browser.profile_path().to_string_lossy().into_owned();
     let pid = browser.process_id();
     browser.shutdown().await.unwrap();

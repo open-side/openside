@@ -27,9 +27,30 @@ pub async fn serial() -> MutexGuard<'static, ()> {
     BROWSER_TEST.lock().await
 }
 
-pub fn browser_config() -> Option<BrowserConfig> {
+/// Supervise a raw Chromium spawn the way `Browser::launch` does: PR_SET_PDEATHSIG so a
+/// killed test harness cannot leave the browser running. The raw spawn sites keep their own
+/// `process_group(0)`/`kill_on_drop` setup; this adds only the parent-death watch.
+#[cfg(target_os = "linux")]
+pub fn supervise(command: &mut tokio::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the hook runs only async-signal-safe work between fork and exec: one prctl(2)
+    // syscall through nix.
+    #[allow(unsafe_code)]
+    unsafe {
+        command.as_std_mut().pre_exec(|| {
+            nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)
+                .map_err(std::io::Error::from)
+        });
+    }
+}
+
+/// No parent-death watch exists off Linux; the spawn sites still kill the process on drop.
+#[cfg(not(target_os = "linux"))]
+pub fn supervise(_command: &mut tokio::process::Command) {}
+
+pub fn executable() -> Option<std::path::PathBuf> {
     match openside_config::discover_browser(&openside_config::Config::default()) {
-        Ok(executable) => Some(BrowserConfig::new(executable)),
+        Ok(executable) => Some(executable),
         Err(error) => {
             eprintln!(
                 "skip: no chromium-compatible browser found (tried {})",
@@ -38,6 +59,15 @@ pub fn browser_config() -> Option<BrowserConfig> {
             None
         }
     }
+}
+
+pub fn browser_config() -> Option<BrowserConfig> {
+    let executable = executable()?;
+    let mut config = BrowserConfig::new(executable);
+    // A test process killed mid-test runs no destructors; without this a detached
+    // launch would intentionally survive and be orphaned under the init process.
+    config.die_with_spawner = true;
+    Some(config)
 }
 
 pub struct Server {
@@ -61,8 +91,14 @@ impl Server {
                         "dialog" => include_str!("../fixtures/dialog.html"),
                         "long-list" => include_str!("../fixtures/long-list.html"),
                         "nested-divs" => include_str!("../fixtures/nested-divs.html"),
+                        "scrolled" => include_str!("../fixtures/scrolled.html"),
                         "secret-race" => include_str!("../fixtures/secret-race.html"),
                         "secret-hooks" => include_str!("../fixtures/secret-hooks.html"),
+                        "never" => {
+                            // Headers never arrive, so a navigation to it cannot commit.
+                            tokio::time::sleep(Duration::from_secs(600)).await;
+                            return StatusCode::NOT_FOUND.into_response();
+                        }
                         "download-file" => {
                             return (
                                 [

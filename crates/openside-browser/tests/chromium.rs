@@ -302,7 +302,7 @@ async fn popup_download_dialog_and_tab_closed_events() {
     assert_eq!(suggested_filename, "fixture.txt");
     event(&mut events, |event| matches!(event, BrowserEvent::DownloadFinished { guid: finished, status: DownloadStatus::Completed } if finished == &guid)).await;
     assert_eq!(
-        tokio::fs::read(browser.profile_path().join("downloads/fixture.txt"))
+        tokio::fs::read(browser.profile_path().join("downloads").join(&guid))
             .await
             .unwrap(),
         b"openside local download fixture\n"
@@ -1031,7 +1031,8 @@ async fn a_reattached_browser_reports_whether_it_was_started_with_the_document_i
 
     // Started like an older build would have started it: no isolation switch, no preferences.
     let profile = tempfile::tempdir().unwrap();
-    let mut child = tokio::process::Command::new(&config.executable)
+    let mut command = tokio::process::Command::new(&config.executable);
+    command
         .args([
             "--headless=new",
             "--remote-debugging-port=0",
@@ -1043,9 +1044,9 @@ async fn a_reattached_browser_reports_whether_it_was_started_with_the_document_i
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
-        .process_group(0)
-        .spawn()
-        .unwrap();
+        .process_group(0);
+    common::supervise(&mut command);
+    let mut child = command.spawn().unwrap();
     let pid = child.id().unwrap();
     let active = profile.path().join("DevToolsActivePort");
     let mut saved = String::new();
@@ -1071,4 +1072,95 @@ async fn a_reattached_browser_reports_whether_it_was_started_with_the_document_i
     let reaper = tokio::spawn(async move { child.wait().await });
     older.terminate().await.unwrap();
     reaper.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn pointer_hit_test_describes_what_input_reaches_on_a_scrolled_page() {
+    let _serial = serial().await;
+    let Some(config) = browser_config() else {
+        return;
+    };
+    let server = Server::start().await;
+    let (browser, _events) = Browser::launch(config).await.unwrap();
+    let tab = browser
+        .create_agent_tab("owner", &server.page("scrolled"))
+        .await
+        .unwrap();
+    // Viewport (60, 700) is document y=1500 here, where "Pay now" sits; document y=700
+    // holds "Benign". A hit-test that read the point as a document coordinate would label
+    // the harmless button while the click lands on the payment one.
+    browser
+        .evaluate(&tab.id, "window.scrollTo(0, 800)")
+        .await
+        .unwrap();
+    let hit = browser
+        .hit_test("owner", &tab.id, 60.0, 700.0)
+        .await
+        .unwrap();
+    assert!(
+        hit.labels
+            .iter()
+            .any(|label| label.role == "button" && label.name == "Pay now"),
+        "{:?}",
+        hit.labels
+    );
+    // The top of the viewport must also resolve: a document-coordinate read finds nothing
+    // above the scroll offset.
+    assert!(browser.hit_test("owner", &tab.id, 60.0, 10.0).await.is_ok());
+    browser
+        .pointer(
+            "owner",
+            &tab.id,
+            openside_browser::PointerAction::Click {
+                x: 60.0,
+                y: 700.0,
+                clicks: 1,
+            },
+            &hit,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        browser.evaluate(&tab.id, "document.title").await.unwrap(),
+        "Pay clicked"
+    );
+    browser.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn navigation_to_a_server_that_never_answers_fails_without_wedging_the_tab() {
+    let _serial = serial().await;
+    let Some(mut config) = browser_config() else {
+        return;
+    };
+    config.command_timeout = Duration::from_secs(2);
+    let server = Server::start().await;
+    let (browser, _events) = Browser::launch(config).await.unwrap();
+    let tab = browser
+        .create_agent_tab("owner", &server.page("welcome"))
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let failed = browser
+        .navigate("owner", &tab.id, &server.page("never"))
+        .await;
+    assert!(
+        matches!(failed, Err(BrowserError::Timeout(_))),
+        "{failed:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        started.elapsed()
+    );
+    // The pending load was cancelled: the tab answers at once and navigates elsewhere.
+    tokio::time::timeout(
+        Duration::from_secs(8),
+        browser.navigate("owner", &tab.id, &server.page("login")),
+    )
+    .await
+    .expect("the tab stayed busy with the abandoned navigation")
+    .unwrap();
+    assert_eq!(browser.url(&tab.id).await.unwrap(), server.page("login"));
+    browser.shutdown().await.unwrap();
 }

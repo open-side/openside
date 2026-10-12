@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,15 +24,81 @@ use crate::cdp::Cdp;
 #[cfg(unix)]
 use crate::gateway::GatewayLaunch;
 use crate::gateway::{Gateway, GatewayConfig, GatewayOwner};
-use crate::snapshot::{process, References};
+use crate::snapshot::{merge_frames, nodes_in_view, process, RefTarget, References};
 use crate::{BrowserError, Snapshot};
 
+#[path = "browser_pins.rs"]
+mod pins;
 #[path = "pointer.rs"]
 mod pointer;
 pub use pointer::{PointHit, PointLabel, PointerAction, VIEWPORT};
 #[path = "screencast.rs"]
 mod screencast;
 pub use screencast::{Screencast, ScreencastFrame};
+#[path = "network.rs"]
+mod network;
+#[path = "spaces.rs"]
+mod spaces;
+pub use network::{
+    DocumentResponse, DocumentWait, LoadState, LoadWait, NetworkEvent, NetworkEventKind,
+    NetworkEvents, WaitUntil,
+};
+#[path = "page_events.rs"]
+mod page_events;
+pub use page_events::{DialogClaim, DialogInfo, DownloadInfo, FileChooserInfo, PageEvent};
+#[path = "downloads.rs"]
+mod downloads;
+#[path = "screenshot.rs"]
+mod screenshot;
+pub use screenshot::{ScreenshotArea, ScreenshotClip};
+#[path = "frames.rs"]
+mod frames;
+use frames::same_origin;
+pub use frames::{FrameHit, FrameInfo};
+#[path = "cdp_scope.rs"]
+mod cdp_scope;
+#[cfg(unix)]
+#[path = "uploads.rs"]
+mod uploads;
+#[cfg(not(unix))]
+mod uploads {
+    use super::{Browser, BrowserError, Path, PathBuf};
+
+    fn unsupported() -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Private upload staging requires Unix descriptor confinement",
+        )
+    }
+
+    pub(super) fn remove_tab(_: &Path, _: &str) -> std::io::Result<()> {
+        Err(unsupported())
+    }
+
+    impl Browser {
+        pub async fn stage_upload(
+            &self,
+            _: &str,
+            _: &str,
+            _: &Path,
+            _: &str,
+        ) -> Result<PathBuf, BrowserError> {
+            Err(unsupported().into())
+        }
+
+        pub(super) async fn clear_session_uploads(&self, _: &str) -> Result<(), BrowserError> {
+            Err(unsupported().into())
+        }
+
+        pub(super) async fn prune_uploads(&self) -> Result<(), BrowserError> {
+            Err(unsupported().into())
+        }
+
+        pub(super) async fn wipe_uploads(&self) -> Result<(), BrowserError> {
+            Err(unsupported().into())
+        }
+    }
+}
 
 /// Isolated browser launch and operation deadlines.
 #[derive(Clone, Debug)]
@@ -46,8 +113,15 @@ pub struct BrowserConfig {
     pub attach_timeout: Duration,
     /// Explicit durable profile directory; None creates an isolated temporary profile.
     pub profile_dir: Option<PathBuf>,
-    /// Preserve Chromium on controller drop or parent death; shutdown remains explicit.
+    /// Preserve Chromium on controller drop or parent exit so a reconnecting daemon adopts it;
+    /// shutdown remains explicit. `die_with_spawner` opts a detached launch back into
+    /// kernel-enforced exit with the spawning thread (tests only).
     pub detached: bool,
+    /// Kill Chromium when the thread that spawned it exits, even when `detached` would
+    /// otherwise preserve it. Parent-death supervision (PR_SET_PDEATHSIG on Linux) covers
+    /// normal launches; a detached launch needs this override so a test process killed
+    /// without unwinding leaves no browser. Ignored on non-Linux platforms.
+    pub die_with_spawner: bool,
     /// Opt-in patched-browser gateway; stock Chromium falls back to CDP only.
     pub gateway: Option<GatewayConfig>,
     /// Explicit unpacked extensions; empty keeps all extensions disabled.
@@ -64,6 +138,7 @@ impl BrowserConfig {
             attach_timeout: Duration::from_secs(12),
             profile_dir: None,
             detached: false,
+            die_with_spawner: false,
             gateway: None,
             extensions: Vec::new(),
         }
@@ -121,6 +196,9 @@ pub struct TabInfo {
     pub discarded: bool,
     /// Caller-provided unloaded state; sleeping tabs cannot attach.
     pub unloaded: bool,
+    /// CDP browser context of the isolated space ([`Browser::open_space`]) the tab lives in;
+    /// `None` for the managed profile's default context.
+    pub browser_context_id: Option<String>,
 }
 
 /// Reference-targeted interaction; callers must refresh snapshots after navigation.
@@ -235,6 +313,53 @@ struct State {
     /// Popup target id -> opener target id, for popups whose opener was not in `tabs` when the
     /// popup was created. Their requests are held until the opener's owner is known.
     pending_openers: HashMap<String, String>,
+    /// Owner session -> CDP browser context of its isolated space.
+    spaces: HashMap<String, String>,
+    /// CDP-created contexts seen on this controller; Chromium also reports a default-context id.
+    isolated_contexts: HashSet<String>,
+    /// Owners that had a space on this controller; their tabs never go to the default context.
+    isolated: HashSet<String>,
+    /// Context -> owner, for spaces whose disposal Chromium has not confirmed yet.
+    closing: HashMap<String, String>,
+    /// A leftover-context prune failed and must be retried.
+    prune_due: bool,
+    /// Target id -> raw `browserContextId` reported by Chromium, for every page target. Only
+    /// ids in `spaces` are copied into [`TabInfo::browser_context_id`].
+    tab_contexts: HashMap<String, String>,
+    /// Out-of-process iframe target id -> (owning tab id, flattened session), attached on
+    /// demand by the frame helpers in `frames.rs`.
+    oopif_sessions: HashMap<String, (String, String)>,
+    uploads: HashMap<String, PathBuf>,
+    upload_closing: HashSet<String>,
+    upload_epochs: HashMap<String, u64>,
+    closing_tabs: HashSet<String>,
+}
+
+fn check_owned(state: &State, owner: &str, id: &str) -> Result<(), BrowserError> {
+    if state.closing_tabs.contains(id) {
+        return Err(BrowserError::TabNotReady(id.to_owned()));
+    }
+    let tab = state
+        .tabs
+        .get(id)
+        .ok_or_else(|| BrowserError::TabNotReady(id.to_owned()))?;
+    if tab.owner_session_id.as_deref() != Some(owner) || tab.opened_by == OpenedBy::User {
+        return Err(BrowserError::OwnershipDenied(id.to_owned()));
+    }
+    let context = state
+        .tab_contexts
+        .get(id)
+        .filter(|context| state.isolated_contexts.contains(*context))
+        .or(tab.browser_context_id.as_ref());
+    let space = state.spaces.get(owner);
+    if context != space
+        || context.is_some_and(|context| state.closing.contains_key(context))
+        || (space.is_none() && state.isolated.contains(owner))
+        || (space.is_none() && tab.opened_by != OpenedBy::Agent)
+    {
+        return Err(BrowserError::OwnershipDenied(id.to_owned()));
+    }
+    Ok(())
 }
 
 /// Decides whether a top-frame document request to this URL may proceed.
@@ -357,11 +482,9 @@ fn settle_openers(state: &mut State) {
     }
 }
 
-/// Decide a document request whose frame is not in the ledger. Only positively classified
-/// requests bypass the owner policy: Chromium reports no target with that id (a page's main
-/// frame id is its target id, so this is a subframe), the target is not a page, or a page
-/// has no opener. A page whose opener is not yet in the ledger, or a failing lookup, is
-/// retried until the caller's deadline denies it.
+/// Decide a document request whose frame is not in the ledger. Requests bypass the owner
+/// policy only when Chromium reports a non-page/subframe, or a default-context page with no
+/// opener. An unresolved isolated context or opener waits until the caller's deadline denies it.
 async fn reconcile(inner: &Inner, frame: &str, url: &str) -> bool {
     loop {
         {
@@ -389,14 +512,53 @@ async fn reconcile(inner: &Inner, frame: &str, url: &str) -> bool {
             Ok(info) if info["targetInfo"]["type"] != "page" => {
                 return unplaced_frame_allowed(&*inner.state.lock().await, url);
             }
-            Ok(info) => match info["targetInfo"]["openerId"].as_str() {
-                None => return true,
-                Some(opener) => {
-                    if let Some(owner) = opener_owner(&*inner.state.lock().await, opener) {
-                        return owner.map_or(true, |owner| owner_allows(inner, &owner, url));
+            Ok(info) => {
+                let target = &info["targetInfo"];
+                let mut state = inner.state.lock().await;
+                let default_context = if let Some(context) = target["browserContextId"].as_str() {
+                    if state.closing.contains_key(context) {
+                        return false;
+                    }
+                    if let Some((owner, _)) =
+                        state.spaces.iter().find(|(_, space)| *space == context)
+                    {
+                        return owner_allows(inner, owner, url);
+                    }
+                    if state.isolated_contexts.contains(context) {
+                        false
+                    } else {
+                        let listed = inner
+                            .cdp
+                            .call(None, "Target.getBrowserContexts", json!({}))
+                            .await;
+                        if let Some(ids) = listed
+                            .as_ref()
+                            .ok()
+                            .and_then(|listed| listed["browserContextIds"].as_array())
+                        {
+                            state
+                                .isolated_contexts
+                                .extend(ids.iter().filter_map(|id| id.as_str().map(str::to_owned)));
+                            !state.isolated_contexts.contains(context)
+                        } else {
+                            false
+                        }
+                    }
+                } else {
+                    true
+                };
+                if default_context {
+                    match target["openerId"].as_str() {
+                        None => return true,
+                        Some(opener) => {
+                            if let Some(owner) = opener_owner(&state, opener) {
+                                return owner
+                                    .map_or(true, |owner| owner_allows(inner, &owner, url));
+                            }
+                        }
                     }
                 }
-            },
+            }
             Err(_) => {}
         }
         tokio::time::sleep(RECONCILE_INTERVAL).await;
@@ -414,7 +576,20 @@ fn top_frame_allowed(inner: &Inner, state: &State, target: &str, url: &str) -> b
         .get(target)
         .and_then(|tab| tab.owner_session_id.as_deref())
         .map_or(true, |owner| owner_allows(inner, owner, url));
-    rule && owner
+    let active_context = state
+        .tab_contexts
+        .get(target)
+        .filter(|context| state.isolated_contexts.contains(*context))
+        .map_or(true, |context| {
+            !state.closing.contains_key(context)
+                && state
+                    .tabs
+                    .get(target)
+                    .and_then(|tab| tab.owner_session_id.as_ref())
+                    .and_then(|owner| state.spaces.get(owner))
+                    == Some(context)
+        });
+    rule && owner && active_context
 }
 
 impl NavigationRule {
@@ -472,10 +647,12 @@ struct Inner {
     attach_lock: Mutex<()>,
     capture_lock: Arc<Mutex<()>>,
     interaction_lock: Mutex<()>,
+    network: network::Tracker,
     attach_timeout: Duration,
     events: mpsc::UnboundedSender<BrowserEvent>,
     navigation_policy: std::sync::RwLock<Option<OwnerNavigationCheck>>,
     screencasts: screencast::Slots,
+    page: page_events::PageHub,
 }
 
 impl Inner {
@@ -502,7 +679,11 @@ impl Inner {
         Ok(cleanup)
     }
 
-    async fn capture(self: Arc<Self>, session: String) -> Result<Vec<u8>, BrowserError> {
+    async fn capture(
+        self: Arc<Self>,
+        session: String,
+        params: Value,
+    ) -> Result<Vec<u8>, BrowserError> {
         let _capture = self.capture_lock.lock().await;
         let enabled = self
             .cdp
@@ -515,11 +696,7 @@ impl Inner {
         let captured = match enabled {
             Ok(_) => {
                 self.cdp
-                    .call(
-                        Some(&session),
-                        "Page.captureScreenshot",
-                        json!({"format":"png","captureBeyondViewport":false}),
-                    )
+                    .call(Some(&session), "Page.captureScreenshot", params)
                     .await
             }
             Err(error) => Err(error),
@@ -691,7 +868,7 @@ pub struct Browser {
     gateway: Option<Gateway>,
     gateway_dir: Option<PathBuf>,
     /// Started by this code with the profile preferences that keep documents from reaching a
-    /// tab without a network request (see `disable_preloading`).
+    /// tab without a network request (see `harden_profile`).
     isolated: bool,
 }
 
@@ -713,34 +890,73 @@ fn target_tab(info: &Value) -> Option<TabInfo> {
         owner_session_id: None,
         discarded: false,
         unloaded: false,
+        browser_context_id: None,
     })
 }
 
-/// Page-session methods accepted by [`Browser::page_command`]; none runs page script.
+/// Page-session methods accepted by [`Browser::page_command`]. The REPL's own operations use
+/// these; the script-facing `page.cdp(...)` goes through [`Browser::page_cdp`] instead.
+///
+/// Entries with a comment were added for the REPL port slices and name their use.
 pub const PAGE_COMMANDS: &[&str] = &[
     "Accessibility.getFullAXTree",
     "Accessibility.getPartialAXTree",
     "Accessibility.queryAXTree",
     "DOM.describeNode",
+    "DOM.discardSearchResults", // xpath locators, with performSearch
     "DOM.focus",
     "DOM.getAttributes",
     "DOM.getBoxModel",
+    "DOM.getContentQuads", // click points of transformed or fragmented boxes
     "DOM.getDocument",
-    "DOM.getNodeForLocation",
+    "DOM.getFrameOwner", // iframe element of a frame, for coordinate translation
     "DOM.getOuterHTML",
+    "DOM.getSearchResults", // xpath locators, with performSearch
+    "DOM.performSearch",    // xpath locators
     "DOM.querySelectorAll",
+    "DOM.requestNode", // node id of a remote object, for evaluate handles
+    "DOM.resolveNode", // remote object of a backend node, for locator.evaluate
     "DOM.scrollIntoViewIfNeeded",
+    "DOM.setFileInputFiles", // setInputFiles by backend node id, no page script
     "Emulation.setFocusEmulationEnabled",
+    "Input.dispatchDragEvent", // drag and drop
     "Input.dispatchKeyEvent",
     "Input.dispatchMouseEvent",
+    "Input.imeSetComposition", // trusted IME preedit, e.g. Hangul composition
     "Input.insertText",
+    "Storage.getStorageKeyForFrame", // trusted binding of raw page storage parameters
+    "Input.setInterceptDrags",       // drag and drop
+    "Network.disable",               // in-flight request tracking for network idle
+    "Network.enable",                // in-flight request tracking for network idle
+    "Network.getResponseBody",       // response.text() / json() of a waited-for response
+    "Page.captureScreenshot",        // clip / full-page screenshots
+    "Page.addScriptToEvaluateOnNewDocument", // page.addInitScript
+    "Page.createIsolatedWorld",      // evaluate in a world page scripts cannot reach
     "Page.getFrameTree",
+    "Page.getLayoutMetrics", // full-page size, device-pixel ratio, scroll offsets
     "Page.getNavigationHistory",
+    "Page.handleJavaScriptDialog", // accept or dismiss a dialog the page opened
     "Page.navigate",
     "Page.navigateToHistoryEntry",
     "Page.reload",
+    "Page.removeScriptToEvaluateOnNewDocument", // page.addInitScript cleanup
+    "Page.setInterceptFileChooserDialog",       // file chooser interception
+    "Page.setLifecycleEventsEnabled",           // DOMContentLoaded / load / network idle events
+    "Page.stopLoading",
     "Performance.enable",
     "Performance.getMetrics",
+    "Runtime.awaitPromise",   // page.evaluate and handles
+    "Runtime.callFunctionOn", // locator.evaluate, $eval, evaluateHandle
+    "Runtime.compileScript",
+    "Runtime.disable",
+    "Runtime.enable",        // execution contexts per frame and world
+    "Runtime.evaluate",      // page.evaluate, waitForFunction
+    "Runtime.getProperties", // evaluateHandle properties
+    "Runtime.releaseObject",
+    "Runtime.releaseObjectGroup",
+    "Runtime.runScript",
+    "Runtime.terminateExecution", // bounded recovery of an abandoned renderer call
+    "Target.setAutoAttach",       // page-level OOPIF auto-attach, never browser-level
 ];
 
 // Runs in an isolated world of the top frame and validates and writes within one JavaScript turn,
@@ -872,13 +1088,16 @@ fn text_insertion_error(error: BrowserError) -> BrowserError {
     }
 }
 
-/// Command-line marker of a browser started with the preferences from [`disable_preloading`].
+/// Command-line marker of a browser started with the preferences from [`harden_profile`].
 const ISOLATION_SWITCH: &str = "--openside-isolation=1";
 
-/// Turn off Chromium's "preload pages" setting in the profile. A page can ask for another
-/// document to be prerendered and later activate it into its tab without any network request,
-/// which neither navigation rule can see; `--disable-features` no longer reaches that path.
-async fn disable_preloading(profile: &Path) -> Result<(), BrowserError> {
+/// Profile preferences the agent browser must not run without. Preloading is turned off: a page
+/// can ask for another document to be prerendered and later activate it into its tab without
+/// any network request, which neither navigation rule can see; `--disable-features` no longer
+/// reaches that path. Autofill and Chromium's own password manager are turned off too: they
+/// would otherwise keep every identifier typed into a sign-in form in `Web Data` and `Login
+/// Data`, next to the vault that is meant to be the only store.
+async fn harden_profile(profile: &Path) -> Result<(), BrowserError> {
     let directory = profile.join("Default");
     let path = directory.join("Preferences");
     let mut preferences = match tokio::fs::read(&path).await {
@@ -890,6 +1109,10 @@ async fn disable_preloading(profile: &Path) -> Result<(), BrowserError> {
     }
     // 2 = NetworkPredictionOptions::kDisabled
     preferences["net"]["network_prediction_options"] = json!(2);
+    preferences["autofill"]["profile_enabled"] = json!(false);
+    preferences["autofill"]["credit_card_enabled"] = json!(false);
+    preferences["credentials_enable_service"] = json!(false);
+    preferences["profile"]["password_manager_enabled"] = json!(false);
     tokio::fs::create_dir_all(&directory).await?;
     tokio::fs::write(&path, serde_json::to_vec(&preferences).unwrap_or_default()).await?;
     Ok(())
@@ -1035,7 +1258,7 @@ impl Browser {
                 (temporary.path().to_owned(), Some(temporary))
             }
         };
-        disable_preloading(&profile).await?;
+        harden_profile(&profile).await?;
         let active_port = profile.join("DevToolsActivePort");
         if let Ok(contents) = tokio::fs::read_to_string(&active_port).await {
             if let Some(url) = endpoint_url(&contents) {
@@ -1049,6 +1272,27 @@ impl Browser {
             tokio::fs::remove_file(active_port).await?;
         }
         let mut command = Command::new(&config.executable);
+        #[cfg(target_os = "linux")]
+        let supervise = !config.detached || config.die_with_spawner;
+        // PR_SET_PDEATHSIG lets the kernel kill Chromium when the spawning thread dies —
+        // abort, SIGKILL, a harness timeout — where no destructor can run. Detached launches
+        // stay unsupervised: a reconnecting daemon must adopt a live browser whose spawner
+        // already exited. The signal binds to the forking *thread* (POSIX thread-group
+        // semantics), so launches must come from runtime worker threads that live as long as
+        // the process; never spawn from a short-lived or spawn_blocking thread.
+        #[cfg(target_os = "linux")]
+        if supervise {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: the hook runs only async-signal-safe work between fork and exec: one
+            // prctl(2) syscall through nix. The workspace denies unsafe_code except at
+            // audited call sites like this one.
+            #[allow(unsafe_code)]
+            unsafe {
+                command.as_std_mut().pre_exec(|| {
+                    nix::sys::prctl::set_pdeathsig(Signal::SIGKILL).map_err(std::io::Error::from)
+                });
+            }
+        }
         command
             .args([
                 "--headless=new",
@@ -1076,7 +1320,7 @@ impl Browser {
                 // default search engine.
                 "--disable-features=OptimizationHints,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,NetworkTimeServiceQuerying,Translate,AimEnabled,PreconnectToSearch,PreconnectFromKeyedService",
                 // Lets a later `connect` tell from the running process that it was started with
-                // the preferences written by `disable_preloading`; Chromium ignores the switch.
+                // the preferences written by `harden_profile`; Chromium ignores the switch.
                 ISOLATION_SWITCH,
                 // Stock builds check in to GCM at startup even with background networking
                 // disabled and no switch turns it off; point it at the loopback discard port.
@@ -1171,6 +1415,8 @@ impl Browser {
         .map_err(|_| BrowserError::Timeout("Chromium launch"))??;
         let (mut browser, events) =
             Self::initialize(process, url, config.command_timeout, config.attach_timeout).await?;
+        // A fresh process has no restored spaces; stale private downloads must not survive it.
+        browser.prune_spaces().await?;
         if let (Some(launch), Some(gateway)) = (gateway_launch, &config.gateway) {
             browser.gateway_dir = Some(launch.directory());
             // A patched browser publishes discovery before its debugging endpoint, so an
@@ -1187,7 +1433,7 @@ impl Browser {
                 Err(BrowserError::Timeout("gateway discovery")) => {
                     return Err(BrowserError::InvalidEndpoint(
                         "browser published no gateway; use the patched browser",
-                    ))
+                    ));
                 }
                 Err(error) => return Err(error),
             }
@@ -1219,6 +1465,10 @@ impl Browser {
             .filter(|pid| *pid > 0)
             .map(Pid::from_raw)
             .ok_or(BrowserError::InvalidEndpoint("invalid process identifier"))?;
+        if kill(pid, None) == Err(nix::errno::Errno::ESRCH) {
+            spaces::sweep_downloads(&endpoint.profile_dir, &HashSet::new()).await?;
+            uploads::sweep_dead_profile(&endpoint.profile_dir).await?;
+        }
         if kill(pid, None).is_err() || nix::unistd::getpgid(Some(pid)).ok() != Some(pid) {
             return Err(BrowserError::InvalidEndpoint(
                 "browser process is not running",
@@ -1294,10 +1544,12 @@ impl Browser {
             attach_lock: Mutex::default(),
             capture_lock: Arc::default(),
             interaction_lock: Mutex::default(),
+            network: Default::default(),
             attach_timeout,
             events,
             navigation_policy: std::sync::RwLock::new(None),
             screencasts: Default::default(),
+            page: Default::default(),
         });
         let weak = Arc::downgrade(&inner);
         let event_task = tokio::spawn(async move {
@@ -1313,6 +1565,10 @@ impl Browser {
                     handle_paused(&inner, &event).await;
                     continue;
                 }
+                if event["method"] == "Target.attachedToTarget" {
+                    frames::adopt(&inner, &event).await;
+                }
+                inner.network.observe(&event);
                 handle_event(&inner, event).await;
             }
         });
@@ -1325,6 +1581,14 @@ impl Browser {
             gateway_dir: None,
             isolated: false,
         };
+        let contexts = browser.live_contexts().await?;
+        browser
+            .inner
+            .state
+            .lock()
+            .await
+            .isolated_contexts
+            .extend(contexts);
         browser
             .inner
             .cdp
@@ -1346,6 +1610,7 @@ impl Browser {
             )
             .await;
         }
+        browser.prune_uploads().await?;
         // Discovery supplies lifecycle events; automatic attachment would violate the asleep-tab gate.
         browser
             .inner
@@ -1375,7 +1640,7 @@ impl Browser {
             .call(
                 None,
                 "Browser.setDownloadBehavior",
-                json!({"behavior":"allow","downloadPath":downloads,"eventsEnabled":true}),
+                json!({"behavior":"allowAndName","downloadPath":downloads,"eventsEnabled":true}),
             )
             .await?;
         Ok((browser, receiver))
@@ -1471,18 +1736,35 @@ impl Browser {
         tabs
     }
 
-    /// Create a background tab in its own window and fix its viewport to 1440×900.
+    /// Create a background tab in its own window and fix its viewport to 1440×900. An owner
+    /// with an isolated space ([`Browser::open_space`]) gets the tab in that space.
     pub async fn create_agent_tab(&self, owner: &str, url: &str) -> Result<TabInfo, BrowserError> {
+        self.create_agent_tab_cancellable(owner, url, std::future::pending())
+            .await
+    }
+
+    /// Drain creation to learn the target id, then close a cancelled new tab before returning.
+    pub async fn create_agent_tab_cancellable(
+        &self,
+        owner: &str,
+        url: &str,
+        cancellation: impl Future<Output = ()>,
+    ) -> Result<TabInfo, BrowserError> {
         // Hold the ledger lock through createTarget so its earlier event cannot misclassify ownership.
         let mut state = self.inner.state.lock().await;
+        let context = state.spaces.get(owner).cloned();
+        if context.is_none() && state.isolated.contains(owner) {
+            // Fail closed: a closed or lost space never falls back to the shared profile.
+            return Err(BrowserError::SpaceClosed(owner.to_owned()));
+        }
+        let mut params = json!({"url":url,"newWindow":true,"background":true});
+        if let Some(context) = &context {
+            params["browserContextId"] = json!(context);
+        }
         let result = self
             .inner
             .cdp
-            .call(
-                None,
-                "Target.createTarget",
-                json!({"url":url,"newWindow":true,"background":true}),
-            )
+            .call(None, "Target.createTarget", params)
             .await?;
         let id = required_string(&result, "targetId")?.to_owned();
         let tab = TabInfo {
@@ -1493,7 +1775,11 @@ impl Browser {
             owner_session_id: Some(owner.to_owned()),
             discarded: false,
             unloaded: false,
+            browser_context_id: context.clone(),
         };
+        if let Some(context) = context {
+            state.tab_contexts.insert(id.clone(), context);
+        }
         state.tabs.insert(id.clone(), tab.clone());
         let _ = self
             .inner
@@ -1506,8 +1792,19 @@ impl Browser {
             self.wait_loaded(&session, None, url != "about:blank")
                 .await?;
             Ok::<_, BrowserError>(())
-        }
-        .await;
+        };
+        tokio::pin!(ready);
+        let ready = tokio::select! {
+            biased;
+            () = cancellation => {
+                if self.close_agent_tab(owner, &id).await.is_err() {
+                    // If closing was not acknowledged, retain admission until the issued load settles.
+                    let _ = ready.await;
+                }
+                return Err(BrowserError::InvalidAction("browser operation cancelled"));
+            }
+            result = &mut ready => result,
+        };
         if let Err(error) = ready {
             let _ = self.close_agent_tab(owner, &id).await;
             return Err(error);
@@ -1517,12 +1814,22 @@ impl Browser {
 
     /// Mark a discovered tab as user-owned; agent-created tabs cannot be reclassified.
     pub async fn adopt_user_tab(&self, id: &str) -> Result<(), BrowserError> {
+        let created = self.live_contexts().await?;
         let mut state = self.inner.state.lock().await;
+        if state.closing_tabs.contains(id) {
+            return Err(BrowserError::TabNotReady(id.to_owned()));
+        }
+        // A space's storage belongs to its owner session; no person adopts a tab inside it,
+        // bound or not.
+        let in_space = state
+            .tab_contexts
+            .get(id)
+            .is_some_and(|context| created.contains(context));
         let tab = state
             .tabs
             .get_mut(id)
             .ok_or_else(|| BrowserError::TabNotReady(id.to_owned()))?;
-        if tab.opened_by == OpenedBy::Agent {
+        if tab.opened_by == OpenedBy::Agent || in_space {
             return Err(BrowserError::OwnershipDenied(id.to_owned()));
         }
         tab.opened_by = OpenedBy::User;
@@ -1530,16 +1837,35 @@ impl Browser {
         Ok(())
     }
 
-    /// Restore a persisted agent owner after reconnect; user-owned or other-owner tabs are denied.
+    /// Restore a persisted agent owner after reconnect; user-owned or other-owner tabs are
+    /// denied, and so is a tab outside the owner's isolated space (or inside another space).
+    /// Restore spaces ([`Browser::restore_space`]) before their tabs.
     pub async fn adopt_tab(&self, target_id: &str, owner: &str) -> Result<(), BrowserError> {
+        // Chromium's own record decides, so a space tab is never adopted as a default-context
+        // tab just because its space was not restored (or was lost).
+        let created = self.live_contexts().await?;
         let mut state = self.inner.state.lock().await;
+        if state.closing_tabs.contains(target_id) {
+            return Err(BrowserError::TabNotReady(target_id.to_owned()));
+        }
+        let space = state.spaces.get(owner).cloned();
+        let context = state
+            .tab_contexts
+            .get(target_id)
+            .filter(|context| created.contains(context))
+            .cloned();
+        state.isolated_contexts.extend(created);
         let tab = state
             .tabs
             .get_mut(target_id)
             .ok_or_else(|| BrowserError::TabNotReady(target_id.to_owned()))?;
         if tab.opened_by == OpenedBy::User
             || (tab.opened_by == OpenedBy::Agent && tab.owner_session_id.as_deref() != Some(owner))
-            || (tab.opened_by == OpenedBy::External && tab.owner_session_id.is_some())
+            // A space tab carries its context owner from the start; only that owner adopts it.
+            || (tab.opened_by == OpenedBy::External
+                && tab.owner_session_id.is_some()
+                && (space.is_none() || tab.owner_session_id.as_deref() != Some(owner)))
+            || context != space
         {
             return Err(BrowserError::OwnershipDenied(target_id.to_owned()));
         }
@@ -1588,6 +1914,9 @@ impl Browser {
         tokio::time::timeout(self.inner.attach_timeout, async {
             let _attach = self.inner.attach_lock.lock().await;
             let state = self.inner.state.lock().await;
+            if state.closing_tabs.contains(id) {
+                return Err(BrowserError::TabNotReady(id.to_owned()));
+            }
             let tab = state
                 .tabs
                 .get(id)
@@ -1698,17 +2027,21 @@ impl Browser {
             .ok_or(BrowserError::Disconnected)
     }
 
-    async fn owned_session(&self, owner: &str, id: &str) -> Result<String, BrowserError> {
-        let state = self.inner.state.lock().await;
-        let tab = state
-            .tabs
-            .get(id)
-            .ok_or_else(|| BrowserError::TabNotReady(id.to_owned()))?;
-        if tab.opened_by != OpenedBy::Agent || tab.owner_session_id.as_deref() != Some(owner) {
-            return Err(BrowserError::OwnershipDenied(id.to_owned()));
+    /// Check session ownership and active space membership without attaching the target.
+    /// Space-owned popups retain their External provenance but are usable by that owner.
+    pub async fn check_owned(&self, owner: &str, id: &str) -> Result<(), BrowserError> {
+        if !self.is_connected() {
+            return Err(BrowserError::Disconnected);
         }
-        drop(state);
-        self.session(id).await
+        check_owned(&*self.inner.state.lock().await, owner, id)
+    }
+
+    async fn owned_session(&self, owner: &str, id: &str) -> Result<String, BrowserError> {
+        self.check_owned(owner, id).await?;
+        let session = self.session(id).await?;
+        // Attachment awaits CDP; disposal may have unbound the context in the meantime.
+        self.check_owned(owner, id).await?;
+        Ok(session)
     }
 
     async fn top_frame(&self, session: &str) -> Result<Value, BrowserError> {
@@ -1824,6 +2157,7 @@ impl Browser {
         loader: Option<&str>,
         require_document: bool,
     ) -> Result<Value, BrowserError> {
+        self.track_session(session).await?;
         tokio::time::timeout(self.inner.attach_timeout, async {
             let mut poll = tokio::time::interval(Duration::from_millis(20));
             loop {
@@ -1834,34 +2168,15 @@ impl Browser {
                 {
                     continue;
                 }
-                let ready = self
+                if self
                     .inner
-                    .cdp
-                    .call(
-                        Some(session),
-                        "Runtime.evaluate",
-                        json!({
-                            "expression":format!(
-                                "document.readyState === 'complete' && location.href === {}",
-                                frame["url"],
-                            ),
-                            "returnByValue":true
-                        }),
-                    )
-                    .await;
-                match ready {
-                    Ok(result) if result["result"]["value"] == true => {
-                        let after = self.top_frame(session).await?;
-                        if after["url"] == frame["url"] && after["loaderId"] == frame["loaderId"] {
-                            return Ok(after);
-                        }
+                    .network
+                    .loaded(session, frame["loaderId"].as_str())?
+                {
+                    let after = self.top_frame(session).await?;
+                    if after["url"] == frame["url"] && after["loaderId"] == frame["loaderId"] {
+                        return Ok(after);
                     }
-                    Ok(_) => {}
-                    Err(BrowserError::Cdp {
-                        code: -32000,
-                        message,
-                    }) if message.contains("context") || message.contains("Context") => {}
-                    Err(error) => return Err(error),
                 }
             }
         })
@@ -1892,6 +2207,12 @@ impl Browser {
             .get(tab_id)
             .and_then(|refs| refs.resolve(target, root))
             .ok_or(BrowserError::StaleReference)?;
+        if backend.frame.is_some() {
+            return Err(BrowserError::InvalidAction(
+                "the reference is inside an iframe; act on it with browser_repl",
+            ));
+        }
+        let backend = backend.backend;
         let connected = self
             .call_on_node(
                 session,
@@ -2009,55 +2330,8 @@ impl Browser {
         let acted = async {
             match action {
                 Action::Click | Action::Hover => {
-                    self.inner
-                        .cdp
-                        .call(
-                            Some(&session),
-                            "DOM.scrollIntoViewIfNeeded",
-                            json!({"backendNodeId":backend}),
-                        )
+                    self.pointer_at(&session, backend, matches!(action, Action::Click))
                         .await?;
-                    let box_model = self
-                        .inner
-                        .cdp
-                        .call(
-                            Some(&session),
-                            "DOM.getBoxModel",
-                            json!({"backendNodeId":backend}),
-                        )
-                        .await?;
-                    let quad = box_model["model"]["content"]
-                        .as_array()
-                        .filter(|quad| quad.len() == 8)
-                        .ok_or(BrowserError::InvalidResponse("target box model"))?;
-                    let mut x = 0.0;
-                    let mut y = 0.0;
-                    for pair in quad.chunks_exact(2) {
-                        x += pair[0].as_f64().ok_or(BrowserError::InvalidResponse("box x"))?;
-                        y += pair[1].as_f64().ok_or(BrowserError::InvalidResponse("box y"))?;
-                    }
-                    x /= 4.0;
-                    y /= 4.0;
-                    self.inner
-                        .cdp
-                        .call(
-                            Some(&session),
-                            "Input.dispatchMouseEvent",
-                            json!({"type":"mouseMoved","x":x,"y":y}),
-                        )
-                        .await?;
-                    if matches!(action, Action::Click) {
-                        for kind in ["mousePressed", "mouseReleased"] {
-                            self.inner
-                                .cdp
-                                .call(
-                                    Some(&session),
-                                    "Input.dispatchMouseEvent",
-                                    json!({"type":kind,"x":x,"y":y,"button":"left","clickCount":1}),
-                                )
-                                .await?;
-                        }
-                    }
                 }
                 Action::Type { text, submit } => {
                     self.focus_node(&session, backend).await?;
@@ -2461,34 +2735,74 @@ impl Browser {
 
     /// Navigate an explicitly owned tab and wait for its new top-frame document to load.
     pub async fn navigate(&self, owner: &str, tab_id: &str, url: &str) -> Result<(), BrowserError> {
-        let _interaction = self.inner.interaction_lock.lock().await;
-        let session = self.owned_session(owner, tab_id).await?;
-        if let Some(refs) = self.inner.state.lock().await.references.get_mut(tab_id) {
-            refs.invalidate();
-        }
-        let result = self
-            .inner
-            .cdp
-            .call(Some(&session), "Page.navigate", json!({"url":url}))
-            .await?;
-        if result.get("errorText").is_some() || result["isDownload"] == true {
-            return Err(BrowserError::NavigationFailed);
-        }
-        self.wait_loaded(&session, result["loaderId"].as_str(), false)
-            .await?;
-        Ok(())
+        self.navigate_cancellable(owner, tab_id, url, std::future::pending())
+            .await
     }
 
-    /// Close only a tab explicitly opened by the requesting agent session.
-    pub async fn close_agent_tab(&self, owner: &str, id: &str) -> Result<(), BrowserError> {
-        let state = self.inner.state.lock().await;
-        let tab = state
-            .tabs
-            .get(id)
-            .ok_or_else(|| BrowserError::TabNotReady(id.to_owned()))?;
-        if tab.opened_by != OpenedBy::Agent || tab.owner_session_id.as_deref() != Some(owner) {
-            return Err(BrowserError::OwnershipDenied(id.to_owned()));
+    /// A cancelled navigation acknowledges stopLoading before the caller can release ownership.
+    pub async fn navigate_cancellable(
+        &self,
+        owner: &str,
+        tab_id: &str,
+        url: &str,
+        cancellation: impl Future<Output = ()>,
+    ) -> Result<(), BrowserError> {
+        // The lock only fences in-flight interactions and the reference invalidation. It must
+        // not be held across the navigation: a server that never answers would stall every
+        // other session's interactions for the whole navigation timeout.
+        let session = {
+            let _interaction = self.inner.interaction_lock.lock().await;
+            let session = self.owned_session(owner, tab_id).await?;
+            if let Some(refs) = self.inner.state.lock().await.references.get_mut(tab_id) {
+                refs.invalidate();
+            }
+            session
+        };
+        let operation = async {
+            self.track_session(&session).await?;
+            let navigated = self
+                .inner
+                .cdp
+                .call(Some(&session), "Page.navigate", json!({"url":url}))
+                .await;
+            // The reply comes only when the navigation commits; a server that never answers
+            // would otherwise leave the load pending and the tab busy long after this error.
+            if matches!(navigated, Err(BrowserError::Timeout(_))) {
+                let _ = self
+                    .inner
+                    .cdp
+                    .call(Some(&session), "Page.stopLoading", json!({}))
+                    .await;
+            }
+            let result = navigated?;
+            if result.get("errorText").is_some() || result["isDownload"] == true {
+                return Err(BrowserError::NavigationFailed);
+            }
+            self.wait_loaded(&session, result["loaderId"].as_str(), false)
+                .await?;
+            Ok(())
+        };
+        tokio::pin!(operation);
+        tokio::select! {
+            result = &mut operation => result,
+            () = cancellation => {
+                let stopped = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    self.inner.cdp.call(Some(&session), "Page.stopLoading", json!({})),
+                ).await;
+                if !matches!(stopped, Ok(Ok(_))) {
+                    // An unacknowledged stop cannot fence the remote command; drain it instead.
+                    let _ = operation.await;
+                }
+                Err(BrowserError::InvalidAction("browser operation cancelled"))
+            }
         }
+    }
+
+    /// Close a session-owned tab, including a popup in that session's active isolated space.
+    pub async fn close_agent_tab(&self, owner: &str, id: &str) -> Result<(), BrowserError> {
+        let mut state = self.inner.state.lock().await;
+        check_owned(&state, owner, id)?;
         let result = self
             .inner
             .cdp
@@ -2497,6 +2811,14 @@ impl Browser {
         if result["success"] != true {
             return Err(BrowserError::TabNotReady(id.to_owned()));
         }
+        state.upload_closing.insert(id.to_owned());
+        *state.upload_epochs.entry(id.to_owned()).or_default() += 1;
+        state.uploads.remove(id);
+        drop(state);
+        let (root, tab) = (self.profile_path().to_owned(), id.to_owned());
+        tokio::task::spawn_blocking(move || uploads::remove_tab(&root, &tab))
+            .await
+            .map_err(std::io::Error::other)??;
         Ok(())
     }
 
@@ -2572,9 +2894,7 @@ impl Browser {
         Ok(NavigationGuard { active })
     }
 
-    /// Issue one script-free page command to an explicitly owned agent tab. Only DOM,
-    /// accessibility, input, navigation, and load-metric methods in [`PAGE_COMMANDS`] are
-    /// accepted, so callers cannot evaluate, inject, or call functions in any page world.
+    /// Issue one page command from [`PAGE_COMMANDS`] to an explicitly owned agent tab.
     pub async fn page_command(
         &self,
         owner: &str,
@@ -2585,6 +2905,21 @@ impl Browser {
         if !PAGE_COMMANDS.contains(&method) {
             return Err(BrowserError::InvalidAction("page command is not allowed"));
         }
+        let session = self.owned_session(owner, tab_id).await?;
+        self.inner.cdp.call(Some(&session), method, params).await
+    }
+
+    /// Issue tab-confined CDP on an explicitly owned page session. The caller must authorize
+    /// every addressed frame, execution context and input receiver; host-global domains and
+    /// file-transfer commands are unavailable through this untrusted entry point.
+    pub async fn page_cdp(
+        &self,
+        owner: &str,
+        tab_id: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, BrowserError> {
+        cdp_scope::validate(method)?;
         let session = self.owned_session(owner, tab_id).await?;
         self.inner.cdp.call(Some(&session), method, params).await
     }
@@ -2606,14 +2941,14 @@ impl Browser {
         self.inner.cdp.call(Some(&session), method, params).await
     }
 
-    /// Backend node of a reference in the latest snapshot of an owned tab, resolved without
-    /// page script. Callers must still confirm the node is connected before acting on it.
+    /// Node of a reference in the latest snapshot of an owned tab, qualified by its frame and
+    /// hosting session. Callers must still confirm the node is connected before acting on it.
     pub async fn reference_node(
         &self,
         owner: &str,
         tab_id: &str,
         reference: &str,
-    ) -> Result<u64, BrowserError> {
+    ) -> Result<RefTarget, BrowserError> {
         let session = self.owned_session(owner, tab_id).await?;
         let document = self
             .inner
@@ -2645,16 +2980,78 @@ impl Browser {
     }
 
     /// Collect the full accessibility tree and stable-reference compact representation.
+    /// Child frames are included when they share the top frame's origin: content of other
+    /// origins needs a policy decision of its own (see [`Browser::snapshot_frames`]).
     pub async fn snapshot(&self, id: &str) -> Result<Snapshot, BrowserError> {
+        self.capture(id, false, &same_origin).await
+    }
+
+    /// Like [`Browser::snapshot`], but only nodes whose layout box overlaps the visual
+    /// viewport at capture time, plus their ancestors. Refs are the tab's usual stable refs.
+    pub async fn snapshot_viewport(&self, id: &str) -> Result<Snapshot, BrowserError> {
+        self.capture(id, true, &same_origin).await
+    }
+
+    /// [`Browser::snapshot`] (or the viewport form) of an owned tab with the child frames
+    /// `keep(top, frame)` accepts; a rejected frame's subframes are left out with it.
+    pub async fn snapshot_frames(
+        &self,
+        owner: &str,
+        id: &str,
+        viewport: bool,
+        keep: &(dyn Fn(&FrameInfo, &FrameInfo) -> bool + Sync),
+    ) -> Result<Snapshot, BrowserError> {
+        self.owned_session(owner, id).await?;
+        self.capture(id, viewport, keep).await
+    }
+
+    async fn capture(
+        &self,
+        id: &str,
+        viewport: bool,
+        keep: &(dyn Fn(&FrameInfo, &FrameInfo) -> bool + Sync),
+    ) -> Result<Snapshot, BrowserError> {
         let _interaction = self.inner.interaction_lock.lock().await;
         let session = self.session(id).await?;
-        let raw = self
+        let mut raw = self
             .inner
             .cdp
             .call(Some(&session), "Accessibility.getFullAXTree", json!({}))
             .await?;
+        let view = if viewport {
+            let metrics = self
+                .inner
+                .cdp
+                .call(Some(&session), "Page.getLayoutMetrics", json!({}))
+                .await?;
+            let visual = &metrics["cssVisualViewport"];
+            let [left, top, width, height] = ["pageX", "pageY", "clientWidth", "clientHeight"]
+                .map(|field| visual[field].as_f64());
+            let (Some(left), Some(top), Some(width), Some(height)) = (left, top, width, height)
+            else {
+                return Err(BrowserError::InvalidResponse("layout metrics"));
+            };
+            let dom = self
+                .inner
+                .cdp
+                .call(
+                    Some(&session),
+                    "DOMSnapshot.captureSnapshot",
+                    json!({"computedStyles": []}),
+                )
+                .await?;
+            Some(nodes_in_view(&dom, left, top, width, height)?)
+        } else {
+            None
+        };
+        let frames = self.frame_trees(&session, id, view.as_ref(), keep).await?;
+        merge_frames(&mut raw, frames);
         let mut state = self.inner.state.lock().await;
-        process(raw, state.references.entry(id.to_owned()).or_default())
+        process(
+            raw,
+            state.references.entry(id.to_owned()).or_default(),
+            view.as_ref(),
+        )
     }
 
     /// Authenticated patched-browser gateway; None when running stock Chromium over CDP only.
@@ -2674,7 +3071,8 @@ impl Browser {
         }
         let session = self.session(id).await?;
         // The task owns the finally path even if the caller cancels its screenshot future.
-        tokio::spawn(Arc::clone(&self.inner).capture(session))
+        let params = json!({"format":"png","captureBeyondViewport":false});
+        tokio::spawn(Arc::clone(&self.inner).capture(session, params))
             .await
             .map_err(|error| BrowserError::Transport(error.to_string()))?
     }
@@ -2733,6 +3131,7 @@ impl Browser {
             }
         })
         .await;
+        self.wipe_space_downloads().await?;
         Ok(())
     }
 
@@ -2775,6 +3174,8 @@ impl Browser {
         exited.map_err(|_| BrowserError::Timeout("Chromium shutdown"))??;
         self.process.running = false;
         self.event_task.abort();
+        self.wipe_space_downloads().await?;
+        self.wipe_uploads().await?;
         match close {
             Err(BrowserError::Disconnected) => Ok(()),
             result => result.map(|_| ()),
@@ -2809,8 +3210,26 @@ async fn handle_event(inner: &Inner, event: Value) {
                 if state.tabs.contains_key(&tab.id) {
                     return;
                 }
+                if let Some(context) = params["targetInfo"]["browserContextId"].as_str() {
+                    state
+                        .tab_contexts
+                        .insert(tab.id.clone(), context.to_owned());
+                    // Every target of a space belongs to its owner, whatever its opener says
+                    // (or whether it has one, e.g. a service-worker window).
+                    let owner = state
+                        .spaces
+                        .iter()
+                        .find(|(_, space)| *space == context)
+                        .map(|(owner, _)| owner.clone());
+                    if let Some(owner) = owner {
+                        tab.browser_context_id = Some(context.to_owned());
+                        tab.owner_session_id = Some(owner);
+                    } else if let Some(owner) = state.closing.get(context) {
+                        tab.owner_session_id = Some(owner.clone());
+                    }
+                }
                 let opener = params["targetInfo"]["openerId"].as_str();
-                if let Some(opener) = opener {
+                if let Some(opener) = opener.filter(|_| tab.owner_session_id.is_none()) {
                     match opener_owner(&state, opener) {
                         Some(owner) => tab.owner_session_id = owner,
                         // The opener is not (yet) in the ledger: ownership is unresolved, not
@@ -2828,6 +3247,10 @@ async fn handle_event(inner: &Inner, event: Value) {
                     .events
                     .send(BrowserEvent::TabOpened { tab: tab.clone() });
                 if let Some(opener) = opener {
+                    inner.page.publish(PageEvent::PopupOpened {
+                        tab: tab.clone(),
+                        opener_id: opener.to_owned(),
+                    });
                     let _ = inner.events.send(BrowserEvent::PopupOpened {
                         tab,
                         opener_id: opener.to_owned(),
@@ -2846,10 +3269,29 @@ async fn handle_event(inner: &Inner, event: Value) {
         }
         "Target.targetDestroyed" => {
             if let Some(id) = params["targetId"].as_str() {
-                state.sessions.remove(id);
+                state.closing_tabs.remove(id);
+                state.upload_closing.remove(id);
+                state.upload_epochs.remove(id);
+                if let Some(root) = state.uploads.remove(id) {
+                    let tab = id.to_owned();
+                    tokio::task::spawn_blocking(move || uploads::remove_tab(&root, &tab));
+                }
+                if let Some(session) = state.sessions.remove(id) {
+                    inner.cdp.forget_session(&session);
+                }
                 state.references.remove(id);
                 state.frames.retain(|_, target| target != id);
                 state.pending_openers.remove(id);
+                state.tab_contexts.remove(id);
+                state.oopif_sessions.retain(|frame, (tab, session)| {
+                    if frame == id || tab == id {
+                        inner.cdp.forget_session(session);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                inner.page.tab_gone(id);
                 if let Some(tab) = state.tabs.remove(id) {
                     let _ = inner.events.send(BrowserEvent::TabClosed { tab });
                 }
@@ -2858,6 +3300,9 @@ async fn handle_event(inner: &Inner, event: Value) {
         "Target.detachedFromTarget" => {
             if let Some(session) = params["sessionId"].as_str() {
                 state.sessions.retain(|_, value| value != session);
+                state
+                    .oopif_sessions
+                    .retain(|_, (_, value)| value != session);
             }
         }
         // A subframe is attached before its first document request is made, so recording it
@@ -2893,32 +3338,42 @@ async fn handle_event(inner: &Inner, event: Value) {
                 }
             }
         }
-        "Page.javascriptDialogOpening" => {
-            if let Some(target) = event["sessionId"].as_str().and_then(|session| {
-                state
-                    .sessions
-                    .iter()
-                    .find(|(_, value)| *value == session)
-                    .map(|(target, _)| target.clone())
-            }) {
-                let _ = inner.events.send(BrowserEvent::DialogOpened {
-                    tab_id: target,
-                    kind: params["type"].as_str().unwrap_or_default().to_owned(),
-                    message: params["message"].as_str().unwrap_or_default().to_owned(),
-                });
+        "Input.dragIntercepted" => {
+            if let Some(session) = event["sessionId"].as_str() {
+                pointer::record_drag(session, params["data"].clone());
             }
         }
+        "Page.javascriptDialogOpening"
+        | "Page.javascriptDialogClosed"
+        | "Page.fileChooserOpened" => {
+            page_events::page_event(
+                inner,
+                &state,
+                event["method"].as_str().unwrap_or_default(),
+                event["sessionId"].as_str(),
+                params,
+            );
+        }
         "Browser.downloadWillBegin" => {
+            let text = |field: &str| params[field].as_str().unwrap_or_default().to_owned();
+            let tab_id = params["frameId"]
+                .as_str()
+                .and_then(|id| state.frames.get(id).cloned());
+            let tab = tab_id.as_ref().and_then(|id| state.tabs.get(id));
+            inner.page.download_started(DownloadInfo {
+                guid: text("guid"),
+                url: text("url"),
+                suggested_filename: text("suggestedFilename"),
+                tab_id: tab_id.clone(),
+                owner: tab.and_then(|tab| tab.owner_session_id.clone()),
+                space: tab.and_then(|tab| tab.browser_context_id.clone()),
+                status: None,
+            });
             let _ = inner.events.send(BrowserEvent::DownloadStarted {
-                guid: params["guid"].as_str().unwrap_or_default().to_owned(),
-                url: params["url"].as_str().unwrap_or_default().to_owned(),
-                suggested_filename: params["suggestedFilename"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_owned(),
-                tab_id: params["frameId"]
-                    .as_str()
-                    .and_then(|id| state.frames.get(id).cloned()),
+                guid: text("guid"),
+                url: text("url"),
+                suggested_filename: text("suggestedFilename"),
+                tab_id,
             });
         }
         "Browser.downloadProgress" => {
@@ -2928,10 +3383,11 @@ async fn handle_event(inner: &Inner, event: Value) {
                 _ => None,
             };
             if let Some(status) = status {
-                let _ = inner.events.send(BrowserEvent::DownloadFinished {
-                    guid: params["guid"].as_str().unwrap_or_default().to_owned(),
-                    status,
-                });
+                let guid = params["guid"].as_str().unwrap_or_default().to_owned();
+                inner.page.download_finished(&guid, status);
+                let _ = inner
+                    .events
+                    .send(BrowserEvent::DownloadFinished { guid, status });
             }
         }
         _ => {}
@@ -3035,13 +3491,17 @@ mod tests {
                 attach_lock: Mutex::default(),
                 capture_lock: Arc::default(),
                 interaction_lock: Mutex::default(),
+                network: Default::default(),
                 attach_timeout: Duration::from_secs(2),
                 events,
                 navigation_policy: std::sync::RwLock::new(None),
                 screencasts: Default::default(),
+                page: Default::default(),
             });
             assert!(matches!(
-                inner.capture("session".to_owned()).await,
+                inner
+                    .capture("session".to_owned(), json!({"format": "png"}))
+                    .await,
                 Err(BrowserError::Cdp { .. })
             ));
             tokio::time::timeout(Duration::from_secs(2), server)
@@ -3085,10 +3545,12 @@ mod tests {
                 attach_lock: Mutex::default(),
                 capture_lock: Arc::default(),
                 interaction_lock: Mutex::default(),
+                network: Default::default(),
                 attach_timeout: Duration::from_secs(2),
                 events,
                 navigation_policy: std::sync::RwLock::new(None),
                 screencasts: Default::default(),
+                page: Default::default(),
             });
             let cleanup = Arc::clone(&inner).begin_focus("session".to_owned()).await;
             match mode {
@@ -3155,15 +3617,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preloading_is_disabled_in_the_profile_without_losing_other_preferences() {
+    async fn profile_hardening_keeps_other_preferences() {
         let profile = tempfile::tempdir().unwrap();
         let path = profile.path().join("Default/Preferences");
-        disable_preloading(profile.path()).await.unwrap();
+        harden_profile(profile.path()).await.unwrap();
         let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["net"]["network_prediction_options"], 2);
+        assert_eq!(written["autofill"]["profile_enabled"], false);
+        assert_eq!(written["autofill"]["credit_card_enabled"], false);
+        assert_eq!(written["credentials_enable_service"], false);
+        assert_eq!(written["profile"]["password_manager_enabled"], false);
 
         std::fs::write(&path, br#"{"net":{"other":1},"keep":true}"#).unwrap();
-        disable_preloading(profile.path()).await.unwrap();
+        harden_profile(profile.path()).await.unwrap();
         let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["net"]["network_prediction_options"], 2);
         assert_eq!(written["net"]["other"], 1);
@@ -3171,7 +3637,7 @@ mod tests {
 
         // An unreadable file is replaced rather than left to re-enable preloading.
         std::fs::write(&path, b"not json").unwrap();
-        disable_preloading(profile.path()).await.unwrap();
+        harden_profile(profile.path()).await.unwrap();
         let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["net"]["network_prediction_options"], 2);
     }
@@ -3208,9 +3674,23 @@ mod tests {
                             }
                             "worker" => info(json!({"type":"iframe"})),
                             "fresh" => info(json!({})),
+                            "fresh-with-context" => {
+                                info(json!({"browserContextId":"default-context"}))
+                            }
+                            "default-popup-denied" => info(
+                                json!({"browserContextId":"default-context","openerId":"owned-tab"}),
+                            ),
                             "orphan" => info(json!({"openerId":"missing-opener"})),
+                            "space-allowed" | "space-denied" => {
+                                info(json!({"browserContextId":"bound-space"}))
+                            }
+                            "space-closing" => info(json!({"browserContextId":"closing-space"})),
+                            "space-unbound" => info(json!({"browserContextId":"unbound-space"})),
                             _ => info(json!({"openerId":"owned-tab"})),
                         }
+                    }
+                    "Target.getBrowserContexts" => {
+                        json!({"id":request["id"],"result":{"browserContextIds":["bound-space","closing-space","unbound-space"]}})
                     }
                     method => {
                         decided
@@ -3231,6 +3711,12 @@ mod tests {
         let (cdp, _notifications) = Cdp::connect(&url, Duration::from_secs(2)).await.unwrap();
         let (events, _receiver) = mpsc::unbounded_channel();
         let mut state = State::default();
+        state
+            .spaces
+            .insert("space-owner".into(), "bound-space".into());
+        state
+            .closing
+            .insert("closing-space".into(), "space-owner".into());
         state.tabs.insert(
             "owned-tab".into(),
             TabInfo {
@@ -3241,6 +3727,7 @@ mod tests {
                 owner_session_id: Some("agent".into()),
                 discarded: false,
                 unloaded: false,
+                browser_context_id: None,
             },
         );
         let check: OwnerNavigationCheck = Arc::new(|_, url| !url.contains("denied"));
@@ -3250,19 +3737,35 @@ mod tests {
             attach_lock: Mutex::default(),
             capture_lock: Arc::default(),
             interaction_lock: Mutex::default(),
+            network: Default::default(),
             attach_timeout: Duration::from_millis(400),
             events,
             navigation_policy: std::sync::RwLock::new(Some(check)),
             screencasts: Default::default(),
+            page: Default::default(),
         });
         let cases = [
             ("subframe", "https://denied.test/", "Fetch.continueRequest"),
             ("worker", "https://denied.test/", "Fetch.continueRequest"),
             ("fresh", "https://denied.test/", "Fetch.continueRequest"),
+            (
+                "fresh-with-context",
+                "https://denied.test/",
+                "Fetch.continueRequest",
+            ),
+            (
+                "default-popup-denied",
+                "https://denied.test/",
+                "Fetch.failRequest",
+            ),
             ("popup-allowed", "https://ok.test/", "Fetch.continueRequest"),
             ("popup-denied", "https://denied.test/", "Fetch.failRequest"),
             ("orphan", "https://ok.test/", "Fetch.failRequest"),
             ("flaky", "https://ok.test/", "Fetch.failRequest"),
+            ("space-allowed", "https://ok.test/", "Fetch.continueRequest"),
+            ("space-denied", "https://denied.test/", "Fetch.failRequest"),
+            ("space-closing", "https://ok.test/", "Fetch.failRequest"),
+            ("space-unbound", "https://ok.test/", "Fetch.failRequest"),
         ];
         for (frame, url, _) in cases {
             handle_paused(
@@ -3307,6 +3810,7 @@ mod tests {
                 owner_session_id: Some("agent".into()),
                 discarded: false,
                 unloaded: false,
+                browser_context_id: None,
             },
         );
         let late = [

@@ -516,7 +516,8 @@ async fn gateway_hello_publishes_private_discovery_and_rejects_bad_clients() {
     let runtime = private_runtime_dir();
     let profile = tempfile::tempdir().unwrap();
     let instance = "handshake-probe-0001";
-    let mut child = tokio::process::Command::new(&executable)
+    let mut command = tokio::process::Command::new(&executable);
+    command
         .args([
             "--headless=new",
             "--no-first-run",
@@ -534,9 +535,9 @@ async fn gateway_hello_publishes_private_discovery_and_rejects_bad_clients() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .process_group(0)
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+        .kill_on_drop(true);
+    common::supervise(&mut command);
+    let mut child = command.spawn().unwrap();
     let group = nix::unistd::Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap());
     let directory = runtime.path().join("openside/browser").join(instance);
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -1324,6 +1325,43 @@ async fn ownership_ledger_reports_agent_tabs_in_their_group() {
         .is_none());
     patched.browser.shutdown().await.unwrap();
     eprintln!("patched timing: ownership ledger {:?}", started.elapsed());
+}
+
+/// An isolated space's agent tab lives in its own CDP browser context, yet the patched build
+/// still files it under the session in the Agent Tabs group, beside no user tab.
+#[tokio::test]
+async fn space_tabs_are_agent_tabs_in_their_group() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let probe = probe_server().await;
+    let patched = Patched::launch(&executable, "space-session").await;
+    let context = patched.browser.open_space("space-session").await.unwrap();
+    let agent = patched
+        .browser
+        .create_agent_tab("space-session", &probe)
+        .await
+        .unwrap();
+    ready(&patched.browser, &agent).await;
+    assert_eq!(agent.browser_context_id.as_deref(), Some(context.as_str()));
+    gateway_event(patched.gateway(), |event| {
+        event.kind == "tab.opened" && event.payload["tab"]["cdp_target_id"] == agent.id.as_str()
+    })
+    .await;
+    let tab = patched.gateway_tab(&agent.id).await;
+    assert_eq!(tab.owner, GatewayOwner::Agent);
+    assert_eq!(tab.session_id.as_deref(), Some("space-session"));
+    assert_eq!(tab.group_title.as_deref(), Some("Agent Tabs"));
+    assert!(patched.browser.close_space("space-session").await.unwrap());
+    assert!(patched
+        .browser
+        .tabs()
+        .await
+        .iter()
+        .all(|tab| tab.id != agent.id));
+    assert_eq!(patched.browser.prune_spaces().await.unwrap(), 0);
+    patched.browser.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -2524,6 +2562,7 @@ fn raw_gateway_browser(
         .stderr(std::process::Stdio::null())
         .process_group(0)
         .kill_on_drop(true);
+    common::supervise(&mut command);
     if let Some(switch) = switch {
         command.arg(format!(
             "--openside-gateway-runtime-dir={}",

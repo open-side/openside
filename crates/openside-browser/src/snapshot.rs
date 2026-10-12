@@ -133,12 +133,25 @@ impl Snapshot {
     }
 }
 
+/// The node a snapshot reference names: a backend DOM node, qualified by the frame whose
+/// document holds it and the out-of-process iframe target whose session hosts it. Backend ids
+/// are per renderer process, so `backend` alone is ambiguous once frames are included.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RefTarget {
+    /// Frame id of the node's document; None for the top frame.
+    pub frame: Option<String>,
+    /// OOPIF target whose session addresses the node; None for the tab's page session.
+    pub host: Option<String>,
+    /// Backend DOM node id within `host`.
+    pub backend: u64,
+}
+
 #[derive(Default)]
 pub(crate) struct References {
     ids: HashMap<String, String>,
     next: usize,
     document_root: Option<u64>,
-    current: HashMap<String, u64>,
+    current: HashMap<String, RefTarget>,
 }
 
 impl References {
@@ -153,10 +166,71 @@ impl References {
         self.current.clear();
     }
 
-    pub(crate) fn resolve(&self, reference: &str, document_root: u64) -> Option<u64> {
+    pub(crate) fn resolve(&self, reference: &str, document_root: u64) -> Option<RefTarget> {
         (self.document_root == Some(document_root))
-            .then(|| self.current.get(reference).copied())
+            .then(|| self.current.get(reference).cloned())
             .flatten()
+    }
+}
+
+/// The accessibility tree of one child frame, to be spliced under its owner element's node.
+pub(crate) struct FrameTree {
+    pub(crate) frame: String,
+    pub(crate) host: Option<String>,
+    /// Parent frame id; None when the parent is the top frame.
+    pub(crate) parent: Option<String>,
+    /// Backend node of the owner `<iframe>` in the parent frame's document.
+    pub(crate) owner: u64,
+    pub(crate) ax: Value,
+}
+
+/// Splice child-frame trees (parents before children) into the top frame's
+/// `getFullAXTree` reply. Child node ids are prefixed with their frame id, since AX ids are
+/// only unique per document, and every child node is tagged with its frame and host so refs
+/// address it on the right session. A frame whose owner node is not in the tree is dropped.
+pub(crate) fn merge_frames(main: &mut Value, frames: Vec<FrameTree>) {
+    let Some(nodes) = main["nodes"].as_array_mut() else {
+        return;
+    };
+    for mut tree in frames {
+        let Some(Value::Array(children)) = tree.ax.get_mut("nodes").map(Value::take) else {
+            continue;
+        };
+        let prefix = |id: &str| format!("{}:{id}", tree.frame);
+        let owner = nodes.iter_mut().find(|node| {
+            node["backendDOMNodeId"].as_u64() == Some(tree.owner)
+                && node["opensideFrame"].as_str() == tree.parent.as_deref()
+        });
+        let root = children
+            .iter()
+            .find(|node| node["parentId"].is_null())
+            .and_then(|node| node["nodeId"].as_str())
+            .map(prefix);
+        let (Some(owner), Some(root)) = (owner, root) else {
+            continue;
+        };
+        match owner["childIds"].as_array_mut() {
+            Some(ids) => ids.push(Value::String(root)),
+            None => owner["childIds"] = Value::Array(vec![Value::String(root)]),
+        }
+        for mut node in children {
+            if let Some(id) = node["nodeId"].as_str() {
+                node["nodeId"] = Value::String(prefix(id));
+            }
+            // A leaf's missing array must stay absent; inserting null defeats serde's default.
+            if let Some(ids) = node.get_mut("childIds").and_then(Value::as_array_mut) {
+                for id in ids {
+                    if let Some(child) = id.as_str() {
+                        *id = Value::String(prefix(child));
+                    }
+                }
+            }
+            node["opensideFrame"] = Value::String(tree.frame.clone());
+            if let Some(host) = &tree.host {
+                node["opensideHost"] = Value::String(host.clone());
+            }
+            nodes.push(node);
+        }
     }
 }
 
@@ -178,6 +252,29 @@ struct AxNode {
     backend_dom_node_id: Option<u64>,
     #[serde(default)]
     properties: Vec<Value>,
+    #[serde(default, rename = "opensideFrame")]
+    frame: Option<String>,
+    #[serde(default, rename = "opensideHost")]
+    host: Option<String>,
+}
+
+impl AxNode {
+    /// Reference key: frame-qualified, because backend ids repeat across renderer processes.
+    fn key(&self) -> Option<String> {
+        let id = self.backend_dom_node_id?;
+        Some(match &self.frame {
+            None => format!("dom:{id}"),
+            Some(frame) => format!("dom:{frame}:{id}"),
+        })
+    }
+
+    fn target(&self) -> Option<RefTarget> {
+        Some(RefTarget {
+            frame: self.frame.clone(),
+            host: self.host.clone(),
+            backend: self.backend_dom_node_id?,
+        })
+    }
 }
 
 fn ax_text(value: &Value) -> String {
@@ -217,7 +314,94 @@ fn interactive(role: &str) -> bool {
     )
 }
 
-pub(crate) fn process(mut raw: Value, refs: &mut References) -> Result<Snapshot, BrowserError> {
+/// Backend DOM nodes whose layout box (document coordinates, from `DOMSnapshot.captureSnapshot`
+/// of the main document) overlaps the rectangle `[left, left + width) x [top, top + height)`.
+/// The box is the node's own, not clipped by scrolling ancestors; a node without a layout box
+/// is never reported, and `process` keeps it only as an ancestor of one that is.
+pub(crate) fn nodes_in_view(
+    dom: &Value,
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+) -> Result<HashSet<u64>, BrowserError> {
+    let invalid = || BrowserError::InvalidResponse("DOM snapshot");
+    let document = dom["documents"].get(0).ok_or_else(invalid)?;
+    let backend = document["nodes"]["backendNodeId"]
+        .as_array()
+        .ok_or_else(invalid)?;
+    let layout_nodes = document["layout"]["nodeIndex"]
+        .as_array()
+        .ok_or_else(invalid)?;
+    let bounds = document["layout"]["bounds"]
+        .as_array()
+        .ok_or_else(invalid)?;
+    let (right, bottom) = (left + width, top + height);
+    let mut visible = HashSet::new();
+    for (index, rect) in layout_nodes.iter().zip(bounds) {
+        let (Some(index), Some(rect)) = (index.as_u64(), rect.as_array()) else {
+            continue;
+        };
+        let [x, y, w, h] = [0, 1, 2, 3].map(|axis| rect.get(axis).and_then(Value::as_f64));
+        let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) else {
+            continue;
+        };
+        if x < right && x + w >= left && y < bottom && y + h >= top {
+            if let Some(id) = backend
+                .get(usize::try_from(index).map_err(|_| invalid())?)
+                .and_then(Value::as_u64)
+            {
+                visible.insert(id);
+            }
+        }
+    }
+    Ok(visible)
+}
+
+/// Per AX node: kept when it is a root, is in `view`, or has a kept descendant.
+fn kept_in_view(
+    nodes: &[AxNode],
+    indexes: &HashMap<&str, usize>,
+    view: &HashSet<u64>,
+) -> Vec<bool> {
+    let mut parent: Vec<Option<usize>> = vec![None; nodes.len()];
+    for (index, node) in nodes.iter().enumerate() {
+        for child in &node.child_ids {
+            if let Some(&child) = indexes.get(child.as_str()) {
+                parent[child].get_or_insert(index);
+            }
+        }
+    }
+    let mut kept: Vec<bool> = parent.iter().map(Option::is_none).collect();
+    for (index, node) in nodes.iter().enumerate() {
+        // Child-frame trees are merged only when their owner frame is in view, and their
+        // backend ids are not comparable with the top document's layout snapshot.
+        let shown = node.frame.is_some()
+            || node
+                .backend_dom_node_id
+                .is_some_and(|id| view.contains(&id));
+        if !shown {
+            continue;
+        }
+        let mut at = Some(index);
+        while let Some(current) = at {
+            // A kept node's ancestors were kept when it was marked.
+            if std::mem::replace(&mut kept[current], true) {
+                break;
+            }
+            at = parent[current];
+        }
+    }
+    kept
+}
+
+/// Compact tree of a full AX tree. With `view`, only nodes overlapping the viewport and their
+/// ancestors are kept; refs of the omitted nodes that were handed out before still resolve.
+pub(crate) fn process(
+    mut raw: Value,
+    refs: &mut References,
+    view: Option<&HashSet<u64>>,
+) -> Result<Snapshot, BrowserError> {
     let raw_bytes = serde_json::to_vec(&raw)
         .map_err(|_| BrowserError::InvalidResponse("AX JSON"))?
         .len();
@@ -230,7 +414,7 @@ pub(crate) fn process(mut raw: Value, refs: &mut References) -> Result<Snapshot,
     // Document identity also guards against navigation events arriving after an observation.
     let document_root = nodes
         .iter()
-        .find(|node| node.role["value"] == "RootWebArea")
+        .find(|node| node.frame.is_none() && node.role["value"] == "RootWebArea")
         .and_then(|node| node.backend_dom_node_id);
     if document_root.is_some() && document_root != refs.document_root {
         refs.ids.clear();
@@ -246,6 +430,7 @@ pub(crate) fn process(mut raw: Value, refs: &mut References) -> Result<Snapshot,
         .iter()
         .flat_map(|node| node.child_ids.iter().map(String::as_str))
         .collect();
+    let kept = view.map(|view| kept_in_view(&nodes, &indexes, view));
     // (AX index, depth, index in `retained` of the nearest retained ancestor)
     let mut stack: Vec<(usize, usize, Option<usize>)> = nodes
         .iter()
@@ -259,6 +444,9 @@ pub(crate) fn process(mut raw: Value, refs: &mut References) -> Result<Snapshot,
     while let Some((index, depth, parent)) = stack.pop() {
         let node = &nodes[index];
         if !seen.insert(index) {
+            continue;
+        }
+        if kept.as_ref().is_some_and(|kept| !kept[index]) {
             continue;
         }
         let role = ax_text(&node.role);
@@ -302,16 +490,13 @@ pub(crate) fn process(mut raw: Value, refs: &mut References) -> Result<Snapshot,
             continue;
         }
         let reference = if interactive(&role) || !name.is_empty() {
-            let key = node
-                .backend_dom_node_id
-                .map(|id| format!("dom:{id}"))
-                .unwrap_or_else(|| format!("ax:{}", node.node_id));
+            let key = node.key().unwrap_or_else(|| format!("ax:{}", node.node_id));
             let reference = refs.ids.entry(key).or_insert_with(|| {
                 refs.next += 1;
                 format!("e{}", refs.next)
             });
-            if let Some(id) = node.backend_dom_node_id {
-                refs.current.insert(reference.clone(), id);
+            if let Some(target) = node.target() {
+                refs.current.insert(reference.clone(), target);
             }
             Some(reference.clone())
         } else {
@@ -332,6 +517,17 @@ pub(crate) fn process(mut raw: Value, refs: &mut References) -> Result<Snapshot,
             },
             depth,
         });
+    }
+    if let Some(kept) = &kept {
+        // An omitted node keeps the ref it already had, so a ref from an earlier capture
+        // still acts on it; it only gets no new number, which would be unseen text.
+        for (node, _) in nodes.iter().zip(kept).filter(|(_, kept)| !**kept) {
+            if let (Some(key), Some(target)) = (node.key(), node.target()) {
+                if let Some(reference) = refs.ids.get(&key) {
+                    refs.current.insert(reference.clone(), target);
+                }
+            }
+        }
     }
     let (nodes, hidden_names) = compact(retained);
     Ok(Snapshot {
@@ -524,28 +720,84 @@ mod tests {
             {"nodeId":"3","backendDOMNodeId":43,"role":{"value":"textbox"},"name":{"value":"Password"},"value":{"value":"CANARY-secret"},"properties":[{"name":"protected","value":{"value":true}}]}
         ]});
         let mut refs = References::default();
-        let old = process(raw.clone(), &mut refs).unwrap();
+        let old = process(raw.clone(), &mut refs, None).unwrap();
         assert_eq!(old.nodes.len(), 2);
         assert_eq!(old.nodes[0].depth, 0);
         assert_eq!(old.nodes[0].reference.as_deref(), Some("e1"));
         assert!(!old.text.contains("CANARY"));
         let mut changed = raw;
         changed["nodes"][2]["name"]["value"] = json!("Saved");
-        let new = process(changed, &mut refs).unwrap();
+        let new = process(changed, &mut refs, None).unwrap();
         assert_eq!(old.diff(&new).changed, vec!["e1"]);
         assert!(old.diff(&new).added.is_empty());
-        let absent = process(json!({"nodes":[]}), &mut refs).unwrap();
+        let absent = process(json!({"nodes":[]}), &mut refs, None).unwrap();
         assert_eq!(new.diff(&absent).removed, vec!["e1", "e2"]);
-        let reappeared = process(json!({"nodes":[{"nodeId":"99","backendDOMNodeId":42,"role":{"value":"button"},"name":{"value":"Saved"}}]}), &mut refs).unwrap();
+        let reappeared = process(json!({"nodes":[{"nodeId":"99","backendDOMNodeId":42,"role":{"value":"button"},"name":{"value":"Saved"}}]}), &mut refs, None).unwrap();
         assert_eq!(reappeared.nodes[0].reference.as_deref(), Some("e1"));
-        let new_document = process(json!({"nodes":[{"nodeId":"root","backendDOMNodeId":100,"role":{"value":"RootWebArea"},"name":{"value":"New page"},"childIds":["button"]},{"nodeId":"button","backendDOMNodeId":101,"role":{"value":"button"},"name":{"value":"New action"}}]}), &mut refs).unwrap();
+        let new_document = process(json!({"nodes":[{"nodeId":"root","backendDOMNodeId":100,"role":{"value":"RootWebArea"},"name":{"value":"New page"},"childIds":["button"]},{"nodeId":"button","backendDOMNodeId":101,"role":{"value":"button"},"name":{"value":"New action"}}]}), &mut refs, None).unwrap();
         assert_eq!(new_document.nodes[0].reference.as_deref(), Some("e3"));
         assert_eq!(new_document.nodes[1].reference.as_deref(), Some("e4"));
-        assert_eq!(refs.resolve("e1", 100), None);
-        assert_eq!(refs.resolve("e4", 100), Some(101));
-        assert_eq!(refs.resolve("e4", 99), None);
+        let backend = |refs: &References, reference: &str, root: u64| {
+            refs.resolve(reference, root).map(|target| target.backend)
+        };
+        assert_eq!(backend(&refs, "e1", 100), None);
+        assert_eq!(backend(&refs, "e4", 100), Some(101));
+        assert_eq!(backend(&refs, "e4", 99), None);
         refs.invalidate();
-        assert_eq!(refs.resolve("e4", 100), None);
+        assert_eq!(backend(&refs, "e4", 100), None);
+    }
+
+    #[test]
+    fn child_frames_are_spliced_under_their_owner_with_qualified_refs() {
+        let mut main = json!({"nodes":[
+            {"nodeId":"1","backendDOMNodeId":1,"role":{"value":"RootWebArea"},"name":{"value":"Top"},"childIds":["2","3"]},
+            {"nodeId":"2","backendDOMNodeId":5,"role":{"value":"button"},"name":{"value":"Go"}},
+            {"nodeId":"3","backendDOMNodeId":6,"role":{"value":"Iframe"},"name":{"value":"pay"}}
+        ]});
+        // The child document reuses AX id "2" and backend id 5: another renderer process.
+        let child = json!({"nodes":[
+            {"nodeId":"1","backendDOMNodeId":1,"role":{"value":"RootWebArea"},"name":{"value":"Pay"},"childIds":["2"]},
+            {"nodeId":"2","parentId":"1","backendDOMNodeId":5,"role":{"value":"button"},"name":{"value":"Go"}}
+        ]});
+        merge_frames(
+            &mut main,
+            vec![FrameTree {
+                frame: "F".into(),
+                host: Some("F".into()),
+                parent: None,
+                owner: 6,
+                ax: child,
+            }],
+        );
+        let mut refs = References::default();
+        let snapshot = process(main, &mut refs, None).unwrap();
+        let lines: Vec<&str> = snapshot.text.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "[e1] RootWebArea \"Top\"",
+                " [e2] button \"Go\"",
+                " [e3] Iframe \"pay\"",
+                "  [e4] RootWebArea \"Pay\"",
+                "   [e5] button \"Go\"",
+            ]
+        );
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .map(|node| node.depth)
+                .collect::<Vec<_>>(),
+            [0, 1, 1, 2, 3]
+        );
+        assert_eq!(snapshot.document_root, Some(1));
+        let top = refs.resolve("e2", 1).unwrap();
+        assert_eq!((top.frame, top.host, top.backend), (None, None, 5));
+        let inner = refs.resolve("e5", 1).unwrap();
+        assert_eq!(
+            (inner.frame.as_deref(), inner.host.as_deref(), inner.backend),
+            (Some("F"), Some("F"), 5)
+        );
     }
 
     #[test]
@@ -557,7 +809,8 @@ mod tests {
                 json!({"nodeId":"b5","backendDOMNodeId":5,"role":{"value":"button"},"name":{"value":"Verify 2"}}),
             ])
             .collect();
-        let mut snapshot = process(json!({"nodes":boxes}), &mut References::default()).unwrap();
+        let mut snapshot =
+            process(json!({"nodes":boxes}), &mut References::default(), None).unwrap();
         assert!(snapshot.text.contains("= \"2\""));
         snapshot.mask_field_values();
         let values: Vec<&str> = snapshot
@@ -570,5 +823,74 @@ mod tests {
             snapshot.text,
             "[e1] textbox \"Digit 1\" = \"<redacted>\"\n[e2] textbox \"Digit 2\" = \"<redacted>\"\n[e3] textbox \"Digit 3\" = \"<redacted>\"\n[e4] textbox \"Empty\"\n[e5] button \"Verify 2\"\n"
         );
+    }
+
+    fn page() -> Value {
+        json!({"nodes":[
+            {"nodeId":"root","backendDOMNodeId":1,"role":{"value":"RootWebArea"},"name":{"value":"Page"},"childIds":["main","footer"]},
+            {"nodeId":"main","backendDOMNodeId":2,"role":{"value":"main"},"childIds":["list","note"]},
+            {"nodeId":"list","backendDOMNodeId":3,"role":{"value":"list"},"childIds":["a","b"]},
+            {"nodeId":"a","backendDOMNodeId":4,"role":{"value":"link"},"name":{"value":"Visible"}},
+            {"nodeId":"b","backendDOMNodeId":5,"role":{"value":"link"},"name":{"value":"Below"}},
+            {"nodeId":"note","backendDOMNodeId":6,"role":{"value":"paragraph"},"name":{"value":"Far below"}},
+            {"nodeId":"footer","backendDOMNodeId":7,"role":{"value":"contentinfo"},"childIds":["c","d"]},
+            {"nodeId":"c","backendDOMNodeId":8,"role":{"value":"button"},"name":{"value":"Cookies"}},
+            {"nodeId":"d","backendDOMNodeId":9,"role":{"value":"button"},"name":{"value":"Top"}}
+        ]})
+    }
+
+    #[test]
+    fn viewport_keeps_visible_nodes_with_ancestors_and_old_refs_resolve() {
+        let view: HashSet<u64> = [4, 8].into();
+        let mut refs = References::default();
+        let full = process(page(), &mut refs, None).unwrap();
+        let reference = |name: &str| {
+            full.nodes
+                .iter()
+                .find(|node| node.name == name)
+                .and_then(|node| node.reference.clone())
+                .unwrap()
+        };
+        let (below, visible) = (reference("Below"), reference("Visible"));
+        let part = process(page(), &mut refs, Some(&view)).unwrap();
+        let names: Vec<&str> = part.nodes.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(names, ["Page", "", "", "Visible", "", "Cookies"]);
+        assert_eq!(part.nodes.len(), part.text.lines().count());
+        assert_eq!(
+            part.nodes
+                .iter()
+                .find(|node| node.name == "Visible")
+                .unwrap()
+                .reference,
+            Some(visible)
+        );
+        // Not shown, but still the node it was in the earlier capture.
+        assert_eq!(
+            refs.resolve(&below, 1).map(|target| target.backend),
+            Some(5)
+        );
+
+        let mut fresh = References::default();
+        let first = process(page(), &mut fresh, Some(&view)).unwrap();
+        assert!(!first.text.contains("Below") && !first.text.contains("Far below"));
+        assert_eq!(fresh.resolve("e3", 1).map(|target| target.backend), Some(8));
+        assert_eq!(fresh.resolve("e9", 1), None);
+    }
+
+    #[test]
+    fn nodes_in_view_uses_document_coordinates_and_main_document_only() {
+        let dom = json!({"documents":[{
+            "nodes":{"backendNodeId":[10,11,12,13]},
+            "layout":{
+                "nodeIndex":[0,1,2,3],
+                "bounds":[[0.0,0.0,800.0,3000.0],[10.0,590.0,100.0,40.0],[10.0,700.0,100.0,40.0],[10.0,2000.0,100.0,40.0]]
+            }
+        }]});
+        // Scrolled by 600 with a 400-high viewport: document y in [600, 1000).
+        let view = nodes_in_view(&dom, 0.0, 600.0, 800.0, 400.0).unwrap();
+        let mut ids: Vec<u64> = view.into_iter().collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [10, 11, 12]);
+        assert!(nodes_in_view(&json!({}), 0.0, 0.0, 1.0, 1.0).is_err());
     }
 }

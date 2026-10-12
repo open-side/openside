@@ -139,18 +139,57 @@ impl Browser {
             .and_then(|node| node["backendDOMNodeId"].as_u64()))
     }
 
-    async fn hit(&self, session: &str, x: f64, y: f64) -> Result<PointHit, BrowserError> {
-        let cdp = &self.inner.cdp;
-        let (document, top_origin) = self.document_identity(session).await?;
-        let located = cdp
+    /// `DOM.getNodeForLocation` reads its coordinates as document coordinates (Chromium 152:
+    /// at scroll offset 500 a viewport point above y=500 finds nothing), while input events
+    /// use viewport coordinates. Adding the visual viewport's page offset makes the hit-test
+    /// answer for the same point an input event at `(x, y)` reaches.
+    pub(crate) async fn node_at(
+        &self,
+        session: &str,
+        x: f64,
+        y: f64,
+        include_user_agent_shadow_dom: bool,
+    ) -> Result<Value, BrowserError> {
+        let metrics = self
+            .inner
+            .cdp
+            .call(Some(session), "Page.getLayoutMetrics", json!({}))
+            .await?;
+        let offset = |axis: &str| metrics["cssVisualViewport"][axis].as_f64().unwrap_or(0.0);
+        self.inner
+            .cdp
             .call(
                 Some(session),
                 "DOM.getNodeForLocation",
-                // false: hit-test the element that real pointer input reaches, so a
-                // pointer-events:none cover cannot stand in for the receiver beneath it.
-                json!({"x":x.floor(),"y":y.floor(),"includeUserAgentShadowDOM":true,"ignorePointerEventsNone":false}),
+                // ignorePointerEventsNone=false: hit-test the element that real pointer input
+                // reaches, so a pointer-events:none cover cannot stand in for the receiver
+                // beneath it.
+                json!({
+                    "x": (x + offset("pageX")).floor(),
+                    "y": (y + offset("pageY")).floor(),
+                    "includeUserAgentShadowDOM": include_user_agent_shadow_dom,
+                    "ignorePointerEventsNone": false,
+                }),
             )
-            .await?;
+            .await
+    }
+
+    /// [`Browser::node_at`] for an explicitly owned agent tab; the REPL's pointer checks use it.
+    pub async fn node_at_point(
+        &self,
+        owner: &str,
+        tab_id: &str,
+        x: f64,
+        y: f64,
+    ) -> Result<Value, BrowserError> {
+        let session = self.owned_session(owner, tab_id).await?;
+        self.node_at(&session, x, y, false).await
+    }
+
+    async fn hit(&self, session: &str, x: f64, y: f64) -> Result<PointHit, BrowserError> {
+        let cdp = &self.inner.cdp;
+        let (document, top_origin) = self.document_identity(session).await?;
+        let located = self.node_at(session, x, y, true).await?;
         let backend_node = located["backendNodeId"]
             .as_u64()
             .ok_or(BrowserError::InvalidResponse("hit-test node"))?;
@@ -379,5 +418,64 @@ impl Browser {
             url: required_string(&after, "url")?.to_owned(),
             navigated,
         })
+    }
+}
+
+/// Drag payloads announced by `Input.dragIntercepted`, by CDP session: while interception is on,
+/// the browser reports a drag the page started instead of running a system drag.
+static DRAGS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Value>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn drags() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, Value>> {
+    DRAGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub(crate) fn record_drag(session: &str, data: Value) {
+    drags().insert(session.to_owned(), data);
+}
+
+impl Browser {
+    /// Switch drag interception of an owned agent tab on or off, dropping any payload left over
+    /// from an earlier drag.
+    pub async fn intercept_drags(
+        &self,
+        owner: &str,
+        tab_id: &str,
+        enabled: bool,
+    ) -> Result<(), BrowserError> {
+        let session = self.owned_session(owner, tab_id).await?;
+        drags().remove(&session);
+        self.inner
+            .cdp
+            .call(
+                Some(&session),
+                "Input.setInterceptDrags",
+                json!({"enabled": enabled}),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The payload of the drag the page started since interception was switched on, waiting up
+    /// to `wait` for the browser to announce it; `None` when no drag started.
+    pub async fn take_intercepted_drag(
+        &self,
+        owner: &str,
+        tab_id: &str,
+        wait: Duration,
+    ) -> Result<Option<Value>, BrowserError> {
+        let session = self.owned_session(owner, tab_id).await?;
+        let until = tokio::time::Instant::now() + wait;
+        loop {
+            if let Some(data) = drags().remove(&session) {
+                return Ok(Some(data));
+            }
+            if tokio::time::Instant::now() >= until {
+                return Ok(None);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 }

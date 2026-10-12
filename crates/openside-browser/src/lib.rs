@@ -8,10 +8,11 @@
 //! Launch disables extensions, OS-backed password stores, and browser-account sync even
 //! when a distribution wrapper supplies conflicting defaults.
 //!
-//! Mutating actions and text insertion require an explicitly agent-owned tab and a
-//! reference from its latest snapshot. Navigation and reconnect invalidate actionable
-//! references; take a new snapshot before acting. Document-bound NodeHandles let pending
-//! secret-input tickets survive reconnect without reusing a reference in a new document.
+//! Mutating actions and text insertion require a session-owned tab in its active context
+//! (including popups in that session's isolated space) and a reference from its latest
+//! snapshot. Navigation and reconnect invalidate actionable references; take a new snapshot
+//! before acting. Document-bound NodeHandles let pending secret-input tickets survive reconnect
+//! without reusing a reference in a new document.
 //! Text insertion never includes supplied text or page-generated diagnostics in its errors.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
@@ -27,11 +28,20 @@ pub use browser::{
     NavigationCheck, NavigationGuard, NodeHandle, OpenedBy, OwnerNavigationCheck, PointHit,
     PointLabel, PointerAction, Screencast, ScreencastFrame, TabInfo, PAGE_COMMANDS, VIEWPORT,
 };
+pub use browser::{
+    DialogClaim, DialogInfo, DownloadInfo, FileChooserInfo, PageEvent, ScreenshotArea,
+    ScreenshotClip,
+};
+pub use browser::{
+    DocumentResponse, DocumentWait, LoadState, LoadWait, NetworkEvent, NetworkEventKind,
+    NetworkEvents, WaitUntil,
+};
+pub use browser::{FrameHit, FrameInfo};
 pub use gateway::{
     FocusDecision, Gateway, GatewayConfig, GatewayEvent, GatewayEventError, GatewayOwner,
     GatewayScreenshot, GatewayTab, GatewayTabs, EVENT_BUFFER as GATEWAY_EVENT_BUFFER,
 };
-pub use snapshot::{Snapshot, SnapshotDiff, SnapshotNode};
+pub use snapshot::{RefTarget, Snapshot, SnapshotDiff, SnapshotNode};
 pub use snapshot_view::{Hunk, Omission, ScopeHint, SnapshotPatch, SnapshotView};
 
 /// A launch, protocol, ownership, or readiness failure.
@@ -72,6 +82,10 @@ pub enum BrowserError {
     /// An agent attempted to mutate a tab it does not own.
     #[error("agent does not own tab: {0}")]
     OwnershipDenied(String),
+    /// The owner's isolated space is closed or lost; its tabs are never created in the shared
+    /// profile instead.
+    #[error("isolated browser space is closed: {0}")]
+    SpaceClosed(String),
     /// JavaScript evaluation threw an exception.
     #[error("JavaScript evaluation failed: {0}")]
     JavaScript(String),
