@@ -1,0 +1,38 @@
+[package]
+name = "openside-channels"
+description = "Telegram, Slack and Discord adapters: thin clients of the public openside daemon API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "openside_channels"
+
+[[bin]]
+name = "openside-channels"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = "2"
+futures-util = "0.3"
+hmac = "0.12"
+openside-config = { path = "../openside-config" }
+openside-policy = { path = "../openside-policy" }
+openside-proto = { path = "../openside-proto" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "process", "sync", "time", "fs", "signal", "io-util"] }
+tokio-util = "0.7"
+url = "2"
+
+[dev-dependencies]
+axum = "0.8"
+
+[lints]
+workspace = true
