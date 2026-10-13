@@ -28,6 +28,6 @@ describe("StopTaskDialog", () => {
 
   it("a Task cancel names the task and says the rest keeps running", () => {
     open({ kind: "task", name: "Compare hotels" });
-    expect(screen.getByRole("dialog", { name: "Cancel this task?" })).toHaveTextContent("“Compare hotels” stops where it is. The agent and any other tasks keep running");
+    expect(screen.getByRole("dialog", { name: "Stop this task?" })).toHaveTextContent("“Compare hotels” stops where it is. The agent and any other tasks keep running");
   });
 });

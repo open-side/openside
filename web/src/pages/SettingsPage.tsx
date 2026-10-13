@@ -177,7 +177,7 @@ export function SettingsPage({ onModels, onChannels, onRemote, onWorkspace, onGu
         </span>
         <span className="tile-copy">
           <strong>Models &amp; accounts</strong>
-          <span>Connect providers, add API keys and choose the default model</span>
+          <span>Connect providers, add API keys and choose the fast and reasoning models</span>
         </span>
         <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
       </button>

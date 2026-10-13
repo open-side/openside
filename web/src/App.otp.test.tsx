@@ -92,7 +92,7 @@ function stubDaemon(options: { events?: Record<string, unknown>[]; pending?: Tic
       if (url.pathname.endsWith("/events")) return stream(url.pathname.split("/")[3] ?? "", []);
       if (url.pathname === "/v1/tickets") return json(200, { tickets: options.pending ?? [] });
       if (url.pathname === "/v1/sessions") return json(200, { sessions: [] });
-      if (url.pathname === "/v1/agents") return json(200, { agents: [agentSummary("chief", "Juno", { home_session_id: "s-chief" })] });
+      if (url.pathname === "/v1/agents") return json(200, { agents: [agentSummary("chief", "openside", { home_session_id: "s-chief" })] });
       return json(404, { code: "not_found", message: "not found" });
     }),
   );
@@ -131,7 +131,7 @@ describe("code requests never move the person", () => {
     expect(within(dock).getByRole("link", { name: /^Go to / })).toHaveAttribute("href", "/sessions/s2");
     // The dock rests as the card's collapsed bubble; opening it puts the cursor in the code field.
     expect(within(dock).queryByLabelText("Code")).toBeNull();
-    await user.click(within(dock).getByRole("button", { name: summary("ticket:otp1") }));
+    await user.click(await within(dock).findByRole("button", { name: summary("ticket:otp1") }));
     expect(within(dock).getByLabelText("Code")).toHaveFocus();
     await user.type(within(dock).getByLabelText("Code"), "123456{Enter}");
     await vi.waitFor(() => expect(resolves).toEqual([{ path: "/v1/tickets/k2/resolve", body: { value: "123456" } }]));
@@ -198,7 +198,7 @@ describe("code requests never move the person", () => {
     const dock = await screen.findByRole("complementary", { name: "Code needed for accounts.example" });
     expect(await screen.findByRole("textbox", { name: "Message" })).toBeInTheDocument();
     // Folded: the form is not on screen until the person asks for it.
-    expect(within(dock).getByRole("button", { name: summary("ticket:otp1") })).toHaveAttribute("aria-expanded", "false");
+    expect(await within(dock).findByRole("button", { name: summary("ticket:otp1") })).toHaveAttribute("aria-expanded", "false");
     expect(within(dock).queryByLabelText("Code")).toBeNull();
     // Portaled out of the page, so it can never be laid over the conversation's own markup.
     expect(document.querySelector("main")?.contains(dock)).toBe(false);
@@ -224,7 +224,7 @@ describe("code requests never move the person", () => {
     const resolves = stubDaemon({ pending: [choiceTicket("k4", "s2")] });
     render(<App />);
     const dock = await screen.findByRole("complementary", { name: "Choice needed for accounts.example" });
-    await user.click(within(dock).getByRole("button", { name: summary("ticket:choice1") }));
+    await user.click(await within(dock).findByRole("button", { name: summary("ticket:choice1") }));
     expect(within(dock).getAllByRole("radio")).toHaveLength(2);
     await user.click(within(dock).getByLabelText(/Work account/));
     await user.click(within(dock).getByRole("button", { name: "Continue" }));

@@ -82,7 +82,7 @@ fn relative(path: &str) -> Option<PathBuf> {
     }
     let mut out = PathBuf::new();
     for part in path.split('/') {
-        if !component(part) {
+        if !component(part) || part == crate::tool_output::DIRECTORY {
             return None;
         }
         out.push(part);
@@ -95,7 +95,7 @@ fn relative(path: &str) -> Option<PathBuf> {
 /// with `O_NOFOLLOW | O_DIRECTORY` and files with `O_NOFOLLOW`, so neither a symlinked
 /// session root nor an intermediate directory swapped for a link can redirect a read or a
 /// write. `data_dir` itself is daemon configuration and may legitimately contain links.
-mod fsx {
+pub(crate) mod fsx {
     use std::{
         ffi::{OsStr, OsString},
         io::{self, Read, Write},
@@ -142,7 +142,7 @@ mod fsx {
     }
 
     /// `<data_dir>/artifacts/<rel>` as a directory descriptor.
-    pub(super) fn open_dir(data_dir: &Path, rel: &Path, create: bool) -> io::Result<OwnedFd> {
+    pub(crate) fn open_dir(data_dir: &Path, rel: &Path, create: bool) -> io::Result<OwnedFd> {
         let root = fs::openat(
             CWD,
             data_dir,
@@ -300,7 +300,7 @@ pub(crate) async fn lifecycle(
     gate.lock_owned().await
 }
 
-async fn alive(shared: &Shared, session: &SessionId) -> bool {
+pub(crate) async fn alive(shared: &Shared, session: &SessionId) -> bool {
     shared.db.state(session).await.is_ok()
 }
 
@@ -372,6 +372,140 @@ pub(crate) async fn save_tool_output(
         .map_err(|_| std::io::Error::other("artifact event could not be recorded"))
 }
 
+fn document_denial(index: usize, reason: &str, hint: &str) -> crate::tools::ToolExec {
+    crate::tools::ToolExec::Denied {
+        reason: format!("attachment[{index}]: {reason}"),
+        hint: Some(hint.into()),
+    }
+}
+
+pub(crate) async fn admit_message_documents(
+    env: &ToolEnv,
+    requested: Vec<(String, Option<String>, openside_proto::DocumentDisplay)>,
+) -> Result<Vec<openside_proto::MessageDocument>, crate::tools::ToolExec> {
+    use openside_proto::{MAX_DOCUMENT_BYTES, MAX_MESSAGE_DOCUMENTS};
+    if requested.len() > MAX_MESSAGE_DOCUMENTS {
+        return Err(document_denial(
+            2,
+            "too_many_attachments",
+            "Attach at most two documents; combine related sections into one Markdown artifact",
+        ));
+    }
+    if requested.is_empty() {
+        return Ok(Vec::new());
+    }
+    let _gate = lifecycle(&env.shared, &env.session).await;
+    if !alive(&env.shared, &env.session).await {
+        return Err(document_denial(
+            0,
+            "session_unavailable",
+            "Use an active session",
+        ));
+    }
+    let index = index(&env.shared, &env.session).await.map_err(|_| {
+        document_denial(
+            0,
+            "artifact_unavailable",
+            "Ask the Task to write the document again",
+        )
+    })?;
+    let mut admitted = Vec::with_capacity(requested.len());
+    for (position, (path, title, display)) in requested.into_iter().enumerate() {
+        let deny = |reason, hint| document_denial(position, reason, hint);
+        let entry = index.entries.get(&path).ok_or_else(|| {
+            deny(
+                "artifact_not_found",
+                "Use an artifact path returned by this session's Task",
+            )
+        })?;
+        if ArtifactPurpose::classify(&path, entry.tool.as_deref()) != ArtifactPurpose::Output {
+            return Err(deny(
+                "artifact_not_output",
+                "Ask the Task to create a Markdown Output artifact",
+            ));
+        }
+        if entry.mime != "text/markdown" && !path.to_ascii_lowercase().ends_with(".md") {
+            return Err(deny(
+                "artifact_not_markdown",
+                "Ask the Task to write a .md document",
+            ));
+        }
+        if entry.size > MAX_DOCUMENT_BYTES as u64 {
+            return Err(deny(
+                "artifact_too_large",
+                "Shorten the document to at most 256 KiB",
+            ));
+        }
+        let bytes = load(&env.shared, &env.session, &path, MAX_DOCUMENT_BYTES as u64)
+            .await
+            .map_err(|_| {
+                deny(
+                    "artifact_unavailable",
+                    "Ask the Task to write a Markdown document no larger than 256 KiB",
+                )
+            })?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| {
+            deny(
+                "artifact_not_markdown",
+                "Write the Markdown document as UTF-8 text",
+            )
+        })?;
+        let title = title.unwrap_or_else(|| path.rsplit('/').next().unwrap_or("Document").into());
+        if title.trim().is_empty()
+            || title.chars().count() > 160
+            || title.chars().any(char::is_control)
+        {
+            return Err(deny(
+                "invalid_title",
+                "Use a nonempty title of at most 160 characters without control characters",
+            ));
+        }
+        for value in [text, title.as_str()] {
+            crate::tools::present::admit_document_text(value, env).map_err(|_| deny(
+                "attachment_secret_detected", "Remove credentials, tokens, cookies and other secrets, then write a new document",
+            ))?;
+        }
+        // Freeze admitted bytes so later workspace edits cannot change a delivered document.
+        let delivered = format!("documents/delivered/{}.md", sha256_hex(&bytes));
+        let size = bytes.len() as u64;
+        match store(&env.shared, &env.session, &delivered, bytes, true).await {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => {
+                return Err(deny(
+                    "artifact_unavailable",
+                    "Try sending the document again",
+                ))
+            }
+        }
+        admitted.push(openside_proto::MessageDocument {
+            path: delivered,
+            title,
+            display,
+            bytes: size,
+            content_type: "text/markdown".into(),
+        });
+    }
+    Ok(admitted)
+}
+
+pub(crate) async fn task_documents(
+    shared: &Shared,
+    session: &SessionId,
+    task: &str,
+) -> Result<Vec<String>, HttpError> {
+    let _gate = lifecycle(shared, session).await;
+    if !alive(shared, session).await {
+        return Err(HttpError::not_found());
+    }
+    let prefix = format!("documents/tasks/{task}/");
+    Ok(index(shared, session)
+        .await?
+        .order
+        .into_iter()
+        .filter(|path| path.starts_with(&prefix))
+        .collect())
+}
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -1012,7 +1146,21 @@ async fn index(shared: &Shared, session: &SessionId) -> Result<Index, HttpError>
                         ..Entry::default()
                     },
                 ),
-                EventKind::AssistantFinal { text } => {
+                EventKind::AssistantFinal { text, attachments } => {
+                    for attachment in attachments {
+                        upsert(
+                            &mut index,
+                            &attachment.path,
+                            event.ts,
+                            Entry {
+                                size: attachment.bytes,
+                                mime: attachment.content_type.clone(),
+                                source: Some(ArtifactSource::Tool),
+                                tool: Some("send_message".into()),
+                                ..Entry::default()
+                            },
+                        );
+                    }
                     for (n, (kind, source)) in visual_blocks(text).into_iter().enumerate() {
                         let path = visual_path(event.seq, n, kind);
                         upsert(

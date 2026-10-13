@@ -1,0 +1,213 @@
+/*
+ * Background Tasks in a conversation: one unit per Task under the message that started it. At
+ * rest a small light step bubble (state mark, current step) with earlier steps as faint pills
+ * beneath; a Task that browses opens onto its tab's live picture while it works.
+ */
+
+.task-row {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The Task's tab, collapsed: a small light bubble with the current line and fainter steps under it. */
+.task-browser {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+.task-browser-pill {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: min(100%, 440px);
+  min-height: 44px;
+  border: 1px solid rgb(23 26 36 / 0.06);
+  border-radius: var(--radius-pill);
+  background: rgb(246 247 250 / 0.9);
+  box-shadow: 0 6px 18px rgb(16 20 40 / 0.12);
+  color: #1b1f2b;
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+  animation: browser-card-in var(--normal) var(--ease);
+}
+.task-browser-bubble {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 18px 0 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 550;
+  text-align: left;
+}
+button.task-browser-bubble {
+  cursor: pointer;
+}
+button.task-browser-bubble:hover {
+  background: rgb(23 26 36 / 0.05);
+}
+button.task-browser-bubble:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.task-browser-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: #5d6475;
+}
+.task-browser[data-tone="warn"] .task-browser-mark {
+  color: #ea580c;
+}
+.task-browser[data-tone="done"] .task-browser-mark {
+  color: #16a34a;
+}
+.task-browser[data-tone="failed"] .task-browser-mark {
+  color: #b42318;
+}
+.task-browser-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: status-in var(--normal) var(--ease);
+}
+/* The shimmer reads ink on the light bubble, whatever the page theme. */
+.task-browser-bubble .status-line-text {
+  --muted: #7a8193;
+  --text: #1b1f2b;
+}
+/* Earlier steps: faint hairline pills under the unit, newest first. */
+.task-browser-trail {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  margin: 0;
+  padding: 4px 0 0 6px;
+  list-style: none;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.task-browser-trail > li {
+  min-width: 0;
+  max-width: min(100%, 400px);
+  padding: 3px 12px;
+  overflow: hidden;
+  border: 1px solid var(--status-pill-border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--status-pill-bg) 55%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+.task-browser-trail > li + li {
+  opacity: 0.45;
+}
+
+/* Expanded: the tab itself, as wide as the column (up to a readable size), never shrink-wrapped. */
+.task-browser[data-expanded="true"] {
+  justify-self: stretch;
+  justify-items: stretch;
+  width: min(100%, 560px);
+}
+.task-browser-card {
+  width: 100%;
+}
+.task-browser-screen {
+  aspect-ratio: 16 / 10;
+  max-height: min(58vh, 460px);
+  cursor: default;
+}
+/* Status on the left, controls on the right, as in the reference card. */
+.task-browser-card .browser-card-status {
+  margin-right: auto;
+}
+/* No picture yet: a calm page outline, never an empty white box. */
+.task-browser-skeleton {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  padding: 64px 28px 72px;
+}
+.task-browser-skeleton-bar {
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, #eceef3 0%, #f6f7fa 50%, #eceef3 100%) 0 0 / 200% 100%;
+  animation: task-skeleton 1.4s ease-in-out infinite;
+}
+.task-browser-skeleton-bar:nth-child(1) {
+  width: 46%;
+  height: 18px;
+}
+.task-browser-skeleton-bar:nth-child(2) {
+  width: 82%;
+}
+.task-browser-skeleton-bar:nth-child(3) {
+  width: 64%;
+}
+.task-browser-skeleton-text {
+  margin-top: 8px;
+  color: #5d6475;
+  font-size: 0.875rem;
+}
+@keyframes task-skeleton {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Steps in the agents sheet. */
+.task-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.task-steps > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.task-step-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 1.45em;
+}
+.task-steps > li[data-state="done"] .task-step-mark {
+  color: var(--success);
+}
+.task-steps > li[data-state="failed"] {
+  color: var(--danger);
+}
+.task-step-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-browser-skeleton-bar {
+    animation: none;
+  }
+}

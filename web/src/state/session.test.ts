@@ -3,12 +3,13 @@ import type { Card, Event, Ticket } from "../api/types";
 import { emptySessionView, pendingTickets, reduceSession, replaySession } from "./session";
 
 type Payload = { kind: string } & Record<string, unknown>;
+const AT = "2026-01-01T00:00:00Z";
 
 function log(payloads: Payload[]): Event[] {
   return payloads.map((payload, index) => ({
     session_id: "s1",
     seq: index + 1,
-    ts: "2026-01-01T00:00:00Z",
+    ts: AT,
     run_id: null,
     ...payload,
   })) as Event[];
@@ -117,8 +118,7 @@ describe("session view reducer", () => {
       { id: "m2", text: "later, edited", mode: "queue", author_kind: "internal", from_agent: null },
     ]);
     expect(view.items).toEqual([
-      { type: "user", id: "m1", text: "hello", outcome: "deferred", reason: undefined, author_kind: "internal", from_agent: null },
-      { type: "assistant", id: "a11", text: "Hello", final: true },
+      { type: "user", id: "m1", text: "hello", outcome: "deferred", reason: undefined, author_kind: "internal", from_agent: null, at: AT },
       {
         type: "tool",
         id: "c1",
@@ -130,7 +130,7 @@ describe("session view reducer", () => {
         done: true,
       },
       { type: "card", id: "ticket:k1" },
-      { type: "assistant", id: "a22", text: "blue it is", final: true, finalSeq: 22 },
+      { type: "assistant", id: "a22", text: "blue it is", final: true, finalSeq: 22, at: AT },
     ]);
     expect(view.tickets.k1).toMatchObject({ status: "resolved", resolution: { answer: "blue" } });
     expect(pendingTickets(view)).toEqual([]);
@@ -149,7 +149,7 @@ describe("session view reducer", () => {
   it("tracks streaming text, thinking and running status mid-turn", () => {
     const mid = replaySession(events.slice(0, 11));
     expect(mid.status).toBe("running");
-    expect(mid.items.at(-1)).toEqual({ type: "assistant", id: "a11", text: "Hel", final: false });
+    expect(mid.items.at(-1)).toEqual({ type: "assistant", id: "a11", text: "Hel", final: false, at: AT });
     const thinking = replaySession(events.slice(0, 10));
     expect(thinking.thinking).toBe(true);
     const waiting = replaySession(events.slice(0, 16));
@@ -172,8 +172,8 @@ describe("session view reducer", () => {
       );
       const bubbles = view.items.filter((item) => item.type === "assistant");
       expect(bubbles, interruption.kind).toEqual([
-        { type: "assistant", id: "a2", text: "partial", final: true },
-        { type: "assistant", id: "a4", text: "next", final: true },
+        { type: "assistant", id: "a2", text: "partial", final: true, at: AT },
+        { type: "assistant", id: "a4", text: "next", final: true, at: AT },
       ]);
       const afterInterruption = replaySession(log([{ kind: "assistant.delta", text: "partial" }, interruption]));
       expect(afterInterruption.items[0], interruption.kind).toMatchObject({ final: true });
@@ -237,7 +237,7 @@ describe("subagents, artifacts and attachments", () => {
     ]);
     expect(replaySession(childLog.slice(0, 7)).subagents[0]?.status).toBe("waiting_human");
     expect(view.artifacts).toEqual([{ path: "out/report.md", mime: "text/markdown", size: 20, tool: "edit" }]);
-    expect(view.items[0]).toEqual({ type: "user", id: "m1", text: "look", attachments: [attachment], author_kind: "internal", from_agent: null });
+    expect(view.items[0]).toEqual({ type: "user", id: "m1", text: "look", attachments: [attachment], author_kind: "internal", from_agent: null, at: AT });
     expect(view.items.at(-1)).toMatchObject({ type: "assistant", final: true, finalSeq: 13 });
   });
 });
@@ -254,7 +254,7 @@ describe("final answer ordering", () => {
         { kind: "session.settled" },
       ]),
     );
-    expect(view.items).toEqual([{ type: "assistant", id: "a2", text: "parent done", final: true, finalSeq: 5 }]);
+    expect(view.items).toEqual([{ type: "assistant", id: "a2", text: "parent done", final: true, finalSeq: 5, at: AT }]);
   });
 });
 

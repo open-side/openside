@@ -10,9 +10,9 @@ export type StopScope = { kind: "all"; tasks: number } | { kind: "task"; name?: 
 function copy(scope: StopScope): { title: string; description: string; confirm: string } {
   if (scope.kind === "task") {
     return {
-      title: "Cancel this task?",
+      title: "Stop this task?",
       description: `${scope.name ? `“${scope.name}” stops` : "This task stops"} where it is. The agent and any other tasks keep running, and anything already done stays done.`,
-      confirm: "Cancel task",
+      confirm: "Stop task",
     };
   }
   return {

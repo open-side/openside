@@ -34,7 +34,7 @@ function teammateOptions(agents: readonly AgentSummary[] | null, current: string
       value: "",
       label: chief?.name ?? "Your assistant",
       detail: "Default · answers when nobody else is chosen",
-      icon: chief ? <Avatar initials={chief.initials} color={chief.color} size={24} /> : undefined,
+      icon: chief ? <Avatar chief initials={chief.initials} color={chief.color} size={24} /> : undefined,
     },
     ...active
       .filter((agent) => agent.kind === "teammate")

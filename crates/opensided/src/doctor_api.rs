@@ -25,6 +25,7 @@ pub(crate) struct Live {
     pub(crate) restart_pending: bool,
     /// Accepted Chromium signal exits after completed shutdowns in this daemon process.
     pub(crate) browser_shutdown_crashes: u64,
+    pub(crate) chief_name_conflict: bool,
 }
 
 fn fix(action: DoctorFixAction, label: &str, hint: &str) -> Option<DoctorFix> {
@@ -134,6 +135,24 @@ pub(crate) fn build(report: doctor::DoctorReport, live: &Live) -> DoctorReport {
             found
         })
         .collect();
+    if live.chief_name_conflict {
+        checks.push(DoctorCheck {
+            id: "agent.chief_name_conflict".to_owned(),
+            status: DoctorStatus::Warn,
+            summary:
+                "The assistant kept its previous name because a teammate is already named openside."
+                    .to_owned(),
+            next_step: Some(
+                "Rename that teammate, then restart to apply the assistant's default name."
+                    .to_owned(),
+            ),
+            fix: fix(
+                DoctorFixAction::OpenAgents,
+                "Open the agent list",
+                "Review the conflicting teammate name.",
+            ),
+        });
+    }
     checks.push(DoctorCheck {
         id: "browser.shutdown_crashes".to_owned(),
         status: if live.browser_shutdown_crashes == 0 {
@@ -245,6 +264,7 @@ pub(crate) async fn get(State(s): State<Shared>) -> Result<Json<DoctorReport>, H
         model: s.ops.model.headline(),
         restart_pending: model_restart || crate::settings_api::restart_required(&s).await?,
         browser_shutdown_crashes: openside_browser::browser_shutdown_crashes(),
+        chief_name_conflict: s.agents.chief_name_conflict()?,
     };
     Ok(Json(build(report, &live)))
 }
@@ -427,5 +447,28 @@ mod tests {
             assert!(check.fix.is_none());
             assert!(built.ok);
         }
+    }
+    #[test]
+    fn chief_name_collision_is_actionable_without_failing_doctor() {
+        let built = build(
+            report(Vec::new()),
+            &Live {
+                chief_name_conflict: true,
+                ..Live::default()
+            },
+        );
+        let check = built
+            .groups
+            .iter()
+            .flat_map(|group| &group.checks)
+            .find(|check| check.id == "agent.chief_name_conflict")
+            .unwrap();
+        assert_eq!(check.status, DoctorStatus::Warn);
+        assert_eq!(
+            check.fix.as_ref().unwrap().action,
+            DoctorFixAction::OpenAgents
+        );
+        assert!(check.next_step.is_some());
+        assert!(built.ok);
     }
 }

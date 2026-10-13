@@ -1,7 +1,8 @@
-import { Archive, ArchiveRestore, Copy, KeyRound, Link as LinkIcon, Pencil, Pin, PinOff } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, KeyRound, Link as LinkIcon, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useRef, useState, type FormEvent, type ReactElement } from "react";
 import { ApiError } from "../api/client";
 import { useClient } from "../context";
+import { useTeam } from "../hooks/useAgents";
 import { SessionAccountDialog } from "../models/SessionAccountDialog";
 import { Button, copyText, Dialog, DialogActions, ICON_STROKE, MenuItem, MenuSeparator, PopoverMenu, useToast } from "../ui";
 
@@ -17,18 +18,25 @@ export interface SessionMenuProps {
   trigger: ReactElement;
   /** Accessible name of the menu popup. */
   label: string;
-  /** Called after a successful rename, pin or archive so lists can reload. */
+  /** Refreshes lists after a successful mutation. */
   onChanged?: () => void;
+  onDeleted?: () => void;
 }
 
 const icon = { size: 18, strokeWidth: ICON_STROKE, "aria-hidden": true } as const;
 
 /** The conversation actions shared by the header and every sidebar row. */
-export function SessionMenu({ session, trigger, label, onChanged }: SessionMenuProps) {
+export function SessionMenu({ session, trigger, label, onChanged, onDeleted }: SessionMenuProps) {
   const client = useClient();
   const toast = useToast();
   const [renaming, setRenaming] = useState(false);
   const [choosingAccount, setChoosingAccount] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const team = useTeam();
+  // Until the roster arrives, a home conversation cannot safely be identified.
+  const canDelete = team.agents !== null && !team.agents.some((agent) => agent.home_session_id === session.id);
 
   async function update(patch: { title?: string; pinned?: boolean; archived?: boolean }, done: string) {
     try {
@@ -39,6 +47,22 @@ export function SessionMenu({ session, trigger, label, onChanged }: SessionMenuP
     } catch (cause) {
       toast.notify(cause instanceof ApiError ? cause.message : "Request failed", "error");
       return false;
+    }
+  }
+
+  async function remove() {
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await client.deleteSession(session.id);
+      setDeleting(false);
+      toast.notify("Conversation deleted");
+      onChanged?.();
+      onDeleted?.();
+    } catch (cause) {
+      setDeleteError(cause instanceof ApiError ? cause.message : "Request failed");
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -75,6 +99,14 @@ export function SessionMenu({ session, trigger, label, onChanged }: SessionMenuP
         <MenuItem icon={<Copy {...icon} />} onClick={() => void copy(session.id, "session ID")}>
           Copy session ID
         </MenuItem>
+        {canDelete ? (
+          <>
+            <MenuSeparator />
+            <MenuItem icon={<Trash2 {...icon} />} danger onClick={() => { setDeleteError(null); setDeleting(true); }}>
+              Delete conversation
+            </MenuItem>
+          </>
+        ) : null}
       </PopoverMenu>
       {choosingAccount ? <SessionAccountDialog open sessionId={session.id} onClose={() => setChoosingAccount(false)} /> : null}
       <RenameDialog
@@ -85,6 +117,20 @@ export function SessionMenu({ session, trigger, label, onChanged }: SessionMenuP
           if (await update({ title }, "Conversation renamed")) setRenaming(false);
         }}
       />
+      <Dialog
+        open={deleting}
+        onClose={() => { if (!deleteBusy) setDeleting(false); }}
+        title="Delete conversation?"
+        description={`“${session.title}” will be stopped and removed from openside. Its files will be deleted. This cannot be undone.`}
+      >
+        {deleteError ? <p role="alert">{deleteError}</p> : null}
+        <DialogActions>
+          <Button disabled={deleteBusy} onClick={() => setDeleting(false)}>Cancel</Button>
+          <Button variant="danger" disabled={deleteBusy} onClick={() => void remove()}>
+            {deleteBusy ? "Deleting…" : "Delete conversation"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }

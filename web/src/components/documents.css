@@ -1,0 +1,130 @@
+/*
+ * Documents the agent attaches to a message, at the top of its bubble. Inline ones read in
+ * place, clipped at about twelve lines; panel ones are a card with the title and a faded start
+ * that opens beside the thread (desktop) or as a full sheet (phone).
+ */
+
+.message-documents {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.message-documents:last-child {
+  margin-bottom: 0;
+}
+
+.doc-inline {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
+}
+.doc-inline-body {
+  width: 100%;
+  max-height: calc(1.6em * 12);
+  overflow: hidden;
+}
+.doc-inline-body[aria-busy="true"] {
+  min-height: 3.2em;
+}
+.doc-inline[data-open="true"] .doc-inline-body {
+  max-height: none;
+}
+.doc-inline[data-clipped="true"] .doc-inline-body {
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.doc-more {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+.doc-more:hover {
+  background: var(--hover);
+}
+.doc-more:focus-visible,
+.doc-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.doc-card {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.doc-card:hover {
+  background: color-mix(in srgb, currentColor 6%, var(--glass-inset-bg));
+}
+.doc-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.doc-card-preview {
+  display: grid;
+  gap: 2px;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  opacity: 0.7;
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  mask-image: linear-gradient(to bottom, #000 30%, transparent);
+}
+.doc-card-preview > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-failed {
+  margin: 0;
+  opacity: 0.7;
+  font-size: 0.8125rem;
+}
+
+.doc-panel-actions {
+  display: flex;
+  gap: 8px;
+}
+.doc-panel-body {
+  font-size: 0.9375rem;
+}
+
+/* Desktop: a panel along the right edge, full height, beside the thread. */
+@media (min-width: 701px) {
+  .ui-dialog.doc-panel {
+    align-self: stretch;
+    justify-self: end;
+    width: min(560px, 100%);
+    max-height: none;
+  }
+  .ui-dialog.doc-panel[data-starting-style],
+  .ui-dialog.doc-panel[data-ending-style] {
+    transform: translateX(24px);
+  }
+}
+/* Phone: the whole screen but a sliver, so the document has room. */
+@media (max-width: 700px) {
+  .ui-dialog.doc-panel {
+    height: calc(100dvh - 12px);
+    max-height: none;
+  }
+}

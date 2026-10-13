@@ -435,7 +435,14 @@ async fn previews_are_signed_sandboxed_and_visual_blocks_are_indexed() {
     );
     daemon
         .shared
-        .emit(&session, None, EventKind::AssistantFinal { text })
+        .emit(
+            &session,
+            None,
+            EventKind::AssistantFinal {
+                text,
+                attachments: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     // Remote (TCP) router: previews are reachable without a bearer token, nothing else is.
@@ -839,6 +846,7 @@ async fn nothing_recreates_a_deleted_tasks_artifacts() {
             None,
             EventKind::AssistantFinal {
                 text: "```svg visual\n<svg/>\n```".into(),
+                attachments: Vec::new(),
             },
         )
         .await
@@ -956,6 +964,7 @@ async fn failed_cleanup_after_deletion_is_retried_at_startup() {
             None,
             EventKind::AssistantFinal {
                 text: "```svg visual\n<svg/>\n```".into(),
+                attachments: Vec::new(),
             },
         )
         .await
@@ -1018,6 +1027,7 @@ async fn artifacts_and_transcript_include_every_event_page() {
                 None,
                 EventKind::AssistantFinal {
                     text: "earlier".into(),
+                    attachments: Vec::new(),
                 },
             )
             .await
@@ -1056,6 +1066,7 @@ async fn artifacts_and_transcript_include_every_event_page() {
             None,
             EventKind::AssistantFinal {
                 text: "```svg visual\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n```".into(),
+                attachments: Vec::new(),
             },
         )
         .await
@@ -1152,14 +1163,19 @@ async fn artifacts_message_text_cap_rejects_before_storage_and_queue_mutation() 
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     until(|| runtime.0.lock().sent.len() == 1).await;
-    let (status, _, _) = call_api(
-        &router,
+    let mut submission = request(
         "POST",
         "/v1/sessions/session/messages",
         json!({"message_id":"editable","text":"original","mode":"queue"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED);
+        None,
+    );
+    submission
+        .headers_mut()
+        .insert("x-openside-client", "mcp".parse().unwrap());
+    assert_eq!(
+        router.clone().oneshot(submission).await.unwrap().status(),
+        StatusCode::ACCEPTED
+    );
     let (status, _, body) = call_api(
         &router,
         "PATCH",

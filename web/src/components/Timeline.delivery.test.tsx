@@ -46,7 +46,7 @@ describe("delivery states in the transcript", () => {
     expect(screen.queryByText("Team delivery")).toBeNull();
   });
 
-  it("shows Sent, then Read, then the typing dots, then lets the reply take over", () => {
+  it("shows Sent, then Read and typing dots until a completed reply arrives", () => {
     const sent = mount([queued]);
     expect(screen.getByText("Hi there")).toBeInTheDocument();
     expect(screen.getByText("Sent")).toBeInTheDocument();
@@ -64,9 +64,50 @@ describe("delivery states in the transcript", () => {
     expect(document.querySelectorAll(".typing-dot")).toHaveLength(3);
 
     sent.rerender([queued, injected, started, { kind: "assistant.delta", text: "Hello!" }]);
+    expect(document.querySelectorAll(".typing-dot")).toHaveLength(3);
+    // As in a messenger, the newest message keeps its receipt after the answer.
+    expect(screen.getByText("Read")).toBeInTheDocument();
+    expect(screen.queryByText("Hello!")).toBeNull();
+    sent.rerender([queued, injected, started, { kind: "assistant.final", text: "Hello!" }, { kind: "session.settled" }]);
     expect(document.querySelector(".typing")).toBeNull();
-    expect(screen.queryByText("Read")).toBeNull();
     expect(screen.getByText("Hello!")).toBeInTheDocument();
+  });
+
+  it("keeps one delivery note in the thread, under the person's newest bubble", () => {
+    mount([queued, injected, { kind: "assistant.final", text: "Hello!" }, { kind: "session.settled" }, { ...queued, message_id: "m2", text: "And another" }]);
+    const receipts = [...document.querySelectorAll(".receipt")];
+    expect(receipts.map((node) => node.textContent)).toEqual(["Sent"]);
+    expect(receipts[0]!.closest("li")).toHaveAttribute("data-message", "m2");
+  });
+
+  it("puts a Task started before the turn's words after them", () => {
+    mount([
+      queued,
+      injected,
+      started,
+      { kind: "tool.started", tool_call_id: "c1", name: "create_task", args: { goal: "Check the weather" } },
+      { kind: "tool.ended", tool_call_id: "c1", result: { task_id: "t1" }, is_error: false },
+      { kind: "subagent.started", subagent_id: "t1", background: true, model: "m", parent_tool_call_id: "c1", task: "Check the weather", tools: [] },
+      { kind: "assistant.final", text: "On it." },
+      { kind: "turn.ended" },
+    ]);
+    const rows = [...document.querySelectorAll(".timeline > li")].map((row) => row.className.split(" ")[0]);
+    expect(rows.slice(rows.indexOf("bubble"))).toEqual(["bubble", "bubble", "task-row"]);
+    expect(document.querySelector(".bubble.assistant")!.nextElementSibling).toHaveClass("task-row");
+  });
+
+  it("does not defer a running Task to hidden provisional narration", () => {
+    mount([
+      queued,
+      injected,
+      started,
+      { kind: "tool.started", tool_call_id: "c1", name: "create_task", args: { goal: "Check the weather" } },
+      { kind: "tool.ended", tool_call_id: "c1", result: { task_id: "t1" }, is_error: false },
+      { kind: "subagent.started", subagent_id: "t1", background: true, model: "m", parent_tool_call_id: "c1", task: "Check the weather", tools: [] },
+      { kind: "assistant.delta", text: "Internal routing narration" },
+    ]);
+    expect(screen.queryByText("Internal routing narration")).toBeNull();
+    expect(document.querySelector(".task-row")).not.toBeNull();
   });
 
   it("leaves a message sent during a run to the Queued list, not a Sent bubble", () => {

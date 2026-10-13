@@ -17,7 +17,7 @@ const SIGNING = "signing-SECRET-4b7c";
 const NO_OPTIONS: ChannelAccountOptions = { allowed_chats: [], allowed_users: [], allowed_workspaces: [], allowed_channels: [], allowed_guilds: [], api_base: null, listen: null, poll_timeout_secs: null, public_key: null };
 
 const AGENTS = [
-  { id: "chief", kind: "chief", name: "Juno", initials: "J", color: "#2f6fed", status: "active", persona: { role: "Assistant" } },
+  { id: "chief", kind: "chief", name: "openside", initials: "o", color: "#2f6fed", status: "active", persona: { role: "Your assistant" } },
   { id: "mina", kind: "teammate", name: "Mina", initials: "M", color: "#a34dff", status: "active", persona: { role: "Researcher" } },
   { id: "old", kind: "teammate", name: "Otto", initials: "O", color: "#888888", status: "retired", persona: { role: "Retired" } },
 ] as unknown as AgentSummary[];
@@ -117,7 +117,7 @@ describe("ChannelsPanel", () => {
 
     const team = await row("Slack", "Team Slack");
     expect(within(team).getByText("Off")).toBeInTheDocument();
-    expect(within(team).getByText(/Will answer as/)).toHaveTextContent("Will answer as Juno once it connects");
+    expect(within(team).getByText(/Will answer as/)).toHaveTextContent("Will answer as openside once it connects");
 
     // Telegram is polled, so it has no callback address.
     const telegram = await row("Telegram", "Personal bot");
@@ -275,7 +275,7 @@ describe("ChannelsPanel", () => {
     const daemon = open();
     await user.click(within(await row("Slack", "Work Slack")).getByRole("button", { name: "Edit Work Slack" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit Work Slack" });
-    await chooseOption(user, within(dialog).getByRole("combobox", { name: "Answers as" }), /Juno/);
+    await chooseOption(user, within(dialog).getByRole("combobox", { name: "Answers as" }), /openside/);
     await user.click(within(dialog).getByRole("button", { name: "Replace credentials" }));
     await user.type(within(dialog).getByLabelText("Bot token"), TOKEN);
     await user.type(within(dialog).getByLabelText("Signing secret"), SIGNING);

@@ -126,30 +126,43 @@ fn unique(set: &mut HashSet<String>, id: &str, path: &str) -> Result<(), ToolErr
         path,
     )
 }
-fn scan(v: &Value, depth: usize, text: &mut usize, ctx: Option<&ToolEnv>) -> Result<(), ToolError> {
+pub(crate) fn admit_document_text(text: &str, ctx: &ToolEnv) -> Result<(), ToolError> {
+    admit_text(text, Some(ctx), "$document")
+}
+
+fn admit_text(text: &str, ctx: Option<&ToolEnv>, path: &str) -> Result<(), ToolError> {
+    let reason = if openside_memory::looks_secret(text) {
+        Some("secret-shaped content forbidden")
+    } else if ctx.is_some_and(|ctx| {
+        ctx.shared
+            .registry
+            .redactors
+            .read()
+            .iter()
+            .any(|r| r.redact(text) != text)
+    }) {
+        Some("known secret value forbidden")
+    } else {
+        None
+    };
+    match reason {
+        Some(reason) => Err(error("card_secret_detected", path, reason)),
+        None => Ok(()),
+    }
+}
+fn scan(
+    v: &Value,
+    depth: usize,
+    text: &mut usize,
+    ctx: Option<&ToolEnv>,
+    path: &str,
+) -> Result<(), ToolError> {
     bound(depth <= 8, "$depth")?;
     match v {
-        Value::String(s) => {
-            if openside_memory::looks_secret(s)
-                || ctx.is_some_and(|ctx| {
-                    ctx.shared
-                        .registry
-                        .redactors
-                        .read()
-                        .iter()
-                        .any(|r| r.redact(s) != *s)
-                })
-            {
-                return Err(error(
-                    "card_secret_detected",
-                    "$",
-                    "secret material forbidden",
-                ));
-            }
-        }
+        Value::String(s) => admit_text(s, ctx, path)?,
         Value::Array(items) => {
-            for item in items {
-                scan(item, depth + 1, text, ctx)?;
+            for (index, item) in items.iter().enumerate() {
+                scan(item, depth + 1, text, ctx, &format!("{path}[{index}]"))?;
             }
         }
         Value::Object(map) => {
@@ -174,7 +187,7 @@ fn scan(v: &Value, depth: usize, text: &mut usize, ctx: Option<&ToolEnv>) -> Res
                             .sum::<usize>();
                     }
                 }
-                scan(item, depth + 1, text, ctx)?;
+                scan(item, depth + 1, text, ctx, &format!("{path}.{key}"))?;
             }
         }
         _ => {}
@@ -189,11 +202,11 @@ pub(crate) fn admit(args: &Value, ctx: Option<&ToolEnv>) -> Result<PresentReques
             <= 65536,
         "$",
     )?;
-    let mut bytes = 0;
-    scan(args, 0, &mut bytes, ctx)?;
-    bound(bytes <= 24576, "$text")?;
     let mut request: PresentRequest = serde_json::from_value(args.clone())
         .map_err(|_| error("invalid_card", "$", "unknown field or invalid type"))?;
+    let mut bytes = 0;
+    scan(args, 0, &mut bytes, ctx, "$")?;
+    bound(bytes <= 24576, "$text")?;
     let c = &mut request.card;
     shape(
         c.id.is_empty()
@@ -539,7 +552,7 @@ impl DaemonTool for Present {
                 crate::favicons::populate(&mut request.card, ctx).await;
                 request.card.id = id.clone();
                 let mut text_bytes = 0;
-                scan(&args, 0, &mut text_bytes, Some(ctx))?;
+                scan(&args, 0, &mut text_bytes, Some(ctx), "$")?;
                 ctx.shared
                     .emit(
                         &ctx.session,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineItem } from "../state/session";
-import { hostOf, lastHost, outcomeNote, statusPhrase, toolPhrase } from "./toolStatus";
+import { browserLine, hostOf, lastHost, outcomeNote, statusPhrase, toolPhrase } from "./toolStatus";
 
 type ToolItem = Extract<TimelineItem, { type: "tool" }>;
 
@@ -22,6 +22,31 @@ describe("tool status phrases", () => {
     expect(toolPhrase(tool("browser_act", { action: "click", target: "e1" }), "nid.naver.com")).toBe("Clicking on nid.naver.com");
     expect(toolPhrase(tool("browser_act", { action: "type", target: "e1" }), null)).toBe("Typing on the page");
     expect(toolPhrase(tool("browser_snapshot", { tab_id: "a" }), "x.com")).toBe("Reading a page");
+  });
+
+  it("distinguishes safe trending periods without exposing arbitrary query values", () => {
+    for (const period of ["daily", "weekly", "monthly"]) {
+      const url = `https://github.com/trending?token=private-canary&since=${period}#private-canary`;
+      expect(toolPhrase(tool("browser_navigate", { url }), null)).toBe(`Opening github.com (${period} trending)`);
+      const state = {
+        tab_id: "t", url, host: "github.com", title: "Trending", phase: "reading" as const,
+        page_kind: "list" as const, facts: {},
+        action: { tool: "browser_navigate", tool_call_id: "n", phrase: "Going to github.com" },
+      };
+      expect(browserLine(state)).toBe(`Going to github.com (${period} trending)`);
+      expect(browserLine({ ...state, action: null })).toBe(`Reading github.com (${period} trending)`);
+    }
+    for (const url of [
+      "https://github.com/trending?since=private-canary",
+      "https://github.com/trending?token=private-canary",
+      "https://github.com/trending?since=weekly&since=private-canary",
+      "https://github.com/login?since=weekly&token=private-canary",
+      "https://github.com.evil.test/trending?since=weekly&token=private-canary",
+    ]) {
+      const line = toolPhrase(tool("browser_navigate", { url }), null);
+      expect(line).not.toContain("trending");
+      expect(line).not.toContain("private-canary");
+    }
   });
 
   it("describes files, commands and requests for the person", () => {

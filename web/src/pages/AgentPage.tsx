@@ -68,6 +68,7 @@ export function AgentPage() {
         sessionId={agent.home_session_id}
         addressee={agent.name}
         onSeen={onSeen}
+        front={isChief}
         readOnly={agent.status === "retired" ? <RetiredNotice agent={agent} /> : undefined}
         empty={isChief ? (pick) => <ChiefWelcome agent={agent} onPick={pick} /> : undefined}
         draft={isChief ? draft : undefined}
@@ -76,7 +77,7 @@ export function AgentPage() {
           <AppHeader
             heading={
               <button type="button" className="app-header-heading person-heading" onClick={() => setProfile(true)} aria-label={`${agent.name}'s profile`}>
-                <Avatar initials={agent.initials} color={agent.color} size={32} />
+                <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={32} />
                 <span className="person-heading-text">
                   <span className="app-title">{agent.name}</span>
                   <span className="app-subtitle">{waiting || agent.needs_you ? "Needs you" : running ? agent.activity.trim() || "Working…" : agent.persona.role}</span>
@@ -131,7 +132,7 @@ export function AgentPage() {
 function ChiefWelcome({ agent, onPick }: { agent: AgentSummary; onPick: (text: string) => void }) {
   return (
     <div className="empty-chat chief-welcome">
-      <Avatar initials={agent.initials} color={agent.color} size={64} />
+      <Avatar chief initials={agent.initials} color={agent.color} size={64} />
       <h1>Hi, I’m {agent.name}</h1>
       <p>Tell me what to do on the web. I’ll ask before anything important, and bring in a teammate when work keeps coming back.</p>
       <Starters onPick={onPick} />

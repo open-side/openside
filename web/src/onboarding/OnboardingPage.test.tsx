@@ -471,10 +471,8 @@ describe("pair step", () => {
     expect(daemon.state.myRequest).toMatchObject({ scopes: ["admin"] });
   });
 
-  it("starts the phone pairing from the screen once access is there", async () => {
-    const user = userEvent.setup();
+  it("shows the QR code at once when access is there", async () => {
     open(onboardingDaemon({ remote: tailscaleOn() }).client, "pair");
-    await user.click(await screen.findByRole("button", { name: "Show QR code" }));
     expect(await screen.findByRole("img", { name: /QR code to connect/ })).toBeInTheDocument();
   });
 });
@@ -482,24 +480,24 @@ describe("pair step", () => {
 describe("pair step with remote access", () => {
   it("shows the QR flow and recognises the phone", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const daemon = onboardingDaemon({ remote: tailscaleOn() });
     open(daemon.client, "pair");
-    await user.click(await screen.findByRole("button", { name: "Show QR code" }));
     expect(await screen.findByRole("img", { name: /QR code to connect/ })).toBeInTheDocument();
+    expect(screen.getByText("Waiting for your phone…")).toBeInTheDocument();
     expect(screen.queryByText(/openside pair/)).toBeNull();
 
     daemon.state.devices = [...daemon.state.devices, { device_id: "d2", name: "My phone", kind: "person_device", scopes: ["read"], created_at: "2026-10-13T00:00:00Z" }];
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_100);
     });
-    expect(await screen.findByText("My phone is connected")).toBeInTheDocument();
+    expect(await screen.findByText("Connected as My phone")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
   });
 
-  it("sends the person to Remote access when no connection is on", async () => {
+  it("offers to turn on a connection in place when none is on", async () => {
     open(onboardingDaemon({ remote: offStatus() }).client, "pair");
-    expect(await screen.findByRole("link", { name: "Set up remote access" })).toHaveAttribute("href", "/remote");
+    expect(await screen.findByText("Your phone needs a way to reach this computer.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Turn on Tailscale" })).toBeInTheDocument();
   });
 
   it("explains that pairing happens on the computer, without a command, for a browser that is not on it", async () => {
@@ -511,7 +509,7 @@ describe("pair step with remote access", () => {
 
 describe("assistant step", () => {
   function openWithChief(client: Client) {
-    const team = { agents: [agentSummary("chief", "Juno")], error: null, offline: false, refresh: vi.fn() };
+    const team = { agents: [agentSummary("chief", "openside")], error: null, offline: false, refresh: vi.fn() };
     render(
       <ClientContext.Provider value={client}>
         <AgentsContext.Provider value={team}>
@@ -531,7 +529,7 @@ describe("assistant step", () => {
     const daemon = onboardingDaemon({ override: (call) => (call.method === "PATCH" ? json(200, agentSummary("chief", "Mo")) : undefined) });
     const team = openWithChief(daemon.client);
     const name = screen.getByRole("textbox", { name: "Name" });
-    expect(name).toHaveValue("Juno");
+    expect(name).toHaveValue("openside");
     await user.clear(name);
     await user.type(name, "Mo");
     await user.click(screen.getByRole("button", { name: "Call them Mo" }));
@@ -546,7 +544,7 @@ describe("assistant step", () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon();
     openWithChief(daemon.client);
-    await user.click(screen.getByRole("button", { name: "Keep Juno" }));
+    await user.click(screen.getByRole("button", { name: "Keep openside" }));
     expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
     expect(writes(daemon.calls).filter((call) => call.path.startsWith("/v1/agents"))).toEqual([]);
   });

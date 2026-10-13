@@ -80,7 +80,7 @@ export function HistoryPage() {
                 {retired.map((agent) => (
                   <li key={agent.id} className="person-row">
                     <Link to={`/sessions/${encodeURIComponent(agent.home_session_id)}`} className="person-link">
-                      <Avatar initials={agent.initials} color={agent.color} size={40} />
+                      <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={40} />
                       <span className="person-text">
                         <span className="person-name">{agent.name}</span>
                         <span className="person-second">{agent.persona.role}</span>

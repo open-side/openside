@@ -11,7 +11,7 @@ import { rowTime, Sidebar } from "./Sidebar";
 const roster = (): AgentSummary[] => [
   agentSummary("mina", "Mina", { last_message_at: "2026-10-12T08:00:00Z" }),
   agentSummary("theo", "Theo", { last_message_at: "2026-10-12T10:00:00Z" }),
-  agentSummary("chief", "Juno", { last_message_at: "2026-10-01T08:00:00Z" }),
+  agentSummary("chief", "openside", { last_message_at: "2026-10-01T08:00:00Z" }),
   agentSummary("ada", "Ada", { pinned: true, last_message_at: "2026-10-02T08:00:00Z" }),
   agentSummary("old", "Old", { status: "retired" }),
   agentSummary("quiet", "Quiet", { hidden: true }),
@@ -43,7 +43,8 @@ describe("people order", () => {
 
   it("renders the same order and links each person to their thread", () => {
     setup(roster());
-    expect(names()).toEqual(["Juno", "Ada", "Theo", "Mina"]);
+    expect(names()).toEqual(["openside", "Ada", "Theo", "Mina"]);
+    expect(within(screen.getByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ }).querySelector(".avatar svg")).not.toBeNull();
     expect(screen.getByRole("link", { name: /^Theo/ })).toHaveAttribute("href", "/agents/theo");
     expect(screen.queryByText("Old")).toBeNull();
   });
@@ -65,19 +66,19 @@ describe("people order", () => {
   });
 
   it("hints at teammates while the assistant is alone", () => {
-    setup([agentSummary("chief", "Juno")]);
-    expect(screen.getByText(/Juno can bring in a teammate/)).toBeInTheDocument();
+    setup([agentSummary("chief", "openside")]);
+    expect(screen.getByText(/openside can bring in a teammate/)).toBeInTheDocument();
   });
 });
 
 describe("row state", () => {
   it("shows live activity, working dots and Needs you", () => {
     setup([
-      agentSummary("chief", "Juno", { needs_you: true, session_status: "waiting_human" }),
+      agentSummary("chief", "openside", { needs_you: true, session_status: "waiting_human" }),
       agentSummary("theo", "Theo", { session_status: "running", activity: "Checking prices", last_activity: "Old preview" }),
       agentSummary("mina", "Mina", { last_activity: "Here is the weekly summary" }),
     ]);
-    expect(screen.getByRole("link", { name: "Juno, Needs you" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "openside, Needs you" })).toBeInTheDocument();
     const theo = screen.getByRole("link", { name: "Theo, Working" });
     expect(within(theo).getByText("Checking prices")).toHaveClass("live");
     expect(theo.querySelector(".avatar-working")).not.toBeNull();
@@ -85,7 +86,7 @@ describe("row state", () => {
   });
 
   it("falls back to the role when there is no message yet", () => {
-    setup([agentSummary("chief", "Juno"), agentSummary("mina", "Mina", { persona: { role: "Watches prices", voice: "", responsibilities: ["x"], boundaries: [] } })]);
+    setup([agentSummary("chief", "openside"), agentSummary("mina", "Mina", { persona: { role: "Watches prices", voice: "", responsibilities: ["x"], boundaries: [] } })]);
     expect(within(screen.getByRole("link", { name: /^Mina/ })).getByText("Watches prices")).toBeInTheDocument();
   });
 
@@ -124,7 +125,7 @@ describe("unread", () => {
 
   it("marks the row with a dot and updates when the thread is read", () => {
     seen.seed({ chief: 1, mina: 1 });
-    setup([agentSummary("chief", "Juno"), agentSummary("mina", "Mina", { last_seq: 3 })]);
+    setup([agentSummary("chief", "openside"), agentSummary("mina", "Mina", { last_seq: 3 })]);
     expect(screen.getByRole("link", { name: "Mina, Unread" }).querySelector(".unread-dot")).not.toBeNull();
     act(() => seen.mark("mina", 3));
     expect(screen.getByRole("link", { name: "Mina" }).querySelector(".unread-dot")).toBeNull();
@@ -132,7 +133,7 @@ describe("unread", () => {
 
   it("does not flag the thread that is open", () => {
     seen.seed({ chief: 1, mina: 1 });
-    setup([agentSummary("chief", "Juno"), agentSummary("mina", "Mina", { last_seq: 3 })], "/agents/mina");
+    setup([agentSummary("chief", "openside"), agentSummary("mina", "Mina", { last_seq: 3 })], "/agents/mina");
     expect(screen.getByRole("link", { name: "Mina" })).toHaveAttribute("aria-current", "page");
   });
 });

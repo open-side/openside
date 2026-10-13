@@ -1,5 +1,6 @@
 import { isOutputArtifact } from "../api/artifacts";
-import type { Attachment, BrowserState, Card, Event, MessageAuthorKind, PolicyMode, QueueMode, SubagentStatus, Ticket } from "../api/types";
+import type { Attachment, BrowserState, Card, Event, MessageAuthorKind, MessageDocument, PolicyMode, QueueMode, SubagentStatus, Ticket } from "../api/types";
+import { browserLine } from "../components/toolStatus";
 
 export interface QueuedMessage {
   id: string;
@@ -12,10 +13,14 @@ export interface QueuedMessage {
 
 export type MessageOutcome = "completed" | "aborted" | "failed" | "deferred";
 
+/** `at` is the event time (RFC 3339) a message reached the conversation, for day and time separators. */
 export type TimelineItem =
-  | { type: "user"; id: string; text: string; outcome?: MessageOutcome; reason?: string; attachments?: Attachment[]; author_kind: MessageAuthorKind; from_agent: string | null }
-  /** `finalSeq` is the `assistant.final` sequence that visuals (`Visual.seq`) refer to. */
-  | { type: "assistant"; id: string; text: string; final: boolean; finalSeq?: number }
+  | { type: "user"; id: string; text: string; outcome?: MessageOutcome; reason?: string; attachments?: Attachment[]; author_kind: MessageAuthorKind; from_agent: string | null; at?: string }
+  /**
+   * `finalSeq` is the `assistant.final` sequence that visuals (`Visual.seq`) refer to;
+   * `documents` are the Markdown documents the agent attached to that message.
+   */
+  | { type: "assistant"; id: string; text: string; final: boolean; finalSeq?: number; at?: string; documents?: MessageDocument[] }
   | {
       type: "tool";
       id: string;
@@ -49,13 +54,15 @@ export interface SessionView {
   delivering: string | null;
   /** The agent run has picked up work (`turn.started`) and has not settled since. */
   engaged: boolean;
+  /** A model turn is open (`turn.started` until `turn.ended`): the agent is composing. */
+  composing: boolean;
   items: TimelineItem[];
   /** Pending messages in delivery order: steering lane first, then follow-ups. */
   queue: QueuedMessage[];
   tickets: Record<string, Ticket>;
   /** Every conversation card of the session by card id; the timeline holds `{type:"card", id}` rows. */
   cards: Record<string, CardEntry>;
-  /** Children started by `delegate` or `task_start` (`background`), in start order. */
+  /** Children started by `delegate` or `create_task` (`background`), in start order. */
   subagents: SubagentView[];
   /** Latest `browser.state` per agent tab, keyed by {@link browserStateKey}. */
   browserStates: Record<string, BrowserStateView>;
@@ -79,8 +86,11 @@ export interface SubagentView {
   progress: unknown[];
 }
 
-/** `seq` orders states across tabs: the highest is the most recent activity. */
-export type BrowserStateView = BrowserState & { seq: number };
+/**
+ * `seq` orders states across tabs: the highest is the most recent activity. `trail` holds the
+ * tab's earlier status lines ({@link browserLine}), oldest first, at most two.
+ */
+export type BrowserStateView = BrowserState & { seq: number; trail: string[] };
 
 export interface SavedArtifact {
   path: string;
@@ -103,6 +113,7 @@ export const emptySessionView: SessionView = {
   thinking: false,
   delivering: null,
   engaged: false,
+  composing: false,
   items: [],
   queue: [],
   tickets: {},
@@ -256,6 +267,7 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
             text: sent?.text ?? "",
             author_kind: sent?.author_kind ?? "internal",
             from_agent: sent?.from_agent ?? null,
+            at: event.ts,
             ...(sent?.attachments ? { attachments: sent.attachments } : {}),
           },
         ],
@@ -277,13 +289,13 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
       };
     }
     case "turn.started":
-      return { ...next, status: "running", engaged: true };
+      return { ...next, status: "running", engaged: true, composing: true };
     case "turn.ended":
-      return { ...next, thinking: false, items: finalizeStreaming(state.items) };
+      return { ...next, thinking: false, composing: false, items: finalizeStreaming(state.items) };
     case "session.settled":
-      return { ...next, status: "idle", thinking: false, engaged: false, items: finalizeStreaming(state.items) };
+      return { ...next, status: "idle", thinking: false, engaged: false, composing: false, items: finalizeStreaming(state.items) };
     case "session.stopped":
-      return { ...next, status: "stopped", thinking: false, engaged: false, items: finalizeStreaming(state.items) };
+      return { ...next, status: "stopped", thinking: false, engaged: false, composing: false, items: finalizeStreaming(state.items) };
     case "thinking.delta":
       return { ...next, thinking: true };
     case "assistant.delta":
@@ -297,16 +309,17 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
       return {
         ...next,
         thinking: false,
-        items: [...state.items, { type: "assistant", id: `a${event.seq}`, text: event.text, final: false }],
+        items: [...state.items, { type: "assistant", id: `a${event.seq}`, text: event.text, final: false, at: event.ts }],
       };
-    case "assistant.final":
+    case "assistant.final": {
+      const documents = event.attachments?.length ? { documents: event.attachments } : {};
       // The sidecar emits `turn.ended` (which closes the streamed bubble) before the run's
       // `assistant.final`, so the final replaces that bubble instead of duplicating it.
       if (last?.type === "assistant" && last.finalSeq === undefined) {
         return {
           ...next,
           thinking: false,
-          items: [...state.items.slice(0, -1), { ...last, text: event.text, final: true, finalSeq: event.seq }],
+          items: [...state.items.slice(0, -1), { ...last, text: event.text, final: true, finalSeq: event.seq, ...documents }],
         };
       }
       return {
@@ -314,15 +327,16 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
         thinking: false,
         items: [
           ...state.items,
-          { type: "assistant", id: `a${event.seq}`, text: event.text, final: true, finalSeq: event.seq },
+          { type: "assistant", id: `a${event.seq}`, text: event.text, final: true, finalSeq: event.seq, at: event.ts, ...documents },
         ],
       };
+    }
     case "tool.started":
       return {
         ...next,
         thinking: false,
         items: [
-          ...finalizeStreaming(state.items),
+          ...state.items.filter((item) => item.type !== "assistant" || item.finalSeq !== undefined),
           { type: "tool", id: event.tool_call_id, name: event.name, args: event.args, updates: [], done: false },
         ],
       };
@@ -414,11 +428,17 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
       const browser: BrowserStateView = {
         tab_id: event.tab_id, url: event.url, host: event.host, title: event.title,
         phase: event.phase, page_kind: event.page_kind, facts: event.facts, seq: event.seq,
+        trail: [],
         ...(event.task_id != null ? { task_id: event.task_id } : {}),
         ...(event.action != null ? { action: event.action } : {}),
         ...(event.thumbnail != null ? { thumbnail: event.thumbnail } : {}),
         ...(favicon != null ? { favicon } : {}),
       };
+      // The bubble keeps the tab's last few distinct lines, so a step that is over still reads faintly.
+      if (previous) {
+        const before = browserLine(previous);
+        browser.trail = browserLine(browser) === before ? previous.trail : [...previous.trail, before].slice(-2);
+      }
       return { ...next, browserStates: { ...state.browserStates, [browserStateKey(browser)]: browser } };
     }
     case "artifact.saved": {

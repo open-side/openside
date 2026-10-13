@@ -1,71 +1,28 @@
-import { Ban, Check, ChevronRight, CircleAlert, FileText, RotateCw, X } from "lucide-react";
+import { CircleAlert, FileText, RotateCw, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import type { Attachment, Visual } from "../api/types";
-import { pendingTickets, type SessionView, type SubagentView } from "../state/session";
+import { pendingTickets, type SessionView } from "../state/session";
 import { newMessageId, useClient } from "../context";
 import { outgoing, type OutgoingMessage } from "../state/outgoing";
 import { ICON_STROKE } from "../ui";
 import { ArtifactImage } from "./ArtifactImage";
 import { Markdown } from "./Markdown";
 import { RuntimeErrorRow, retrySource } from "./RuntimeError";
-import { StatusMark, STATUS_LABEL, SubagentSteer } from "./SubagentPanel";
 import { askerOf } from "../cards/attention";
 import { ConversationCard } from "./ConversationCard";
+import { MessageDocuments } from "./MessageDocument";
+import { TaskUnit } from "./TaskUnit";
 import { Activity, StatusLine } from "./ToolActivity";
 import { collectToolFacts, type ToolItem } from "./toolCopy";
-import { lastHost, outcomeNote, statusPhrase, TASK_REPORT_PREFIX, taskPhrase, taskSteps } from "./toolStatus";
+import { lastHost, outcomeNote, statusPhrase, TASK_REPORT_PREFIX } from "./toolStatus";
+import { separatorLabel, separatorNeeded } from "./timeStamp";
 import { VisualFrame } from "./VisualFrame";
 
 /** Fenced ```html visual / ```svg visual blocks; shown as rendered frames instead of text. */
 const VISUAL_BLOCK = /```[a-z]+ visual[^\n]*\n[\s\S]*?```\n?/g;
 
-/**
- * A background task, where it was started: its goal and state on a chip that opens to its
- * steps, its final answer, and steer/cancel while it runs.
- */
-function TaskChip({ sessionId, task }: { sessionId: string; task: SubagentView }) {
-  const live = task.status === "running" || task.status === "waiting_human";
-  const steps = taskSteps(task.progress);
-  const state = task.status === "running" ? taskPhrase(task.progress) : STATUS_LABEL[task.status];
-  return (
-    <details className={`activity task task-${task.status}`} data-task={task.id}>
-      <summary className="event-chip task-chip">
-        <span className="activity-icon" aria-hidden="true">
-          <StatusMark status={task.status} />
-        </span>
-        <span className="task-goal" title={task.task}>
-          {task.task}
-        </span>
-        <span className={task.status === "running" ? "task-state status-line-text" : "task-state"} key={state}>
-          {state}
-        </span>
-        <ChevronRight className="activity-chevron" size={15} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </summary>
-      <div className="task-body">
-        {task.output ? (
-          <div className="task-output">
-            <Markdown text={task.output} />
-          </div>
-        ) : null}
-        {task.reason && task.status !== "completed" ? <p className="task-reason">{task.reason}</p> : null}
-        {steps.length ? (
-          <ol className="task-steps" aria-label="Steps">
-            {steps.map((step, index) => (
-              <li key={index}>{step}</li>
-            ))}
-          </ol>
-        ) : null}
-        {live ? <SubagentSteer sessionId={sessionId} child={task} placeholder="Tell this task something" /> : null}
-      </div>
-    </details>
-  );
-}
-
-const REPORT_LABEL: Partial<Record<SubagentView["status"], string>> = {
-  completed: "Task finished",
-  failed: "Task failed",
-  cancelled: "Task cancelled",
-};
+/** Calls that manage Tasks or speak for the agent: the Task rows and the bubbles already show them. */
+const BOOKKEEPING: Record<string, true> = { create_task: true, steer_task: true, cancel_task: true, get_tasks: true, get_models: true, send_message: true };
 
 type Receipt = "sending" | "sent" | "read";
 
@@ -129,7 +86,7 @@ function UserBubble({
 }
 
 /** A message this device sent that the daemon has not (yet) echoed into the conversation. */
-function OutgoingBubble({ sessionId, message }: { sessionId: string; message: OutgoingMessage }) {
+function OutgoingBubble({ sessionId, message, latest }: { sessionId: string; message: OutgoingMessage; latest: boolean }) {
   const failed = message.state === "failed";
   return (
     <li className="bubble user" data-message={message.message_id} data-receipt={failed ? "failed" : message.state === "sending" ? "sending" : "sent"}>
@@ -137,7 +94,7 @@ function OutgoingBubble({ sessionId, message }: { sessionId: string; message: Ou
         sessionId={sessionId}
         text={message.text}
         fileNames={message.attachments.flatMap((file) => (file.name ? [file.name] : []))}
-        receipt={failed ? undefined : message.state === "sending" ? "sending" : "sent"}
+        {...(!failed && latest ? { receipt: message.state === "sending" ? ("sending" as const) : ("sent" as const) } : {})}
         failure={
           failed ? (
             <FailedReceipt
@@ -199,7 +156,10 @@ function FailedReceipt({
   );
 }
 
-/** Three dots that bounce one after another while the agent works before its first words. */
+/**
+ * Three dots that bounce one after another while the agent works before its first words; in a
+ * front agent's thread they sit in a reply bubble of their own, as in a messenger.
+ */
 function TypingIndicator() {
   return (
     <p className="typing" role="status">
@@ -225,6 +185,8 @@ export function Timeline({
   outgoing: sending = [],
   browserCard,
   inertCardId,
+  front = false,
+  onShowPending = () => undefined,
 }: {
   view: SessionView;
   sessionId: string;
@@ -235,6 +197,13 @@ export function Timeline({
   browserCard?: { anchorItemId: string | null; node: ReactNode };
   /** A card hosted somewhere else right now (a sheet); its inline copy stays visible but inert. */
   inertCardId?: string | null;
+  /**
+   * The front agent's thread: it only talks (each `send_message` is one bubble) and hands work
+   * to Tasks, so its own calls never show; a Task is a row with its browser bubble.
+   */
+  front?: boolean;
+  /** Brings the card waiting on the person into view. */
+  onShowPending?: () => void;
 }) {
   const facts = useMemo(() => collectToolFacts(view.items, view.browserStates), [view.items, view.browserStates]);
   const rows: ReactNode[] = [];
@@ -245,17 +214,37 @@ export function Timeline({
   ) : null;
   if (cardRow && browserCard?.anchorItemId === null) rows.push(cardRow);
   let tools: ToolItem[] = [];
-  // A run with nothing new on screen (no streaming text, no card waiting for an answer) shows
-  // what it is doing; a trailing group of calls becomes that line instead of a finished chip.
+  // A run without a completed reply or waiting card shows activity; provisional text is internal.
   // Until the agent has picked a message up (`Sent`, `Read`) there is nothing to show yet.
+  // The front agent shows typing dots only while it composes a turn: its Tasks keep working
+  // after it has answered, and they speak through their own rows.
   const last = view.items.at(-1);
   const unanswered = last?.type === "user" && last.outcome === undefined;
-  const live =
-    view.status === "running" &&
-    pendingTickets(view).length === 0 &&
-    view.delivering === null &&
-    !(unanswered && !view.engaged) &&
-    (view.thinking || last?.type !== "assistant");
+  const live = front
+    ? view.composing && pendingTickets(view).length === 0 && !(last?.type === "assistant" && last.finalSeq !== undefined)
+    : view.status === "running" &&
+      pendingTickets(view).length === 0 &&
+      view.delivering === null &&
+      !(unanswered && !view.engaged) &&
+      (view.thinking || !(last?.type === "assistant" && last.finalSeq !== undefined));
+  const newestPerson = view.items.findLast((it) => it.type === "user" && it.author_kind === "person");
+  // One delivery note in the whole thread, under the person's newest bubble, wherever it is.
+  const delivering = view.delivering ? view.queue.find((message) => message.id === view.delivering && message.author_kind !== "internal") : undefined;
+  const known = new Set([...view.queue.map((message) => message.id), ...view.items.flatMap((item) => (item.type === "user" ? [item.id] : []))]);
+  const unechoed = sending.filter((message) => !known.has(message.message_id));
+  const lastUnechoed = unechoed.at(-1);
+  let previousAt: string | undefined;
+  const stamp = (key: string, at: string | undefined) => {
+    if (!at) return;
+    if (separatorNeeded(previousAt, at)) {
+      rows.push(
+        <li key={`time-${key}`} className="time-separator">
+          <time dateTime={at}>{separatorLabel(at)}</time>
+        </li>,
+      );
+    }
+    previousAt = at;
+  };
 
   // One reply, one bubble: the agent's text segments of a turn and the calls between them read
   // as one message. Calls before its first words stay a row above the bubble.
@@ -314,6 +303,20 @@ export function Timeline({
   };
 
   const tasks = new Map(view.subagents.filter((child) => child.background).map((child) => [child.parentToolCallId, child]));
+  // Only the newest Task still at work opens its browser by itself; phones have room for one.
+  const browsing = new Set(Object.values(view.browserStates).flatMap((state) => (state.task_id ? [state.task_id] : [])));
+  const newestActive = view.subagents.findLast((child) => child.background && browsing.has(child.id) && (child.status === "running" || child.status === "waiting_human"))?.id;
+  // A Task started before the turn's completed reply moves after that reply, never after narration.
+  const deferTo = new Map<string, string>();
+  {
+    let started: string[] = [];
+    for (const item of view.items) {
+      if (item.type === "user") started = [];
+      else if (item.type === "tool" && tasks.has(item.id)) started.push(item.id);
+      else if (item.type === "assistant" && item.finalSeq !== undefined) for (const id of started) deferTo.set(id, item.id);
+    }
+  }
+  const deferred = new Map<string, ReactNode[]>();
   // A request is its card, so the call that raised it adds nothing next to it, and neither does
   // a `present` call whose card is on the timeline. An approved call's own outcome arrives on
   // its card too. A `present` call that failed has no card and keeps its row.
@@ -337,47 +340,41 @@ export function Timeline({
       if (ticketCalls.has(item.id) || view.cards[`present:${item.id}`]) continue;
       const task = tasks.get(item.id);
       if (!task) {
-        tools.push(item);
+        if (!front && !BOOKKEEPING[item.name]) tools.push(item);
+        continue;
+      }
+      const tab = Object.values(view.browserStates)
+        .filter((state) => state.task_id === task.id)
+        .reduce<(typeof view.browserStates)[string] | undefined>((latest, state) => (!latest || state.seq > latest.seq ? state : latest), undefined);
+      const unit = (
+        <li key={`task-${task.id}`} className="task-row">
+          <TaskUnit sessionId={sessionId} task={task} state={tab} newest={task.id === newestActive} onShowPending={onShowPending} />
+        </li>
+      );
+      const after = deferTo.get(item.id);
+      if (after) {
+        deferred.set(after, [...(deferred.get(after) ?? []), unit]);
         continue;
       }
       flush();
-      place(`task-${task.id}`, <TaskChip sessionId={sessionId} task={task} />, "task-row");
+      closeReply();
+      rows.push(unit);
       continue;
     }
     flush();
-    if (item.type !== "assistant") closeReply();
+    // The front agent's messages are each complete; one bubble per message.
+    if (item.type !== "assistant" || front) closeReply();
     switch (item.type) {
       case "user": {
-        if (item.author_kind === "internal" && item.id.startsWith(TASK_REPORT_PREFIX)) {
-          // The daemon hands a finished task's result to the front agent as a message; it is not
-          // the person's words, so it shows as a marker and the full answer stays on the chip.
-          const task = view.subagents.find((child) => child.id === item.id.slice(TASK_REPORT_PREFIX.length));
-          const status = task?.status ?? "completed";
-          rows.push(
-            <li key={`u-${item.id}`} className="task-report" data-status={status}>
-              <span className="activity-icon" aria-hidden="true">
-                {status === "failed" ? (
-                  <CircleAlert size={15} strokeWidth={ICON_STROKE} />
-                ) : status === "cancelled" ? (
-                  <Ban size={15} strokeWidth={ICON_STROKE} />
-                ) : (
-                  <Check size={15} strokeWidth={2.2} />
-                )}
-              </span>
-              <span>{REPORT_LABEL[status] ?? "Task update"}</span>
-              {task ? (
-                <span className="task-report-goal" title={task.task}>
-                  {task.task}
-                </span>
-              ) : null}
-            </li>,
-          );
-          break;
-        }
-        const lastUser = item === view.items.at(-1) && item.outcome === undefined;
+        // The daemon hands a finished Task's result to the front agent as a message; it is not
+        // the person's words, and the Task's own row already says how it ended.
+        if (item.author_kind === "internal" && item.id.startsWith(TASK_REPORT_PREFIX)) break;
+        stamp(item.id, item.at);
+        // The runtime took the message up (`message.injected`), so the person's newest one reads
+        // "Read" and keeps it, as in a messenger; "Sent" belongs to the queued bubble before that.
         const failed = item.outcome === "failed";
         // Only the newest failed message is offered again, and not while something else is on its way.
-        const newest = item === view.items.findLast((it) => it.type === "user" && it.author_kind === "person");
+        const newest = item === newestPerson;
         const idle = sending.length === 0 && view.queue.length === 0 && view.status !== "running";
         const note = item.outcome && item.outcome !== "completed" && item.outcome !== "deferred" ? outcomeNote(item.outcome, item.reason) : undefined;
         // The agent's own error row below carries the retry for a run that died; one is enough.
@@ -389,7 +386,7 @@ export function Timeline({
               text={item.text}
               {...(item.attachments ? { attachments: item.attachments } : {})}
               {...(note && !(failed && newest) ? { note } : {})}
-              {...(lastUser ? { receipt: "read" as const } : {})}
+              {...(item === newestPerson && !failed && !delivering && !lastUnechoed ? { receipt: "read" as const } : {})}
               {...(failed && newest
                 ? {
                     failure: (
@@ -407,12 +404,21 @@ export function Timeline({
         break;
       }
       case "assistant": {
+        // Deltas may precede a tool call, so only an explicit final is conversational text.
+        if (item.finalSeq === undefined) break;
         const frames = item.finalSeq !== undefined ? (visuals[item.finalSeq] ?? []) : [];
         const text = frames.length ? item.text.replace(VISUAL_BLOCK, "").trim() : item.text;
+        if (!turn.reply) stamp(item.id, item.at);
         const current = (turn.reply ??= { key: item.id, parts: [], final: item.final, frames: [] });
+        if (item.documents) current.parts.push(<MessageDocuments key={`${item.id}-documents`} sessionId={sessionId} documents={item.documents} />);
         if (text.trim()) current.parts.push(<Markdown key={item.id} text={text} />);
         current.final = item.final;
         current.frames.push(...frames);
+        const units = deferred.get(item.id);
+        if (units) {
+          closeReply();
+          rows.push(...units);
+        }
         break;
       }
       case "card": {
@@ -441,23 +447,26 @@ export function Timeline({
   for (const entry of waiting.sort((a, b) => a.firstSeq - b.firstSeq)) rows.push(conversationRow(entry.id));
   if (live && !trailingLive) {
     rows.push(
-      <li key="status" className="live-status typing-row">
+      <li key="status" className={front ? "live-status typing-row typing-bubble" : "live-status typing-row"}>
         <TypingIndicator />
       </li>,
     );
   }
 
-  const delivering = view.delivering ? view.queue.find((message) => message.id === view.delivering) : undefined;
-  if (delivering && delivering.author_kind !== "internal") {
+  if (delivering) {
     rows.push(
       <li key={`d-${delivering.id}`} className="bubble user" data-message={delivering.id}>
-        <UserBubble sessionId={sessionId} text={delivering.text} {...(delivering.attachments ? { attachments: delivering.attachments } : {})} receipt="sent" />
+        <UserBubble
+          sessionId={sessionId}
+          text={delivering.text}
+          {...(delivering.attachments ? { attachments: delivering.attachments } : {})}
+          {...(lastUnechoed ? {} : { receipt: "sent" as const })}
+        />
       </li>,
     );
   }
-  const known = new Set([...view.queue.map((message) => message.id), ...view.items.flatMap((item) => (item.type === "user" ? [item.id] : []))]);
-  for (const message of sending) {
-    if (!known.has(message.message_id)) rows.push(<OutgoingBubble key={`o-${message.message_id}`} sessionId={sessionId} message={message} />);
+  for (const message of unechoed) {
+    rows.push(<OutgoingBubble key={`o-${message.message_id}`} sessionId={sessionId} message={message} latest={message === lastUnechoed} />);
   }
 
   return (

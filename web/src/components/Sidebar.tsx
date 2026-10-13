@@ -128,7 +128,7 @@ function PersonRow({ agent, current, unread }: { agent: AgentSummary; current: b
         aria-current={current ? "page" : undefined}
         aria-label={[agent.name, state].filter(Boolean).join(", ")}
       >
-        <Avatar initials={agent.initials} color={agent.color} size={40} working={working} />
+        <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={40} working={working} />
         <span className="person-text">
           <span className="person-name" title={agent.name}>
             {agent.name}

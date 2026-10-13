@@ -476,7 +476,7 @@ describe("blocks", () => {
     const block: Block = {
       type: "people",
       id: "p",
-      from: { agent_id: "a1", name: "Juno", initials: "J", color: "#2f6fed", role: null },
+      from: { agent_id: "a1", name: "openside", initials: "o", color: "#2f6fed", role: null },
       to: { agent_id: "a2", name: "Mina", initials: "M", color: "#ef476f; background:url(x)", role: "Prices" },
     };
     mount({ ...ask({ kind: "handoff", blocks: [block], actions: [] }), interaction: "none", id: "handoff:h" }, { defaultOpen: true });

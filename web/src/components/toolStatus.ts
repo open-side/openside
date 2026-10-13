@@ -1,3 +1,4 @@
+import type { BrowserState } from "../api/types";
 import type { TimelineItem } from "../state/session";
 
 type ToolItem = Extract<TimelineItem, { type: "tool" }>;
@@ -13,9 +14,27 @@ export function hostOf(url: unknown): string | null {
   }
 }
 
+function pageFacet(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port ||
+      !["/trending", "/trending/developers"].includes(url.pathname)) return null;
+    const periods = url.searchParams.getAll("since");
+    if (periods.length !== 1) return null;
+    const period = periods[0]!;
+    return ["daily", "weekly", "monthly"].includes(period) ? `${period} trending` : null;
+  } catch {
+    return null;
+  }
+}
+
 function urlIn(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
-  return hostOf((value as Record<string, unknown>).url);
+  const url = (value as Record<string, unknown>).url;
+  const host = hostOf(url);
+  const facet = pageFacet(url);
+  return host && facet ? `${host} (${facet})` : host;
 }
 
 /**
@@ -48,10 +67,11 @@ const ON_PAGE: Record<string, string> = {
 };
 
 const TASK_TOOLS: Record<string, string> = {
-  task_start: "Starting a task",
-  task_steer: "Updating a task",
-  task_cancel: "Cancelling a task",
-  task_status: "Checking on tasks",
+  create_task: "Starting a task",
+  steer_task: "Updating a task",
+  cancel_task: "Cancelling a task",
+  get_tasks: "Checking on tasks",
+  send_message: "Writing",
 };
 
 /** Message id prefix the daemon gives a finished task's report to the front agent. */
@@ -106,31 +126,21 @@ export function statusPhrase(tools: readonly ToolItem[], host: string | null): s
   return "Thinking";
 }
 
-/** The calls a background task's model made, in order, as people would name them. */
-export function taskSteps(progress: readonly unknown[]): string[] {
-  const steps: string[] = [];
-  for (const entry of progress) {
-    if (!entry || typeof entry !== "object") continue;
-    const { kind, tool_calls: calls } = entry as { kind?: unknown; tool_calls?: unknown };
-    if (kind !== "model_response" || !Array.isArray(calls)) continue;
-    for (const name of calls) {
-      if (typeof name !== "string") continue;
-      // Progress names the calls without their arguments, so one tool reads the same each time.
-      const step = toolPhrase({ type: "tool", id: "", name, args: undefined, updates: [], done: true }, null);
-      if (steps.at(-1) !== step) steps.push(step);
-    }
-  }
-  return steps;
-}
-
-/** What a running task is doing now: waiting on its model, or the calls it last asked for. */
-export function taskPhrase(progress: readonly unknown[]): string {
-  const last = progress.at(-1) as { kind?: unknown; tool_calls?: unknown } | undefined;
-  if (last?.kind === "model_request") return "Thinking";
-  if (last?.kind === "model_response" && Array.isArray(last.tool_calls) && last.tool_calls.length) {
-    return taskSteps([last]).at(-1) ?? "Working";
-  }
-  return "Working";
+/**
+ * One line for a tab's latest `browser.state`, as a person would narrate it: "Typing on
+ * nid.example.com", "Opening github.com", "Waiting for you".
+ */
+export function browserLine(state: BrowserState): string {
+  const site = state.host || "a page";
+  const facet = pageFacet(state.url);
+  let line: string;
+  if (state.phase === "waiting_human") line = "Waiting for you";
+  else if (state.phase === "error") line = state.facts.error_text || `Couldn’t load ${site}`;
+  else if (state.action) {
+    const { phrase, target } = state.action;
+    line = target ? `${phrase} ${target}` : /\s/.test(phrase) ? phrase : `${phrase} on ${site}`;
+  } else line = state.phase === "loading" ? `Opening ${site}` : `Reading ${site}`;
+  return facet ? `${line} (${facet})` : line;
 }
 
 const OUTCOME_NOTES: Record<string, string> = {

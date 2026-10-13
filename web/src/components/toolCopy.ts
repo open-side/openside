@@ -255,10 +255,11 @@ const PHRASES: Record<string, Phrase> = {
     present: (call) => (call.args.action === "register" ? `Creating a passkey for ${siteOf(call) ?? "this site"}` : `Signing in to ${siteOf(call) ?? "the site"} with a passkey`),
   },
   delegate: fixed("helper", "Asked a helper", "Asking a helper", ({ args }) => firstLine(str(args, "task"))),
-  task_start: fixed("helper", "Started a background task", "Starting a background task", ({ args }) => firstLine(str(args, "goal"))),
-  task_steer: fixed("helper", "Updated a background task", "Updating a background task"),
-  task_cancel: fixed("helper", "Cancelled a background task", "Cancelling a background task"),
-  task_status: fixed("helper", "Checked on background tasks", "Checking on background tasks"),
+  create_task: fixed("helper", "Started a task", "Starting a task", ({ args }) => firstLine(str(args, "goal"))),
+  steer_task: fixed("helper", "Updated a task", "Updating a task"),
+  cancel_task: fixed("helper", "Cancelled a task", "Cancelling a task"),
+  get_tasks: fixed("helper", "Checked on tasks", "Checking on tasks"),
+  send_message: fixed("other", "Sent a message", "Writing a message"),
 };
 
 /** Tool names the daemon registers; the table above must speak for each of them. */

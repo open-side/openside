@@ -1615,93 +1615,6 @@ summary.status-line {
   flex: none;
   color: var(--danger);
 }
-/* Background task: a chip like a finished group, carrying the goal and a live state. */
-.task > summary.task-chip {
-  min-height: 36px;
-  padding: 0 12px;
-}
-.task-goal {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-state {
-  flex: none;
-  font-weight: 500;
-}
-.task-state:not(.status-line-text) {
-  color: var(--muted);
-}
-.task-state::before {
-  content: "·";
-  margin-right: 6px;
-  color: var(--muted);
-}
-.task-failed .activity-icon {
-  color: var(--danger);
-}
-.task-cancelled .activity-icon {
-  color: var(--muted);
-}
-.task-body {
-  display: grid;
-  gap: 10px;
-  margin: 8px 0 0;
-  padding: 12px 14px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
-  animation: status-in var(--normal) var(--ease);
-}
-.task-body:empty {
-  display: none;
-}
-.task-output {
-  font-size: 0.9375rem;
-}
-.task-reason {
-  margin: 0;
-  color: var(--danger);
-  font-size: 0.8125rem;
-}
-.task-steps {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0 0 0 18px;
-  color: var(--muted);
-  font-size: 0.8125rem;
-}
-/* Where a task's result came back: a quiet marker, not a message bubble. */
-.task-report {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 0.8125rem;
-  font-weight: 550;
-}
-.task-report[data-status="failed"] .activity-icon {
-  color: var(--danger);
-}
-.task-report[data-status="cancelled"] .activity-icon {
-  color: var(--muted);
-}
-.task-report-goal {
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 450;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-report-goal::before {
-  content: "· ";
-}
 @media (pointer: coarse) {
   .activity > summary,
   .activity > summary.status-line {
@@ -2228,16 +2141,8 @@ summary.status-line {
 .subagent-events code {
   word-break: break-word;
 }
-.subagent-steer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.subagent-steer label {
-  flex: 1 1 12rem;
-}
 
-/* Stop confirmation ("Cancel this task?"): a neutral pill and a rose one. */
+/* Stop confirmation ("Stop this task?", "Stop everything?"): a neutral pill and a rose one. */
 .stop-task-dialog .ui-dialog-actions .ui-button {
   border-radius: var(--radius-pill);
 }
@@ -2322,6 +2227,27 @@ summary.status-line {
   background: var(--status-pill-bg);
   -webkit-backdrop-filter: var(--blur-glass);
   backdrop-filter: var(--blur-glass);
+}
+/* The front agent types in a reply bubble of its own. */
+.typing-bubble .typing {
+  height: 46px;
+  padding: 0 20px;
+  border-color: var(--glass-strong-border);
+  border-radius: var(--radius-2xl);
+  background: var(--glass-strong-bg);
+  box-shadow: 0 1px 2px rgb(10 14 30 / 0.12), 0 8px 24px rgb(10 14 30 / 0.12);
+}
+.typing-bubble .typing-dot {
+  background: var(--glass-strong-muted);
+}
+/* A messenger's day and time line: centred, small and muted, never a divider rule. */
+.time-separator {
+  justify-self: center;
+  padding: 6px 0 2px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.3;
 }
 .typing-dot {
   width: 7px;

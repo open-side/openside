@@ -34,7 +34,6 @@ export interface ThreadViewProps {
   sessionId: string;
   /** The screen's header, built from the live thread state. */
   header: (state: ThreadState) => ReactNode;
-  /** Who reads what the person types ("Message Juno"). */
   addressee?: string;
   /** Replaces the composer, e.g. for a retired teammate's thread. */
   readOnly?: ReactNode;
@@ -45,10 +44,12 @@ export interface ThreadViewProps {
   onDraftApplied?: () => void;
   /** Every new event sequence this view rendered, for the device's read cursor. */
   onSeen?: (lastSeq: number) => void;
+  /** The thread of the front agent, which only talks and hands work to Tasks. */
+  front?: boolean;
 }
 
 /** One continuous conversation: transcript, live browser card, queue and composer. */
-export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, draft, onDraftApplied, onSeen }: ThreadViewProps) {
+export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, draft, onDraftApplied, onSeen, front = false }: ThreadViewProps) {
   const client = useClient();
   const shell = useShell();
   const toast = useToast();
@@ -231,6 +232,8 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
               visuals={files.visuals}
               outgoing={sending}
               inertCardId={sheetCard?.id ?? null}
+              front={front}
+              onShowPending={showPending}
               browserCard={{
                 anchorItemId: browserAnchor(view.items),
                 node: <BrowserPreview key={id} sessionId={id} view={view} onShowPending={showPending} onCancel={() => setConfirmStop(true)} />,
@@ -262,10 +265,14 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
               onDraftApplied?.();
             }}
             tools={
-              <>
-                <AgentsTray sessionId={id} subagents={view.subagents} />
-                <FilesTray sessionId={id} artifacts={files.artifacts} />
-              </>
+              // The assistant's thread stays a plain conversation: its work shows as Task units
+              // and a document reaches the person only attached to a message.
+              front ? undefined : (
+                <>
+                  <AgentsTray subagents={view.subagents} />
+                  <FilesTray sessionId={id} artifacts={files.artifacts} />
+                </>
+              )
             }
           />
         )}

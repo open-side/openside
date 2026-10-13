@@ -156,7 +156,7 @@ export const MESSAGES: Record<string, string> = {
   secret_detected: "That text looks like a secret, so it was not stored.",
   unknown_subscription: "This device's notification subscription is no longer registered.",
   vault_unavailable: "The vault is locked or not set up. Unlock it first.",
-  invalid_models: "Pick a default model and up to 16 different fallback models.",
+  invalid_models: "Pick a reasoning model, an optional fast model and up to 16 different fallback models.",
   model_unavailable: "That model is not available right now. Connect its provider first.",
   key_id_conflict: "A vault item already uses the name this key is stored under. Rename that item in the Vault, then try again.",
   invalid_provider: "Keys can be stored for Anthropic, OpenAI and Google.",
@@ -219,6 +219,7 @@ export const MESSAGES: Record<string, string> = {
   agent_retired: "That teammate is retired. Restore them first.",
   name_taken: "Someone on your team already has that name. Pick another.",
   roster_full: "Your team is full. Give the work to someone already on it, or retire a teammate first.",
+  responsibility_taken: "A teammate already owns that responsibility. Give the work to them instead.",
   already_assigned: "Someone is already working on that.",
   channel_binding_conflict: "That channel already belongs to another teammate. Unassign it there first.",
   invalid_channel_kind: "That service is not supported. Choose Telegram, Slack or Discord.",
@@ -382,6 +383,7 @@ export interface Client {
   testChannelAccount(kind: string, accountId: string): Promise<ChannelAccountTest>;
   createSession(request: CreateSessionRequest): Promise<Session>;
   updateSession(id: string, request: UpdateSessionRequest): Promise<Session>;
+  deleteSession(id: string): Promise<void>;
   stopSession(id: string): Promise<Session>;
   /** Start the session's agent process, browser and a blank agent tab ahead of a message. */
   prewarmSession(id: string): Promise<void>;
@@ -396,7 +398,6 @@ export interface Client {
   rejectTicket(id: string, reason?: string): Promise<Ticket>;
   ticketDone(id: string): Promise<Ticket>;
   cancelSubagent(id: string, subagentId: string): Promise<Subagent>;
-  steerSubagent(id: string, subagentId: string, text: string): Promise<Subagent>;
   /** `/` mention candidates: enabled skills visible to the session. */
   searchSkills(sessionId: string, q: string): Promise<SkillList>;
   listArtifacts(id: string): Promise<ArtifactList>;
@@ -642,6 +643,7 @@ export function createClient(options: ClientOptions): Client {
     createSession: (request: CreateSessionRequest) => json<Session>("POST", "/v1/sessions", request),
     updateSession: (id: string, request: UpdateSessionRequest) =>
       json<Session>("PATCH", `/v1/sessions/${enc(id)}`, request),
+    deleteSession: (id: string) => json<void>("DELETE", `/v1/sessions/${enc(id)}`),
     stopSession: (id: string) => json<Session>("POST", `/v1/sessions/${enc(id)}/stop`),
     prewarmSession: async (id: string) => {
       await send(`/v1/sessions/${enc(id)}/prewarm`, { method: "POST", headers: headers() });
@@ -663,8 +665,6 @@ export function createClient(options: ClientOptions): Client {
     ticketDone: (id: string) => json<Ticket>("POST", `/v1/tickets/${enc(id)}/done`),
     cancelSubagent: (id: string, subagentId: string) =>
       json<Subagent>("POST", `/v1/sessions/${enc(id)}/subagents/${enc(subagentId)}/cancel`),
-    steerSubagent: (id: string, subagentId: string, text: string) =>
-      json<Subagent>("POST", `/v1/sessions/${enc(id)}/subagents/${enc(subagentId)}/steer`, { text }),
     searchSkills: (sessionId: string, q: string) => {
       const params = new URLSearchParams({ q, session: sessionId, enabled: "true" });
       return json<SkillList>("GET", `/v1/skills?${params}`);

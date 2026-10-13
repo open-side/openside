@@ -68,7 +68,7 @@ export function ManageDialogs({ location, onSignOut }: { location: Location; onS
         onClose={close}
         size="wide"
         title="Models & accounts"
-        description="Connect providers, choose the default model and see what each one makes available."
+        description="Connect providers, choose the fast and reasoning models and see what each one makes available."
         back={{ label: "Back to settings", onClick: () => go("/settings") }}
       >
         <ModelsPanel />

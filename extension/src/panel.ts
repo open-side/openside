@@ -1,12 +1,12 @@
 import { askerOf, isAttentionTicket } from "../../web/src/cards/attention";
 import { mountCard, type MountedCard } from "../../web/src/cards/render";
 import type { Action } from "../../web/src/api/types";
-import { client, openSessionStream, type Client } from "./api";
+import { client, openSessionStream } from "./api";
 import { hasContextMention, withContext, type TabContext } from "./context";
 import { renderMarkdown } from "./markdown";
 import { pairing, tabSessions } from "./storage";
 import { createPicker } from "./picker";
-import { bindStatus, icon, mountIcons, type IconName } from "./ui";
+import { bindStatus, icon, mountIcons } from "./ui";
 import { installScrollReveal } from "../../web/src/ui/scrollReveal";
 import { outcomeNote } from "../../web/src/components/toolStatus";
 installScrollReveal();

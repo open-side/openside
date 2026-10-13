@@ -517,6 +517,22 @@
   flex: 1;
   min-width: 0;
 }
+.ui-select-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.ui-select-tag {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
 .ui-select-detail {
   color: var(--muted);
   font-size: 0.8125rem;

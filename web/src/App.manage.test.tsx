@@ -38,7 +38,7 @@ function stubDaemon(route: Route) {
 /** Answers every management screen with the smallest valid document. */
 const EMPTY_ADMIN: Record<string, unknown> = {
   "/v1/sessions": { sessions: [{ id: "s1", title: "Hello", status: "idle", activity: "", created_at: "2026-10-12T00:00:00Z", updated_at: "2026-10-12T00:00:00Z", pinned: false, archived: false }] },
-  "/v1/agents": { agents: [agentSummary("chief", "Juno", { home_session_id: "s1" })] },
+  "/v1/agents": { agents: [agentSummary("chief", "openside", { home_session_id: "s1" })] },
   "/v1/skills": { skills: [{ name: "pdf-tools", description: "PDF helper", source: "user", enabled: true }], problems: [] },
   "/v1/routines": {
     routines: [
@@ -86,7 +86,7 @@ describe("/pair deep link", () => {
         <App />
       </StrictMode>,
     );
-    expect(await screen.findByRole("link", { name: /^Juno/ })).toBeInTheDocument();
+    expect(within(await screen.findByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ })).toBeInTheDocument();
     const exchanges = requests.filter((r) => r.path === "/v1/pairing/exchange");
     expect(exchanges).toEqual([{ method: "POST", path: "/v1/pairing/exchange", auth: null, body: { code: "code-123" } }]);
     expect(localStorage.getItem("openside.token")).toBe("tok-7");
@@ -113,7 +113,7 @@ describe("management screens (PP-15: no feature flags)", () => {
     stubDaemon((method, path) => (method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined));
     render(<App />);
     const nav = await screen.findByRole("navigation", { name: "Sections" });
-    expect(await screen.findByRole("link", { name: /^Juno/ })).toBeInTheDocument();
+    expect(within(await screen.findByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ })).toBeInTheDocument();
 
     const checks: Record<string, () => Promise<HTMLElement>> = {
       Skills: () => screen.findByRole("switch", { name: /^Enable \// }),
@@ -132,7 +132,7 @@ describe("management screens (PP-15: no feature flags)", () => {
       expect(screen.queryByRole("alert"), label).toBeNull();
       expect(document.body.textContent, label).not.toMatch(/upgrade|premium|feature flag|not available in this/i);
       // The people list stays underneath the dialog.
-      expect(screen.getByRole("link", { name: /^Juno/, hidden: true })).toBeInTheDocument();
+      expect(within(screen.getByRole("list", { name: "Team", hidden: true })).getByRole("link", { name: /^openside/, hidden: true })).toBeInTheDocument();
       await user.click(within(dialog).getByRole("button", { name: "Back to workspace" }));
     }
     await user.click(within(await screen.findByRole("dialog", { name: "Workspace" })).getByRole("button", { name: "Close" }));
@@ -168,7 +168,7 @@ describe("phone team drawer", () => {
     await user.click(await screen.findByRole("button", { name: "Open menu" }));
     const drawer = await screen.findByRole("dialog", { name: "Team menu" });
     expect(window.location.pathname).toBe("/agents/chief");
-    await user.click(within(drawer).getByRole("link", { name: /^Juno/ }));
+    await user.click(within(within(drawer).getByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ }));
     await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Team menu" })).toBeNull());
     expect(window.location.pathname).toBe("/agents/chief");
     expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();

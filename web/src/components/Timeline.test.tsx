@@ -41,21 +41,31 @@ describe("Timeline visuals (A-15)", () => {
     ]),
   );
 
-  it("renders a visual block in a script-free sandboxed iframe and toggles to its source", async () => {
+  it("draws a visual block as an inert image and toggles to its source", async () => {
     const user = userEvent.setup();
     setup(view, { 3: [visual] });
     const bubble = document.querySelector(".bubble.assistant")!;
     expect(bubble.textContent).toBe("Here is the chart:\nDone.");
-    const frame = screen.getByTitle("SVG visual");
-    expect(frame.tagName).toBe("IFRAME");
-    // Empty sandbox: no scripts, opaque origin, no top navigation.
-    expect(frame.getAttribute("sandbox")).toBe("");
-    expect(frame).toHaveAttribute("src", `http://localhost:3000${visual.preview_url}`);
+    // An image never runs script or loads anything, and it has no backdrop of its own.
+    const image = await screen.findByRole("img", { name: "SVG visual" });
+    expect(image.tagName).toBe("IMG");
+    expect(image.getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
     await user.click(screen.getByRole("button", { name: "Source" }));
-    expect(screen.queryByTitle("SVG visual")).toBeNull();
+    expect(screen.queryByRole("img", { name: "SVG visual" })).toBeNull();
     expect(document.querySelector(".visual-source")?.textContent).toBe(SOURCE);
     await user.click(screen.getByRole("button", { name: "Preview" }));
-    expect(screen.getByTitle("SVG visual")).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "SVG visual" })).toBeInTheDocument();
+  });
+
+  it("says plainly when a visual cannot be drawn, and strips script from one that can", async () => {
+    const broken = { ...visual, id: "3-1", source: "<svg><rect></svg" };
+    const scripted = { ...visual, id: "3-2", source: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><text>hi</text></svg>' };
+    setup(view, { 3: [broken, scripted] });
+    expect(await screen.findByText("Couldn’t show this visual. Its source is under Source.")).toBeInTheDocument();
+    const image = await screen.findByRole("img", { name: "SVG visual" });
+    const svg = decodeURIComponent(image.getAttribute("src")!.split(",").slice(1).join(","));
+    expect(svg).not.toContain("<script");
+    expect(svg).toContain("<text>hi</text>");
   });
 
   it("keeps the visual block as a code block when the daemon lists no visual for that message", async () => {
@@ -164,7 +174,17 @@ describe("Timeline tool activity", () => {
     expect(status.querySelector("li.tool-running")).toHaveTextContent("Clicking on the page");
   });
 
-  it("reads one reply as one bubble, with the calls between its words as an inline chip", () => {
+  it("never renders provisional narration even before its tool call arrives", () => {
+    setup(replaySession(events([
+      { kind: "turn.started" },
+      { kind: "assistant.delta", text: "Internal page narration" },
+      { kind: "turn.ended" },
+    ])));
+    expect(screen.queryByText("Internal page narration")).toBeNull();
+    expect(document.querySelector(".bubble.assistant")).toBeNull();
+  });
+
+  it("hides tool-adjacent narration and shows only the completed reply", () => {
     const view = replaySession(
       events([
         { kind: "message.queued", message_id: "m1", text: "Check the repo", mode: "queue", author_kind: "person", from_agent: null },
@@ -182,11 +202,8 @@ describe("Timeline tool activity", () => {
     setup(view);
     const bubbles = document.querySelectorAll(".bubble.assistant");
     expect(bubbles).toHaveLength(1);
-    expect(bubbles[0]).toHaveTextContent("Seven crates have updates");
+    expect(bubbles[0]).not.toHaveTextContent("Seven crates have updates");
     expect(bubbles[0]).toHaveTextContent("this week. I checked the lockfile.");
-    // The chip between the segments is inside the bubble; the call before the first words is not.
-    expect(bubbles[0]!.querySelectorAll(".reply-activity details.activity")).toHaveLength(1);
-    expect(bubbles[0]!.querySelector(".activity-label")).toHaveTextContent("Read Cargo.lock");
     expect(document.querySelectorAll("li.activity-row")).toHaveLength(1);
   });
 

@@ -42,7 +42,7 @@ export function AssistantStep({ update }: StepProps) {
 
   return (
     <form className="onb-assistant" onSubmit={(event) => void save(event)} aria-label="Name your assistant">
-      <Avatar initials={initials} color={chief.color} size={64} />
+      <Avatar chief initials={initials} color={chief.color} size={64} />
       <label className="onb-field">
         Name
         <input value={name} maxLength={24} required onChange={(event) => setName(event.target.value)} />

@@ -67,7 +67,6 @@ export interface ComposerProps {
   /** Content shared to the app (share target) or a picked starter; applied once, then `onDraftApplied` fires. */
   draft?: ShareDraft | null;
   onDraftApplied?: () => void;
-  /** Who reads the message: "Message Juno". */
   addressee?: string;
 }
 

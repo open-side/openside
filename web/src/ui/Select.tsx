@@ -10,6 +10,8 @@ export interface SelectOption {
   icon?: ReactNode;
   /** Muted second line under the label. */
   detail?: string;
+  /** Small pill after the label, for a short category such as a model tier. */
+  tag?: string;
   disabled?: boolean;
 }
 
@@ -75,7 +77,10 @@ export function Select({
         </span>
       )}
       <span className="ui-select-text">
-        <BaseSelect.ItemText>{option.label}</BaseSelect.ItemText>
+        <span className="ui-select-title">
+          <BaseSelect.ItemText>{option.label}</BaseSelect.ItemText>
+          {option.tag && <span className="ui-select-tag">{option.tag}</span>}
+        </span>
         {option.detail && <span className="ui-select-detail">{option.detail}</span>}
       </span>
       <BaseSelect.ItemIndicator className="ui-select-check" aria-hidden="true">

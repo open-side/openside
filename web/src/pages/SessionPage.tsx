@@ -1,5 +1,5 @@
 import { Ellipsis } from "lucide-react";
-import { Navigate, useParams } from "react-router";
+import { Navigate, useNavigate, useParams } from "react-router";
 import { AppHeader } from "../components/AppHeader";
 import { SessionMenu } from "../components/SessionMenu";
 import { displayTitle } from "../components/toolStatus";
@@ -16,6 +16,7 @@ import { ThreadView } from "./ThreadView";
 export function SessionPage() {
   const { id = "" } = useParams();
   const shell = useShell();
+  const navigate = useNavigate();
   const owner = useTeam().agents?.find((agent) => agent.home_session_id === id);
   if (owner?.status === "active") return <Navigate to={`/agents/${encodeURIComponent(owner.id)}`} replace />;
 
@@ -35,6 +36,7 @@ export function SessionPage() {
               session={{ id, title: view.title, pinned: view.pinned, archived: view.archived }}
               label="Conversation options"
               onChanged={shell.refreshSessions}
+              onDeleted={() => navigate("/history", { replace: true })}
               trigger={
                 <IconButton label="Conversation options">
                   <Ellipsis size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />

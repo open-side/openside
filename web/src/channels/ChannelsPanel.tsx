@@ -22,7 +22,7 @@ function Routing({ account, agents }: { account: ChannelAccount; agents: readonl
   const name = owner?.name ?? (ownerId === CHIEF_ID ? "Your assistant" : ownerId);
   return (
     <p className="channel-route">
-      {owner ? <Avatar initials={owner.initials} color={owner.color} size={24} /> : null}
+      {owner ? <Avatar chief={owner.kind === "chief"} initials={owner.initials} color={owner.color} size={24} /> : null}
       <span>
         {account.effective_agent_id ? "Answers as " : "Will answer as "}
         <strong>{name}</strong>

@@ -12,6 +12,7 @@
   /* Above dialogs (41) and the takeover screen (44): typing the code must never need to close Settings first. */
   z-index: 55;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: end;
   gap: 4px;
   width: min(424px, calc(100vw - 32px));
@@ -22,14 +23,17 @@
 }
 .card-dock .conversation-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: end;
   width: 100%;
+  min-width: 0;
 }
 /* The text is the way to the conversation; the arrow says so without a second button. */
 .card-dock-meta {
   display: flex;
   align-items: center;
   gap: 10px;
+  max-width: 100%;
   margin: 0;
   padding: 0 12px;
   /* Floats over scrolled conversation text, so it needs its own surface to stay legible. */
@@ -49,6 +53,7 @@
   align-items: center;
   gap: 4px;
   min-height: 28px;
+  min-width: 0;
   max-width: 240px;
   color: inherit;
   text-decoration: none;
