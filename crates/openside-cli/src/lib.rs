@@ -1729,7 +1729,7 @@ async fn follow<W: Write, E: Write>(
                             ends_with_newline = text.ends_with('\n');
                         }
                     }
-                    EventKind::AssistantFinal { text } if !saw_delta => {
+                    EventKind::AssistantFinal { text, .. } if !saw_delta => {
                         write!(stdout, "{text}").map_err(output_error)?;
                         if !text.is_empty() {
                             ends_with_newline = text.ends_with('\n');

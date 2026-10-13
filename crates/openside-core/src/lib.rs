@@ -30,6 +30,6 @@ pub use ids::{MessageId, SessionId, TicketId};
 pub use queue::{DropReason, MessageQueue, MessageStatus, QueueError, QueueMode, SubmitOutcome};
 pub use runtime::{
     AgentRuntime, AgentSession, AgentState, ApprovalTier, DeferKind, DeferredCall, HostToolHandler,
-    RunOutcome, RuntimeError, RuntimeEvent, SessionInfo, SessionSpec, SubagentControl, TeamContext,
-    TeamRole, TicketResolution, ToolCall, ToolOutcome, ToolSpec,
+    MessageAuthorKind, RunOutcome, RuntimeError, RuntimeEvent, SessionInfo, SessionSpec,
+    SubagentControl, TeamContext, TeamRole, TicketResolution, ToolCall, ToolOutcome, ToolSpec,
 };

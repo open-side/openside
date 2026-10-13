@@ -95,8 +95,19 @@ impl Host {
             return Ok((denied(reason, hint), None));
         }
         if let Some(subagent) = &call.subagent {
-            if let Some(reason) =
-                crate::subagents::guard(shared, &self.env.session, subagent, &call.name).await?
+            let output_read = call.name == "read"
+                && serde_json::from_str::<Value>(&call.arguments_json)
+                    .ok()
+                    .and_then(|args| args["path"].as_str().map(crate::tool_output::valid_ref))
+                    .unwrap_or(false);
+            if let Some(reason) = crate::subagents::guard(
+                shared,
+                &self.env.session,
+                subagent,
+                &call.name,
+                output_read,
+            )
+            .await?
             {
                 return Ok((denied(reason, "Use a tool granted to this subagent"), None));
             }
@@ -180,6 +191,13 @@ impl Host {
             crate::takeover::blocked(shared, &self.env.session, &call.name, &args).await
         {
             return Ok((denied(reason, &hint), None));
+        }
+        if browser_gate.is_some() {
+            shared
+                .registry
+                .browser
+                .rearm_connection_session(&current_env.session, args["tab_id"].as_str())
+                .await?;
         }
         match tools::connections::admit_grant(
             &current_env,
@@ -460,10 +478,18 @@ impl Host {
             .get("tab_id")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let privacy_tool = (call.name == "browser_import_lookup").then(|| TicketTool {
+        let privacy_tool = matches!(
+            call.name.as_str(),
+            "browser_import_lookup" | crate::routines::proposals::PROPOSE_ROUTINE
+        )
+        .then(|| TicketTool {
             name: call.name.clone(),
             args: tool.redact_args(&args),
         });
+        let output_read = call.name == "read"
+            && args["path"]
+                .as_str()
+                .is_some_and(crate::tool_output::valid_ref);
         // Dropping a future does not cancel an issued CDP command or blocking filesystem I/O.
         // Cooperative tools stop themselves; all others settle before terminal publication.
         let mut executed = match relogin_step {
@@ -560,7 +586,28 @@ impl Host {
                 if document_result {
                     keep.push(&["connection_id"]);
                 }
+                if output_read {
+                    keep.push(&["output_ref"]);
+                }
                 let for_model = shared.registry.redact_except(for_model, &keep)?;
+                let for_model = match crate::tool_output::prepare(&env, for_model).await {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return Ok((
+                            ToolOutcome::Failed {
+                                message: message.into(),
+                            },
+                            None,
+                        ))
+                    }
+                };
+                let for_app = if for_model.get("output_ref").is_some()
+                    && for_model.get("preview").is_some()
+                {
+                    Some(json!({"status":"private_output_stored","bytes":for_model["bytes"]}))
+                } else {
+                    for_app
+                };
                 let for_app = for_app
                     .map(|value| shared.registry.redact(value))
                     .transpose()?;
@@ -591,6 +638,24 @@ impl Host {
                 }
                 tracker.record(&env, &call.name).await;
                 let for_model = shared.registry.redact_except(for_model, &[&["tab_id"]])?;
+                let for_model = match crate::tool_output::prepare(&env, for_model).await {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return Ok((
+                            ToolOutcome::Failed {
+                                message: message.into(),
+                            },
+                            None,
+                        ))
+                    }
+                };
+                let for_app = if for_model.get("output_ref").is_some()
+                    && for_model.get("preview").is_some()
+                {
+                    Some(json!({"status":"private_output_stored","bytes":for_model["bytes"]}))
+                } else {
+                    for_app
+                };
                 let for_app = for_app
                     .map(|value| shared.registry.redact(value))
                     .transpose()?;
@@ -633,6 +698,58 @@ impl Host {
 
     async fn recorded(&self, call: ToolCall, relogin_step: Option<&str>) -> Result<ToolOutcome> {
         let shared = &self.env.shared;
+        if call.name == "__redact_diagnostic" {
+            let args: Value = serde_json::from_str(&call.arguments_json)?;
+            let diagnostic = args["diagnostic"].as_str().unwrap_or_default();
+            let safe = shared.registry.redact(Value::String(diagnostic.into()))?;
+            return Ok(ToolOutcome::Done {
+                for_model_json: safe.to_string(),
+            });
+        }
+        if matches!(
+            call.name.as_str(),
+            "__memory_context" | "__memory_consolidate"
+        ) {
+            if call.subagent.is_some()
+                || shared
+                    .db
+                    .state(&self.env.session)
+                    .await
+                    .map_or(true, |state| state.incognito)
+            {
+                return Ok(denied(
+                    "memory_internal_scope",
+                    "Memory context is unavailable for this caller",
+                ));
+            }
+            let Ok(args) = serde_json::from_str(&call.arguments_json) else {
+                return Ok(denied(
+                    "invalid_memory_arguments",
+                    "Send valid JSON arguments",
+                ));
+            };
+            let result = if call.name == "__memory_context" {
+                crate::memory::context::handle(&self.env, args).await
+            } else {
+                crate::memory::consolidation::handle(&self.env, args).await
+            };
+            // Internal recall and rejected consolidation proposals are never event payloads.
+            return Ok(match result {
+                ToolExec::Done { for_model, .. } => ToolOutcome::Done {
+                    // Context handlers redact content before budgeting; rendered IDs must survive.
+                    for_model_json: if call.name == "__memory_context" {
+                        for_model.to_string()
+                    } else {
+                        shared.registry.redact(for_model)?.to_string()
+                    },
+                },
+                ToolExec::Denied { reason, hint } => ToolOutcome::Denied { reason, hint },
+                ToolExec::Failed(message) => ToolOutcome::Failed { message },
+                _ => ToolOutcome::Failed {
+                    message: "Invalid internal memory response".into(),
+                },
+            });
+        }
         let started = Instant::now();
         let args = shared
             .registry
@@ -647,17 +764,16 @@ impl Host {
             })
             .unwrap_or(Value::Null);
         let args = shared.registry.redact(args)?;
-        shared
-            .emit(
-                &self.env.session,
-                None,
-                EventKind::ToolStarted {
-                    tool_call_id: call.tool_call_id.clone(),
-                    name: call.name.clone(),
-                    args,
-                },
-            )
-            .await?;
+        self.record_activity(
+            &call,
+            EventKind::ToolStarted {
+                tool_call_id: call.tool_call_id.clone(),
+                name: call.name.clone(),
+                args,
+            },
+            false,
+        )
+        .await?;
         let active = call
             .subagent
             .as_ref()
@@ -734,18 +850,17 @@ impl Host {
             }
         };
         let result = shared.registry.redact(result)?;
-        shared
-            .emit(
-                &self.env.session,
-                None,
-                EventKind::ToolEnded {
-                    card: None,
-                    tool_call_id: call.tool_call_id.clone(),
-                    result,
-                    is_error,
-                },
-            )
-            .await?;
+        self.record_activity(
+            &call,
+            EventKind::ToolEnded {
+                card: None,
+                tool_call_id: call.tool_call_id.clone(),
+                result,
+                is_error,
+            },
+            is_error,
+        )
+        .await?;
         if let Some(binding) = browser_probe {
             stamp = binding.lock().take();
         }
@@ -760,6 +875,80 @@ impl Host {
         )
         .await?;
         Ok(outcome)
+    }
+
+    async fn record_activity(
+        &self,
+        call: &ToolCall,
+        mut kind: EventKind,
+        is_error: bool,
+    ) -> Result<()> {
+        let shared = &self.env.shared;
+        let session = &self.env.session;
+        if let Some(child) = &call.subagent {
+            let state = shared.db.state(session).await?;
+            crate::cards::enrich_at(&mut kind, &state, 0);
+            let person_card = matches!(&kind, EventKind::ToolEnded { card: Some(_), .. });
+            let mut progress = serde_json::to_value(&kind)?;
+            // Person-facing cards have their own schema-filtered event; never duplicate
+            // their private fields in the untyped Task progress payload.
+            if let Some(object) = progress.as_object_mut() {
+                object.remove("card");
+            }
+            progress["status_text"] = Value::String(
+                if is_error {
+                    "A step failed"
+                } else if matches!(&kind, EventKind::ToolStarted { .. }) {
+                    "Started a step"
+                } else {
+                    match call.name.as_str() {
+                        "browser_open_tab" | "browser_navigate" => "Opened a page",
+                        "browser_snapshot" => "Read the page",
+                        "browser_screenshot" => "Captured the page",
+                        "browser_close_tab" => "Closed the page",
+                        "present" => "Shared the result",
+                        "memory_search" => "Checked saved information",
+                        name if name.starts_with("browser_") => "Completed a browser step",
+                        _ => "Completed a step",
+                    }
+                }
+                .into(),
+            );
+            if !is_error && call.name.starts_with("browser_") {
+                if let EventKind::ToolEnded { result, .. } = &kind {
+                    if let Some(host) = result
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .and_then(|url| url::Url::parse(url).ok())
+                        .and_then(|url| url.host_str().map(str::to_owned))
+                    {
+                        let action = match call.name.as_str() {
+                            "browser_open_tab" | "browser_navigate" => "Opened",
+                            "browser_snapshot" => "Read",
+                            "browser_screenshot" => "Captured",
+                            _ => "Updated",
+                        };
+                        progress["status_text"] = Value::String(format!("{action} {host}"));
+                    }
+                }
+            }
+            shared
+                .emit(
+                    session,
+                    None,
+                    EventKind::SubagentProgress {
+                        subagent_id: child.clone(),
+                        progress,
+                    },
+                )
+                .await?;
+            if person_card {
+                shared.emit(session, None, kind).await?;
+            }
+        } else if call.name != crate::tasks::SEND_MESSAGE {
+            shared.emit(session, None, kind).await?;
+        }
+        Ok(())
     }
 }
 

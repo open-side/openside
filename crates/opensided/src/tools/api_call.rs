@@ -195,7 +195,7 @@ mod tests {
             "edit",
             "read",
             "browser_repl",
-            "task_start",
+            "create_task",
             "delegate",
         ] {
             assert!(!names.contains(&agent_only), "{agent_only}");

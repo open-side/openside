@@ -2022,6 +2022,22 @@ async fn a_paired_admin_device_manages_the_vault_lifecycle_and_items_without_val
         .unwrap()
         .iter()
         .filter(|record| record["what"] != "get")
+        .filter(|record| {
+            // Default subscription discovery can import credentials after vault unlock.
+            if record["who"] == "managed-subscription" {
+                assert_eq!(record["what"], "item_add", "{record}");
+                assert_eq!(record["detail"], "subscription", "{record}");
+                assert!(
+                    matches!(record["result"].as_str(), Some("allowed" | "added")),
+                    "{record}"
+                );
+                assert!(record["session_id"].is_null(), "{record}");
+                assert!(record["tool_call_id"].is_null(), "{record}");
+                false
+            } else {
+                true
+            }
+        })
         .map(|record| {
             assert_eq!(record["who"], json!(device), "{record}");
             format!(

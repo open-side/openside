@@ -124,6 +124,7 @@ impl DaemonClient {
         let mut request = self
             .http
             .request(method, self.url(path)?)
+            .header("x-openside-client", "channel")
             .bearer_auth(self.token.expose());
         if let Some(body) = body {
             request = request.json(&body);

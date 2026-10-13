@@ -233,6 +233,10 @@ impl Registry {
             Arc::new(crate::tasks::TaskTool::Steer),
             Arc::new(crate::tasks::TaskTool::Cancel),
             Arc::new(crate::tasks::TaskTool::Status),
+            Arc::new(crate::tasks::TaskTool::Message),
+            Arc::new(crate::tasks::document::WriteDocument),
+            Arc::new(crate::tasks::model_routing::Models),
+            Arc::new(crate::routines::proposals::ProposeRoutine),
             Arc::new(crate::team::TeamTool::Hire),
             Arc::new(crate::team::TeamTool::Propose),
             Arc::new(crate::team::TeamTool::Delegate),
@@ -244,6 +248,10 @@ impl Registry {
             Arc::new(crate::team::TeamTool::Ask),
             Arc::new(crate::team::TeamTool::Report),
         ];
+        assert!(
+            tools.iter().all(|tool| !tool.name().starts_with("__")),
+            "Internal runtime operations cannot be registered as model tools"
+        );
         let redactors = Arc::new(RwLock::new(Vec::new()));
         let browser = Arc::new(browser::Controller::new(
             &config.loaded.config,
@@ -278,6 +286,10 @@ impl Registry {
                     return None;
                 }
                 let spec = tool.spec();
+                assert!(
+                    !spec.name.starts_with("__"),
+                    "Internal runtime operations cannot be exposed as model tools"
+                );
                 (ctx.mode != PolicyMode::ReadOnly || spec.approval == ApprovalTier::Read)
                     .then_some(spec)
             })
@@ -433,6 +445,7 @@ pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
             &["ticket_id"],
             &["resolution", "status"],
             &["resolution", "agent_id"],
+            &["resolution", "routine_id"],
         ],
         "ticket.rejected" | "ticket.expired" => &[&["ticket_id"]],
         "card.presented" => &[
@@ -495,7 +508,12 @@ pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
             &["tools", "*"],
         ],
         "subagent.ended" | "subagent.lifecycle" => &[&["subagent_id"], &["status"]],
-        "subagent.progress" => &[&["subagent_id"]],
+        "subagent.progress" => &[
+            &["subagent_id"],
+            &["progress", "kind"],
+            &["progress", "tool_call_id"],
+            &["progress", "name"],
+        ],
         "tab.opened" | "tab.closed" | "tab.asleep" => &[&["tab_id"]],
         "session.created" => &[&["model"], &["mode"], &["workspace"], &["agent_id"]],
         "session.updated" => &[&["mode"]],
@@ -559,10 +577,16 @@ pub(crate) fn spec<T: schemars::JsonSchema>(
     approval: ApprovalTier,
     deferrable: bool,
 ) -> ToolSpec {
+    let mut parameters = schemars::schema_for!(T).to_value();
+    if let Some(root) = parameters.as_object_mut() {
+        // Rust type names and the schema dialect add no argument guidance.
+        root.remove("$schema");
+        root.remove("title");
+    }
     ToolSpec {
         name: name.into(),
         description: description.into(),
-        parameters_json: schemars::schema_for!(T).to_value().to_string(),
+        parameters_json: parameters.to_string(),
         approval,
         deferrable,
     }

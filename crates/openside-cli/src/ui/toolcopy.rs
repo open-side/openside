@@ -293,16 +293,16 @@ pub(crate) fn describe(name: &str, args: &Value, facts: &Facts, done: bool) -> D
             detail = first_line(str_arg(args, "task"));
             fixed("Asked a helper", "Asking a helper")
         }
-        "task_start" => {
+        "create_task" => {
             detail = first_line(str_arg(args, "goal"));
             fixed("Started a background task", "Starting a background task")
         }
-        "task_steer" => fixed("Updated a background task", "Updating a background task"),
-        "task_cancel" => fixed(
+        "steer_task" => fixed("Updated a background task", "Updating a background task"),
+        "cancel_task" => fixed(
             "Cancelled a background task",
             "Cancelling a background task",
         ),
-        "task_status" => fixed(
+        "get_tasks" => fixed(
             "Checked on background tasks",
             "Checking on background tasks",
         ),

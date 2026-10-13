@@ -263,7 +263,7 @@ pub(crate) async fn done_result(shared: &Shared, ticket: &Ticket) -> Value {
     };
     result["tab_id"] = json!(tab_id);
     result["page_changed"] = json!(true);
-    result["note"] = json!("A person controlled this tab; earlier snapshot ids and refs are void. Take a fresh browser_snapshot before acting.");
+    result["note"] = json!("A person controlled this tab; earlier snapshot ids and refs are void. Start the continuation with a fresh browser_snapshot (or browser_repl page.snapshot() when that is the exposed capture tool) of this tab and inspect whether the requested outcome actually occurred before replying. Continue any remaining steps; do not ask whether to check an outcome the person already asked you to complete. The done status means the person finished their step, not that sign-in or the task succeeded.");
     if let Some(browser) = shared
         .registry
         .browser

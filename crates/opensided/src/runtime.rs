@@ -24,6 +24,7 @@ pub(crate) trait Session: Send {
         text: String,
         parts: Vec<ContentPart>,
         mode: QueueMode,
+        author_kind: openside_core::MessageAuthorKind,
     ) -> BoxFuture<'_, Result<(), RuntimeError>>;
     fn abort(&mut self) -> BoxFuture<'_, Result<(), RuntimeError>>;
     fn resolve(
@@ -68,8 +69,16 @@ impl<S: AgentSession> Session for S {
         text: String,
         parts: Vec<ContentPart>,
         mode: QueueMode,
+        author_kind: openside_core::MessageAuthorKind,
     ) -> BoxFuture<'_, Result<(), RuntimeError>> {
-        Box::pin(AgentSession::send_with_parts(self, id, text, parts, mode))
+        Box::pin(AgentSession::send_with_parts(
+            self,
+            id,
+            text,
+            parts,
+            mode,
+            author_kind,
+        ))
     }
     fn abort(&mut self) -> BoxFuture<'_, Result<(), RuntimeError>> {
         Box::pin(AgentSession::abort(self))

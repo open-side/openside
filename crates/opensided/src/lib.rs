@@ -115,6 +115,7 @@ mod takeover;
 mod tasks;
 mod team;
 mod tickets;
+mod tool_output;
 mod tools;
 mod ui;
 mod vault_api;

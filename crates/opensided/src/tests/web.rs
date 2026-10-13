@@ -30,6 +30,19 @@ async fn session_metadata_is_durable_and_drives_list_search_pin_and_archive() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();
     let first = daemon(root.path(), &runtime).await;
+    let (_, baseline) = send(
+        &api::router(first.shared.clone(), true),
+        "GET",
+        "/v1/sessions",
+        json!({}),
+    )
+    .await;
+    let baseline_ids: Vec<_> = baseline["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_owned())
+        .collect();
     for name in ["alpha", "bravo", "charlie"] {
         create_session(&first, name, PolicyMode::Guard, None).await;
     }
@@ -87,7 +100,11 @@ async fn session_metadata_is_durable_and_drives_list_search_pin_and_archive() {
         .iter()
         .map(|s| s["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["bravo", "charlie"]);
+    let expected: Vec<_> = ["bravo", "charlie"]
+        .into_iter()
+        .chain(baseline_ids.iter().map(String::as_str))
+        .collect();
+    assert_eq!(ids, expected);
     let (_, archived) = send(&router, "GET", "/v1/sessions?archived=true", json!({})).await;
     assert_eq!(titles(&archived), ["Groceries"]);
     // Search matches the first message text case-insensitively, and the title.
@@ -205,6 +222,19 @@ async fn queue_text(daemon: &Daemon, id: &str, message: &str, text: &str) {
 async fn session_list_is_ordered_by_recent_activity_with_pinned_first_across_restart() {
     let root = tempfile::tempdir().unwrap();
     let first = daemon(root.path(), &TestRuntime::default()).await;
+    let (_, baseline) = send(
+        &api::router(first.shared.clone(), true),
+        "GET",
+        "/v1/sessions",
+        json!({}),
+    )
+    .await;
+    let baseline_ids: Vec<_> = baseline["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_owned())
+        .collect();
     // Identifier order (alpha < bravo < charlie) must not decide the list order.
     for name in ["charlie", "alpha", "bravo"] {
         create_session(&first, name, PolicyMode::Guard, None).await;
@@ -221,7 +251,13 @@ async fn session_list_is_ordered_by_recent_activity_with_pinned_first_across_res
             .collect()
     };
     let (_, list) = send(&router, "GET", "/v1/sessions", json!({})).await;
-    assert_eq!(order(&list), ["charlie", "bravo", "alpha"]);
+    let expected = |ids: [&str; 3]| -> Vec<String> {
+        ids.into_iter()
+            .map(str::to_owned)
+            .chain(baseline_ids.iter().cloned())
+            .collect()
+    };
+    assert_eq!(order(&list), expected(["charlie", "bravo", "alpha"]));
     // Renaming is not activity; pinning moves a session to the front group only.
     send(
         &router,
@@ -238,13 +274,13 @@ async fn session_list_is_ordered_by_recent_activity_with_pinned_first_across_res
     )
     .await;
     let (_, list) = send(&router, "GET", "/v1/sessions", json!({})).await;
-    assert_eq!(order(&list), ["bravo", "charlie", "alpha"]);
+    assert_eq!(order(&list), expected(["bravo", "charlie", "alpha"]));
     first.shutdown().await;
     drop(first);
     let second = daemon(root.path(), &TestRuntime::default()).await;
     let router = api::router(second.shared.clone(), true);
     let (_, list) = send(&router, "GET", "/v1/sessions", json!({})).await;
-    assert_eq!(order(&list), ["bravo", "charlie", "alpha"]);
+    assert_eq!(order(&list), expected(["bravo", "charlie", "alpha"]));
     second.shutdown().await;
 }
 

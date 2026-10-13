@@ -124,6 +124,9 @@ pub enum EventKind {
     AssistantFinal {
         /// Full final text.
         text: String,
+        /// Admitted Markdown artifacts; bodies are fetched separately.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<crate::MessageDocument>,
     },
     /// Incremental model thinking output.
     #[serde(rename = "thinking.delta")]
@@ -244,7 +247,7 @@ pub enum EventKind {
         model: String,
         /// Tools the child may call.
         tools: Vec<String>,
-        /// A Task started by the front agent's `task_start`: it runs in the background and
+        /// A Task started by the front agent's `create_task`: it runs in the background and
         /// reports its result into the conversation instead of blocking the parent call.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         background: bool,
@@ -408,16 +411,16 @@ pub enum EventKind {
         /// HTTP method for fetch, absent for page opening.
         method: Option<String>,
     },
-    /// A completed hire, correlated to its human authorization.
+    /// A completed autonomous hire or a legacy human-authorized hire.
     #[serde(rename = "team.hired")]
     TeamHired {
         /// Stable registry identity, independent of later renames.
         agent_id: String,
         /// Display name at the time of hiring.
         name: String,
-        /// Approving ticket, absent for an immediate person-requested hire.
+        /// Legacy approving ticket; absent for an autonomous hire.
         ticket_id: Option<String>,
-        /// Authoritative person message permitting immediate hiring.
+        /// Legacy explicit person-requested hire authorization, absent for autonomous hires.
         request_message_id: Option<MessageId>,
         /// Common card projection, absent in historical records.
         #[serde(default, skip_serializing_if = "Option::is_none")]

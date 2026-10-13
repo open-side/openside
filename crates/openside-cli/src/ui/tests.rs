@@ -529,7 +529,7 @@ fn the_session_list_shows_status_ids_titles_and_activity() {
     let text = super::sessions(&ui, &session_list());
     assert_eq!(
         text,
-        "  STATUS       ID      TITLE                      MODEL\n  \
+        "  STATUS       ID      TITLE                      Started with\n  \
          ───────────────────────────────────────────────────────────────────────\n  \
          ● running    ses_a1  Plan trip  Reading a page  anthropic:claude-sonnet\n  \
          ◆ needs you  ses_b2  Pay the electricity bill   openai:gpt\n  \

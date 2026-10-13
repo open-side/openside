@@ -577,6 +577,16 @@ async fn every_scope_succeeds_at_its_own_work() {
     let human = token(&daemon, CapabilityScope::HumanStep).await;
     let admin = token(&daemon, CapabilityScope::Admin).await;
     let browse = token(&daemon, CapabilityScope::Browse).await;
+    let (_, agent) = daemon
+        .shared
+        .db
+        .pair_as(
+            "queue producer".into(),
+            vec![CapabilityScope::Steer],
+            openside_proto::DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap();
 
     for path in [
         "/v1/health",
@@ -605,7 +615,7 @@ async fn every_scope_succeeds_at_its_own_work() {
             "POST",
             "/v1/sessions/session/messages",
             json!({"message_id": id, "text": id, "mode": mode}),
-            Some(&steer),
+            Some(if id == "running" { &steer } else { &agent }),
         )
         .await;
         assert_eq!(status, StatusCode::ACCEPTED, "{id}");
@@ -670,6 +680,19 @@ async fn every_scope_succeeds_at_its_own_work() {
             &router,
             "POST",
             "/v1/sessions/session/queue/q1/promote",
+            json!({}),
+            Some(&steer)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(queue(read.clone()).await, ["q3", "q1"]);
+    assert_eq!(
+        send(
+            &router,
+            "DELETE",
+            "/v1/sessions/session/queue/q1",
             json!({}),
             Some(&steer)
         )
@@ -808,6 +831,16 @@ async fn read_token_cannot_steer_through_any_steer_route() {
     let router = api::router(daemon.shared.clone(), false);
     let read = token(&daemon, CapabilityScope::Read).await;
     let steer = token(&daemon, CapabilityScope::Steer).await;
+    let (_, agent) = daemon
+        .shared
+        .db
+        .pair_as(
+            "queue producer".into(),
+            vec![CapabilityScope::Steer],
+            openside_proto::DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap();
     for (id, mode) in [("running", "now"), ("pending", "queue")] {
         assert_eq!(
             send(
@@ -815,7 +848,7 @@ async fn read_token_cannot_steer_through_any_steer_route() {
                 "POST",
                 "/v1/sessions/session/messages",
                 json!({"message_id": id, "text": id, "mode": mode}),
-                Some(&steer)
+                Some(if id == "running" { &steer } else { &agent })
             )
             .await
             .0,
@@ -882,6 +915,16 @@ async fn steer_lane_messages_reorder_without_crossing_into_the_queue_lane() {
     let router = api::router(daemon.shared.clone(), false);
     let steer = token(&daemon, CapabilityScope::Steer).await;
     let read = token(&daemon, CapabilityScope::Read).await;
+    let (_, agent) = daemon
+        .shared
+        .db
+        .pair_as(
+            "queue producer".into(),
+            vec![CapabilityScope::Steer],
+            openside_proto::DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap();
     opened(
         &daemon,
         &session,
@@ -901,7 +944,7 @@ async fn steer_lane_messages_reorder_without_crossing_into_the_queue_lane() {
             "POST",
             "/v1/sessions/session/messages",
             json!({"message_id": id, "text": id, "mode": mode}),
-            Some(&steer),
+            Some(if id == "q1" { &agent } else { &steer }),
         )
         .await;
         assert_eq!(status, StatusCode::ACCEPTED, "{id}");
@@ -969,25 +1012,28 @@ const SEED: &str = "JBSWY3DPEHPK3PXP";
 /// credential. A new tool with no policy action fails the gate test until it is listed here
 /// with a reason: `ask_user` and `request_human_step` only open tickets, `browser_tabs`
 /// lists the session's own tabs, `memory_*`/`skill` use the daemon's own stores (secrets are
-/// refused on write), `delegate` and `task_start` admit children whose calls re-enter
+/// refused on write), `delegate` and `create_task` admit children whose calls re-enter
 /// this hook, Task management touches only their lifecycle, and `browser_repl`
 /// evaluates policy per operation inside the snippet.
-const NO_POLICY_CAPABILITY: [&str; 23] = [
+const NO_POLICY_CAPABILITY: [&str; 27] = [
     "ask_user",
     "browser_repl",
     "browser_tabs",
+    "cancel_task",
     "connection_confirm",
     "connection_observe",
     "connections_list",
+    "create_task",
     "delegate",
+    "get_models",
+    "get_tasks",
     "memory_search",
     "memory_write",
     "present",
+    "propose_routine",
+    "send_message",
     "skill",
-    "task_cancel",
-    "task_start",
-    "task_status",
-    "task_steer",
+    "steer_task",
     "team_answer",
     "team_ask_chief",
     "team_delegate",
@@ -996,6 +1042,7 @@ const NO_POLICY_CAPABILITY: [&str; 23] = [
     "team_report",
     "team_status",
     "team_steer",
+    "write_document",
 ];
 
 struct Killer(u32);
@@ -1325,18 +1372,28 @@ fn tool_calls(
             json!({"task": format!("look at {CANARY}"), "tools": ["read"]}),
         ),
         (
-            "task_start",
+            "create_task",
             json!({"goal":format!("look at {CANARY}"),"tools":["read"]}),
         ),
-        ("task_status", json!({})),
+        ("get_tasks", json!({})),
+        ("get_models", json!({})),
+        ("send_message", json!({"text":"The result is ready."})),
         (
-            "task_steer",
+            "write_document",
+            json!({"title":"Report","markdown":"A short report."}),
+        ),
+        (
+            "propose_routine",
+            json!({"name":"Daily check","schedule":{"type":"interval","secs":3600},"action":{"type":"new_session","prompt":"Check the page"}}),
+        ),
+        (
+            "steer_task",
             json!({"task_id":"missing-task","message":format!("find {CANARY}")}),
         ),
-        ("task_cancel", json!({"task_id":"missing-task"})),
+        ("cancel_task", json!({"task_id":"missing-task"})),
         (
             "team_hire",
-            json!({"draft":{"name":"Mina","persona":{"role":"Price researcher","voice":"","responsibilities":["Track prices"],"boundaries":[]}},"request_message_id":"person"}),
+            json!({"draft":{"name":"Mina","persona":{"role":"Price researcher","voice":"","responsibilities":["Track prices"],"boundaries":[]}}}),
         ),
         (
             "team_propose_hire",
@@ -1727,7 +1784,7 @@ async fn check_policy_hooks(orchestration: openside_config::Orchestration) {
         "vault audit stayed empty"
     );
 
-    // Every call, allowed or refused, left a tool.started/tool.ended pair in the durable log.
+    // Acting calls retain paired events; output-only calls must not add timeline bookkeeping.
     let events = rig.daemon.shared.db.events(&rig.session, 0).await.unwrap();
     let ended: BTreeSet<_> = events
         .iter()
@@ -1748,6 +1805,26 @@ async fn check_policy_hooks(orchestration: openside_config::Orchestration) {
                 _ => None,
             })
             .collect();
+        if *name == "send_message" {
+            // Output tools publish the answer, not tool bookkeeping, to the timeline.
+            assert!(
+                started.is_empty(),
+                "send_message leaked a tool.started event"
+            );
+            let serial = calls
+                .iter()
+                .position(|(name, _)| *name == "send_message")
+                .unwrap()
+                + 1;
+            for id in [format!("forged-{serial}"), format!("schema-{serial}")] {
+                let id = format!("{}{id}", crate::tools::API_CALL_PREFIX);
+                assert!(
+                    !ended.contains(id.as_str()),
+                    "send_message leaked tool.ended"
+                );
+            }
+            continue;
+        }
         assert!(!started.is_empty(), "{name} left no tool.started event");
         for id in started {
             assert!(
@@ -1805,10 +1882,10 @@ const TEXT_RETURNING: [&str; 12] = [
     "browser_snapshot",
     "browser_tabs",
     "connection_fetch",
+    "get_tasks",
     "memory_search",
     "read",
     "skill",
-    "task_status",
 ];
 
 /// A-7 / D-4: the after-call hook redacts secrets from every tool result before the model or

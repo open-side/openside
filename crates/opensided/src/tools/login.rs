@@ -720,7 +720,7 @@ impl DaemonTool for RequestLogin {
     fn spec(&self) -> openside_core::ToolSpec {
         spec::<LoginRequestArgs>(
             self.name(),
-            "Use whenever a page asks the person to sign in. The daemon reads the tab's login form itself. With exactly one login saved in the vault for the page it signs in at once; otherwise the person gets a sign-in card on their own device, mirroring the page's fields and its other sign-in options (Google, Apple, passkey, QR …), and may keep the login in the vault. Values go straight into the page and never reach you; the tab is never brought to the screen. Result {\"status\":\"submitted\"|\"filled_from_vault\"|\"alternative\",\"next\":…}. Then follow `next`: login → call request_login again (the next sign-in page), otp → take a fresh snapshot for the current code-field ref, then request_otp, push_approval → wait_for_approval, enroll_totp → register_authenticator, choice → request_choice, captcha → tell the person and offer takeover, error → report error_text and call request_login again, done → continue, unknown → take a snapshot. login_form_not_found means inspect the page, not that sign-in succeeded: profile, account, trust-device and terms screens need request_choice. Never ask for passwords in chat or ask_user and never type them yourself.",
+            "For sign-in pages. The daemon reads the form: exactly one saved vault login fills automatically; otherwise a private card mirrors fields and alternative sign-ins, with optional vault saving. Values go directly to the hidden tab, never to you. Returns status=submitted|filled_from_vault|alternative and next. Follow next: login=request_login; otp=fresh snapshot then request_otp; push_approval=wait_for_approval; enroll_totp=register_authenticator; choice=request_choice; captcha=tell person and offer takeover; error=report error_text then request_login; done=continue; unknown=snapshot. login_form_not_found means inspect, not success: account/profile/trust-device/terms require request_choice. Never request passwords in chat/ask_user or type them yourself.",
             ApprovalTier::Read,
             true,
         )
@@ -965,10 +965,10 @@ pub(crate) async fn relogin_continuation(ctx: &ToolEnv, tab: &str, next: &str) -
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ChoiceOptionArg {
-    /// Ref of the option's control in your latest snapshot.
+    /// Latest snapshot control ref.
     #[serde(rename = "ref")]
     reference: String,
-    /// Ignored for display: the person always sees the page's own text for the control.
+    /// Display ignored; person sees page text.
     #[allow(dead_code)]
     label: Option<String>,
 }
@@ -976,11 +976,10 @@ pub(crate) struct ChoiceOptionArg {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ChoiceRequestArgs {
-    /// Tab showing the choice.
     tab_id: String,
-    /// The question, used only when the page has no heading for it.
+    /// Fallback when page has no heading.
     question: Option<String>,
-    /// The options' refs; omit to let the daemon find the page's choice itself.
+    /// Omit to auto-detect page choices.
     options: Option<Vec<ChoiceOptionArg>>,
 }
 
@@ -1021,7 +1020,7 @@ impl DaemonTool for RequestChoice {
     fn spec(&self) -> openside_core::ToolSpec {
         spec::<ChoiceRequestArgs>(
             self.name(),
-            "Ask the person to make a decision the page presents (which account, which verification method, trust this device, …) instead of clicking it yourself. Omit options to let the daemon find the page's choice, or pass refs from your latest snapshot; the person always sees the page's own labels. Their pick is clicked in the tab without bringing it to the screen. Result {\"status\":\"chosen\",\"option\":…,\"next\":…}; follow `next` as for request_login.",
+            "Let the person decide page choices (account, verification method, trust device), never click them yourself. The daemon clicks their selected page-labeled option without showing the tab. Returns status=chosen, option and next; follow request_login routing.",
             ApprovalTier::Read,
             true,
         )
@@ -1218,7 +1217,7 @@ impl DaemonTool for WaitForApproval {
     fn spec(&self) -> openside_core::ToolSpec {
         spec::<ApprovalWaitArgs>(
             self.name(),
-            "Use when a sign-in page waits for the person to approve it on their phone (a push notification in the site's app, \"check your phone\", a number to tap). The person sees an \"Approve on your phone\" card that waits live; the daemon watches the page and returns once it moves on, so do not poll, reload or click anything meanwhile. Result {\"status\":\"done\",\"next\":…} (follow `next` as for request_login; a denied or timed-out approval is next=error with error_text), {\"status\":\"rejected\"} when the person cancelled, or {\"status\":\"expired\"}.",
+            "For phone/push sign-in approval, including number matching. Shows a live approval card; the daemon waits for page change. Do not poll, reload or click meanwhile. Returns status=done with next (request_login routing; denial/timeout gives next=error and error_text), rejected if cancelled, or expired.",
             ApprovalTier::Read,
             true,
         )

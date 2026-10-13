@@ -337,16 +337,10 @@ async fn a_login_card_mirrors_the_page_and_fills_it_once_without_any_value_escap
     let login = &opened["login"];
     assert_eq!(login["origin"], json!(origin));
     assert_eq!(login["site_name"], "NAVER");
-    let icon =
-        openside_browser::Browser::validated_favicon(login["icon"].as_str().unwrap()).unwrap();
-    assert!(icon.len() <= 8192);
-    let actual = image::load_from_memory(&icon).unwrap().into_rgba8();
-    let source = base64::engine::general_purpose::STANDARD
-        .decode(ICON)
-        .unwrap();
-    let expected = image::load_from_memory(&source).unwrap().into_rgba8();
-    assert_eq!(actual.dimensions(), (1, 1));
-    assert_eq!(actual.as_raw(), expected.as_raw());
+    assert!(
+        login["icon"].is_null(),
+        "uncached icons must not trigger a fetch"
+    );
     assert_eq!(login["submit_label"], "로그인");
     assert_eq!(login["can_save"], true);
     assert!(login.get("accounts").is_none());

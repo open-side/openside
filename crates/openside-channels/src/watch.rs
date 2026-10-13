@@ -178,7 +178,7 @@ impl<M: Messenger> Core<M> {
                     self.flush(thread, current).await;
                 }
             }
-            EventKind::AssistantFinal { text } => {
+            EventKind::AssistantFinal { text, .. } => {
                 let current = reply.get_or_insert_with(Reply::new);
                 current.text = text;
                 self.flush(thread, current).await;

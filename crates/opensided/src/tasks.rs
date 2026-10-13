@@ -1,7 +1,7 @@
 //! Front agent and background Tasks (`docs/specs/sidecar-protocol.md` §11).
 //!
 //! With `[agent] orchestration = "front"` the session's parent agent is a fast front agent
-//! that only talks, reads and manages Tasks. A Task is a background subagent admitted like
+//! that only talks and manages Tasks. A Task is a background subagent admitted like
 //! `delegate` (same model and tool checks, same `subagent.*` events and parent-inbox
 //! tickets), but the sidecar does not wait for it: its result comes back as a
 //! `task-report-<id>` message that the front agent summarizes.
@@ -21,24 +21,20 @@ use crate::{
     tools::{self, DaemonTool, ToolEnv, ToolError, ToolExec},
 };
 
-pub(crate) const TASK_START: &str = "task_start";
-pub(crate) const TASK_STEER: &str = "task_steer";
-pub(crate) const TASK_CANCEL: &str = "task_cancel";
-pub(crate) const TASK_STATUS: &str = "task_status";
-const TASK_TOOLS: [&str; 4] = [TASK_START, TASK_STEER, TASK_CANCEL, TASK_STATUS];
+pub(crate) mod document;
+pub(crate) mod model_routing;
 
-/// Front agents may inspect local records and session tabs, but anything that acts
-/// (browser actions, shell, files or human steps) must run in a Task.
-const FRONT_READ_TOOLS: [&str; 9] = [
-    "browser_tabs",
-    "browser_snapshot",
-    "browser_screenshot",
-    "browser_import_lookup",
-    "connections_list",
-    "connection_observe",
-    "memory_search",
-    "skill",
-    "present",
+pub(crate) const TASK_START: &str = "create_task";
+pub(crate) const TASK_STEER: &str = "steer_task";
+pub(crate) const TASK_CANCEL: &str = "cancel_task";
+pub(crate) const TASK_STATUS: &str = "get_tasks";
+pub(crate) const SEND_MESSAGE: &str = "send_message";
+const TASK_TOOLS: [&str; 5] = [
+    TASK_START,
+    TASK_STEER,
+    TASK_CANCEL,
+    TASK_STATUS,
+    SEND_MESSAGE,
 ];
 
 /// `message_id` prefix of the report a finished Task leaves in its session's queue.
@@ -61,11 +57,13 @@ pub(crate) fn front(shared: &Shared, agent_id: Option<&str>) -> bool {
 }
 
 pub(crate) fn is_task_tool(name: &str) -> bool {
-    TASK_TOOLS.contains(&name)
+    TASK_TOOLS.contains(&name) || name == "get_models"
 }
 
 pub(crate) fn is_front_tool(name: &str) -> bool {
-    is_task_tool(name) || name.starts_with("team_") || FRONT_READ_TOOLS.contains(&name)
+    is_task_tool(name)
+        || name.starts_with("team_")
+        || name == crate::routines::proposals::PROPOSE_ROUTINE
 }
 
 /// The front agent's share of the session tools, sent as `open.config.agent.front_tools`.
@@ -94,7 +92,7 @@ pub(crate) fn front_denial(
     }
     Some((
         "front_agent_cannot_act",
-        "Start a Task with task_start for work that uses this tool",
+        "Start a Task with create_task for work that uses this tool",
     ))
 }
 
@@ -105,12 +103,14 @@ struct StartArgs {
     goal: String,
     /// Tool names the Task may use; defaults to every acting tool.
     tools: Option<Vec<String>>,
+    /// Available connected model from get_models; omitted uses the reasoning model.
+    model: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SteerArgs {
-    /// Task to steer, from `task_start` or `task_status`.
+    /// Task to steer, from `create_task` or `get_tasks`.
     task_id: String,
     /// Instruction the Task receives before its next step.
     message: String,
@@ -127,12 +127,29 @@ struct CancelArgs {
 #[serde(deny_unknown_fields)]
 struct StatusArgs {}
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MessageArgs {
+    text: String,
+    #[serde(default)]
+    attachments: Vec<DocumentArgs>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DocumentArgs {
+    artifact: String,
+    display: openside_proto::DocumentDisplay,
+    title: Option<String>,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum TaskTool {
     Start,
     Steer,
     Cancel,
     Status,
+    Message,
 }
 
 /// A live background Task of this session, or the denial the model should see.
@@ -144,7 +161,7 @@ async fn live_task(ctx: &ToolEnv, task_id: &str) -> std::result::Result<Subagent
     match task {
         None => Err(ToolExec::Denied {
             reason: "unknown_task".into(),
-            hint: Some("Use a task_id from task_start or task_status".into()),
+            hint: Some("Use a task_id from create_task or get_tasks".into()),
         }),
         Some(task) if task.status.is_terminal() => Err(ToolExec::Denied {
             reason: "task_finished".into(),
@@ -174,13 +191,20 @@ impl DaemonTool for TaskTool {
             Self::Steer => TASK_STEER,
             Self::Cancel => TASK_CANCEL,
             Self::Status => TASK_STATUS,
+            Self::Message => SEND_MESSAGE,
         }
     }
     fn spec(&self) -> ToolSpec {
         match self {
+            Self::Message => tools::spec::<MessageArgs>(
+                self.name(),
+                "Send a concise answer or necessary question. Attach up to two Markdown Output artifacts for longer content: inline for brief tables/summaries, panel for reports. Never narrate tools, task bookkeeping, model choices, or routing.",
+                ApprovalTier::Read,
+                false,
+            ),
             Self::Start => tools::spec::<StartArgs>(
                 self.name(),
-                "Start a background Task for work that takes more than a moment: anything in the browser, files or shell. Returns at once with its task_id; keep talking to the person. The Task's result arrives later as a [task report] message.",
+                "Start background work on an available connected model, or omit model to use the reasoning model. Returns immediately; wait silently for the result unless the person needs an answer or question.",
                 ApprovalTier::Read,
                 false,
             ),
@@ -217,6 +241,7 @@ impl DaemonTool for TaskTool {
             Self::Steer => tools::parse::<SteerArgs>(args).map(|_| ()),
             Self::Cancel => tools::parse::<CancelArgs>(args).map(|_| ()),
             Self::Status => tools::parse::<StatusArgs>(args).map(|_| ()),
+            Self::Message => tools::parse::<MessageArgs>(args).map(|_| ()),
         }
         .map(|()| Vec::new());
         Box::pin(async move { parsed })
@@ -227,6 +252,47 @@ impl DaemonTool for TaskTool {
     fn call<'a>(&'a self, args: Value, ctx: &'a ToolEnv) -> BoxFuture<'a, ToolExec> {
         Box::pin(async move {
             match self {
+                Self::Message => {
+                    let args: MessageArgs = match tools::parse(&args) {
+                        Ok(args) => args,
+                        Err(error) => return ToolExec::Failed(error.0),
+                    };
+                    if args.text.trim().is_empty() {
+                        return ToolExec::Failed("Message is empty".into());
+                    }
+                    let attachments = match crate::artifacts::admit_message_documents(
+                        ctx,
+                        args.attachments
+                            .into_iter()
+                            .map(|attachment| {
+                                (attachment.artifact, attachment.title, attachment.display)
+                            })
+                            .collect(),
+                    )
+                    .await
+                    {
+                        Ok(attachments) => attachments,
+                        Err(denied) => return denied,
+                    };
+                    match ctx
+                        .shared
+                        .emit(
+                            &ctx.session,
+                            None,
+                            EventKind::AssistantFinal {
+                                text: args.text,
+                                attachments,
+                            },
+                        )
+                        .await
+                    {
+                        Ok(_) => ToolExec::Done {
+                            for_model: json!({"status": "sent"}),
+                            for_app: None,
+                        },
+                        Err(_) => ToolExec::Failed("Message could not be recorded".into()),
+                    }
+                }
                 Self::Start => {
                     let args: StartArgs = match tools::parse(&args) {
                         Ok(args) => args,
@@ -235,8 +301,14 @@ impl DaemonTool for TaskTool {
                     let Some(model) = subagents::session_model(ctx).await else {
                         return ToolExec::Failed("Session state is unavailable".into());
                     };
-                    // Tasks run on the session's (strong) model; the front agent's model is
-                    // only for talking.
+                    let model = if let Some(selected) = args.model {
+                        if let Err(error) = model_routing::validate(ctx, &selected).await {
+                            return error;
+                        }
+                        selected
+                    } else {
+                        model
+                    };
                     let admitted =
                         subagents::admit(&args.goal, None, args.tools, "fresh", ctx, model);
                     subagents::record_start(ctx, &args.goal, admitted, true).await
@@ -296,12 +368,31 @@ impl DaemonTool for TaskTool {
                     }
                 }
                 Self::Status => match subagents::list(&ctx.shared, &ctx.session).await {
-                    Ok(list) => ToolExec::Done {
-                        for_model: json!({
-                            "tasks": list.iter().filter(|task| task.background).map(status_view).collect::<Vec<_>>()
-                        }),
-                        for_app: None,
-                    },
+                    Ok(list) => {
+                        let mut tasks = Vec::new();
+                        for task in list.iter().filter(|task| task.background) {
+                            let mut view = status_view(task);
+                            match crate::artifacts::task_documents(
+                                &ctx.shared,
+                                &ctx.session,
+                                &task.id,
+                            )
+                            .await
+                            {
+                                Ok(paths) => view["artifacts"] = json!(paths),
+                                Err(_) => {
+                                    return ToolExec::Failed(
+                                        "Task artifacts are unavailable".into(),
+                                    )
+                                }
+                            }
+                            tasks.push(view);
+                        }
+                        ToolExec::Done {
+                            for_model: json!({"tasks": tasks}),
+                            for_app: None,
+                        }
+                    }
                     Err(_) => ToolExec::Failed("Task state is unavailable".into()),
                 },
             }
@@ -345,6 +436,14 @@ pub(crate) async fn settle_unreported(
     Ok(())
 }
 
+fn report_excerpt(text: &str) -> &str {
+    let end = text
+        .char_indices()
+        .nth(1024)
+        .map_or(text.len(), |(index, _)| index);
+    &text[..end]
+}
+
 fn report_text(task: &Subagent) -> Option<String> {
     let reason = task.reason.as_deref();
     let line = match task.status {
@@ -368,18 +467,17 @@ fn report_text(task: &Subagent) -> Option<String> {
         task.id, task.task
     );
     if let Some(reason) = reason.filter(|_| task.status == SubagentStatus::Failed) {
-        text.push_str(&format!("\nReason: {reason}"));
+        text.push_str(&format!("\nReason: {}", report_excerpt(reason)));
     }
     if let Some(output) = &task.output {
-        text.push_str(&format!("\nResult:\n{output}"));
+        text.push_str(&format!("\nResult:\n{}", report_excerpt(output)));
     }
     Some(text)
 }
 
-/// Queue the report of every ended Task that has none yet. The store dedupes `message_id`,
-/// so calling this again (after a crash between the end and the report) never adds a
-/// second report. Returns whether anything may have been queued.
-pub(crate) async fn report_ended(shared: &Shared, session: &SessionId) -> Result<bool> {
+/// Stable report IDs repair missed lifecycle notifications after a crash without
+/// replaying an already delivered outcome or waiting-for-person request.
+pub(crate) async fn report_updates(shared: &Shared, session: &SessionId) -> Result<bool> {
     let state = shared.db.state(session).await?;
     if !front(shared, state.agent_id.as_deref()) {
         return Ok(false);
@@ -391,6 +489,28 @@ pub(crate) async fn report_ended(shared: &Shared, session: &SessionId) -> Result
     crate::browser_state::release_ended(shared, session, &tasks).await;
     let mut queued = false;
     for task in tasks {
+        if task.background && task.status == SubagentStatus::WaitingHuman {
+            for ticket in state.tickets.values().filter(|ticket| {
+                ticket.status == openside_proto::TicketStatus::Pending
+                    && ticket.origin.subagent_id.as_deref() == Some(task.id.as_str())
+            }) {
+                let message_id =
+                    MessageId::new(format!("{REPORT_PREFIX}{}-waiting-{}", task.id, ticket.id));
+                if state.queue.status(&message_id).is_some() {
+                    continue;
+                }
+                shared.emit(session, None, EventKind::MessageQueued {
+                    message_id,
+                    text: format!("{REPORT_MARKER} Task {} waiting for the person.\nGoal: {}\nNeeds you: {}",
+                        task.id, task.task, report_excerpt(&ticket.summary)),
+                    mode: QueueMode::Queue,
+                    attachments: Vec::new(),
+                    author_kind: openside_proto::MessageAuthorKind::Internal,
+                    from_agent: None,
+                }).await?;
+                queued = true;
+            }
+        }
         if !task.background || !task.status.is_terminal() {
             continue;
         }
@@ -408,7 +528,7 @@ pub(crate) async fn report_ended(shared: &Shared, session: &SessionId) -> Result
                 EventKind::MessageQueued {
                     message_id,
                     text,
-                    mode: QueueMode::Steer,
+                    mode: QueueMode::Queue,
                     attachments: Vec::new(),
                     author_kind: openside_proto::MessageAuthorKind::Internal,
                     from_agent: None,

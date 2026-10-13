@@ -1572,6 +1572,15 @@ fn task_status_waits_for_all_injected_messages_and_deferral_keeps_human_waiting_
             },
         )
         .unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().status,
+        SessionStatus::Running
+    );
+    store.replay().unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().status,
+        SessionStatus::Running
+    );
     for event in [EventKind::TurnStarted {}, EventKind::TurnEnded {}] {
         store.append(&sid(), None, event).unwrap();
     }
@@ -1872,6 +1881,10 @@ fn conversation_activity_finishes_a_standalone_api_ticket_without_a_turn() {
         )
         .unwrap();
     assert_eq!(store.session(&sid()).unwrap().session().activity, "Done");
+    assert_eq!(
+        store.session(&sid()).unwrap().session().status,
+        SessionStatus::Idle
+    );
 }
 
 #[test]
@@ -1880,7 +1893,7 @@ fn agent_identity_and_updated_home_ceiling_survive_replay() {
     let path = directory.path().join("events.db");
     let mut store = Store::open(&path).unwrap();
     let event: EventKind = serde_json::from_str(
-        r#"{"kind":"session.created","agent_id":"chief","title":"Juno","model":"","mode":"guard"}"#,
+        r#"{"kind":"session.created","agent_id":"chief","title":"openside","model":"","mode":"guard"}"#,
     )
     .unwrap();
     store.append(&sid(), None, event).unwrap();
@@ -1968,4 +1981,154 @@ fn connection_once_grants_are_bound_consumed_and_restart_safe() {
         .unwrap()
         .connection_grant_available(&sid(), &grant.id, Some("child"), &[7; 32])
         .unwrap());
+}
+
+#[test]
+fn waiting_children_do_not_keep_the_session_running_and_terminal_children_never_revive() {
+    let mut store = Store::open(":memory:").unwrap();
+    store
+        .create_session(sid(), "Task", "model", PolicyMode::Guard, None)
+        .unwrap();
+    for id in ["first", "second"] {
+        store
+            .append(
+                &sid(),
+                None,
+                EventKind::SubagentStarted {
+                    subagent_id: id.into(),
+                    parent_tool_call_id: id.into(),
+                    task: "work".into(),
+                    model: "model".into(),
+                    tools: vec![],
+                    background: true,
+                },
+            )
+            .unwrap();
+    }
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::TicketOpened {
+                ticket: Box::new(ticket(1, TicketDeferral::External)),
+            },
+        )
+        .unwrap();
+    for (id, expected) in [
+        ("first", SessionStatus::Running),
+        ("second", SessionStatus::WaitingHuman),
+    ] {
+        store
+            .append(
+                &sid(),
+                None,
+                EventKind::SubagentLifecycle {
+                    subagent_id: id.into(),
+                    status: "waiting_human".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(store.session(&sid()).unwrap().session().status, expected);
+    }
+    store.replay().unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().status,
+        SessionStatus::WaitingHuman
+    );
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::SubagentLifecycle {
+                subagent_id: "first".into(),
+                status: "running".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().status,
+        SessionStatus::Running
+    );
+    for id in ["first", "second"] {
+        store
+            .append(
+                &sid(),
+                None,
+                EventKind::SubagentEnded {
+                    subagent_id: id.into(),
+                    status: openside_proto::SubagentStatus::Completed,
+                    reason: None,
+                    output: None,
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                &sid(),
+                None,
+                EventKind::SubagentLifecycle {
+                    subagent_id: id.into(),
+                    status: "running".into(),
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        store.session(&sid()).unwrap().session().status,
+        SessionStatus::WaitingHuman
+    );
+    store.replay().unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().status,
+        SessionStatus::WaitingHuman
+    );
+}
+
+#[test]
+fn ending_a_waiting_child_replaces_waiting_activity_and_replays_the_terminal_result() {
+    use openside_proto::SubagentStatus;
+    for (status, activity) in [
+        (SubagentStatus::Completed, "Done"),
+        (SubagentStatus::Failed, "Couldn't finish"),
+        (SubagentStatus::Cancelled, "Stopped"),
+    ] {
+        let mut store = Store::open(":memory:").unwrap();
+        store
+            .create_session(sid(), "Task", "model", PolicyMode::Guard, None)
+            .unwrap();
+        for event in [
+            EventKind::SubagentStarted {
+                subagent_id: "child".into(),
+                parent_tool_call_id: "delegate".into(),
+                task: "work".into(),
+                model: "model".into(),
+                tools: vec![],
+                background: true,
+            },
+            EventKind::SubagentLifecycle {
+                subagent_id: "child".into(),
+                status: "waiting_human".into(),
+            },
+            EventKind::SubagentEnded {
+                subagent_id: "child".into(),
+                status,
+                reason: None,
+                output: None,
+            },
+            EventKind::SubagentLifecycle {
+                subagent_id: "child".into(),
+                status: "running".into(),
+            },
+        ] {
+            store.append(&sid(), None, event).unwrap();
+        }
+        for replay in [false, true] {
+            if replay {
+                store.replay().unwrap();
+            }
+            let session = store.session(&sid()).unwrap().session();
+            assert_eq!(session.status, SessionStatus::Idle);
+            assert_eq!(session.activity, activity);
+        }
+    }
 }

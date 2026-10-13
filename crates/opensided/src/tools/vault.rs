@@ -449,6 +449,9 @@ impl Service {
             outcome: None,
             now,
         };
+        // Admit before credential serialization so concurrent guesses are refused, not queued.
+        let _channel_change = shared.channels.change_credentials().await;
+        let _model_change = shared.models.change_credentials().await;
         let mut guard = self.vault.lock().await;
         if guard.is_some() {
             return Ok(());

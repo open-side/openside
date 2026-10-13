@@ -166,6 +166,7 @@ fn every_event_kind_round_trips() {
         },
         EventKind::AssistantFinal {
             text: "full".into(),
+            attachments: Vec::new(),
         },
         EventKind::ThinkingDelta {
             text: "thinking".into(),
@@ -459,6 +460,7 @@ fn ticket_types_round_trip_with_all_wire_variants() {
         (TicketKind::Takeover, "takeover"),
         (TicketKind::Login, "login"),
         (TicketKind::Choice, "choice"),
+        (TicketKind::Hire, "hire"),
     ] {
         assert_eq!(serde_json::to_value(kind).unwrap(), wire);
         for (status, status_wire) in [
@@ -516,7 +518,8 @@ fn ticket_types_round_trip_with_all_wire_variants() {
             json!("info"),
             json!("takeover"),
             json!("login"),
-            json!("choice")
+            json!("choice"),
+            json!("hire")
         ]
     );
     assert_eq!(
@@ -1069,4 +1072,22 @@ fn cards_normative_block_and_action_fixtures_round_trip() {
         unknown["arbitrary_html"] = json!("<script>forbidden</script>");
         assert!(serde_json::from_value::<Card>(unknown).is_err());
     }
+}
+
+#[test]
+fn assistant_final_document_serde_back_compat() {
+    let old: EventKind = serde_json::from_value(serde_json::json!({
+        "kind": "assistant.final", "text": "A short answer"
+    }))
+    .unwrap();
+    assert!(matches!(old, EventKind::AssistantFinal { attachments, .. } if attachments.is_empty()));
+    let wire = serde_json::json!({
+        "kind": "assistant.final", "text": "Here is the report.",
+        "attachments": [{
+            "path": "documents/delivered/report.md", "title": "Report",
+            "display": "panel", "bytes": 42, "content_type": "text/markdown"
+        }]
+    });
+    let event: EventKind = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(event).unwrap(), wire);
 }

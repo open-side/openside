@@ -26,10 +26,12 @@ pub(crate) fn lifetime(kind: TicketKind, config: &openside_config::TicketsConfig
 }
 
 pub(crate) fn proposal_key(draft: &openside_proto::HireDraft) -> String {
+    canonical_topic(&draft.persona.role)
+}
+
+pub(crate) fn canonical_topic(topic: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
-    let normalized: String = draft
-        .persona
-        .role
+    let normalized: String = topic
         .nfkc()
         .flat_map(char::to_lowercase)
         .map(|c| if c.is_alphanumeric() { c } else { ' ' })
@@ -137,10 +139,17 @@ pub(crate) async fn open(
     let state = shared.db.state(session).await?;
     if let Some(ticket) = state.tickets.values().find(|ticket| {
         ticket.tool_call_id == call.tool_call_id
-            && ticket.status == TicketStatus::Pending
+            && (ticket.status == TicketStatus::Pending
+                || (call.name == crate::routines::proposals::PROPOSE_ROUTINE
+                    && crate::routines::proposals::is_proposal(ticket)))
             && ticket.deferral == deferral
             && ticket.origin.subagent_id == call.subagent
     }) {
+        if crate::routines::proposals::is_proposal(ticket)
+            && ticket.tool.as_ref().map(|tool| &tool.args) != tool.as_ref().map(|tool| &tool.args)
+        {
+            return Err("approval_args_mismatch".into());
+        }
         if let Some(binding) = approval_binding {
             let session = session.clone();
             let id = ticket.id.clone();
@@ -242,6 +251,11 @@ pub(crate) async fn open(
     // Target strings are kept verbatim only when the daemon checked them against the live
     // browser; a caller-supplied tab id, origin or field ref is redacted like any other text.
     let mut keep = crate::tools::TICKET_KEEP.to_vec();
+    if crate::routines::proposals::is_proposal(&ticket) {
+        let payload = &ticket.tool.as_ref().ok_or("missing_routine_payload")?.args;
+        crate::routines::proposals::screen_payload(shared, payload)?;
+        keep.extend_from_slice(crate::routines::proposals::TICKET_KEEP);
+    }
     if crate::tools::connections::is_grant_ticket(&ticket) {
         keep.extend_from_slice(crate::tools::connections::GRANT_KEEP);
     }
@@ -279,26 +293,15 @@ pub(crate) async fn open(
             .collect();
         shared.agents.migrate_proposal_keys(&aliases)?;
         let stored = shared.agents.get_proposal(&key)?;
-        let person_fallback = if call.name == "team_hire" {
-            let args: Value = serde_json::from_str(&call.arguments_json)?;
-            let message = args["request_message_id"].as_str().ok_or("not_requested")?;
-            crate::team::hire_tainted(shared, session, message)
-                .await
-                .map_err(|error| error.1)?
-        } else {
-            false
-        };
-        if !person_fallback {
-            if stored.as_ref().is_some_and(|(status, _)| status == "never") {
-                return Err("proposal_suppressed".into());
-            }
-            if shared
-                .agents
-                .latest_proposal_decline()?
-                .is_some_and(|at| Utc::now() < at + Duration::days(7))
-            {
-                return Err("proposal_global_cooldown".into());
-            }
+        if stored.as_ref().is_some_and(|(status, _)| status == "never") {
+            return Err("proposal_suppressed".into());
+        }
+        if shared
+            .agents
+            .latest_proposal_decline()?
+            .is_some_and(|at| Utc::now() < at + Duration::days(7))
+        {
+            return Err("proposal_global_cooldown".into());
         }
         let previous_ticket = state
             .tickets
@@ -319,8 +322,7 @@ pub(crate) async fn open(
             Some((_, at)) => Some(at),
             None => previous_ticket,
         };
-        if !person_fallback && last_proposal.is_some_and(|at| Utc::now() < at + Duration::days(30))
-        {
+        if last_proposal.is_some_and(|at| Utc::now() < at + Duration::days(30)) {
             return Err("proposal_cooldown".into());
         }
     }
@@ -472,10 +474,9 @@ pub(crate) async fn reject_open(shared: &Shared, session: &SessionId, reason: &s
 
 /// End a pending ticket without the person's answer: rejected with `rejected` as the reason
 /// (an explicit rejection, a session stop, a subagent cancellation), or expired when `None`.
-/// The caller holds `ticket_gate`. A registration whose interrupted attempt saved its factor,
-/// or whose outcome cannot be checked, is published as that outcome instead
-/// ([`crate::tools::otp::interrupted_registration`]), so no terminal result denies a factor
-/// the vault holds.
+/// The caller holds `ticket_gate`. An interrupted approval that already saved an authenticator
+/// or created a routine is published as its recorded outcome instead. A rejection must never
+/// deny a committed mutation; an uncheckable outcome remains indeterminate.
 pub(crate) async fn close_unanswered(
     shared: &Shared,
     ticket: &Ticket,
@@ -486,7 +487,12 @@ pub(crate) async fn close_unanswered(
         None => (openside_proto::TakeoverEndReason::Expired, "expired"),
     };
     crate::takeover::finish(shared, ticket, end).await;
-    let event = match crate::tools::otp::interrupted_registration(shared, ticket).await {
+    let interrupted = if crate::routines::proposals::is_proposal(ticket) {
+        crate::routines::proposals::interrupted(shared, ticket)
+    } else {
+        crate::tools::otp::interrupted_registration(shared, ticket).await
+    };
+    let event = match interrupted {
         Some(resolution) => {
             decision = "resolved";
             EventKind::TicketResolved {

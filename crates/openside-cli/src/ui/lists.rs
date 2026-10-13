@@ -62,7 +62,7 @@ pub(crate) fn sessions(ui: &Ui, list: &SessionList) -> String {
         Column::new("STATUS"),
         Column::new("ID"),
         Column::new("TITLE").flex(14),
-        Column::new("MODEL").flex(10),
+        Column::new("Started with").flex(10),
     ]);
     for session in &list.sessions {
         let (tone, word) = match session.status {
@@ -238,6 +238,7 @@ pub(crate) fn models(ui: &Ui, catalog: &ModelCatalog) -> String {
             Column::new("SOURCE"),
             Column::new("ACCOUNT").flex(8),
             Column::new("NOTE").flex(12),
+            Column::new("REMAINING USAGE").flex(12),
         ]);
         for model in listed {
             let tone = if model.available {
@@ -251,21 +252,38 @@ pub(crate) fn models(ui: &Ui, catalog: &ModelCatalog) -> String {
                 Span::plain(clean(&model.id)),
             ];
             if catalog.default_model.as_deref() == Some(model.id.as_str()) {
-                name.push(Span::role(ui, Role::Brand, "  default"));
+                name.push(Span::role(ui, Role::Brand, "  reasoning"));
+            }
+            if catalog.fast_model.as_deref() == Some(model.id.as_str()) {
+                name.push(Span::role(ui, Role::Brand, "  fast"));
             }
             table.row(vec![
                 Cell::spans(name),
                 Cell::role(ui, Role::Dim, model.source.as_deref().unwrap_or("-")),
                 Cell::role(ui, Role::Dim, model.account_id.as_deref().unwrap_or("-")),
-                if model.available {
+                if !model.in_catalog && model.available {
+                    Cell::role(ui, Role::Dim, "Not in current catalog")
+                } else if !model.in_catalog {
+                    Cell::role(
+                        ui,
+                        Role::Dim,
+                        format!("Not in current catalog; {}", clean(&model.reason)),
+                    )
+                } else if model.available {
                     Cell::empty()
                 } else {
                     Cell::role(ui, Role::Dim, clean(&model.reason))
                 },
+                Cell::role(ui, Role::Dim, clean(&crate::models::remaining_usage(model))),
             ]);
         }
         out.push_str(&table.render(ui));
     }
+    out.push_str(&format!(
+        "\n  Reasoning model  {}\n  Fast model  {}\n",
+        clean(catalog.default_model.as_deref().unwrap_or("not configured")),
+        clean(catalog.fast_model.as_deref().unwrap_or("same as reasoning")),
+    ));
     if !catalog.fallback_models.is_empty() {
         out.push_str(&format!(
             "\n  {}  {}\n",

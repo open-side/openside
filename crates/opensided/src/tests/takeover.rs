@@ -688,6 +688,12 @@ async fn takeover_streams_frames_forwards_input_locks_agent_and_resumes_with_fre
     assert_eq!(result["page_changed"], true);
     assert_eq!(result["tab_id"], f.tab.as_str());
     assert_eq!(result["title"], "Clicked by human");
+    let note = result["note"].as_str().unwrap();
+    assert!(note.contains("Start the continuation with a fresh browser_snapshot"));
+    assert!(
+        note.contains("inspect whether the requested outcome actually occurred before replying")
+    );
+    assert!(note.contains("not that sign-in or the task succeeded"));
 
     // Element references from before the takeover are void even for nodes that survived.
     let stale = host(&f.daemon, &f.session)

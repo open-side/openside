@@ -63,12 +63,14 @@ mod remote_transport;
 mod repl;
 mod resource_limits;
 mod routines;
+mod session_help;
 mod skills;
 mod subagents;
 mod sync;
 mod takeover;
 mod tasks;
 mod team;
+mod tool_output;
 mod tools_api;
 mod vault;
 mod web;
@@ -150,6 +152,7 @@ impl AgentSession for TestSession {
         text: String,
         parts: Vec<openside_core::ContentPart>,
         mode: QueueMode,
+        _author_kind: MessageAuthorKind,
     ) -> std::result::Result<(), RuntimeError> {
         if !parts.is_empty() {
             self.runtime.0.lock().parts.push((id.clone(), parts));
@@ -517,9 +520,16 @@ async fn every_protocol_method_and_path_is_routed() {
             .replace("{thumbnail_id}", "thumbnail")
             .replace("{sid}", "child")
             .replace("{name}", "skill")
+            .replace("{key}", "proposal")
+            .replace("{origin}", "https%3A%2F%2Fexample.test")
             .replace("{path}", "transcript.jsonl")
             .replace("{provider}", "anthropic")
             .replace("{source}", "claude-code")
+            .replace("{kind}", "telegram")
+            .replace("{account_id}", "unknown-account")
+            .replace("{key_id}", "unknown-key")
+            .replace("{space_id}", "unknown-space")
+            .replace("{ticket}", "ticket")
             .replace("{id}", id);
         assert!(
             !path.contains('{'),
@@ -1157,6 +1167,112 @@ async fn crash_after_ticket_delivery_recovers_only_interrupted_resolutions() {
             .unwrap();
         assert_eq!(recovered.0.lock().resolved.len(), 1);
         second.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn interruption_reports_coalesce_and_survive_partial_recovery() {
+    for partial in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = TestRuntime::default();
+        let first = daemon(root.path(), &runtime).await;
+        let session = create_session(&first, "session", PolicyMode::Guard, None).await;
+        for mid in ["a", "b"] {
+            first
+                .shared
+                .emit(
+                    &session,
+                    None,
+                    EventKind::MessageQueued {
+                        message_id: MessageId::new(mid),
+                        text: mid.into(),
+                        mode: QueueMode::Steer,
+                        attachments: Vec::new(),
+                        author_kind: MessageAuthorKind::Person,
+                        from_agent: None,
+                    },
+                )
+                .await
+                .unwrap();
+            first
+                .shared
+                .emit(
+                    &session,
+                    None,
+                    EventKind::MessageInjected {
+                        message_id: MessageId::new(mid),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        if partial {
+            first
+                .shared
+                .emit(
+                    &session,
+                    None,
+                    EventKind::MessageQueued {
+                        message_id: MessageId::new("interrupted-report-a"),
+                        text: "Recovery covering a, b".into(),
+                        mode: QueueMode::Queue,
+                        attachments: Vec::new(),
+                        author_kind: MessageAuthorKind::Internal,
+                        from_agent: None,
+                    },
+                )
+                .await
+                .unwrap();
+            first
+                .shared
+                .emit(
+                    &session,
+                    None,
+                    EventKind::MessageCompleted {
+                        message_id: MessageId::new("a"),
+                        outcome: openside_proto::MessageOutcome::Failed,
+                        reason: Some("interrupted".into()),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        first.shutdown().await;
+        drop(first);
+        for _ in 0..2 {
+            let recovered = daemon(root.path(), &runtime).await;
+            let events = recovered.shared.db.events(&session, 0).await.unwrap();
+            let reports: Vec<_> = events
+                .iter()
+                .filter_map(|event| match &event.kind {
+                    EventKind::MessageQueued {
+                        message_id,
+                        text,
+                        author_kind: MessageAuthorKind::Internal,
+                        ..
+                    } if message_id.as_str().starts_with("interrupted-report-") => {
+                        Some((message_id, text))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].0.as_str(), "interrupted-report-a");
+            assert!(reports[0].1.contains("a, b"));
+            for mid in ["a", "b"] {
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| matches!(&event.kind,
+                            EventKind::MessageCompleted { message_id, reason: Some(reason), .. }
+                                if message_id.as_str() == mid && reason == "interrupted"
+                        ))
+                        .count(),
+                    1
+                );
+            }
+            recovered.shutdown().await;
+        }
     }
 }
 
@@ -2055,18 +2171,19 @@ async fn steer_is_sent_while_running_and_followup_waits_for_settled() {
     let session = create_session(&daemon, "session", PolicyMode::Guard, None).await;
     let router = api::router(daemon.shared.clone(), true);
     for (id, mode) in [("first", "queue"), ("later", "queue"), ("steer", "steer")] {
+        let mut submission = request(
+            "POST",
+            "/v1/sessions/session/messages",
+            json!({"message_id":id,"text":id,"mode":mode}),
+            None,
+        );
+        if id == "later" {
+            submission
+                .headers_mut()
+                .insert("x-openside-client", "mcp".parse().unwrap());
+        }
         assert_eq!(
-            router
-                .clone()
-                .oneshot(request(
-                    "POST",
-                    "/v1/sessions/session/messages",
-                    json!({"message_id":id,"text":id,"mode":mode}),
-                    None
-                ))
-                .await
-                .unwrap()
-                .status(),
+            router.clone().oneshot(submission).await.unwrap().status(),
             StatusCode::ACCEPTED
         );
     }
@@ -2210,7 +2327,16 @@ async fn sse_last_event_id_replays_only_newer_durable_events() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();
     let daemon = daemon(root.path(), &runtime).await;
-    create_session(&daemon, "session", PolicyMode::Guard, None).await;
+    let session = create_session(&daemon, "session", PolicyMode::Guard, None).await;
+    let initial = daemon
+        .shared
+        .db
+        .events(&session, 0)
+        .await
+        .unwrap()
+        .last()
+        .unwrap()
+        .seq;
     let request = Request::builder()
         .uri("/v1/sessions/session/events")
         .header("last-event-id", "0")
@@ -2222,11 +2348,15 @@ async fn sse_last_event_id_replays_only_newer_durable_events() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let mut body = response.into_body();
+    let greeting = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert_eq!(std::str::from_utf8(&greeting).unwrap(), ": ok\n\n");
     let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
-    assert!(std::str::from_utf8(&frame).unwrap().contains("id: 1"));
+    assert!(std::str::from_utf8(&frame)
+        .unwrap()
+        .contains(&format!("id: {initial}")));
     let request = Request::builder()
         .uri("/v1/sessions/session/events")
-        .header("last-event-id", "1")
+        .header("last-event-id", initial.to_string())
         .body(Body::empty())
         .unwrap();
     let response = api::router(daemon.shared.clone(), true)
@@ -2234,6 +2364,8 @@ async fn sse_last_event_id_replays_only_newer_durable_events() {
         .await
         .unwrap();
     let mut body = response.into_body();
+    let greeting = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert_eq!(std::str::from_utf8(&greeting).unwrap(), ": ok\n\n");
     daemon
         .shared
         .emit(
@@ -2251,7 +2383,7 @@ async fn sse_last_event_id_replays_only_newer_durable_events() {
         .into_data()
         .unwrap();
     let text = std::str::from_utf8(&frame).unwrap();
-    assert!(text.contains("id: 2"));
+    assert!(text.contains(&format!("id: {}", initial + 1)));
     assert!(!text.contains("session.created"));
     daemon.shutdown().await;
 }

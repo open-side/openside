@@ -105,13 +105,11 @@ pub(crate) async fn observed(
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OtpRequestArgs {
-    /// Tab showing the code prompt.
     tab_id: String,
-    /// Current-document ref from browser_snapshot; refs from before navigation are invalid.
     field_ref: String,
-    /// Where the page says the code comes from; `unknown` when it does not say.
+    /// Page-stated source; unknown if unspecified.
     channel: Option<OtpChannel>,
-    /// Short note for the person, e.g. the page's own prompt. Never a code.
+    /// Note to person; never a code.
     summary: Option<String>,
 }
 
@@ -171,7 +169,7 @@ impl DaemonTool for RequestOtp {
     fn spec(&self) -> openside_core::ToolSpec {
         spec::<OtpRequestArgs>(
             self.name(),
-            "Use whenever a page asks for a verification / one-time code (authenticator, SMS, email or backup code), including codes split over several boxes (pass the first box). field_ref must be the code textbox ref from a fresh browser_snapshot on the current code page: never guess a ref or reuse one from before navigation. If the vault holds an authenticator for the tab's origin, the daemon fills the current code immediately. Otherwise the person is asked on their own device to enter the code or register the site's authenticator; the code goes straight into the field and the tab is never brought to the screen. Result {\"status\":\"filled\"} (or {\"status\":\"registered\",\"filled\":false}: call request_otp again); you never see the code. Wait for the result before clicking the page's verify/continue button; do not batch that click with a still-pending code request. After clicking, inspect the next page: account/profile/trust/terms decisions require request_choice and are not successful sign-in yet. Never ask for codes in chat or ask_user, and never use takeover for a code unless the person asks for it.",
+            "For verification codes (TOTP/SMS/email/backup); use the first box for split codes. field_ref must come from a fresh browser_snapshot of this code page, never guessed or reused across navigation. The daemon fills from the origin's saved authenticator or asks the person privately to enter a code/register it; no code reaches you or brings the tab onscreen. status=filled means ready; status=registered with filled=false requires request_otp again. Await completion before clicking verify/continue; never batch that click with a pending request. Inspect the next page: account/profile/trust/terms need request_choice, not a success claim. Never ask codes in chat/ask_user; takeover only if requested.",
             ApprovalTier::Read,
             true,
         )

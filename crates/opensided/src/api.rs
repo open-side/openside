@@ -692,6 +692,10 @@ pub(crate) async fn authorize(
         .headers()
         .get("x-openside-client")
         .is_some_and(|value| value == "mcp");
+    let channel_client = request
+        .headers()
+        .get("x-openside-client")
+        .is_some_and(|value| value == "channel");
     if unix {
         request
             .extensions_mut()
@@ -704,6 +708,8 @@ pub(crate) async fn authorize(
             .insert(crate::remote::LocalAuthority(true));
         request.extensions_mut().insert(if agent_client {
             MessageAuthorKind::AgentClient
+        } else if channel_client {
+            MessageAuthorKind::Channel
         } else {
             MessageAuthorKind::Person
         });
@@ -793,6 +799,8 @@ pub(crate) async fn authorize(
         .extensions_mut()
         .insert(if agent_client || kind == DeviceKind::AgentClient {
             MessageAuthorKind::AgentClient
+        } else if channel_client {
+            MessageAuthorKind::Channel
         } else {
             MessageAuthorKind::Person
         });
@@ -1037,7 +1045,11 @@ async fn submit(
         EventKind::MessageQueued {
             message_id: mid.clone(),
             text: request.text,
-            mode: request.mode.into(),
+            mode: if author_kind == MessageAuthorKind::Person {
+                openside_core::QueueMode::Steer
+            } else {
+                openside_core::QueueMode::Queue
+            },
             attachments,
             author_kind,
             from_agent: None,
@@ -1430,6 +1442,10 @@ async fn resolve(
                 caller.person_approval(&s, &ticket).await?;
                 crate::tools::connections::resolve_grant(&s, &ticket, request.value).await?
             }
+            TicketKind::Confirm if crate::routines::proposals::is_proposal(&ticket) => {
+                caller.person_approval(&s, &ticket).await?;
+                crate::routines::proposals::resolve(&s, &ticket, &caller, request.value).await?
+            }
             TicketKind::Confirm => {
                 if request.value != true
                     && request.value != false
@@ -1668,6 +1684,7 @@ async fn resolve(
             &["option"],
             &["item_id"],
             &["agent_id"],
+            &["routine_id"],
         ];
         if crate::tools::connections::is_grant_ticket(&ticket) {
             keep.push(&["access"]);

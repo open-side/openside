@@ -113,15 +113,11 @@ pub(crate) async fn unlock(
             Err(error) => return error.into_response(),
         }
     };
-    let channel_change = s.channels.change_credentials().await;
-    let change = s.models.change_credentials().await;
     let service = &s.registry.vault;
     let remote = caller.0.is_some();
     let result = service
         .unlock_now(&s, &who(&caller), remote, passphrase(request))
         .await;
-    drop(change);
-    drop(channel_change);
     match result {
         Ok(()) => {
             s.models.invalidate(&s).await;

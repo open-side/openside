@@ -7,6 +7,70 @@ fn legacy_ticket(kind: TicketKind) -> Ticket {
 fn draft() -> Value {
     json!({"card":{"id":"","kind":"table","site":{"origin":"https://example.test","name":"Example","favicon_ref":null},"title":"Results","subtitle":null,"status":"done","blocks":[{"type":"table","id":"table","columns":[{"id":"name","label":"Name"}],"rows":[[{"type":"text","text":"Example"}]],"layout":"grid"}],"actions":[],"interaction":"none","collapsed_summary":"One result"},"images":[]})
 }
+
+#[tokio::test]
+async fn cards_public_trending_table_ignores_cookie_preferences_but_rejects_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open_runtime(resolved_config(root.path()), TestRuntime::default())
+        .await
+        .unwrap();
+    let session = create_session(&daemon, "trending", PolicyMode::Full, Some(root.path())).await;
+    let state = daemon.shared.db.state(&session).await.unwrap();
+    let env = crate::tools::ToolEnv::new(daemon.shared.clone(), &state);
+    let mut input = draft();
+    input["card"]["site"] = json!({"name":"GitHub","origin":"https://github.com"});
+    input["card"]["title"] = json!("Trending repositories");
+    input["card"]["collapsed_summary"] = json!("Two public repositories");
+    input["card"]["blocks"] = json!([{
+        "type":"table","id":"trending","layout":"grid",
+        "columns":[{"id":"repo","label":"Repository"},{"id":"language","label":"Language"},{"id":"stars","label":"Stars"}],
+        "rows":[
+            [{"type":"link","link":{"label":"mksglu/context-mode","url":"https://github.com/mksglu/context-mode"}},{"type":"text","text":"TypeScript"},{"type":"text","text":"12,345"}],
+            [{"type":"link","link":{"label":"vercel-labs/skills","url":"https://github.com/vercel-labs/skills"}},{"type":"text","text":"JavaScript"},{"type":"text","text":"98,765"}]
+        ]
+    }]);
+    input["card"]["actions"] = json!([{"id":"open","label":"View trending","style":"primary","target":{"type":"link","url":"https://github.com/trending"}}]);
+    // The former all-cookie filter rejected even the mandatory interaction="none".
+    let preference = openside_vault::Secret::new("no".into());
+    assert_ne!(
+        openside_vault::Redactor::new([&preference]).redact("none"),
+        "none"
+    );
+    for value in [
+        "no",
+        "true",
+        "1",
+        "light",
+        "Asia/Seoul",
+        "session-cookie-canary-58f29d04a1",
+    ] {
+        if let Some(filter) = openside_vault::Redactor::for_cookie(value) {
+            daemon.shared.registry.redactors.write().push(filter);
+        }
+    }
+    assert!(crate::tools::present::admit(&input, Some(&env)).is_ok());
+    for (value, reason) in [
+        ("session-cookie-canary-58f29d04a1", "known secret value"),
+        ("sk-1234567890abcdefghijklmnop", "secret-shaped content"),
+        (
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signature123456",
+            "secret-shaped content",
+        ),
+    ] {
+        let mut secret_input = input.clone();
+        secret_input["card"]["blocks"][0]["rows"][1][1]["text"] = json!(value);
+        let error = crate::tools::present::admit(&secret_input, Some(&env))
+            .unwrap_err()
+            .0;
+        assert!(
+            error.contains("$.card.blocks[0].rows[1][1].text"),
+            "{error}"
+        );
+        assert!(error.contains(reason), "{error}");
+        assert!(!error.contains(value));
+    }
+    daemon.shutdown().await;
+}
 #[test]
 fn cards_project_every_current_ticket_kind_and_legacy_metadata() {
     for (kind, expected) in [

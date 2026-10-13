@@ -8,7 +8,7 @@ async fn front_daemon(root: &Path, runtime: &TestRuntime) -> Daemon {
 }
 
 #[tokio::test]
-async fn front_denies_actions_but_allows_reads_and_session_model_fallback() {
+async fn front_denies_work_tools_and_uses_session_model_fallback() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();
     let daemon = front_daemon(root.path(), &runtime).await;
@@ -18,26 +18,21 @@ async fn front_denies_actions_but_allows_reads_and_session_model_fallback() {
         matches!(parent.call(call("browser_navigate", json!({"tab_id":"task-tab","url":"https://example.test"}), "front-act")).await,
         ToolOutcome::Denied { reason, .. } if reason == "front_agent_cannot_act")
     );
-    assert!(crate::tasks::front_denial(
-        &daemon.shared,
-        &call(
-            "browser_snapshot",
-            json!({"tab_id":"task-tab"}),
-            "front-read"
-        ),
-        None
-    )
-    .is_none());
-    assert!(matches!(
-        parent
-            .call(call(
-                "browser_import_lookup",
-                json!({"kind":"bookmarks"}),
-                "front-import-read",
-            ))
-            .await,
-        ToolOutcome::Deferred { .. }
-    ));
+    for name in [
+        "browser_snapshot",
+        "browser_screenshot",
+        "browser_import_lookup",
+        "memory_search",
+        "present",
+    ] {
+        assert!(
+            matches!(
+                parent.call(call(name, json!({}), name)).await,
+                ToolOutcome::Denied { reason, .. } if reason == "front_agent_cannot_act"
+            ),
+            "{name}"
+        );
+    }
     daemon
         .shared
         .command(&session, crate::engine::Action::Recover)
@@ -46,14 +41,103 @@ async fn front_denies_actions_but_allows_reads_and_session_model_fallback() {
     let opened = runtime.0.lock().opened.clone();
     let agent: Value = serde_json::from_str(&opened[0].agent_json).unwrap();
     assert_eq!(agent["orchestration"], "front");
-    assert!(agent["front_tools"]
-        .as_array()
-        .unwrap()
+    let tools = agent["front_tools"].as_array().unwrap();
+    for name in [
+        "send_message",
+        "create_task",
+        "cancel_task",
+        "get_tasks",
+        "steer_task",
+    ] {
+        assert!(tools.iter().any(|tool| tool == name), "{name}");
+    }
+    assert!(tools
         .iter()
-        .any(|tool| tool == "browser_import_lookup"));
+        .all(|tool| crate::tasks::is_front_tool(tool.as_str().unwrap())));
     assert!(agent.get("front_model").is_none());
     assert_eq!(opened[0].model, std::any::type_name::<TestRuntime>());
     daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn send_message_records_one_complete_message_without_activity_or_deltas() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = front_daemon(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&daemon, "message", PolicyMode::Full, None).await;
+    let parent = host(&daemon, &session).await;
+    assert!(matches!(
+        parent
+            .call(call(
+                "send_message",
+                json!({"text":"Working on it."}),
+                "say"
+            ))
+            .await,
+        ToolOutcome::Done { .. }
+    ));
+    let events = daemon.shared.db.events(&session, 0).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(&event.kind,
+        EventKind::AssistantFinal { text, .. } if text == "Working on it."))
+            .count(),
+        1
+    );
+    assert!(!events.iter().any(|event| matches!(
+        &event.kind,
+        EventKind::AssistantDelta { .. }
+            | EventKind::ToolStarted { .. }
+            | EventKind::ToolEnded { .. }
+    )));
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn front_model_override_does_not_change_task_admission_model() {
+    for fast in [Some("openai:gpt-6-luna"), None] {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = TestRuntime::default();
+        let mut config = resolved_config(root.path());
+        config.loaded.config.agent.orchestration = openside_config::Orchestration::Front;
+        config.loaded.config.models.front = fast.map(str::to_owned);
+        config.loaded.config.models.default = Some("openai:gpt-6.1-sol".into());
+        let daemon = Daemon::open_runtime(config, runtime.clone()).await.unwrap();
+        let session = daemon
+            .shared
+            .agents
+            .get("chief")
+            .unwrap()
+            .unwrap()
+            .home_session_id;
+        daemon
+            .shared
+            .command(&session, crate::engine::Action::Recover)
+            .await
+            .unwrap();
+        let opened = runtime.0.lock().opened.clone();
+        let agent: Value = serde_json::from_str(&opened[0].agent_json).unwrap();
+        assert_eq!(agent.get("front_model").and_then(Value::as_str), fast);
+        let reasoning = opened[0].model.clone();
+        assert_eq!(reasoning, "openai:gpt-6.1-sol");
+        let parent = host(&daemon, &session).await;
+        let result = parent
+            .call(call(
+                "create_task",
+                json!({"goal":"reason about this"}),
+                "start-role",
+            ))
+            .await;
+        let ToolOutcome::Done { for_model_json, .. } = result else {
+            panic!("Task admission failed: {result:?}");
+        };
+        let admitted: Value = serde_json::from_str(&for_model_json).unwrap();
+        assert_eq!(admitted["model"], reasoning);
+        let events = daemon.shared.db.events(&session, 0).await.unwrap();
+        assert!(events.iter().any(|event| matches!(&event.kind,
+            EventKind::SubagentStarted { model, background: true, .. } if model == &reasoning)));
+        daemon.shutdown().await;
+    }
 }
 
 #[tokio::test]
@@ -85,10 +169,19 @@ async fn restart_repairs_a_task_end_without_a_report_and_never_queues_it_twice()
     drop(daemon);
     let daemon = front_daemon(root.path(), &runtime).await;
     for _ in 0..3 {
-        crate::tasks::report_ended(&daemon.shared, &session)
+        crate::tasks::report_updates(&daemon.shared, &session)
             .await
             .unwrap();
     }
+    until(|| {
+        runtime
+            .0
+            .lock()
+            .sent
+            .iter()
+            .any(|(_, id, _, _)| id.as_str() == "task-report-task-1")
+    })
+    .await;
     let events = daemon.shared.db.events(&session, 0).await.unwrap();
     assert_eq!(events.iter().filter(|event| matches!(&event.kind, EventKind::MessageQueued { message_id, text, .. } if message_id.as_str() == "task-report-task-1" && text.contains("durable result"))).count(), 1);
     assert!(events
@@ -528,6 +621,9 @@ async fn delayed_browser_probes_cannot_overwrite_newer_or_terminal_task_state() 
         }).await else { panic!("Open failed"); };
         let result: Value = serde_json::from_str(&for_model_json).unwrap();
         let tab = result["tab_id"].as_str().unwrap();
+        let browser = daemon.shared.registry.browser.existing().await.unwrap_or_else(|error| panic!("{}", error.0));
+        let person_tabs: Vec<_> = browser.tabs().await.into_iter()
+            .filter(|info| info.owner_session_id.is_none()).map(|info| info.id).collect();
         // Drain the Open probe before deliberately parking the next observation.
         tokio::time::timeout(Duration::from_secs(10), ledger.probe_finished.notified()).await.unwrap();
         for terminal in [false, true] {
@@ -548,7 +644,7 @@ async fn delayed_browser_probes_cannot_overwrite_newer_or_terminal_task_state() 
             tokio::time::timeout(Duration::from_secs(10), ledger.probe_started.notified()).await.unwrap();
             if terminal {
                 crate::subagents::end(&daemon.shared, &session, "task", SubagentStatus::Completed, "completed").await.unwrap();
-                crate::tasks::report_ended(&daemon.shared, &session).await.unwrap();
+                crate::tasks::report_updates(&daemon.shared, &session).await.unwrap();
             } else {
                 let current = ToolCall { tool_call_id: "new-action".into(), ..old };
                 let _ = crate::browser_state::before(&daemon.shared, &session, &current).await;
@@ -560,8 +656,15 @@ async fn delayed_browser_probes_cannot_overwrite_newer_or_terminal_task_state() 
             assert!(!later.iter().any(|event| matches!(&event.kind, EventKind::BrowserState(state)
                 if state.action.as_ref().is_some_and(|action| action.tool_call_id.contains("old-")))));
             if terminal {
-                assert!(daemon.shared.db.events(&session, 0).await.unwrap().iter().any(|event|
-                    matches!(&event.kind, EventKind::BrowserState(state) if state.task_id.as_deref() == Some("task") && state.phase == BrowserPhase::Done)));
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while browser.tabs().await.iter().any(|info| info.id == tab) {
+                        tokio::task::yield_now().await;
+                    }
+                }).await.expect("terminal Task must close its unreferenced agent tab");
+                let remaining = browser.tabs().await;
+                assert!(person_tabs.iter().all(|id| remaining.iter().any(|info| &info.id == id)),
+                    "Task cleanup must preserve person tabs");
+                assert!(ledger.holder(&session, tab).is_none());
             }
         }
     }).catch_unwind().await;
@@ -607,7 +710,6 @@ async fn task_cancellation_waits_for_repl_cleanup_and_releases_held_input_for_th
         let result = running.await.unwrap();
         assert!(matches!(result, ToolOutcome::Failed { message } if message.contains("cancelled")));
         assert!(browser.tabs().await.iter().any(|info| info.id == tab && info.title == "READY"));
-        crate::tasks::report_ended(&daemon.shared, &session).await.unwrap();
         let result = parent.call(ToolCall {
             subagent: Some("sibling".into()),
             ..call("browser_repl", json!({"tab_id":tab,"code":"await page.getByRole('textbox').focus(); await page.keyboard.press('KeyA'); await page.getByRole('textbox').inputValue()"}), "sibling-input")
@@ -615,6 +717,7 @@ async fn task_cancellation_waits_for_repl_cleanup_and_releases_held_input_for_th
         let ToolOutcome::Done { for_model_json } = result else { panic!("sibling REPL failed"); };
         let result: Value = serde_json::from_str(&for_model_json).unwrap();
         assert_eq!(result["return_value"], "a", "cancelled Task left Shift held: {result}");
+        crate::tasks::report_updates(&daemon.shared, &session).await.unwrap();
     }).catch_unwind().await;
     daemon.shutdown().await;
     if let Err(error) = checked {
@@ -698,7 +801,6 @@ async fn cancelled_navigation_and_open_cannot_commit_after_terminal_publication(
             assert!(matches!(operation.await.unwrap(), ToolOutcome::Failed { message } if message.contains("cancelled")));
             release.notify_one();
             tokio::time::timeout(Duration::from_secs(5), responded.notified()).await.unwrap();
-            crate::tasks::report_ended(&daemon.shared, &session).await.unwrap();
             let result = parent.call(ToolCall {
                 subagent: Some("sibling".into()),
                 ..call("browser_repl", json!({"tab_id":tab,"code":"await page.waitForTimeout(200); await page.title()"}), "sibling-read")
@@ -706,6 +808,7 @@ async fn cancelled_navigation_and_open_cannot_commit_after_terminal_publication(
             let ToolOutcome::Done { for_model_json } = result else { panic!("sibling read failed"); };
             let result: Value = serde_json::from_str(&for_model_json).unwrap();
             assert_eq!(result["return_value"], "Original", "{result}");
+            crate::tasks::report_updates(&daemon.shared, &session).await.unwrap();
             let browser = daemon.shared.registry.browser.existing().await.unwrap_or_else(|error| panic!("{}", error.0));
             assert!(!browser.tabs().await.iter().any(|info| info.url.ends_with("/delayed")));
         }).catch_unwind().await;
@@ -713,5 +816,250 @@ async fn cancelled_navigation_and_open_cannot_commit_after_terminal_publication(
         if let Err(error) = checked {
             std::panic::resume_unwind(error);
         }
+    }
+}
+
+#[tokio::test]
+async fn message_documents_validate_and_freeze_admitted_bytes() {
+    use crate::tools::{DaemonTool, ToolEnv, ToolExec};
+    use openside_proto::DocumentDisplay;
+
+    let root = tempfile::tempdir().unwrap();
+    let daemon = front_daemon(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&daemon, "documents", PolicyMode::Full, None).await;
+    let state = daemon.shared.db.state(&session).await.unwrap();
+    let mut env = ToolEnv::new(daemon.shared.clone(), &state);
+    env.tool_call_id = "document-write".into();
+    env.subagent = Some("task-document".into());
+    let secret_args = json!({"title":"sk-1234567890abcdefghijklmnop","markdown":"Safe body"});
+    assert_eq!(
+        crate::tasks::document::WriteDocument.redact_args(&secret_args),
+        json!({"title":"[REDACTED]","markdown":"[REDACTED]"}),
+    );
+    assert!(matches!(
+        crate::tasks::document::WriteDocument.call(secret_args, &env).await,
+        ToolExec::Denied { reason, .. } if reason == "document_secret_detected"
+    ));
+    let document = crate::tasks::document::WriteDocument
+        .call(
+            json!({"title":"Report","markdown":"# Report\n\nA safe result."}),
+            &env,
+        )
+        .await;
+    let ToolExec::Done { for_model, .. } = document else {
+        panic!("document write failed")
+    };
+    let path = for_model["artifact"].as_str().unwrap().to_owned();
+    assert_eq!(
+        crate::artifacts::task_documents(&daemon.shared, &session, "task-document")
+            .await
+            .unwrap(),
+        std::slice::from_ref(&path),
+    );
+    let request = |path: &str| {
+        vec![(
+            path.to_owned(),
+            Some("Report".into()),
+            DocumentDisplay::Panel,
+        )]
+    };
+    let admitted = crate::artifacts::admit_message_documents(&env, request(&path))
+        .await
+        .unwrap_or_else(|_| panic!("document admission failed"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].bytes, 24);
+    assert_eq!(admitted[0].content_type, "text/markdown");
+    assert_ne!(admitted[0].path, path);
+    crate::artifacts::save_tool_output(&env, "write", &path, b"Changed after admission".to_vec())
+        .await
+        .unwrap();
+    daemon
+        .shared
+        .emit(
+            &session,
+            None,
+            EventKind::AssistantFinal {
+                text: "Here is the report.".into(),
+                attachments: admitted.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let response = api::router(daemon.shared.clone(), true)
+        .oneshot(super::request(
+            "GET",
+            &format!(
+                "/v1/sessions/{session}/artifacts/{}",
+                admitted[0].path.replace('/', "%2F")
+            ),
+            json!({}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "# Report\n\nA safe result."
+    );
+
+    for (path, content, expected) in [
+        ("missing.md", None, "artifact_not_found"),
+        (
+            "files/report.txt",
+            Some("plain text"),
+            "artifact_not_markdown",
+        ),
+        (
+            "files/secret.md",
+            Some("sk-1234567890abcdefghijklmnop"),
+            "attachment_secret_detected",
+        ),
+        (
+            "files/card.md",
+            Some("4111 1111 1111 1111"),
+            "attachment_secret_detected",
+        ),
+    ] {
+        if let Some(content) = content {
+            crate::artifacts::save_tool_output(&env, "write", path, content.as_bytes().to_vec())
+                .await
+                .unwrap();
+        }
+        assert!(
+            matches!(crate::artifacts::admit_message_documents(&env, request(path)).await,
+            Err(ToolExec::Denied { reason, hint: Some(_) }) if reason == format!("attachment[0]: {expected}"))
+        );
+    }
+    let secret = openside_vault::Secret::new("private-vault-canary".into());
+    daemon
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(openside_vault::Redactor::new([&secret]));
+    daemon
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(openside_vault::Redactor::for_cookie("private-cookie-canary").unwrap());
+    for (n, secret) in ["private-vault-canary", "private-cookie-canary"]
+        .iter()
+        .enumerate()
+    {
+        let path = format!("files/private-{n}.md");
+        crate::artifacts::save_tool_output(&env, "write", &path, secret.as_bytes().to_vec())
+            .await
+            .unwrap();
+        assert!(
+            matches!(crate::artifacts::admit_message_documents(&env, request(&path)).await,
+            Err(ToolExec::Denied { reason, .. }) if reason == "attachment[0]: attachment_secret_detected")
+        );
+    }
+    crate::artifacts::save_tool_output(
+        &env,
+        "write",
+        "files/large.md",
+        vec![b'x'; openside_proto::MAX_DOCUMENT_BYTES + 1],
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(crate::artifacts::admit_message_documents(&env, request("files/large.md")).await,
+        Err(ToolExec::Denied { reason, .. }) if reason == "attachment[0]: artifact_too_large")
+    );
+    assert!(
+        matches!(crate::artifacts::admit_message_documents(&env, vec![
+        (path.clone(), None, DocumentDisplay::Inline); 3
+    ]).await, Err(ToolExec::Denied { reason, hint: Some(_) }) if reason == "attachment[2]: too_many_attachments")
+    );
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn terminal_task_preserves_tab_referenced_by_pending_person_step() {
+    let site = task_site().await;
+    let root = tempfile::tempdir().unwrap();
+    let daemon = browser_front_daemon(root.path()).await;
+    let session = create_session(&daemon, "retained-tab", PolicyMode::Full, None).await;
+    let checked = std::panic::AssertUnwindSafe(async {
+        start_browser_task(&daemon, &session, "task").await;
+        let parent = host(&daemon, &session).await;
+        let ToolOutcome::Done { for_model_json } = parent
+            .call(ToolCall {
+                subagent: Some("task".into()),
+                ..call("browser_open_tab", json!({"url":site.url}), "open")
+            })
+            .await
+        else {
+            panic!("Open failed");
+        };
+        let opened: Value = serde_json::from_str(&for_model_json).unwrap();
+        let tab = opened["tab_id"].as_str().unwrap();
+        crate::tickets::open(
+            &daemon.shared,
+            &session,
+            &call("ask_user", json!({}), "person"),
+            openside_proto::TicketDeferral::External,
+            crate::tools::TicketRequest {
+                hire: None,
+                kind: openside_proto::TicketKind::Info,
+                summary: "Inspect this tab".into(),
+                instructions: None,
+                options: Vec::new(),
+                target: Some(openside_proto::TicketTarget {
+                    tab_id: Some(tab.into()),
+                    origin: None,
+                    field_ref: None,
+                }),
+                resume_when: None,
+                otp: None,
+                otp_register: None,
+                login: None,
+                choice: None,
+                approval: None,
+                form: None,
+                pins: Vec::new(),
+            },
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        crate::subagents::end(
+            &daemon.shared,
+            &session,
+            "task",
+            SubagentStatus::Completed,
+            "completed",
+        )
+        .await
+        .unwrap();
+        crate::tasks::report_updates(&daemon.shared, &session)
+            .await
+            .unwrap();
+        let browser = daemon
+            .shared
+            .registry
+            .browser
+            .existing()
+            .await
+            .unwrap_or_else(|error| panic!("{}", error.0));
+        assert!(browser.tabs().await.iter().any(|info| info.id == tab));
+        assert!(daemon
+            .shared
+            .registry
+            .browser
+            .task_tabs
+            .holder(&session, tab)
+            .is_none());
+    })
+    .catch_unwind()
+    .await;
+    daemon.shutdown().await;
+    if let Err(error) = checked {
+        std::panic::resume_unwind(error);
     }
 }

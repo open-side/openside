@@ -339,7 +339,7 @@ impl Live {
                 let rendered = self.markdown.push(text);
                 self.write_text(&rendered, stdout, err)?;
             }
-            EventKind::AssistantFinal { text } if !self.saw_delta => {
+            EventKind::AssistantFinal { text, .. } if !self.saw_delta => {
                 let mut rendered = self.markdown.push(text);
                 rendered.push_str(&self.markdown.finish());
                 self.write_text(&rendered, stdout, err)?;

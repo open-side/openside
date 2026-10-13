@@ -133,6 +133,23 @@ async fn profile_ultrabrowse_tools_and_open_payload_match_snapshot() {
     assert_profile_snapshot(AgentProfile::Ultrabrowse).await;
 }
 
+#[test]
+fn narrow_profiles_preserve_front_delegation_tools() {
+    for profile in [AgentProfile::BrowserAgent, AgentProfile::Ultrabrowse] {
+        for name in [
+            "send_message",
+            "create_task",
+            "cancel_task",
+            "get_tasks",
+            "steer_task",
+            "get_models",
+            "team_delegate",
+        ] {
+            assert!(crate::profiles::allows(profile, name), "{name}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn profile_full_keeps_every_tool_and_the_full_prompt() {
     let (_root, runtime, daemon, _session) = open_with(AgentProfile::Full).await;

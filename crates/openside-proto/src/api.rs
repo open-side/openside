@@ -141,7 +141,7 @@ pub struct Session {
     pub id: SessionId,
     /// User-visible conversation title.
     pub title: String,
-    /// Provider-qualified model.
+    /// Provider-qualified model selected when the session was created, not its effective current model.
     pub model: String,
     /// Permission ceiling selected when the session was created.
     pub mode: PolicyMode,

@@ -4,8 +4,8 @@ use parking_lot::{Mutex, MutexGuard};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use openside_proto::{
-    MessageId, Routine, RoutineAction, RoutinePauseReason, RoutineSchedule, RunRecord, RunStatus,
-    SessionId,
+    CreateRoutineRequest, MessageId, Routine, RoutineAction, RoutinePauseReason, RoutineSchedule,
+    RunRecord, RunStatus, SessionId,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -162,6 +162,11 @@ impl Store {
                  created_at TEXT NOT NULL,
                  next_run_at TEXT
              );
+             CREATE TABLE IF NOT EXISTS approved_routines (
+                 ticket_id TEXT PRIMARY KEY,
+                 routine_id TEXT NOT NULL UNIQUE,
+                 request TEXT NOT NULL CHECK(json_valid(request))
+             );
              CREATE TABLE IF NOT EXISTS runs (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  routine_id TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
@@ -188,6 +193,55 @@ impl Store {
         Ok(self
             .connection()
             .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
+    }
+
+    /// Receipts outlive routine deletion so replay cannot recreate a deleted approval.
+    pub(crate) fn approved_routine(
+        &self,
+        ticket: &str,
+    ) -> Result<Option<(String, CreateRoutineRequest)>> {
+        Ok(self
+            .connection()
+            .query_row(
+                "SELECT routine_id,request FROM approved_routines WHERE ticket_id=?1",
+                [ticket],
+                |row| {
+                    let request: String = row.get(1)?;
+                    Ok((row.get(0)?, parse_json(1, &request)?))
+                },
+            )
+            .optional()?)
+    }
+
+    pub(crate) fn insert_approved_routine(
+        &self,
+        ticket: &str,
+        request: &str,
+        routine: &Routine,
+    ) -> Result<()> {
+        let mut connection = self.connection();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO routines(id,name,schedule,action,enabled,paused_reason,catch_up,created_at,next_run_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                routine.id,
+                routine.name,
+                serde_json::to_string(&routine.schedule)?,
+                serde_json::to_string(&routine.action)?,
+                routine.enabled,
+                pause_text(routine.paused_reason),
+                routine.catch_up,
+                text(routine.created_at),
+                routine.next_run_at.map(text),
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO approved_routines(ticket_id,routine_id,request) VALUES(?1,?2,?3)",
+            params![ticket, routine.id, request],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Persist a new routine.

@@ -10,6 +10,31 @@ use std::sync::Arc;
 use crate::ids::{MessageId, SessionId, TicketId};
 use crate::queue::QueueMode;
 
+/// Daemon-authenticated source of a conversational message.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageAuthorKind {
+    /// Authenticated owner ingress.
+    Person,
+    /// A paired automation client.
+    AgentClient,
+    /// A relayed channel thread, not owner steering.
+    Channel,
+    /// Schedules, team reports and historical unknown sources.
+    #[default]
+    Internal,
+}
+
 /// Opaque conversation snapshot, interpreted only by the sidecar.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AgentState {
@@ -354,6 +379,12 @@ pub enum RuntimeEvent {
         status: String,
         /// Final answer of a completed child.
         output: Option<String>,
+        /// Explicit live inventory; absence must not imply an empty inventory.
+        known_subagents: Option<Vec<String>>,
+        /// Stable primary failure classification, separate from recovery failures.
+        error_code: Option<String>,
+        /// Untrusted exception detail; the host must redact before recording.
+        diagnostic: Option<String>,
     },
     /// A subagent reported progress.
     SubagentProgress {
@@ -412,13 +443,14 @@ pub trait AgentSession: Send {
         text: String,
         parts: Vec<crate::ContentPart>,
         mode: QueueMode,
+        author_kind: MessageAuthorKind,
     ) -> impl Future<Output = Result<(), RuntimeError>> + Send {
         async move {
-            if parts.is_empty() {
+            if parts.is_empty() && author_kind == MessageAuthorKind::Person {
                 self.send(id, text, mode).await
             } else {
                 Err(RuntimeError::Rejected(
-                    "attachments are not supported".into(),
+                    "attachments or non-person provenance are not supported".into(),
                 ))
             }
         }

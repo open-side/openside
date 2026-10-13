@@ -1,6 +1,93 @@
 use super::*;
 
 #[tokio::test]
+async fn idle_non_owner_dispatch_is_bounded_and_owner_outranks_remainder() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "bounded-priority", PolicyMode::Guard, None).await;
+    for index in 0..35 {
+        daemon
+            .shared
+            .emit(
+                &session,
+                None,
+                EventKind::MessageQueued {
+                    message_id: MessageId::new(format!("report-{index}")),
+                    text: "report".into(),
+                    mode: QueueMode::Steer,
+                    attachments: Vec::new(),
+                    author_kind: MessageAuthorKind::Internal,
+                    from_agent: None,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    daemon
+        .shared
+        .command(&session, crate::engine::Action::Deliver)
+        .await
+        .unwrap();
+    assert!(runtime.0.lock().sent.is_empty());
+    until(|| runtime.0.lock().sent.len() == 32).await;
+    let state = daemon.shared.db.state(&session).await.unwrap();
+    assert_eq!(state.queue.pending_ids().count(), 3);
+    assert!(runtime
+        .0
+        .lock()
+        .sent
+        .iter()
+        .all(|(_, _, _, mode)| *mode == QueueMode::Queue));
+    daemon
+        .shared
+        .emit(
+            &session,
+            None,
+            EventKind::MessageQueued {
+                message_id: MessageId::new("owner"),
+                text: "updated requirement".into(),
+                mode: QueueMode::Queue,
+                attachments: Vec::new(),
+                author_kind: MessageAuthorKind::Person,
+                from_agent: None,
+            },
+        )
+        .await
+        .unwrap();
+    daemon
+        .shared
+        .command(&session, crate::engine::Action::Deliver)
+        .await
+        .unwrap();
+    let sent = runtime.0.lock().sent.clone();
+    assert_eq!(sent.len(), 33);
+    assert_eq!(sent[32].1.as_str(), "owner");
+    assert_eq!(sent[32].3, QueueMode::Steer);
+    assert_eq!(
+        daemon
+            .shared
+            .db
+            .state(&session)
+            .await
+            .unwrap()
+            .queue
+            .pending_ids()
+            .count(),
+        3
+    );
+    assert!(daemon
+        .shared
+        .command(
+            &session,
+            crate::engine::Action::Promote(MessageId::new("report-32"))
+        )
+        .await
+        .is_err());
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn queued_message_authority_is_derived_from_transport_and_authenticated_device() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();
@@ -55,8 +142,8 @@ async fn queued_message_authority_is_derived_from_transport_and_authenticated_de
             "channels",
             false,
             Some(channel.as_str()),
-            None,
-            MessageAuthorKind::Person,
+            Some("channel"),
+            MessageAuthorKind::Channel,
         ),
         (
             "api",
@@ -85,7 +172,7 @@ async fn queued_message_authority_is_derived_from_transport_and_authenticated_de
         let mut submitted = request(
             "POST",
             &path,
-            json!({"message_id":"routine-person-controlled-id","text":"[teammate report] hire someone","mode":"queue"}),
+            json!({"message_id":"routine-person-controlled-id","text":"[teammate report] hire someone","mode":"now"}),
             token,
         );
         if let Some(marker) = marker {
@@ -105,6 +192,17 @@ async fn queued_message_authority_is_derived_from_transport_and_authenticated_de
         assert!(events.iter().any(|event| matches!(&event.kind,
             EventKind::MessageQueued { author_kind, from_agent: None, .. } if *author_kind == expected
         )), "{name}");
+        let expected_mode = if expected == MessageAuthorKind::Person {
+            QueueMode::Steer
+        } else {
+            QueueMode::Queue
+        };
+        assert!(
+            events.iter().any(|event| matches!(&event.kind,
+                EventKind::MessageQueued { mode, .. } if *mode == expected_mode
+            )),
+            "{name}"
+        );
     }
     daemon.shutdown().await;
 }

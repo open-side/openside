@@ -8,20 +8,19 @@ use serde_json::Value;
 
 use super::{parse, spec, DaemonTool, TicketRequest, ToolEnv, ToolError, ToolExec};
 
-/// The ticket kinds `request_human_step` opens. `login` and `choice` tickets carry a form the
-/// daemon built from the page, so only `request_login` and `request_choice` open them.
+// Page-derived login/choice forms must use their dedicated tools.
 #[derive(Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum HumanKind {
-    /// Authorize or reject a sensitive operation.
+    /// Approve/reject a sensitive operation.
     Confirm,
-    /// Provide a secret directly to the daemon, never to the model or event log.
+    /// Secret to daemon only; never model/event log.
     SecretInput,
-    /// Complete approval on another device.
+    /// Approval on another device.
     DeviceApproval,
-    /// Answer a non-secret question.
+    /// Non-secret answer.
     Info,
-    /// Perform an action directly in the browser.
+    /// Person operates browser.
     Takeover,
 }
 

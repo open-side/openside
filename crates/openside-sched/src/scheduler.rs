@@ -194,20 +194,25 @@ impl<H: RoutineHost> Scheduler<H> {
         Ok(())
     }
 
-    /// Create a routine; an enabled one computes its first occurrence from now.
-    ///
-    /// Serialised with firing and with [`Scheduler::on_session_deleted`].
-    pub async fn create(&self, request: CreateRoutineRequest) -> Result<Routine> {
+    /// Validate a proposal without making it visible to the scheduler.
+    pub async fn validate_request(&self, request: &CreateRoutineRequest) -> Result<()> {
         let _gate = self.gate.lock().await;
+        self.validate_request_locked(request).await
+    }
+
+    async fn validate_request_locked(&self, request: &CreateRoutineRequest) -> Result<()> {
         if blank(&request.name) {
             return Err(Invalid::Name.into());
         }
         schedule::validate(&request.schedule, self.clock.now())?;
         validate_action(&request.action)?;
-        self.require_target(&request.action).await?;
+        self.require_target(&request.action).await
+    }
+
+    fn routine(&self, request: CreateRoutineRequest) -> Result<Routine> {
         let now = self.clock.now();
         let enabled = request.enabled.unwrap_or(true);
-        let routine = Routine {
+        Ok(Routine {
             id: self.store.new_id()?,
             name: request.name.trim().to_owned(),
             next_run_at: if enabled {
@@ -222,8 +227,50 @@ impl<H: RoutineHost> Scheduler<H> {
             paused_reason: None,
             catch_up: request.catch_up.unwrap_or(false),
             created_at: now,
-        };
+        })
+    }
+
+    /// Create a routine; an enabled one computes its first occurrence from now.
+    ///
+    /// Serialised with firing and with [`Scheduler::on_session_deleted`].
+    pub async fn create(&self, request: CreateRoutineRequest) -> Result<Routine> {
+        let _gate = self.gate.lock().await;
+        self.validate_request_locked(&request).await?;
+        let routine = self.routine(request)?;
         self.store.insert_routine(&routine)?;
+        Ok(routine)
+    }
+
+    /// The immutable creation receipt remains available even after routine deletion.
+    pub fn approved_routine(
+        &self,
+        ticket: &str,
+        request: &CreateRoutineRequest,
+    ) -> Result<Option<String>> {
+        let Some((id, approved)) = self.store.approved_routine(ticket)? else {
+            return Ok(None);
+        };
+        if *request != approved {
+            return Err(Invalid::Action("approved routine payload cannot change".into()).into());
+        }
+        Ok(Some(id))
+    }
+
+    /// Commit an approved ticket once, atomically with its durable creation receipt.
+    pub async fn create_approved(
+        &self,
+        ticket: &str,
+        request: CreateRoutineRequest,
+    ) -> Result<Routine> {
+        let _gate = self.gate.lock().await;
+        if let Some(id) = self.approved_routine(ticket, &request)? {
+            return self.get(&id);
+        }
+        self.validate_request_locked(&request).await?;
+        let approved = serde_json::to_string(&request)?;
+        let routine = self.routine(request)?;
+        self.store
+            .insert_approved_routine(ticket, &approved, &routine)?;
         Ok(routine)
     }
 

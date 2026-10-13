@@ -52,7 +52,7 @@ pub struct Subagent {
     /// Latest `subagent.progress` payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_progress: Option<Value>,
-    /// A background Task started by the front agent (`task_start`).
+    /// A background Task started by the front agent (`create_task`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub background: bool,
     /// Final answer of a completed child, truncated for display.

@@ -63,7 +63,9 @@ impl Wait {
     fn apply(&mut self, seq: u64, kind: &EventKind) {
         let current = seq > self.terminal_after;
         match kind {
-            EventKind::AssistantFinal { text } if self.started => self.replies.push(text.clone()),
+            EventKind::AssistantFinal { text, .. } if self.started => {
+                self.replies.push(text.clone())
+            }
             EventKind::MessageInjected { message_id } if self.is_ours(message_id.as_str()) => {
                 self.started = true;
             }
@@ -209,6 +211,7 @@ mod tests {
             2,
             &EventKind::AssistantFinal {
                 text: "completed".into(),
+                attachments: Vec::new(),
             },
         );
         state.apply(3, &EventKind::SessionSettled {});

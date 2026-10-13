@@ -228,6 +228,7 @@ pub(crate) const REMOTE_EDITABLE: &[&str] = &[
     "agent.startup_timeout_ms",
     "agent.tool_retries",
     "agent.compaction_max_messages",
+    "agent.compaction_max_tokens",
     "agent.compaction_keep_messages",
     "agent.orchestration",
     "service.inhibit_sleep",

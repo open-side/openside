@@ -37,7 +37,7 @@ async fn direct_tool_calls_follow_scopes_and_return_the_human_answer() {
         "bash",
         "write",
         "delegate",
-        "task_start",
+        "create_task",
         "browser_repl",
         "memory_search",
     ] {

@@ -36,6 +36,8 @@ pub struct SessionState {
     pub activity: String,
     /// Background work can still be browsing after the front agent has replied.
     pub active_subagents: BTreeSet<String>,
+    waiting_subagents: BTreeSet<String>,
+    foreground_running: bool,
     /// Latest applied per-session sequence.
     pub last_seq: u64,
     /// Queue with pending order, edited text, and terminal idempotency history.
@@ -154,6 +156,8 @@ impl SessionState {
             status: SessionStatus::Idle,
             activity: String::new(),
             active_subagents: BTreeSet::new(),
+            waiting_subagents: BTreeSet::new(),
+            foreground_running: false,
             last_seq: 1,
             queue: MessageQueue::new(),
             injected: BTreeSet::new(),
@@ -259,7 +263,7 @@ impl SessionState {
             ));
         }
         self.validate(&event.kind)?;
-        if let EventKind::MessageQueued { text, .. } | EventKind::AssistantFinal { text } =
+        if let EventKind::MessageQueued { text, .. } | EventKind::AssistantFinal { text, .. } =
             &event.kind
         {
             self.last_message_preview = text.chars().take(160).collect();
@@ -324,6 +328,7 @@ impl SessionState {
                     return Err(Error::InvalidEvent("delivery order mismatch".into()));
                 }
                 self.injected.insert(message_id.clone());
+                self.foreground_running = true;
                 self.status = SessionStatus::Running;
                 self.activity = "Working".into();
             }
@@ -333,7 +338,8 @@ impl SessionState {
                 ..
             } => {
                 self.completions.insert(message_id.clone(), *outcome);
-                if *outcome != MessageOutcome::Completed || self.active_subagents.is_empty() {
+                self.foreground_running = self.injected.len() > self.completions.len();
+                if !self.foreground_running && self.active_subagents.is_empty() {
                     self.activity = match outcome {
                         MessageOutcome::Completed => "Done",
                         MessageOutcome::Aborted => "Stopped",
@@ -343,7 +349,7 @@ impl SessionState {
                     .into();
                 }
                 if self.status != SessionStatus::Stopped {
-                    self.status = if self.injected.len() > self.completions.len() {
+                    self.status = if self.foreground_running || !self.active_subagents.is_empty() {
                         SessionStatus::Running
                     } else {
                         SessionStatus::Idle
@@ -435,27 +441,76 @@ impl SessionState {
                 ticket.card = card.clone();
             }
             EventKind::TurnStarted { .. } => {
+                self.foreground_running = true;
                 self.status = SessionStatus::Running;
                 self.activity = "Working".into();
             }
             // A model request can end before its tools and the user task finish.
             EventKind::TurnEnded { .. } => {}
             EventKind::SessionSettled { .. } => {
-                self.status = SessionStatus::Idle;
-                if self.activity != "Couldn't finish" && self.activity != "Stopped" {
+                self.foreground_running = false;
+                self.status = if self.active_subagents.is_empty() {
+                    SessionStatus::Idle
+                } else {
+                    SessionStatus::Running
+                };
+                if !self.active_subagents.is_empty() {
+                    self.activity = "Working".into();
+                } else if self.activity != "Couldn't finish" && self.activity != "Stopped" {
                     self.activity = "Done".into();
                 }
             }
             EventKind::SessionStopped { .. } => {
+                self.foreground_running = false;
                 self.status = SessionStatus::Stopped;
                 self.activity = "Stopped".into();
             }
             EventKind::SubagentStarted { subagent_id, .. } => {
                 self.active_subagents.insert(subagent_id.clone());
+                self.status = SessionStatus::Running;
                 self.activity = "Working".into();
             }
-            EventKind::SubagentEnded { subagent_id, .. } => {
-                self.active_subagents.remove(subagent_id);
+            EventKind::SubagentLifecycle {
+                subagent_id,
+                status,
+            } => {
+                if status == "waiting_human" && self.active_subagents.remove(subagent_id) {
+                    self.waiting_subagents.insert(subagent_id.clone());
+                    if !self.foreground_running
+                        && self.active_subagents.is_empty()
+                        && self.status != SessionStatus::Stopped
+                    {
+                        self.status = SessionStatus::Idle;
+                        self.activity = "Waiting for you".into();
+                    }
+                } else if status == "running" && self.waiting_subagents.remove(subagent_id) {
+                    self.active_subagents.insert(subagent_id.clone());
+                    if self.status != SessionStatus::Stopped {
+                        self.status = SessionStatus::Running;
+                        self.activity = "Working".into();
+                    }
+                }
+            }
+            EventKind::SubagentEnded {
+                subagent_id,
+                status,
+                ..
+            } => {
+                let was_waiting = self.waiting_subagents.remove(subagent_id);
+                let was_running = self.active_subagents.remove(subagent_id);
+                if (was_running || was_waiting)
+                    && !self.foreground_running
+                    && self.active_subagents.is_empty()
+                    && self.status != SessionStatus::Stopped
+                {
+                    self.status = SessionStatus::Idle;
+                    self.activity = match status {
+                        openside_proto::SubagentStatus::Failed => "Couldn't finish",
+                        openside_proto::SubagentStatus::Cancelled => "Stopped",
+                        _ => "Done",
+                    }
+                    .into();
+                }
             }
             EventKind::BrowserState(state)
                 if self.status == SessionStatus::Running || !self.active_subagents.is_empty() =>
@@ -511,6 +566,17 @@ impl SessionState {
                     .completions
                     .values()
                     .any(|outcome| *outcome == MessageOutcome::Deferred);
+            // A resolved deferred call still owes a continuation. Publishing idle here
+            // lets resume clients stop at the resolution before the runtime starts it.
+            if continuing
+                && self.status != SessionStatus::Stopped
+                && !self
+                    .tickets
+                    .values()
+                    .any(|ticket| ticket.status == TicketStatus::Pending)
+            {
+                self.status = SessionStatus::Running;
+            }
             self.activity = if self.status == SessionStatus::Stopped {
                 "Stopped"
             } else if continuing {
