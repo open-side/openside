@@ -1,6 +1,6 @@
 //! Team orchestration is daemon-authorized; delivery identities survive runtime restarts.
 mod lifecycle;
-pub(crate) use lifecycle::{hire, hire_tainted, restore, retire, transfer};
+pub(crate) use lifecycle::{hire, restore, retire, transfer};
 
 use crate::{
     api::HttpError,
@@ -319,7 +319,7 @@ pub(crate) async fn settled(s: &Shared, session: &SessionId) -> Result<()> {
                         .rev()
                         .filter(|event| event.seq > after)
                         .find_map(|event| match &event.kind {
-                            EventKind::AssistantFinal { text } => Some(text.clone()),
+                            EventKind::AssistantFinal { text, .. } => Some(text.clone()),
                             _ => None,
                         })
                 })
@@ -469,7 +469,6 @@ pub(crate) async fn assign_responsibility(
 #[serde(deny_unknown_fields)]
 struct HireArgs {
     draft: HireDraft,
-    request_message_id: String,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -586,7 +585,7 @@ impl DaemonTool for TeamTool {
     fn spec(&self) -> ToolSpec {
         let name = self.name();
         match self {
-            Self::Hire => tools::spec::<HireArgs>(name, "Hire a teammate only for the latest explicit person request in your home thread. Pass its message ID.", ApprovalTier::Read, false),
+            Self::Hire => tools::spec::<HireArgs>(name, "Hire a teammate for a recurring responsibility, long-running domain, or independent work stream. Reuse existing owners; use create_task for one-off work. After success send one short send_message notice naming the teammate and responsibility. Authority-expanding bindings require approval.", ApprovalTier::Read, false),
             Self::Propose => tools::spec::<ProposeArgs>(name, "Propose a focused teammate for the person's approval. One pending proposal and a 30-day topic cooldown apply.", ApprovalTier::Read, false),
             Self::Delegate => tools::spec::<DelegateArgs>(name, "Give a teammate a self-contained packet. Results arrive automatically; choose a different author for independent review.", ApprovalTier::Read, false),
             Self::Steer => tools::spec::<SteerArgs>(name, "Send a live instruction to a teammate.", ApprovalTier::Read, false),
@@ -638,11 +637,11 @@ impl DaemonTool for TeamTool {
                         Ok(args) => args,
                         Err(error) => return ToolExec::Failed(error.0),
                     };
-                    return match lifecycle::hire_explicit(
+                    return match lifecycle::hire_autonomous(
                         &ctx.shared,
                         &args.draft,
                         &ctx.session,
-                        &args.request_message_id,
+                        &ctx.tool_call_id,
                     )
                     .await
                     {
@@ -702,8 +701,7 @@ async fn execute(tool: TeamTool, args: Value, ctx: &ToolEnv) -> Result<Value> {
         TeamTool::Hire => {
             let args: HireArgs = parse(args)?;
             Ok(json!(
-                lifecycle::hire_explicit(s, &args.draft, &ctx.session, &args.request_message_id)
-                    .await?
+                lifecycle::hire_autonomous(s, &args.draft, &ctx.session, &ctx.tool_call_id).await?
             ))
         }
         TeamTool::Delegate => {

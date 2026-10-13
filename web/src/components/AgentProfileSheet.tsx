@@ -165,7 +165,7 @@ export function AgentProfileSheet({ agent, open, onClose, onRetire }: { agent: A
     <Dialog open={open} onClose={onClose} title={isChief ? "Your assistant" : "Profile"} size="wide" className="profile-sheet">
       <form className="dialog-form profile-form" onSubmit={(event) => void save(event)} aria-label={`${agent.name}'s profile`}>
         <div className="profile-identity">
-          <Avatar initials={form.initials || "?"} color={form.color} size={64} />
+          <Avatar chief={isChief} initials={form.initials || "?"} color={form.color} size={64} />
           <div className="profile-identity-fields">
             <label className="field">
               <span>Name</span>

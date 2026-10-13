@@ -584,6 +584,7 @@ fn hire_suppression_migrates_legacy_labels_and_clears_with_audit() {
     let root = tempfile::tempdir().unwrap();
     let db = rusqlite::Connection::open(root.path().join("agents.db")).unwrap();
     db.execute_batch("CREATE TABLE team_proposals(key TEXT PRIMARY KEY,status TEXT NOT NULL,decided_at TEXT NOT NULL);
+        CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE COLLATE NOCASE,home_session_id TEXT NOT NULL UNIQUE,data TEXT NOT NULL);
         CREATE TABLE agent_audit(seq INTEGER PRIMARY KEY AUTOINCREMENT,agent_id TEXT NOT NULL,operation TEXT NOT NULL,at TEXT NOT NULL);
         INSERT INTO team_proposals VALUES('legacy','never','2025-01-01T00:00:00Z');
         PRAGMA user_version=2;").unwrap();
@@ -660,90 +661,51 @@ async fn hire_lifecycle_routes_transfer_work_and_delegate_from_chief() {
 }
 
 #[tokio::test]
-async fn hire_after_page_output_requires_ticket_and_bypasses_only_cooldown() {
-    use crate::tools::DaemonTool;
+async fn hire_after_page_output_is_autonomous_and_idempotent() {
+    use crate::tools::{DaemonTool, ToolEnv, ToolExec};
     let root = tempfile::tempdir().unwrap();
-    let runtime = TestRuntime::default();
-    let d = daemon(root.path(), &runtime).await;
+    let d = daemon(root.path(), &TestRuntime::default()).await;
     let chief = d.shared.agents.get("chief").unwrap().unwrap();
-    let session = &chief.home_session_id;
     d.shared
         .emit(
-            session,
-            None,
-            EventKind::MessageQueued {
-                message_id: MessageId::new("hire-request"),
-                text: "Hire a price researcher".into(),
-                mode: QueueMode::Queue,
-                attachments: vec![],
-                author_kind: MessageAuthorKind::Person,
-                from_agent: None,
-            },
-        )
-        .await
-        .unwrap();
-    d.shared
-        .emit(
-            session,
+            &chief.home_session_id,
             None,
             EventKind::ToolEnded {
                 tool_call_id: "page-read".into(),
-                result: json!({"text":"Untrusted page content"}),
+                result: json!({"text":"Page content"}),
                 is_error: false,
                 card: None,
             },
         )
         .await
         .unwrap();
-    d.shared
-        .agents
-        .suppress_proposal("price researcher", "Price researcher", Utc::now())
-        .unwrap();
-    let state = d.shared.db.state(session).await.unwrap();
-    let ctx = crate::tools::ToolEnv::new(d.shared.clone(), &state);
-    let args = json!({"draft":draft(),"request_message_id":"hire-request"});
-    let crate::tools::ToolExec::Defer(request) =
-        crate::team::TeamTool::Hire.call(args.clone(), &ctx).await
-    else {
-        panic!("tainted hire must defer")
-    };
-    assert_eq!(d.shared.agents.list().unwrap().len(), 1);
-    let id = crate::tickets::open(
-        &d.shared,
-        session,
-        &call("team_hire", args.clone(), "tainted-hire"),
-        TicketDeferral::External,
-        *request,
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    let ticket = crate::tickets::get(&d.shared, &id).await.unwrap().unwrap();
-    assert_eq!(ticket.kind, TicketKind::Hire);
-    assert_eq!(ticket.status, TicketStatus::Pending);
-    assert_eq!(ticket.card.unwrap().kind, CardKind::Hire);
-    let crate::tools::ToolExec::Defer(request) =
-        crate::team::TeamTool::Hire.call(args.clone(), &ctx).await
-    else {
-        panic!("expected deferred hire")
-    };
-    assert!(crate::tickets::open(
-        &d.shared,
-        session,
-        &call("team_hire", args, "second-hire"),
-        TicketDeferral::External,
-        *request,
-        None,
-        None,
-        None
-    )
-    .await
-    .unwrap_err()
-    .to_string()
-    .contains("proposal_pending"));
-    assert_eq!(d.shared.agents.list().unwrap().len(), 1);
+    let state = d.shared.db.state(&chief.home_session_id).await.unwrap();
+    let mut ctx = ToolEnv::new(d.shared.clone(), &state);
+    ctx.tool_call_id = "recurring-owner".into();
+    let args = json!({"draft":draft()});
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let ToolExec::Done { for_model, .. } =
+            crate::team::TeamTool::Hire.call(args.clone(), &ctx).await
+        else {
+            panic!("bounded hire must create directly");
+        };
+        ids.push(for_model["id"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(ids[0], ids[1]);
+    assert_eq!(d.shared.agents.list().unwrap().len(), 2);
+    let events = d.shared.db.events(&chief.home_session_id, 0).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.kind, EventKind::TeamHired { .. }))
+            .count(),
+        1
+    );
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event.kind, EventKind::TicketOpened { .. })));
+    d.shutdown().await;
 }
 
 #[tokio::test]
@@ -847,59 +809,25 @@ fn hire_legacy_topic_key_migration_is_atomic_and_one_time() {
 }
 
 #[tokio::test]
-async fn hire_after_agent_client_message_is_a_pending_card_not_an_agent() {
-    use crate::tools::DaemonTool;
+async fn hire_authority_expansion_still_requires_approval() {
+    use crate::tools::{DaemonTool, ToolEnv, ToolExec};
     let root = tempfile::tempdir().unwrap();
-    let runtime = TestRuntime::default();
-    let d = daemon(root.path(), &runtime).await;
+    let d = daemon(root.path(), &TestRuntime::default()).await;
     let chief = d.shared.agents.get("chief").unwrap().unwrap();
-    for (id, author) in [
-        ("person-request", MessageAuthorKind::Person),
-        ("agent-followup", MessageAuthorKind::AgentClient),
-    ] {
-        d.shared
-            .emit(
-                &chief.home_session_id,
-                None,
-                EventKind::MessageQueued {
-                    message_id: MessageId::new(id),
-                    text: "Hire a researcher".into(),
-                    mode: QueueMode::Queue,
-                    attachments: vec![],
-                    author_kind: author,
-                    from_agent: None,
-                },
-            )
-            .await
-            .unwrap();
-    }
     let state = d.shared.db.state(&chief.home_session_id).await.unwrap();
-    let ctx = crate::tools::ToolEnv::new(d.shared.clone(), &state);
-    let args = json!({"draft":draft(),"request_message_id":"person-request"});
-    let crate::tools::ToolExec::Defer(request) =
-        crate::team::TeamTool::Hire.call(args.clone(), &ctx).await
+    let ctx = ToolEnv::new(d.shared.clone(), &state);
+    let mut requested = draft();
+    requested.account_pool = Some(vec![ModelAccountRef {
+        source: "vault".into(),
+        account_id: "another-account".into(),
+    }]);
+    let ToolExec::Defer(request) = crate::team::TeamTool::Hire
+        .call(json!({"draft":requested}), &ctx)
+        .await
     else {
-        panic!("agent follow-up must require approval")
+        panic!("account binding must require approval");
     };
-    let id = crate::tickets::open(
-        &d.shared,
-        &chief.home_session_id,
-        &call("team_hire", args, "client-tainted-hire"),
-        TicketDeferral::External,
-        *request,
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        crate::tickets::get(&d.shared, &id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        TicketStatus::Pending
-    );
+    assert_eq!(request.kind, TicketKind::Hire);
     assert_eq!(d.shared.agents.list().unwrap().len(), 1);
+    d.shutdown().await;
 }

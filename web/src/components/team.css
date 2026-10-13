@@ -89,8 +89,10 @@
   padding: 0;
   list-style: none;
 }
-.people-list {
-  padding-top: 4px;
+/* The rows sit inset on every side of the glass card, so a highlighted row never meets its edge.
+   Doubled class: the shared `.session-list` padding in styles.css loads later. */
+.session-list.people-list {
+  padding-top: 12px;
 }
 .person-row {
   min-width: 0;
@@ -109,7 +111,7 @@
   gap: 12px;
   min-width: 0;
   min-height: 56px;
-  padding: 8px 12px;
+  padding: 10px 14px 10px 12px;
   color: var(--text);
   text-decoration: none;
 }

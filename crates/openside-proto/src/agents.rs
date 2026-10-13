@@ -61,18 +61,7 @@ pub enum HireDecision {
     /// Suppress future proposals for the same topic permanently.
     Never,
 }
-/// Assigned by the daemon from authenticated ingress; historical messages fail closed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MessageAuthorKind {
-    /// Authenticated person ingress; eligible for immediate-hire provenance checks.
-    Person,
-    /// A paired agent client, never equivalent to person approval.
-    AgentClient,
-    /// Schedules, team messages, and historical messages with unknown provenance.
-    #[default]
-    Internal,
-}
+pub use openside_core::MessageAuthorKind;
 
 /// Bounded durable instructions; task-specific instructions belong in handoff packets.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

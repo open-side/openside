@@ -307,6 +307,7 @@ pub(crate) async fn guard(
     session: &SessionId,
     subagent: &str,
     tool: &str,
+    output_read: bool,
 ) -> Result<Option<&'static str>> {
     if tool == DELEGATE {
         return Ok(Some("Subagents cannot delegate"));
@@ -314,7 +315,9 @@ pub(crate) async fn guard(
     Ok(match get(shared, session, subagent).await? {
         None => Some("Unknown subagent"),
         Some(child) if child.status.is_terminal() => Some("Subagent is no longer running"),
-        Some(child) if !child.tools.iter().any(|name| name == tool) => {
+        Some(child)
+            if !(child.tools.iter().any(|name| name == tool) || tool == "read" && output_read) =>
+        {
             Some("Tool is not available to this subagent")
         }
         Some(_) => None,
@@ -328,8 +331,32 @@ pub(crate) async fn lifecycle(
     subagent_id: String,
     status: String,
     output: Option<String>,
+    known_subagents: Option<Vec<String>>,
+    failure: Option<(String, String)>,
 ) -> Result<Option<EventKind>> {
+    let failure = if let Some((code, diagnostic)) = failure {
+        let code = match code.as_str() {
+            "child_run_failed" | "corrupt_child_identity" | "interrupted" => code,
+            _ => "child_run_failed".into(),
+        };
+        let safe = shared.registry.redact(Value::String(diagnostic))?;
+        let diagnostic = safe.as_str().unwrap_or_default().to_owned();
+        crate::diag!(
+            "opensided: child failure session={session} code={code} diagnostic={diagnostic}"
+        );
+        Some((code, diagnostic))
+    } else {
+        None
+    };
     let Some(current) = get(shared, session, &subagent_id).await? else {
+        crate::diag!("opensided: unknown child lifecycle session={session}; reconciling explicit runtime inventory");
+        shared.emit(session, None, EventKind::runtime_error(
+            "unknown_child_identity",
+            "A child reported an unknown identity; reconciling the runtime inventory without guessing identifiers.",
+        )).await?;
+        if let Some(known) = known_subagents {
+            reconcile(shared, session, &known.into_iter().collect()).await?;
+        }
         return Ok(None);
     };
     let Some(next) = parse_status(&status) else {
@@ -346,10 +373,18 @@ pub(crate) async fn lifecycle(
         EventKind::SubagentEnded {
             subagent_id,
             status: next,
-            reason: (next == SubagentStatus::Failed).then(|| "failed".into()),
-            output: output
-                .filter(|_| next == SubagentStatus::Completed)
-                .map(|text| text.chars().take(OUTPUT_SUMMARY_CHARS).collect()),
+            reason: (next == SubagentStatus::Failed).then(|| {
+                failure
+                    .as_ref()
+                    .map(|(code, _)| code.clone())
+                    .unwrap_or_else(|| "failed".into())
+            }),
+            output: if next == SubagentStatus::Failed {
+                failure.map(|(_, diagnostic)| diagnostic)
+            } else {
+                output.filter(|_| next == SubagentStatus::Completed)
+            }
+            .map(|text| text.chars().take(OUTPUT_SUMMARY_CHARS).collect()),
         }
     } else {
         EventKind::SubagentLifecycle {

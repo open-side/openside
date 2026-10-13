@@ -5,6 +5,62 @@ fn draft() -> HireDraft {
 }
 
 #[tokio::test]
+async fn agents_default_name_migration_preserves_custom_names_and_handles_collision() {
+    for (name, collision, expected) in [
+        (crate::agents::LEGACY_CHIEF_NAME, false, "openside"),
+        ("My assistant", false, "My assistant"),
+        (
+            crate::agents::LEGACY_CHIEF_NAME,
+            true,
+            crate::agents::LEGACY_CHIEF_NAME,
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let d = daemon(root.path(), &TestRuntime::default()).await;
+        let mut chief = d.shared.agents.get("chief").unwrap().unwrap();
+        assert_eq!(chief.name, "openside");
+        assert_eq!(chief.persona.role, "Your assistant");
+        let home = chief.home_session_id.clone();
+        chief.name = name.into();
+        chief.initials = name.chars().take(1).collect();
+        chief.persona.role = if name == crate::agents::LEGACY_CHIEF_NAME {
+            "Your chief assistant".into()
+        } else {
+            "Personal coordinator".into()
+        };
+        d.shared.agents.put(&chief, "test").unwrap();
+        if collision {
+            let mut teammate = draft();
+            teammate.name = "openside".into();
+            crate::team::hire(&d.shared, &teammate, "collision")
+                .await
+                .unwrap();
+        }
+        let data_dir = d.shared.config.data_dir.clone();
+        d.shutdown().await;
+        let path = openside_config::data_layout::DataPath::Agents.path(&data_dir);
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute("DELETE FROM agent_migrations WHERE key='chief_name'", [])
+            .unwrap();
+        drop(db);
+        let store = crate::agents::Service::open(&data_dir).unwrap();
+        let chief = store.get("chief").unwrap().unwrap();
+        assert_eq!(chief.name, expected);
+        assert_eq!(chief.home_session_id, home);
+        if expected == "openside" {
+            assert_eq!(chief.initials, "o");
+            assert_eq!(chief.persona.role, "Your assistant");
+        } else if !collision {
+            assert_eq!(chief.persona.role, "Personal coordinator");
+        }
+        assert_eq!(store.chief_name_conflict().unwrap(), collision);
+        drop(store);
+        let reopened = crate::agents::Service::open(&data_dir).unwrap();
+        assert_eq!(reopened.get("chief").unwrap().unwrap().name, expected);
+    }
+}
+
+#[tokio::test]
 async fn agents_retirement_stops_nonhome_channel_stream_and_rejects_new_messages() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();
@@ -397,6 +453,7 @@ async fn agents_list_preview_tracks_latest_final_and_home_identity() {
             None,
             EventKind::AssistantFinal {
                 text: "Latest result".into(),
+                attachments: Vec::new(),
             },
         )
         .await

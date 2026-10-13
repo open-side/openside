@@ -6,6 +6,8 @@ use std::path::Path;
 
 pub(crate) mod api;
 
+pub(crate) const LEGACY_CHIEF_NAME: &str = "Juno";
+
 pub(crate) struct Service {
     db: parking_lot::Mutex<rusqlite::Connection>,
     pub(crate) gate: tokio::sync::Mutex<()>,
@@ -53,10 +55,42 @@ impl Service {
                 UPDATE team_proposals SET last_declined_at=decided_at WHERE status IN ('never','not_now','declined','cleared');
                 PRAGMA user_version=4; COMMIT;")?;
         }
+        db.execute_batch("CREATE TABLE IF NOT EXISTS agent_migrations(key TEXT PRIMARY KEY);")?;
+        if !db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_migrations WHERE key='chief_name')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )? {
+            db.execute_batch("BEGIN IMMEDIATE;")?;
+            let collision = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM agents WHERE id='chief' AND name=?1 COLLATE BINARY) AND EXISTS(SELECT 1 FROM agents WHERE id!='chief' AND name='openside')",
+                [LEGACY_CHIEF_NAME],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if collision {
+                crate::diag!(
+                    "Chief default-name migration skipped: another teammate is named openside"
+                );
+            } else {
+                db.execute(
+                    "UPDATE agents SET name='openside',data=json_set(data,'$.name','openside','$.initials','o','$.persona.role',CASE WHEN json_extract(data,'$.persona.role')='Your chief assistant' THEN 'Your assistant' ELSE json_extract(data,'$.persona.role') END) WHERE id='chief' AND name=?1 COLLATE BINARY",
+                    [LEGACY_CHIEF_NAME],
+                )?;
+                db.execute("INSERT INTO agent_migrations VALUES('chief_name')", [])?;
+            }
+            db.execute_batch("COMMIT;")?;
+        }
         Ok(Self {
             db: parking_lot::Mutex::new(db),
             gate: Default::default(),
         })
+    }
+    pub(crate) fn chief_name_conflict(&self) -> Result<bool> {
+        Ok(self.db.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM agents WHERE id='chief' AND name=?1 COLLATE BINARY) AND EXISTS(SELECT 1 FROM agents WHERE id!='chief' AND name='openside')",
+            [LEGACY_CHIEF_NAME],
+            |row| row.get(0),
+        )?)
     }
     pub(crate) fn get(&self, id: &str) -> Result<Option<Agent>> {
         let raw: Option<String> = self
@@ -433,11 +467,11 @@ pub(crate) async fn bootstrap(s: &Shared) -> Result<()> {
             let chief = Agent {
                 id: "chief".into(),
                 kind: AgentKind::Chief,
-                name: "Juno".into(),
-                initials: "J".into(),
+                name: "openside".into(),
+                initials: "o".into(),
                 color: ACCENT_COLORS[0].into(),
                 persona: AgentPersona {
-                    role: "Your chief assistant".into(),
+                    role: "Your assistant".into(),
                     voice: String::new(),
                     responsibilities: vec![],
                     boundaries: vec![],
@@ -481,7 +515,7 @@ pub(crate) fn prepare(
         .iter()
         .filter(|a| a.kind == AgentKind::Teammate && a.status == AgentStatus::Active)
         .count()
-        >= 8
+        >= s.config.loaded.config.team.max_active_teammates
     {
         return Err(HttpError(StatusCode::CONFLICT, "roster_full"));
     }

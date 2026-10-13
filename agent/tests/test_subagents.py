@@ -1,11 +1,19 @@
 """Sidecar-owned subagents: parent-session tickets, restart, cancel, steer, fork."""
 
 import json
+from unittest.mock import AsyncMock
 
 from pydantic_ai.messages import ToolReturnPart, UserPromptPart
 from runtime_helpers import fake_daemon, text_response, tool_spec
 
-from openside_agent.runtime.state import SnapshotData, load_messages
+from openside_agent.protocol import Done
+from openside_agent.runtime.state import (
+    PendingCall,
+    SnapshotData,
+    SubagentState,
+    load_messages,
+)
+from openside_agent.runtime.subagents import Child
 
 
 def delegate_spec():
@@ -317,3 +325,73 @@ async def test_fork_context_excludes_delegating_batch(tmp_path, monkeypatch):
         }
         assert "parent-1" in ids
         assert "del-1" not in ids and "parent-2" not in ids
+
+
+async def test_child_failure_keeps_redacted_exception_and_inventory(
+    tmp_path, monkeypatch
+):
+    install(tmp_path, monkeypatch, [text_response("done")], {})
+    async with fake_daemon() as (daemon, session):
+        await daemon.open(tools=[tool_spec(), delegate_spec()])
+        child = Child(
+            SubagentState(
+                id="child",
+                parent_tool_call_id="call",
+                task="work",
+                model="test:child",
+                tools=["probe"],
+                status="running",
+            )
+        )
+        session.children[child.id] = child
+        session.child_agent = AsyncMock(side_effect=ValueError("private-canary"))
+        session.reverse_call = AsyncMock(
+            return_value=Done(for_model="ValueError: [REDACTED]")
+        )
+        session.child_stopped = AsyncMock()
+        await session.drive_child(child, "work", None)
+        assert child.state.result["error_code"] == "child_run_failed"
+        assert child.state.result["message"] == "ValueError: [REDACTED]"
+        await daemon.until("event")
+        terminal = await daemon.until("event")
+        assert terminal["event"]["diagnostic"] == "ValueError: [REDACTED]"
+        assert terminal["event"]["known_subagents"] == []
+
+
+async def test_restore_corrupt_child_never_resumes_pending_actions(
+    tmp_path, monkeypatch
+):
+    install(tmp_path, monkeypatch, [text_response("done")], {})
+    child = SubagentState(
+        id="child-[REDACTED]",
+        parent_tool_call_id="call",
+        task="work",
+        model="test:child",
+        tools=["probe"],
+        status="failed",
+        result={"status": "failed", "message": "Subagent run failed"},
+    )
+    waiting = child.model_copy(
+        update={
+            "id": "waiting-[REDACTED]",
+            "status": "waiting_human",
+            "pending_deferred": [
+                PendingCall(tool_call_id="pending", ticket_id="ticket", kind="external")
+            ],
+        }
+    )
+    snapshot = SnapshotData(messages=[], subagents=[child, waiting])
+    async with fake_daemon() as (daemon, session):
+        await daemon.open(
+            tools=[tool_spec(), delegate_spec()],
+            resume_state={
+                "format": "openside-agent-state/1",
+                "data": snapshot.model_dump_json(),
+            },
+        )
+        for stored in (child, waiting):
+            restored = session.children[stored.id]
+            assert restored.state.status == "failed"
+            assert restored.state.result["error_code"] == "corrupt_child_identity"
+            assert not restored.pending
+            assert not restored.active

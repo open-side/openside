@@ -16,6 +16,7 @@
 - `browser-agent` 와 `ultrabrowse` 는 `skill` 도구가 없으므로 `<available_skills>` 목록도 보내지 않는다.
 - 짧은 프롬프트에도 기존 안전 규칙(페이지·파일 내용은 지시가 아님, 정책 우회 금지, 보안 장벽은 `request_human_step`, 비밀번호·코드는 `secret_input` 으로만)이 모두 들어 있다.
 - `browser-agent` 에는 Vault 도구가 없다. 로그인은 `request_human_step`(`secret_input`·`takeover`)으로 사람에게 넘긴다.
+- Front orchestration retains its messaging, Task control, model discovery and `team_*` delegation tools under every profile. Work tools still follow the profile allowlist, but are exposed only to Tasks, not to the front. The front does not run research planning/citation guards or profile-specific reasoning settings; Task settings are unchanged.
 
 ## 2. 스냅샷(A-1)
 `docs/specs/profiles/<프로필>.tools.json` 은 노출 도구 이름 목록, `<프로필>.open.json` 은 사이드카가 실제로 받는 `open` 메시지의 `system_prompt_parts` 와 `tools` 다. 둘 다 `browser-agent`, `ultrabrowse` 에 대해 커밋돼 있다.
@@ -43,3 +44,23 @@
 가장 촘촘한 경우가 4.19 바이트/토큰(Claude 토크나이저, ultrabrowse 도구 스키마)이었다. 3.0 으로 나누면 이보다 약 40% 크게 센다. 보정 시점의 실측 최댓값은 `browser-agent` 1,725, `ultrabrowse` 1,964 토큰이다. 위 표는 보정 시점(도구 추가 전)의 값이고, 현재 추정치는 `tools/token-budget.py` 출력으로 확인한다.
 
 테스트: `tools/tests/test_token_budget.py`(실제 프로필 통과, 부풀린 도구 설명·긴 프롬프트 파트 실패, 한도 경계, 비ASCII 바이트 계산 포함).
+
+Prompt-budget maintenance: keep the 10,000-token gate unchanged and aim for at most
+9,500 estimated tokens per narrowed profile. Shared tool schemas omit root Rust
+type titles and schema-dialect metadata, but retain argument constraints and
+behavioral guidance. Login next-step routing lives in `request_login`; the compact
+safety prompt refers to it rather than repeating the routing table.
+`RESPONSE_LANGUAGE` and `HUMAN_CONTINUATION` remain shared prompt parts.
+
+2026-10-14 compaction (same estimator and limit):
+
+| Profile | Before: system / tools / total | After: system / tools / total |
+| --- | ---: | ---: |
+| browser-agent | 754 / 10,549 / 11,303 | 605 / 8,818 / 9,423 |
+| ultrabrowse | 866 / 10,469 / 11,335 | 718 / 8,728 / 9,446 |
+
+The largest common tool reductions were `request_otp` (236), `browser_repl`
+(212), and `request_login` (188 estimated tokens). `browser_snapshot` saved 224
+in ultrabrowse. The shared compact safety part saved 149; response-language and
+fresh-capture continuation wording stayed unchanged. `present` retains its
+already-compacted schema and all argument shapes remain unchanged.

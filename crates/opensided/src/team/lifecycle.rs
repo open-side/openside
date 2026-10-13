@@ -360,80 +360,51 @@ async fn moves(
 pub(crate) async fn hire(s: &Shared, draft: &HireDraft, key: &str) -> Result<Agent> {
     let _settings = crate::settings_api::WRITE.lock().await;
     let _gate = s.agents.gate.lock().await;
-    let agent = hire_locked(s, draft, key, None).await?;
+    let agent = hire_locked(s, draft, key).await?;
     drop(_gate);
     notify(s, &agent).await?;
     Ok(agent)
 }
 
-pub(crate) async fn hire_tainted(s: &Shared, session: &SessionId, message: &str) -> Result<bool> {
-    if active(s, "chief")?.home_session_id != *session {
-        return Err(HttpError(StatusCode::FORBIDDEN, "not_requested"));
-    }
-    let events = s.db.events(session, 0).await?;
-    let latest = events.iter().rev().find(|event| {
-        matches!(
-            &event.kind,
-            EventKind::MessageQueued {
-                author_kind: MessageAuthorKind::Person,
-                from_agent: None,
-                ..
-            }
-        )
-    });
-    let Some(latest) = latest.filter(|event| {
-        matches!(&event.kind,
-        EventKind::MessageQueued { message_id, .. } if message_id.as_str() == message)
-    }) else {
-        return Err(HttpError(StatusCode::FORBIDDEN, "not_requested"));
-    };
-    // Replaying completed outputs makes turn taint durable across a daemon restart.
-    let tainted = events
-        .iter()
-        .filter(|event| event.seq > latest.seq)
-        .any(|event| {
-            matches!(
-                &event.kind,
-                EventKind::ToolEnded { .. }
-                    | EventKind::ToolUpdated { .. }
-                    | EventKind::MessageQueued { .. }
-            )
-        });
-    Ok(tainted)
-}
-
-pub(super) async fn hire_explicit(
+pub(super) async fn hire_autonomous(
     s: &Shared,
     draft: &HireDraft,
     session: &SessionId,
-    message: &str,
+    call: &str,
 ) -> Result<Agent> {
     let _settings = crate::settings_api::WRITE.lock().await;
     let _gate = s.agents.gate.lock().await;
-    if hire_tainted(s, session, message).await? {
+    let chief = active(s, "chief")?;
+    if chief.home_session_id != *session {
+        return Err(HttpError(StatusCode::FORBIDDEN, "forbidden"));
+    }
+    if draft.channel.is_some() || draft.account_pool.is_some() || draft.model.is_some() {
         return Err(HttpError(StatusCode::CONFLICT, "hire_requires_approval"));
     }
     let mut draft = draft.clone();
+    if let Some(ceiling) = &chief.skills {
+        if draft
+            .skills
+            .as_ref()
+            .is_some_and(|skills| skills.iter().any(|skill| !ceiling.contains(skill)))
+        {
+            return Err(HttpError(StatusCode::CONFLICT, "hire_requires_approval"));
+        }
+        if draft.skills.is_none() {
+            draft.skills = Some(ceiling.clone());
+        }
+    }
     draft.mode = None;
-    let agent = hire_locked(
-        s,
-        &draft,
-        &format!("person:{session}:{message}"),
-        Some(MessageId::new(message)),
-    )
-    .await?;
+    draft.model = chief.model;
+    draft.account_pool = chief.account_pool;
+    let agent = hire_locked(s, &draft, &format!("autonomous:{session}:{call}")).await?;
     drop(_gate);
     notify(s, &agent).await?;
     Ok(agent)
 }
 
-async fn hire_locked(
-    s: &Shared,
-    draft: &HireDraft,
-    key: &str,
-    request_message_id: Option<MessageId>,
-) -> Result<Agent> {
-    let ticket_id = request_message_id.is_none().then(|| key.to_owned());
+async fn hire_locked(s: &Shared, draft: &HireDraft, key: &str) -> Result<Agent> {
+    let ticket_id = (!key.starts_with("autonomous:")).then(|| key.to_owned());
     let key = format!("hire:{key}");
     if let Some((_, value)) = s.agents.get_transfer(&key)? {
         return run(
@@ -442,6 +413,30 @@ async fn hire_locked(
             serde_json::from_value(value).map_err(|_| HttpError::internal())?,
         )
         .await;
+    }
+    if key.starts_with("hire:autonomous:") {
+        let responsibilities: Vec<_> = draft
+            .persona
+            .responsibilities
+            .iter()
+            .map(|line| crate::tickets::canonical_topic(line))
+            .collect();
+        if s.agents
+            .list()?
+            .iter()
+            .filter(|agent| {
+                agent.kind == AgentKind::Teammate && agent.status == AgentStatus::Active
+            })
+            .any(|agent| {
+                agent
+                    .persona
+                    .responsibilities
+                    .iter()
+                    .any(|line| responsibilities.contains(&crate::tickets::canonical_topic(line)))
+            })
+        {
+            return Err(conflict("responsibility_taken"));
+        }
     }
     let id = crate::persistence::random_id();
     agents::prepare(s, draft, &id)?;
@@ -458,7 +453,7 @@ async fn hire_locked(
                 agent_id: id.clone(),
                 name: draft.name.clone(),
                 ticket_id,
-                request_message_id,
+                request_message_id: None,
                 card: None,
             },
         )
@@ -761,7 +756,7 @@ pub(crate) async fn restore(s: &Shared, id: &str, key: &str) -> Result<Agent> {
         .iter()
         .filter(|agent| agent.kind == AgentKind::Teammate && agent.status == AgentStatus::Active)
         .count()
-        >= 8
+        >= s.config.loaded.config.team.max_active_teammates
     {
         return Err(conflict("roster_full"));
     }

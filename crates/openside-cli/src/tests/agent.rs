@@ -30,7 +30,7 @@ async fn daemon(environment: &Environment) -> (PathBuf, Seen, JoinHandle<()>) {
             match (method.as_str(), path.as_str()) {
                 ("POST", "/v1/sessions") => respond(201, session_json(3)),
                 ("GET", "/v1/agents/chief") => respond(200, json!({
-                    "id":"chief","kind":"chief","name":"Juno","initials":"J","color":"#2f6fed",
+                    "id":"chief","kind":"chief","name":"openside","initials":"o","color":"#2f6fed",
                     "persona":{"role":"Coordinator","responsibilities":[],"boundaries":[],"voice":""},
                     "skills":null,"model":null,"account_pool":null,"channel":null,"mode":"guard",
                     "home_session_id":"s-1","status":"active","hidden":false,"pinned":true,

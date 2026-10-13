@@ -3,7 +3,11 @@ from pydantic import ValidationError
 from runtime_helpers import fake_daemon, install_script, text_response, tool_spec
 
 from openside_agent.protocol import TeamContext
-from openside_agent.runtime.subagents import CHIEF_TOOLS, TEAMMATE_TOOLS
+from openside_agent.runtime.subagents import (
+    CHIEF_TOOLS,
+    FRONT_INSTRUCTIONS,
+    TEAMMATE_TOOLS,
+)
 from openside_agent.scripted import ScriptedModel
 
 
@@ -11,19 +15,38 @@ from openside_agent.scripted import ScriptedModel
     "role,names", [("chief", CHIEF_TOOLS), ("teammate", TEAMMATE_TOOLS)]
 )
 async def test_team_role_prompt_and_tool_visibility(tmp_path, monkeypatch, role, names):
-    install_script(tmp_path, monkeypatch, [text_response()])
+    if role == "chief":
+        names = names | {"send_message"}
+    terminal = (
+        {
+            "parts": [
+                {"type": "tool_call", "name": "stay_silent", "args": {}, "id": "silent"}
+            ]
+        }
+        if role == "chief"
+        else text_response()
+    )
+    install_script(tmp_path, monkeypatch, [terminal])
     persona = "Persona: " + "🦉" * (1500 - len("Persona: "))
     roster = "Roster: " + "界" * (2000 - len("Roster: "))
     observed = []
     original = ScriptedModel.stream
 
     async def capture(self, messages, info):
-        observed.append(info)
+        observed.append((messages, info))
         async for item in original(self, messages, info):
             yield item
 
     monkeypatch.setattr(ScriptedModel, "stream", capture)
     tools = [tool_spec(name) for name in sorted(names)]
+    for spec in tools:
+        if spec["name"] == "send_message":
+            spec["parameters"] = {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+                "additionalProperties": False,
+            }
     async with fake_daemon() as (daemon, session):
         ready = await daemon.open(
             tools=tools,
@@ -35,16 +58,29 @@ async def test_team_role_prompt_and_tool_visibility(tmp_path, monkeypatch, role,
             },
         )
         assert set(ready["tools"]) == names
-        assert session.expected_tools == names
+        assert session.expected_tools == (
+            names - {"send_message"} if role == "chief" else names
+        )
         await daemon.user()
         await daemon.until("settled")
     assert len(observed) == 1
-    info = observed[0]
-    assert {tool.name for tool in info.function_tools} == names
-    assert persona in info.instructions and roster in info.instructions
+    messages, info = observed[0]
+    assert {tool.name for tool in info.function_tools} == (
+        names - {"send_message"} if role == "chief" else names
+    )
+    if role == "chief":
+        assert {tool.name for tool in info.output_tools} == {
+            "send_message",
+            "stay_silent",
+        }
+    assert persona in info.instructions
+    assert roster in str(messages)
     assert len(persona) == 1500 and len(roster) == 2000
     assert f"[{role.upper()}]" in info.instructions
-    assert "You are the front agent" not in info.instructions
+    if role == "chief":
+        assert FRONT_INSTRUCTIONS in info.instructions
+    else:
+        assert "You are the front agent" not in info.instructions
 
 
 @pytest.mark.parametrize(

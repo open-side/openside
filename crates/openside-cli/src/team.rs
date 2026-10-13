@@ -333,7 +333,7 @@ async fn history_summary(client: &Client, id: &str) -> Result<String, String> {
     {
         let (label, text) = match event.kind {
             EventKind::MessageQueued { text, .. } => ("Message", text),
-            EventKind::AssistantFinal { text } => ("Reply", text),
+            EventKind::AssistantFinal { text, .. } => ("Reply", text),
             _ => continue,
         };
         let mut start = text.len().saturating_sub(MAX_BYTES / 2);

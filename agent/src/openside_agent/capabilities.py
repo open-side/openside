@@ -21,13 +21,11 @@ refuses the session on any difference; that is the gate for capability-added too
 """
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
-from pydantic_ai_harness.compaction import SummarizingCompaction
+from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai_harness.guardrails import InputGuardrail
 from pydantic_ai_harness.guardrails.detectors import redact_secrets
 from pydantic_ai_harness.prompt_injection_defender import PromptInjectionDefender
@@ -35,30 +33,6 @@ from pydantic_ai_harness.repair_tool_arguments import RepairToolArguments
 from pydantic_ai_harness.spend import SpendLimits
 from pydantic_ai_harness.system_reminders import SystemReminders
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
-
-
-@dataclass
-class ReportingCompaction(SummarizingCompaction[None]):
-    """SummarizingCompaction that tells the daemon when it dropped earlier messages.
-
-    Daemon tools can hand the model a base it later refers to by id (browser snapshot
-    diffs); once compaction summarizes that result away the daemon must stop honoring it
-    afterwards.
-    """
-
-    on_compaction: Callable[[], Awaitable[None]] | None = field(
-        default=None, kw_only=True
-    )
-
-    async def compact(
-        self, messages: list[ModelMessage], ctx: RunContext[None]
-    ) -> list[ModelMessage]:
-        compacted = await super().compact(messages, ctx)
-        # `compact` returns its input object when nothing was old enough to summarize.
-        if compacted is not messages and self.on_compaction is not None:
-            await self.on_compaction()
-        return compacted
-
 
 REANCHOR_EVERY = 5
 REANCHOR_MAX_CHARS = 500
@@ -89,10 +63,22 @@ def adopted_capabilities(
     config: dict[str, Any],
     on_compaction: Callable[[], Awaitable[None]] | None = None,
 ) -> list[AbstractCapability[None]]:
-    maximum: Any = config.get("compaction_max_messages", 100)
+    from openside_agent.runtime.compaction import (
+        DEFAULT_MAX_TOKENS,
+        ReportingCompaction,
+    )
+
+    maximum: Any = config.get("compaction_max_messages")
     keep: Any = config.get("compaction_keep_messages", 20)
-    if type(maximum) is not int or type(keep) is not int or not 0 < keep < maximum:
-        raise ValueError("Invalid compaction message thresholds")
+    tokens: Any = config.get("compaction_max_tokens", DEFAULT_MAX_TOKENS)
+    if (
+        type(keep) is not int
+        or keep < 2
+        or (maximum is not None and (type(maximum) is not int or maximum <= keep))
+        or type(tokens) is not int
+        or tokens <= 0
+    ):
+        raise ValueError("Invalid compaction thresholds")
     capabilities: list[AbstractCapability[None]] = [
         # The first user message states the task goal (A-3); keeping it verbatim means a
         # lossy summary cannot drop the goal. Covered by tests/test_compaction.py.
@@ -100,6 +86,8 @@ def adopted_capabilities(
             model=None,
             max_messages=maximum,
             keep_messages=keep,
+            max_tokens=tokens,
+            tool_return_max_chars=None,
             preserve_first_user_message=True,
             on_compaction=on_compaction,
         ),

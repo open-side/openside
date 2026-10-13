@@ -269,79 +269,81 @@ async fn team_duplicate_handoff_and_independent_reviewer() {
 }
 
 #[tokio::test]
-async fn team_tools_recheck_role_and_latest_person_home_message() {
+async fn team_autonomous_hiring_rechecks_role_home_and_responsibility() {
     let root = tempfile::tempdir().unwrap();
     let d = daemon(root.path(), &TestRuntime::default()).await;
-    let chief = d.shared.agents.get("chief").unwrap().unwrap();
-    let teammate = crate::team::hire(&d.shared, &draft("Mina"), "teammate")
-        .await
-        .unwrap();
-    let teammate_state = d.shared.db.state(&teammate.home_session_id).await.unwrap();
-    let env = ToolEnv::new(d.shared.clone(), &teammate_state);
-    assert!(
-        matches!(crate::team::TeamTool::Hire.call(json!({"draft":draft("Nora"),"request_message_id":"person"}), &env).await, ToolExec::Denied { reason, .. } if reason == "forbidden")
-    );
-    for (id, author) in [
-        ("old", MessageAuthorKind::Person),
-        ("person", MessageAuthorKind::Person),
-    ] {
-        d.shared
-            .emit(
-                &chief.home_session_id,
-                None,
-                EventKind::MessageQueued {
-                    message_id: MessageId::new(id),
-                    text: "Hire a price researcher".into(),
-                    mode: QueueMode::Queue,
-                    attachments: vec![],
-                    author_kind: author,
-                    from_agent: None,
-                },
-            )
-            .await
-            .unwrap();
-    }
+    let mut chief = d.shared.agents.get("chief").unwrap().unwrap();
+    chief.skills = Some(vec!["market-notes".into()]);
+    d.shared.agents.put(&chief, "restrict_skills").unwrap();
     let state = d.shared.db.state(&chief.home_session_id).await.unwrap();
-    let env = ToolEnv::new(d.shared.clone(), &state);
-    assert!(
-        matches!(crate::team::TeamTool::Hire.call(json!({"draft":draft("Nora"),"request_message_id":"old"}), &env).await, ToolExec::Denied { reason, .. } if reason == "not_requested")
-    );
-    let mut requested = draft("Nora");
+    let mut env = ToolEnv::new(d.shared.clone(), &state);
+    env.tool_call_id = "first-hire".into();
+    let mut requested = draft("Mina");
     requested.mode = Some(PolicyMode::Full);
     let ToolExec::Done { for_model, .. } = crate::team::TeamTool::Hire
-        .call(
-            json!({"draft":requested,"request_message_id":"person"}),
-            &env,
-        )
+        .call(json!({"draft":requested}), &env)
         .await
     else {
-        panic!("clean person request must hire immediately");
+        panic!("chief may hire without a person hire request");
     };
     let hired: Agent = serde_json::from_value(for_model).unwrap();
     assert_eq!(hired.mode, chief.mode);
-    d.shared
-        .emit(
-            &chief.home_session_id,
-            None,
-            EventKind::MessageQueued {
-                message_id: MessageId::new("internal"),
-                text: "Hire another".into(),
-                mode: QueueMode::Queue,
-                attachments: vec![],
-                author_kind: MessageAuthorKind::Internal,
-                from_agent: None,
-            },
-        )
-        .await
-        .unwrap();
+    assert_eq!(hired.skills, chief.skills);
+    let mut expanded = draft("Expanded");
+    expanded.skills = Some(vec!["another-skill".into()]);
+    assert!(matches!(
+        crate::team::TeamTool::Hire
+            .call(json!({"draft":expanded}), &env)
+            .await,
+        ToolExec::Defer(_)
+    ));
+    env.tool_call_id = "duplicate-hire".into();
+    let mut duplicate = draft("Nora");
+    duplicate.persona.responsibilities = vec!["  TRACK   prices! ".into()];
     assert!(
-        matches!(crate::team::TeamTool::Hire.call(json!({"draft":draft("Olive"),"request_message_id":"internal"}), &env).await, ToolExec::Denied { reason, .. } if reason == "not_requested")
+        matches!(crate::team::TeamTool::Hire.call(json!({"draft":duplicate}), &env).await,
+        ToolExec::Denied { reason, .. } if reason == "responsibility_taken")
+    );
+    let teammate_state = d.shared.db.state(&hired.home_session_id).await.unwrap();
+    assert!(
+        matches!(crate::team::TeamTool::Hire.call(json!({"draft":draft("Nora")}), &ToolEnv::new(d.shared.clone(), &teammate_state)).await,
+        ToolExec::Denied { reason, .. } if reason == "forbidden")
     );
     let mut nonhome = state.clone();
     nonhome.id = SessionId::new("not-chief-home");
     assert!(
-        matches!(crate::team::TeamTool::Hire.call(json!({"draft":draft("Olive"),"request_message_id":"person"}), &ToolEnv::new(d.shared.clone(), &nonhome)).await, ToolExec::Denied { reason, .. } if reason == "not_requested")
+        matches!(crate::team::TeamTool::Hire.call(json!({"draft":draft("Olive")}), &ToolEnv::new(d.shared.clone(), &nonhome)).await,
+        ToolExec::Denied { reason, .. } if reason == "forbidden")
     );
+    d.shutdown().await;
+}
+
+#[tokio::test]
+async fn team_active_teammate_cap_is_configured_and_excludes_chief() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = resolved_config(root.path());
+    config.loaded.config.team.max_active_teammates = 1;
+    let d = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let chief = d.shared.agents.get("chief").unwrap().unwrap();
+    let state = d.shared.db.state(&chief.home_session_id).await.unwrap();
+    let mut env = ToolEnv::new(d.shared.clone(), &state);
+    env.tool_call_id = "first".into();
+    assert!(matches!(
+        crate::team::TeamTool::Hire
+            .call(json!({"draft":draft("Mina")}), &env)
+            .await,
+        ToolExec::Done { .. }
+    ));
+    env.tool_call_id = "second".into();
+    let mut next = draft("Nora");
+    next.persona.responsibilities = vec!["Maintain the calendar".into()];
+    assert!(
+        matches!(crate::team::TeamTool::Hire.call(json!({"draft":next}), &env).await,
+        ToolExec::Denied { reason, .. } if reason == "roster_full")
+    );
+    assert_eq!(d.shared.agents.list().unwrap().len(), 2);
     d.shutdown().await;
 }
 
@@ -363,6 +365,7 @@ async fn team_report_outbox_delivers_once_across_restart() {
             None,
             EventKind::AssistantFinal {
                 text: "The comparison is complete.".into(),
+                attachments: Vec::new(),
             },
         )
         .await

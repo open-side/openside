@@ -1,6 +1,164 @@
 use super::*;
 use crate::tools::TicketRequest;
 
+#[tokio::test]
+async fn foreground_settlement_keeps_session_running_until_children_end() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "session", PolicyMode::Guard, None).await;
+    daemon
+        .shared
+        .emit(&session, None, EventKind::TurnStarted {})
+        .await
+        .unwrap();
+    start_child(&daemon, &session, "child").await;
+    daemon
+        .shared
+        .emit(
+            &session,
+            None,
+            EventKind::SubagentLifecycle {
+                subagent_id: "child".into(),
+                status: "running".into(),
+            },
+        )
+        .await
+        .unwrap();
+    daemon
+        .shared
+        .emit(&session, None, EventKind::SessionSettled {})
+        .await
+        .unwrap();
+    let state = daemon.shared.db.state(&session).await.unwrap().session();
+    assert_eq!(state.status, openside_proto::SessionStatus::Running);
+    assert_eq!(state.activity, "Working");
+    crate::subagents::end(
+        &daemon.shared,
+        &session,
+        "child",
+        SubagentStatus::Completed,
+        "completed",
+    )
+    .await
+    .unwrap();
+    let state = daemon.shared.db.state(&session).await.unwrap().session();
+    assert_eq!(state.status, openside_proto::SessionStatus::Idle);
+    assert_eq!(state.activity, "Done");
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn admission_identity_survives_registered_secret_substrings() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let secret = openside_vault::Secret::new("a".into());
+    daemon
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(openside_vault::Redactor::new([&secret]));
+    let admission = json!({
+        "subagent_id": "abc123",
+        "model": "provider:alpha",
+        "tools": ["browser_navigate"],
+        "context": "fresh",
+        "note": "a private detail"
+    });
+    for tool in ["create_task", "delegate"] {
+        let safe = daemon
+            .shared
+            .registry
+            .redact_except(
+                admission.clone(),
+                crate::tools::connections::result_keep(tool),
+            )
+            .unwrap();
+        for key in ["subagent_id", "model", "tools", "context"] {
+            assert_eq!(safe[key], admission[key], "{tool} {key}");
+        }
+        assert_ne!(safe["note"], admission["note"]);
+    }
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_child_inventory_reconciles_orphans_without_guessing_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "session", PolicyMode::Guard, None).await;
+    start_child(&daemon, &session, "orphan").await;
+    start_child(&daemon, &session, "live").await;
+    crate::subagents::lifecycle(
+        &daemon.shared,
+        &session,
+        "[REDACTED]".into(),
+        "failed".into(),
+        None,
+        Some(vec!["live".into()]),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        status(&daemon, &session, "orphan").await.0,
+        SubagentStatus::Failed
+    );
+    assert_eq!(
+        status(&daemon, &session, "live").await.0,
+        SubagentStatus::WaitingHuman
+    );
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn primary_child_failure_is_redacted_and_survives_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "session", PolicyMode::Guard, None).await;
+    let secret = openside_vault::Secret::new("private-canary".into());
+    daemon
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(openside_vault::Redactor::new([&secret]));
+    start_child(&daemon, &session, "child").await;
+    let ended = crate::subagents::lifecycle(
+        &daemon.shared,
+        &session,
+        "child".into(),
+        "failed".into(),
+        None,
+        Some(vec![]),
+        Some((
+            "child_run_failed".into(),
+            "ValueError: private-canary".into(),
+        )),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    daemon.shared.emit(&session, None, ended).await.unwrap();
+    crate::subagents::reconcile(&daemon.shared, &session, &Default::default())
+        .await
+        .unwrap();
+    let child = crate::subagents::get(&daemon.shared, &session, "child")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(child.reason.as_deref(), Some("child_run_failed"));
+    assert_eq!(child.output.as_deref(), Some("ValueError: [REDACTED]"));
+    let projected = daemon.shared.db.state(&session).await.unwrap().session();
+    assert_eq!(projected.status, openside_proto::SessionStatus::Idle);
+    assert_eq!(projected.activity, "Couldn't finish");
+    daemon.shutdown().await;
+}
+
 async fn start_child(daemon: &Daemon, session: &SessionId, id: &str) {
     for kind in [
         EventKind::SubagentStarted {
@@ -272,6 +430,7 @@ async fn restore_discards_a_continuation_whose_final_is_already_durable() {
         },
         EventKind::AssistantFinal {
             text: "done".into(),
+            attachments: Vec::new(),
         },
     ] {
         daemon.shared.emit(&session, None, kind).await.unwrap();
@@ -308,6 +467,7 @@ async fn restore_still_resumes_a_continuation_without_a_durable_final() {
             None,
             EventKind::AssistantFinal {
                 text: "earlier".into(),
+                attachments: Vec::new(),
             },
         )
         .await

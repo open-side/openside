@@ -126,7 +126,7 @@ function TeamRow({ agent }: { agent: AgentSummary }) {
   return (
     <article className="resource-card team-row" data-agent={agent.id}>
       <div className="resource-card-header">
-        <Avatar initials={agent.initials} color={agent.color} size={40} />
+        <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={40} />
         <div className="resource-card-copy">
           <h4 className="resource-card-title">
             <span>{agent.name}</span>

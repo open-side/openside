@@ -1,12 +1,10 @@
 import { Ban, Bot, Check, ChevronRight, CircleAlert } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { ApiError } from "../api/client";
-import { useClient } from "../context";
+import { useState } from "react";
 import type { SubagentView } from "../state/session";
-import { Button, Dialog, ICON_STROKE, Spinner } from "../ui";
-import { StopTaskDialog } from "./StopTaskDialog";
-import { taskPhrase } from "./toolStatus";
+import { Dialog, ICON_STROKE, Spinner } from "../ui";
+import { taskLine, taskSteps } from "./taskStatus";
 import "./browser.css";
+import "./tasks.css";
 
 export const STATUS_LABEL: Record<SubagentView["status"], string> = {
   running: "Running",
@@ -15,15 +13,6 @@ export const STATUS_LABEL: Record<SubagentView["status"], string> = {
   failed: "Failed",
   cancelled: "Cancelled",
 };
-
-function describe(progress: unknown): string {
-  if (progress && typeof progress === "object" && "kind" in progress) {
-    const { kind, ...rest } = progress as { kind: unknown } & Record<string, unknown>;
-    const detail = Object.keys(rest).length ? ` ${JSON.stringify(rest)}` : "";
-    return `${String(kind)}${detail}`;
-  }
-  return JSON.stringify(progress);
-}
 
 export function StatusMark({ status }: { status: SubagentView["status"] }) {
   switch (status) {
@@ -40,67 +29,32 @@ export function StatusMark({ status }: { status: SubagentView["status"] }) {
   }
 }
 
-/** Steer or cancel a live child directly, bypassing the agent that started it. */
-export function SubagentSteer({ sessionId, child, placeholder }: { sessionId: string; child: SubagentView; placeholder: string }) {
-  const client = useClient();
-  const [steer, setSteer] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-
-  async function act(action: () => Promise<unknown>) {
-    setBusy(true);
-    setError(null);
-    try {
-      await action();
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Request failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function sendSteer(event: FormEvent) {
-    event.preventDefault();
-    const text = steer.trim();
-    if (!text) return;
-    void act(async () => {
-      await client.steerSubagent(sessionId, child.id, text);
-      setSteer("");
-    });
-  }
-
+/** The calls a child made, one past-tense line each; the running one spins. */
+function TaskStepList({ progress }: { progress: readonly unknown[] }) {
+  const steps = taskSteps(progress);
+  if (!steps.length) return null;
   return (
-    <>
-      <form className="subagent-steer" onSubmit={sendSteer}>
-        <label>
-          <span className="sr-only">Steer {child.id}</span>
-          <input value={steer} onChange={(e) => setSteer(e.target.value)} placeholder={placeholder} disabled={busy} />
-        </label>
-        <Button type="submit" size="compact" variant="primary" disabled={busy || !steer.trim()}>
-          Steer
-        </Button>
-        <Button size="compact" variant="danger" disabled={busy} onClick={() => setConfirming(true)}>
-          Cancel
-        </Button>
-      </form>
-      {error ? (
-        <p role="alert" className="subagent-error">
-          {error}
-        </p>
-      ) : null}
-      <StopTaskDialog
-        open={confirming}
-        scope={{ kind: "task", name: child.task.slice(0, 80) }}
-        onClose={() => setConfirming(false)}
-        onConfirm={() => void act(() => client.cancelSubagent(sessionId, child.id))}
-      />
-    </>
+    <ol className="task-steps" aria-label="Steps">
+      {steps.map((step) => (
+        <li key={step.id} data-state={step.state}>
+          <span className="task-step-mark" aria-hidden="true">
+            {step.state === "running" ? (
+              <Spinner size={14} />
+            ) : step.state === "failed" ? (
+              <CircleAlert size={14} strokeWidth={ICON_STROKE} />
+            ) : (
+              <Check size={14} strokeWidth={2.2} />
+            )}
+          </span>
+          <span className="task-step-text">{step.text}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
-function SubagentRow({ sessionId, child }: { sessionId: string; child: SubagentView }) {
-  const live = child.status === "running" || child.status === "waiting_human";
+/** One child, read-only: people steer work by talking to the agent that started it. */
+function SubagentRow({ child }: { child: SubagentView }) {
   return (
     <li className={`subagent subagent-${child.status}`} data-subagent={child.id}>
       <details>
@@ -112,7 +66,7 @@ function SubagentRow({ sessionId, child }: { sessionId: string; child: SubagentV
             <span className="subagent-task">{child.task}</span>
             <span className="subagent-meta">
               <span className={`subagent-status status-${child.status}`}>{STATUS_LABEL[child.status]}</span>
-              {child.status === "running" ? <span> · {taskPhrase(child.progress)}</span> : null}
+              {child.status === "running" ? <span> · {taskLine(child)}</span> : null}
             </span>
           </span>
           <ChevronRight className="subagent-chevron" size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
@@ -123,16 +77,7 @@ function SubagentRow({ sessionId, child }: { sessionId: string; child: SubagentV
             {child.tools.length ? ` · ${child.tools.join(", ")}` : ""}
           </p>
           {child.reason ? <p className="subagent-detail">{child.reason}</p> : null}
-          {child.progress.length ? (
-            <ol className="subagent-events thin-scroll" aria-label="Subagent events">
-              {child.progress.map((progress, index) => (
-                <li key={index}>
-                  <code>{describe(progress)}</code>
-                </li>
-              ))}
-            </ol>
-          ) : null}
-          {live ? <SubagentSteer sessionId={sessionId} child={child} placeholder="Steer this subagent" /> : null}
+          <TaskStepList progress={child.progress} />
         </div>
       </details>
     </li>
@@ -144,7 +89,7 @@ function SubagentRow({ sessionId, child }: { sessionId: string; child: SubagentV
  * screen. A pill in the composer's tool row opens them in a sheet; background tasks are chips
  * in the transcript instead (Timeline).
  */
-export function AgentsTray({ sessionId, subagents }: { sessionId: string; subagents: SubagentView[] }) {
+export function AgentsTray({ subagents }: { subagents: SubagentView[] }) {
   const [open, setOpen] = useState(false);
   const delegated = subagents.filter((child) => !child.background);
   if (!delegated.length) return null;
@@ -172,7 +117,7 @@ export function AgentsTray({ sessionId, subagents }: { sessionId: string; subage
         <div className="tray-scroll thin-scroll">
           <ul className="subagent-list" aria-label="Subagents">
             {delegated.map((child) => (
-              <SubagentRow key={child.id} sessionId={sessionId} child={child} />
+              <SubagentRow key={child.id} child={child} />
             ))}
           </ul>
         </div>
