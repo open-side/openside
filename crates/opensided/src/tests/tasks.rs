@@ -675,6 +675,67 @@ async fn delayed_browser_probes_cannot_overwrite_newer_or_terminal_task_state() 
 }
 
 #[tokio::test]
+async fn tab_less_approvals_do_not_fence_an_in_flight_browser_probe() {
+    let site = task_site().await;
+    let root = tempfile::tempdir().unwrap();
+    let daemon = browser_front_daemon(root.path()).await;
+    let session = create_session(&daemon, "probe-confirm", PolicyMode::Full, None).await;
+    let checked = std::panic::AssertUnwindSafe(async {
+        start_browser_task(&daemon, &session, "task").await;
+        let parent = host(&daemon, &session).await;
+        let ledger = &daemon.shared.registry.browser.task_tabs;
+        let ToolOutcome::Done { for_model_json } = parent.call(ToolCall {
+            subagent: Some("task".into()), ..call("browser_open_tab", json!({"url":site.url}), "open")
+        }).await else { panic!("Open failed"); };
+        let result: Value = serde_json::from_str(&for_model_json).unwrap();
+        let tab = result["tab_id"].as_str().unwrap().to_owned();
+        tokio::time::timeout(Duration::from_secs(10), ledger.probe_finished.notified()).await.unwrap();
+        // Park a snapshot probe behind the probe gate, then let a confirm approval —
+        // a call with no tab and nothing to publish — run its `before` first.
+        let blocker = ledger.probe_gate.lock().await;
+        let read = ToolCall {
+            subagent: Some("task".into()),
+            ..call("browser_snapshot", json!({"tab_id":tab}), "read-before-approval")
+        };
+        let stamp = crate::browser_state::before(&daemon.shared, &session, &read).await;
+        crate::browser_state::after(
+            &daemon.shared,
+            &session,
+            &read,
+            &ToolOutcome::Done { for_model_json: json!({"tab_id":tab}).to_string() },
+            stamp,
+        );
+        tokio::time::timeout(Duration::from_secs(10), ledger.probe_started.notified()).await.unwrap();
+        let confirm = ToolCall {
+            subagent: Some("task".into()),
+            ..call("request_human_step",
+                json!({"kind":"confirm","summary":"Approve this remote phone task"}), "confirm")
+        };
+        assert!(crate::browser_state::before(&daemon.shared, &session, &confirm).await.is_none());
+        let boundary = daemon.shared.db.events(&session, 0).await.unwrap().last().unwrap().seq;
+        drop(blocker);
+        tokio::time::timeout(Duration::from_secs(10), ledger.probe_finished.notified()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if daemon.shared.db.events(&session, boundary).await.unwrap().iter().any(|event|
+                    matches!(&event.kind, EventKind::BrowserState(state)
+                        if state.action.as_ref().is_some_and(|action| action.tool_call_id == "read-before-approval")))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("the approval call fenced out the page probe's emission");
+    })
+    .catch_unwind()
+    .await;
+    daemon.shutdown().await;
+    if let Err(error) = checked {
+        std::panic::resume_unwind(error);
+    }
+}
+
+#[tokio::test]
 async fn task_cancellation_waits_for_repl_cleanup_and_releases_held_input_for_the_next_task() {
     let site = task_site().await;
     let root = tempfile::tempdir().unwrap();

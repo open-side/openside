@@ -270,7 +270,10 @@ pub(crate) async fn finish(shared: &Shared, session: &SessionId, task: &str) -> 
     }
 }
 
-/// The state shown while a browser call runs, for calls on a known tab.
+/// The state shown while a browser call runs, for calls on a known tab. `None` for a call
+/// that cannot publish any `browser.state` — its `after` returns early — so it must not
+/// consume the probe generation either: an epoch taken without an emission fences out a
+/// still-running `after` probe of the previous call, and nothing replaces the lost state.
 pub(crate) async fn before(
     shared: &Shared,
     session: &SessionId,
@@ -286,6 +289,9 @@ pub(crate) async fn before(
     let owner = tab
         .and_then(|tab| card_owner(shared, session, call, tab))
         .or_else(|| call.subagent.clone());
+    if tab.is_none() && call.name != "browser_open_tab" {
+        return None;
+    }
     let stamp = advance(shared, session, owner.clone()).await;
     let Some(tab) = tab else {
         return Some(stamp);
