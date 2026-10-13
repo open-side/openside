@@ -362,6 +362,97 @@ async def test_steer_during_tool_request_boundary(tmp_path, monkeypatch, deferre
         )
 
 
+async def test_idle_non_owner_burst_batches_and_settles_every_id(tmp_path, monkeypatch):
+    install_script(tmp_path, monkeypatch, [text_response("batch complete")])
+    async with fake_daemon() as (daemon, _):
+        await daemon.open()
+        for index in range(3):
+            await daemon.user(f"report-{index}", f"report {index}", "queue")
+        await daemon.until("settled")
+        assert user_texts(daemon) == ["report 0", "report 1", "report 2"]
+        assert [
+            (item["message_id"], item["outcome"])
+            for item in daemon.outputs
+            if item["type"] == "message_result"
+        ] == [(f"report-{index}", "completed") for index in range(3)]
+        assert (
+            sum(
+                item["type"] == "event" and item["event"]["kind"] == "turn.started"
+                for item in daemon.outputs
+            )
+            == 1
+        )
+
+
+@pytest.mark.parametrize("count,size,turns", [(33, 1, 2), (3, 600_000, 3)])
+async def test_non_owner_batches_bound_count_and_bytes(
+    tmp_path, monkeypatch, count, size, turns
+):
+    install_script(
+        tmp_path, monkeypatch, [text_response("batch complete") for _ in range(turns)]
+    )
+    async with fake_daemon() as (daemon, _):
+        await daemon.open(agent={"compaction_max_tokens": 2_000_000})
+        for index in range(count):
+            await daemon.user(f"bounded-{index}", "x" * size, "queue")
+        await daemon.until("settled")
+        assert sum(item["type"] == "message_result" for item in daemon.outputs) == count
+        assert (
+            sum(
+                item["type"] == "event" and item["event"]["kind"] == "turn.started"
+                for item in daemon.outputs
+            )
+            == turns
+        )
+
+
+async def test_owner_bypasses_idle_report_batch(tmp_path, monkeypatch):
+    install_script(
+        tmp_path, monkeypatch, [text_response("owner"), text_response("reports")]
+    )
+    async with fake_daemon() as (daemon, _):
+        await daemon.open()
+        await daemon.user("report", "queued report", "queue")
+        await daemon.user("owner", "owner update", "steer")
+        await daemon.until("settled")
+        assert [
+            item["message_id"]
+            for item in daemon.outputs
+            if item["type"] == "message_accepted"
+        ] == ["owner", "report"]
+        assert user_texts(daemon) == ["owner update", "queued report"]
+
+
+async def test_owner_steers_before_report_without_replaying_mutation(
+    tmp_path, monkeypatch
+):
+    install_script(
+        tmp_path,
+        monkeypatch,
+        [tool_response(), text_response("owner updated"), text_response("report read")],
+    )
+    async with fake_daemon() as (daemon, _):
+        await daemon.open(tools=[tool_spec()])
+        await daemon.user("initial", "perform action", "steer")
+        call = await daemon.until("tool_call")
+        await daemon.user("report", "routine report", "queue")
+        await daemon.user("owner", "changed requirement", "steer")
+        await daemon.result(call, {"status": "done", "for_model": "effect committed"})
+        await daemon.until("settled")
+        accepted = [
+            item["message_id"]
+            for item in daemon.outputs
+            if item["type"] == "message_accepted"
+        ]
+        assert accepted == ["initial", "owner", "report"]
+        assert sum(item["type"] == "tool_call" for item in daemon.outputs) == 1
+        assert [
+            item["message_id"]
+            for item in daemon.outputs
+            if item["type"] == "message_result"
+        ] == ["initial", "owner", "report"]
+
+
 async def test_queue_processed_in_new_run(tmp_path, monkeypatch):
     install_script(
         tmp_path,
@@ -414,9 +505,16 @@ async def test_abort_mid_tool_preserves_undelivered_steer(tmp_path, monkeypatch)
             .message_id
             == "pending"
         )
+        interrupted_snapshot = daemon.snapshots()[-1]
         await daemon.user("new", "restart")
         await daemon.until("settled")
         assert user_texts(daemon).count("undelivered") == 1
+    async with fake_daemon() as (daemon, _):
+        await daemon.open(tools=[tool_spec()], resume_state=interrupted_snapshot)
+        await daemon.user("after-restart", "reconcile interrupted work")
+        await daemon.until("settled")
+        assert "undelivered" not in user_texts(daemon)
+        assert not any(item["type"] == "tool_call" for item in daemon.outputs)
 
 
 @pytest.mark.parametrize("midrun", [False, True])

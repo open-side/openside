@@ -272,6 +272,9 @@ async fn every_observation_maps_to_the_runtime_boundary() {
                 subagent_id: "child".into(),
                 status: "running".into(),
                 output: None,
+                known_subagents: None,
+                error_code: None,
+                diagnostic: None,
             },
         ),
         (
@@ -280,6 +283,9 @@ async fn every_observation_maps_to_the_runtime_boundary() {
                 subagent_id: "child".into(),
                 status: "completed".into(),
                 output: Some("done".into()),
+                known_subagents: None,
+                error_code: None,
+                diagnostic: None,
             },
         ),
         (
@@ -358,7 +364,7 @@ async fn messages_abort_and_all_ticket_resolutions_serialize_exactly() {
             .unwrap();
         assert_eq!(
             peer.recv().await,
-            json!({"v":1,"type":"user_message","message_id":"message","text":"text","mode":wire})
+            json!({"v":1,"type":"user_message","message_id":"message","text":"text","mode":wire,"author_kind":"person"})
         );
     }
     connection.abort().await.unwrap();
@@ -1254,7 +1260,8 @@ async fn largest_allowed_text_and_attachments_fit_the_same_wire_line() {
             MessageId::new("maximum"),
             text.clone(),
             parts,
-            QueueMode::Queue
+            QueueMode::Queue,
+            openside_core::MessageAuthorKind::Person
         ),
         peer.recv(),
     );

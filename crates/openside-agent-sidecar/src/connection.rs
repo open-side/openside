@@ -191,7 +191,14 @@ impl Connection {
         text: String,
         mode: QueueMode,
     ) -> Result<(), RuntimeError> {
-        self.send_with_parts(id, text, Vec::new(), mode).await
+        self.send_with_parts(
+            id,
+            text,
+            Vec::new(),
+            mode,
+            openside_core::MessageAuthorKind::Person,
+        )
+        .await
     }
 
     /// Send a message whose content parts are inlined as base64 on the wire.
@@ -201,6 +208,7 @@ impl Connection {
         text: String,
         parts: Vec<ContentPart>,
         mode: QueueMode,
+        author_kind: openside_core::MessageAuthorKind,
     ) -> Result<(), RuntimeError> {
         if text.len() > MAX_USER_TEXT_BYTES {
             return Err(RuntimeError::Rejected("message text exceeds 1 MiB".into()));
@@ -213,6 +221,7 @@ impl Connection {
             message_id: id,
             text,
             mode,
+            author_kind,
             parts: parts.into_iter().map(wire_part).collect(),
         })
         .await
@@ -435,8 +444,9 @@ impl AgentSession for Connection {
         text: String,
         parts: Vec<ContentPart>,
         mode: QueueMode,
+        author_kind: openside_core::MessageAuthorKind,
     ) -> Result<(), RuntimeError> {
-        Connection::send_with_parts(self, id, text, parts, mode).await
+        Connection::send_with_parts(self, id, text, parts, mode, author_kind).await
     }
     async fn abort(&mut self) -> Result<(), RuntimeError> {
         Connection::abort(self).await
@@ -922,10 +932,16 @@ fn runtime_event(message: SidecarMessage) -> Option<RuntimeEvent> {
                 subagent_id,
                 status,
                 output,
+                known_subagents,
+                error_code,
+                diagnostic,
             } => RuntimeEvent::SubagentLifecycle {
                 subagent_id,
                 status,
                 output,
+                known_subagents,
+                error_code,
+                diagnostic,
             },
             Event::SubagentProgress {
                 subagent_id,

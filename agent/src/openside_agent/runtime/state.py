@@ -15,6 +15,7 @@ from openside_agent.protocol import (
     StateSnapshot,
     UserMessage,
 )
+from openside_agent.runtime.prompt_epoch import PromptEpoch
 
 SubagentStatus = Literal["running", "waiting_human", "completed", "failed", "cancelled"]
 TERMINAL: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
@@ -126,6 +127,7 @@ class SubagentState(BaseModel):
     # A Task started by the front agent: nobody awaits it; its result reaches the
     # conversation as a daemon-queued `[task report]` message.
     background: bool = False
+    prompt_epoch: PromptEpoch | None = None
 
 
 class SnapshotData(BaseModel):
@@ -141,6 +143,7 @@ class SnapshotData(BaseModel):
     deferred_messages: list[str] = Field(default_factory=list[str])
     script_cursor: int = Field(default=0, ge=0)
     title_attempted: bool = False
+    prompt_epoch: PromptEpoch | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -164,6 +167,7 @@ class SnapshotData(BaseModel):
         subagents: list[SubagentState],
         deferred_messages: list[str],
         title_attempted: bool = False,
+        prompt_epoch: PromptEpoch | None = None,
     ) -> AgentState:
         data = cls(
             messages=dump_messages(messages),
@@ -174,6 +178,7 @@ class SnapshotData(BaseModel):
             deferred_messages=deferred_messages,
             script_cursor=cursor,
             title_attempted=title_attempted,
+            prompt_epoch=prompt_epoch,
         )
         _shed_snapshot(data, SNAPSHOT_MEDIA_BUDGET)
         if not _fits(data):

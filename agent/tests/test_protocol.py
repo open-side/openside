@@ -51,7 +51,10 @@ async def test_gate_rejects_added_capability_tool(monkeypatch):
 
     monkeypatch.setattr(
         "openside_agent.runtime.adopted_capabilities",
-        lambda *_: [RogueCapability()],
+        lambda *args, **kwargs: [
+            *adopted_capabilities(*args, **kwargs),
+            RogueCapability(),
+        ],
     )
     async with fake_daemon(model=TestModel()) as (daemon, _):
         model = TestModel()

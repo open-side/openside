@@ -92,6 +92,8 @@ def test_present_examples_follow_the_daemon_catalog_schema():
 async def test_catalog_present_returns_only_card_id(
     tmp_path, monkeypatch, requests, role
 ):
+    front = role in {"front", "chief"}
+    reply = "Here is the option I found."
     install_script(
         tmp_path,
         monkeypatch,
@@ -102,7 +104,9 @@ async def test_catalog_present_returns_only_card_id(
                     call("probe", "check-id", {"value": "{{result:present-1.card_id}}"})
                 ]
             },
-            text_response("Here is the option I found."),
+            {"parts": [call("send_message", "present-reply", {"text": reply})]}
+            if front
+            else text_response(reply),
         ],
     )
     team = (
@@ -111,12 +115,24 @@ async def test_catalog_present_returns_only_card_id(
         else None
     )
     spec = catalog_tool("present")
+    tools = [spec, tool_spec()]
+    if front:
+        send = tool_spec("send_message")
+        send["parameters"] = {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        }
+        tools.append(send)
     async with fake_daemon() as (daemon, session):
         await daemon.open(
-            tools=[spec, tool_spec()],
+            tools=tools,
             agent={
                 "orchestration": "single" if role == "single" else "front",
-                "front_tools": ["present", "probe"],
+                "front_tools": ["present", "probe", "send_message"]
+                if front
+                else ["present", "probe"],
                 "title_needed": False,
             },
             team=team,
@@ -130,11 +146,22 @@ async def test_catalog_present_returns_only_card_id(
         checked = await daemon.until("tool_call")
         assert checked["args"] == {"value": result["card_id"]}
         await daemon.result(checked, {"status": "done", "for_model": "ok"})
-        final = await daemon.until("event", kind="assistant.final")
+        if front:
+            final = await daemon.until("tool_call")
+            assert final["name"] == "send_message" and final["args"] == {"text": reply}
+            await daemon.result(final, {"status": "done", "for_model": {"sent": True}})
+        else:
+            final = await daemon.until("event", kind="assistant.final")
+            assert final["event"]["text"] == reply
         await daemon.until("settled")
+        if front:
+            assert not any(
+                item["type"] == "event"
+                and item["event"]["kind"] in {"assistant.final", "assistant.delta"}
+                for item in daemon.outputs
+            )
         returns = parts(snapshot(daemon).restore_messages(), ToolReturnPart)
         assert [p.content for p in returns if p.tool_name == "present"] == [result]
-        assert final["event"]["text"] == "Here is the option I found."
         assert session.front is (role in {"front", "chief"})
     for messages, info in requests:
         assert PRESENT_INSTRUCTIONS in info.instructions
@@ -149,8 +176,8 @@ async def test_catalog_present_returns_only_card_id(
             expected = CHIEF_INSTRUCTIONS if role == "chief" else TEAMMATE_INSTRUCTIONS
             assert expected in info.instructions
             assert team["persona"] in info.instructions
-            assert team["roster"] in info.instructions
-            assert FRONT_INSTRUCTIONS not in info.instructions
+            assert team["roster"] in str(messages)
+            assert (FRONT_INSTRUCTIONS in info.instructions) is (role == "chief")
         elif role == "front":
             assert FRONT_INSTRUCTIONS in info.instructions
 

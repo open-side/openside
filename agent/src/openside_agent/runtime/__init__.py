@@ -17,6 +17,7 @@ from pydantic_ai import (
     CallDeferred,
     DeferredToolRequests,
     DeferredToolResults,
+    ModelRetry,
     RunContext,
     ToolApproved,
     ToolDenied,
@@ -29,6 +30,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
+    TextContent,
     TextPart,
     TextPartDelta,
     ThinkingPart,
@@ -38,6 +40,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model, ModelRequestContext
 from pydantic_ai.run import AgentRun
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage
 
 from openside_agent import providers, research
@@ -59,6 +62,7 @@ from openside_agent.protocol import (
     Deferred,
     DeferredCall,
     DiscardDeferred,
+    Done,
     Error,
     Event,
     EventBody,
@@ -89,7 +93,11 @@ from openside_agent.protocol import (
     UserMessage,
 )
 from openside_agent.providers.credential_rpc import CredentialReply, DaemonCredentialRpc
+from openside_agent.runtime import memory as memory_context
+from openside_agent.runtime.compaction import IdleCompaction, ReportingCompaction
 from openside_agent.runtime.fork import fork_history
+from openside_agent.runtime.front_output import OUTPUT_NAMES, output_types
+from openside_agent.runtime.prompt_epoch import PromptEpoch, stable_sections
 from openside_agent.runtime.state import (
     TERMINAL,
     PendingCall,
@@ -168,6 +176,18 @@ class SessionHooks(AbstractCapability[None]):
             tool.name
             for tool in request_context.model_request_parameters.declared_function_tools
         }
+        if session.front:
+            parameters = request_context.model_request_parameters
+            expected_outputs = {"stay_silent"}
+            if session.prompt_epoch is not None and any(
+                tool.name == "send_message" for tool in session.prompt_epoch.tools
+            ):
+                expected_outputs.add("send_message")
+            if (
+                parameters.allow_text_output
+                or {tool.name for tool in parameters.output_tools} != expected_outputs
+            ):
+                raise ToolGateError()
         if actual != session.expected_tools:
             raise ToolGateError()
         session.messages = ctx.messages
@@ -176,6 +196,17 @@ class SessionHooks(AbstractCapability[None]):
             accepted.append(session.initial.text)
             await session.accept(session.initial)
             session.initial = None
+        while session.batch:
+            message = session.batch.popleft()
+            injected = ModelRequest(
+                parts=[UserPromptPart(user_prompt(message))],
+                run_id=ctx.run_id,
+                conversation_id=ctx.conversation_id,
+            )
+            ctx.messages.append(injected)
+            request_context.messages = [*request_context.messages, injected]
+            accepted.append(message.text)
+            await session.accept(message)
         while session.steer_buffer:
             message = session.steer_buffer.popleft()
             injected = ModelRequest(
@@ -199,6 +230,42 @@ class SessionHooks(AbstractCapability[None]):
             )
             ctx.messages.extend(loaded)
             request_context.messages = [*request_context.messages, *loaded]
+        if accepted and session.memory_context:
+            session.memory_context = await memory_context.recall(
+                session.reverse_call, "\n".join(accepted)
+            )
+            session.prompt_sections["profile"] = str(
+                session.memory_context.get("profile", "")
+            )
+        if session.prompt_epoch is not None:
+            tail = session.prompt_epoch.tail_context(
+                session.prompt_sections,
+                "\n".join(
+                    filter(
+                        None,
+                        [
+                            session.spec.team.roster
+                            if session.spec is not None
+                            and session.spec.team is not None
+                            else "",
+                            str(session.memory_context.get("tail", "")),
+                        ],
+                    )
+                ),
+            )
+            if tail:
+                request_context.messages = [
+                    *request_context.messages,
+                    ModelRequest(
+                        parts=[UserPromptPart([TextContent(tail)])],
+                    ),
+                ]
+            session.prompt_epoch.record_request(
+                request_context.messages,
+                provider=request_context.model.system,
+                model=request_context.model.model_name,
+                latest_context=tail,
+            )
         session.steer_received.clear()
         await session.event(TurnStarted())
         session.turn_open = True
@@ -227,11 +294,19 @@ class Session:
     def __init__(self, connection: JsonLineConnection, *, model: Model | None = None):
         self.connection = connection
         self.model_override = model
-        self.agent: Agent[None, str | DeferredToolRequests] | None = None
+        self.agent: Agent[None, str | dict[str, Any] | DeferredToolRequests] | None = (
+            None
+        )
         self.spec: Open | None = None
+        self.prompt_epoch: PromptEpoch | None = None
+        self.prompt_sections: dict[str, str] = {}
+        self.memory_context: dict[str, Any] = {}
+        self.memory_task: asyncio.Task[None] | None = None
         self.expected_tools: set[str] = set()
         self.skill_names: list[str] = []
         self.messages: list[ModelMessage] = []
+        self.idle_compaction = IdleCompaction()
+        self.compaction: ReportingCompaction | None = None
         self.pending: dict[str, PendingCall] = {}
         self.pending_delegates: dict[str, PendingDelegate] = {}
         self.children: dict[str, Child] = {}
@@ -239,6 +314,8 @@ class Session:
         self.retries = 3
         self.steer_buffer: deque[UserMessage] = deque()
         self.queue: deque[UserMessage] = deque()
+        self.batch: deque[UserMessage] = deque()
+        self.batch_timer: asyncio.TimerHandle | None = None
         self.steer_received = asyncio.Event()
         self.scripted: ScriptedModel | None = None
         self.title_model: Model | None = None
@@ -248,7 +325,9 @@ class Session:
         self.run_messages: list[str] = []
         self.deferred_messages: list[str] = []
         self.run_task: asyncio.Task[None] | None = None
-        self.run: AgentRun[None, str | DeferredToolRequests] | None = None
+        self.run: AgentRun[None, str | dict[str, Any] | DeferredToolRequests] | None = (
+            None
+        )
         self.abort_requested = False
         self.turn_open = False
         self.shutting_down = False
@@ -262,6 +341,12 @@ class Session:
         self.stack = AsyncExitStack()
 
     async def event(self, event: EventBody) -> None:
+        if isinstance(event, SubagentLifecycle):
+            event.known_subagents = [
+                child.id
+                for child in self.children.values()
+                if child.state.status not in TERMINAL
+            ]
         await self.connection.send(Event(event=event))
 
     def compaction_reporter(
@@ -347,6 +432,7 @@ class Session:
         if spec.resume_state is not None:
             state = SnapshotData.model_validate_json(spec.resume_state.data)
             self.messages = state.restore_messages()
+            self.prompt_epoch = state.prompt_epoch
             self.pending = {item.tool_call_id: item for item in state.pending_deferred}
             self.pending_delegates = {
                 item.tool_call_id: item for item in state.pending_delegates
@@ -358,19 +444,35 @@ class Session:
             for child in self.children.values():
                 for pending in child.pending.values():
                     pending.resolution = None
-                if child.state.status not in TERMINAL and not child.pending:
+                corrupt = any(
+                    "[REDACTED]" in value
+                    for value in (child.id, child.state.model, *child.state.tools)
+                )
+                if corrupt or (
+                    child.state.status not in TERMINAL and not child.pending
+                ):
                     # Nothing can wake a child without tickets; failing it keeps
                     # its parent's delegate call from waiting forever.
                     child.state.status = "failed"
+                    child.pending = {}
                     child.state.result = {
                         "status": "failed",
                         "subagent_id": child.id,
-                        "message": "Subagent run was interrupted",
+                        "error_code": (
+                            "corrupt_child_identity" if corrupt else "interrupted"
+                        ),
+                        "message": (
+                            "Stored child routing identity was redacted; "
+                            "it cannot be recovered"
+                            if corrupt
+                            else "Subagent run was interrupted"
+                        ),
                     }
             for item in self.pending_delegates.values():
                 if item.result is None:
                     item.result = self.child_result(item.subagent_id)
-            self.steer_buffer.extend(state.steer_buffer)
+            # The daemon settles every injected, unconsumed message as interrupted.
+            # Restoring this buffer would replay work already closed durably.
             self.deferred_messages = list(state.deferred_messages)
             cursor = state.script_cursor
             self.title_attempted = state.title_attempted
@@ -406,47 +508,81 @@ class Session:
         if type(retries) is not int or retries < 0:
             raise ValueError("Invalid tool retry limit")
         self.retries = retries
-        profile = spec.config.agent.get("profile")
+        profile = None if self.front else spec.config.agent.get("profile")
         capabilities = [
             SessionHooks(self),
             *adopted_capabilities(spec.config.agent, self.compaction_reporter(None)),
             *research.capabilities(profile),
         ]
-        instructions = list(spec.system_prompt_parts)
+        self.compaction = next(
+            item for item in capabilities if isinstance(item, ReportingCompaction)
+        )
+        policies = [FRONT_INSTRUCTIONS if self.front else SUBAGENT_INSTRUCTIONS]
         if spec.team is not None:
-            instructions.extend(
-                [
-                    CHIEF_INSTRUCTIONS if role == "chief" else TEAMMATE_INSTRUCTIONS,
-                    spec.team.persona,
-                    spec.team.roster,
-                ]
+            policies.append(
+                CHIEF_INSTRUCTIONS if role == "chief" else TEAMMATE_INSTRUCTIONS
             )
-        elif self.front:
-            instructions.append(FRONT_INSTRUCTIONS)
         if "present" in self.expected_tools:
-            instructions.append(PRESENT_INSTRUCTIONS)
-        self.agent = Agent(
+            policies.append(PRESENT_INSTRUCTIONS)
+        self.prompt_sections = stable_sections(
+            spec.system_prompt_parts,
+            persona=spec.team.persona if spec.team is not None else "",
+            policy="\n\n".join(policies),
+        )
+        context = spec.config.agent.get("memory_context")
+        self.memory_context = (
+            cast(dict[str, Any], context) if isinstance(context, dict) else {}
+        )
+        self.prompt_sections["profile"] = str(self.memory_context.get("profile", ""))
+        self.prompt_epoch = PromptEpoch.assemble(
+            self.prompt_sections,
+            [tool for tool in spec.tools if tool.name in self.expected_tools],
+            self.prompt_epoch,
+        )
+        self.expected_tools = {tool.name for tool in self.prompt_epoch.tools}
+        if self.front:
+            self.expected_tools.difference_update(OUTPUT_NAMES)
+        self.skill_names = (
+            index_names(self.prompt_epoch.instructions)
+            if SKILL_TOOL in self.expected_tools
+            else []
+        )
+        self.agent = Agent[None, str | dict[str, Any] | DeferredToolRequests](
             model,
-            output_type=[str, DeferredToolRequests],
+            output_type=(
+                [*output_types(self.prompt_epoch.tools), DeferredToolRequests]
+                if self.front
+                else [str, DeferredToolRequests]
+            ),
             deps_type=type(None),
-            instructions=instructions,
+            instructions=self.prompt_epoch.instructions,
             toolsets=[
                 proxy_toolset(
-                    [tool for tool in spec.tools if tool.name in self.expected_tools],
+                    [
+                        tool
+                        for tool in self.prompt_epoch.tools
+                        if tool.name in self.expected_tools
+                    ],
                     self.reverse_call,
                     retries=retries,
                     continuations={
                         "delegate": self.delegate,
-                        "task_start": self.task_start,
-                        "task_steer": self.task_steer,
-                        "task_cancel": self.task_cancel,
+                        "create_task": self.create_task,
+                        "steer_task": self.steer_task,
+                        "cancel_task": self.cancel_task,
                     },
                 )
             ],
             capabilities=capabilities,
-            model_settings=research.model_settings(profile),
+            model_settings=(
+                ModelSettings(thinking="minimal", max_tokens=1024)
+                if self.front
+                else research.model_settings(profile)
+            ),
             retries=retries,
         )
+        if self.front:
+            self.agent.output_validator(self.finish_front)
         await self.stack.enter_async_context(self.agent)
         # Public toolsets include capability contributions, not just daemon proxies.
         # Capability-owned wrappers need their registry even for preflight listing.
@@ -473,6 +609,24 @@ class Session:
                 startup_ms=int((time.monotonic() - start) * 1000),
             )
         )
+        repaired = False
+        for child in self.children.values():
+            raw_result = child.state.result
+            result = (
+                cast(dict[str, Any], raw_result) if isinstance(raw_result, dict) else {}
+            )
+            if result.get("error_code") == "corrupt_child_identity":
+                repaired = True
+                await self.event(
+                    SubagentLifecycle(
+                        subagent_id=child.id,
+                        status="failed",
+                        error_code="corrupt_child_identity",
+                        diagnostic=str(result["message"]),
+                    )
+                )
+        if repaired:
+            await self.snapshot()
         self.resume_if_ready()
 
     async def reverse_call(
@@ -532,6 +686,10 @@ class Session:
     def start(
         self, message: UserMessage | None, results: DeferredToolResults | None = None
     ) -> None:
+        self.idle_compaction.cancel()
+        if self.batch_timer is not None:
+            self.batch_timer.cancel()
+            self.batch_timer = None
         self.initial = message
         # A message-less resume finishes the messages whose run deferred.
         self.run_messages = (
@@ -559,9 +717,37 @@ class Session:
             self.start(self.steer_buffer.popleft())
             return True
         if self.queue:
-            self.start(self.queue.popleft())
+            if self.batch_timer is None:
+                self.batch_timer = asyncio.get_running_loop().call_later(
+                    0.1, self.start_batch
+                )
             return True
         return False
+
+    def start_batch(self) -> None:
+        self.batch_timer = None
+        if (
+            self.run_task is not None
+            or self.waiting()
+            or self.shutting_down
+            or self.fatal
+        ):
+            return
+        if self.steer_buffer:
+            self.start(self.steer_buffer.popleft())
+            return
+        if not self.queue:
+            return
+        first = self.queue.popleft()
+        size = len(first.text.encode("utf-8"))
+        while self.queue and len(self.batch) < 31:
+            next_size = len(self.queue[0].text.encode("utf-8"))
+            if size + next_size > MAX_USER_TEXT_BYTES:
+                break
+            size += next_size
+            self.batch.append(self.queue.popleft())
+        self.start(first)
+        self.run_messages.extend(message.message_id for message in self.batch)
 
     def deferred_wire(self) -> list[DeferredCall]:
         """Daemon-visible deferred calls: parent tickets plus waiting children's."""
@@ -583,23 +769,56 @@ class Session:
                 subagents=[child.capture() for child in self.children.values()],
                 deferred_messages=self.deferred_messages,
                 title_attempted=self.title_attempted,
+                prompt_epoch=self.prompt_epoch,
             )
         except SnapshotTooLarge as exc:
             await self.error("internal", str(exc))
             return
         await self.connection.send(StateSnapshot(state=state))
 
+    async def finish_front(
+        self, ctx: RunContext[None], output: str | dict[str, Any] | DeferredToolRequests
+    ) -> str | dict[str, Any] | DeferredToolRequests:
+        if ctx.tool_name == "stay_silent" and output == {}:
+            return {}
+        if ctx.tool_name != "send_message" or not isinstance(output, dict):
+            raise ModelRetry("End the turn with send_message or stay_silent.")
+        if ctx.tool_call_id is None:
+            raise ToolGateError()
+        outcome = await self.reverse_call(
+            ctx.tool_call_id, "send_message", output, None
+        )
+        if outcome.status == "done":
+            return output
+        if outcome.status == "denied":
+            raise ModelRetry(
+                outcome.reason + (f"; {outcome.hint}" if outcome.hint else "")
+            )
+        if outcome.status == "error":
+            raise ModelRetry(outcome.message)
+        raise ModelRetry(
+            "Message delivery did not complete; use a valid message output."
+        )
+
     async def stream_event(self, event: object, held: list[str] | None = None) -> None:
+        if self.front:
+            return
         if isinstance(event, PartStartEvent):
             if isinstance(event.part, TextPart) and event.part.content:
                 await self.text_delta(event.part.content, held)
-            elif isinstance(event.part, ThinkingPart) and event.part.content:
+            elif (
+                not self.front
+                and isinstance(event.part, ThinkingPart)
+                and event.part.content
+            ):
                 await self.event(ThinkingDelta(text=event.part.content))
         elif isinstance(event, PartDeltaEvent):
             if isinstance(event.delta, TextPartDelta):
                 await self.text_delta(event.delta.content_delta, held)
             elif (
-                isinstance(event.delta, ThinkingPartDelta) and event.delta.content_delta
+                not self.front
+                and isinstance(event.delta, ThinkingPartDelta)
+                and event.delta.content_delta
             ):
                 await self.event(ThinkingDelta(text=event.delta.content_delta))
 
@@ -637,9 +856,13 @@ class Session:
                             async for event in stream:
                                 await self.stream_event(event, held)
                         # Text beside tool calls is narration, never the final answer.
-                        if held and any(
-                            isinstance(part, ToolCallPart)
-                            for part in stream.response.parts
+                        if (
+                            not self.front
+                            and held
+                            and any(
+                                isinstance(part, ToolCallPart)
+                                for part in stream.response.parts
+                            )
                         ):
                             await self.event(AssistantDelta(text="".join(held)))
                 result = run.result
@@ -677,11 +900,20 @@ class Session:
                     if wire:
                         await self.connection.send(Deferred(calls=wire))
                 else:
-                    await self.event(AssistantFinal(text=result.output))
+                    if (
+                        not self.front
+                        and isinstance(result.output, str)
+                        and result.output
+                    ):
+                        await self.event(AssistantFinal(text=result.output))
                     if not self.title_attempted:
                         self.title_attempted = True
                         self.title_task = asyncio.create_task(
-                            self.propose_title(result.output)
+                            self.propose_title(
+                                str(result.output.get("text", ""))
+                                if isinstance(result.output, dict)
+                                else result.output
+                            )
                         )
         except RunCancelled as exc:
             self.messages = exc.all_messages()
@@ -706,6 +938,7 @@ class Session:
         finally:
             self.run = None
             self.initial = None
+            self.batch.clear()
             if not self.fatal:
                 if self.turn_open:
                     await self.event(TurnEnded())
@@ -731,6 +964,67 @@ class Session:
                 and not self.children_active()
             ):
                 await self.connection.send(Settled())
+                self.schedule_idle_compaction()
+                if outcome == "completed" and self.front and self.memory_context:
+                    if self.memory_task is None or self.memory_task.done():
+                        self.memory_task = asyncio.create_task(
+                            self.consolidate_memory(
+                                dict(self.memory_context), self.messages[-12:]
+                            )
+                        )
+
+    async def consolidate_memory(
+        self, context: dict[str, Any], messages: list[ModelMessage]
+    ) -> None:
+        assert self.spec is not None
+        transcript = memory_context.owner_turn_text(messages)
+        try:
+            front = self.spec.config.agent.get("front_model")
+            model = self.model_override
+            if self.scripted is not None:
+                return
+            if model is None:
+                model = await providers.build_model(
+                    front if isinstance(front, str) else self.spec.model.id,
+                    [self.spec.model.id, *self.spec.model.fallback],
+                    self.spec.config.credentials,
+                    credential_rpc=self.credential_client,
+                )
+            await memory_context.consolidate(
+                self.reverse_call, model, context, transcript
+            )
+        except Exception:
+            # A failed extraction cannot invalidate an already settled owner turn.
+            pass
+
+    def schedule_idle_compaction(self) -> None:
+        if self.compaction is None:
+            return
+
+        def current() -> tuple[object, list[ModelMessage], bool]:
+            return (
+                self.prompt_epoch.id if self.prompt_epoch is not None else None,
+                self.messages,
+                bool(
+                    self.run_task
+                    or self.queue
+                    or self.batch
+                    or self.steer_buffer
+                    or self.waiting()
+                    or any(child.active for child in self.children.values())
+                    or self.shutting_down
+                    or self.fatal
+                ),
+            )
+
+        async def commit(messages: list[ModelMessage]) -> None:
+            self.messages = messages
+            await self.compaction_reporter(None)()
+            await self.snapshot()
+
+        self.idle_compaction.schedule(
+            self.compaction, self.messages, current()[0], current, commit
+        )
 
     async def propose_title(self, reply: str) -> None:
         if self.title_model is None:
@@ -894,7 +1188,7 @@ class Session:
             raise CallDeferred(metadata={"subagent_id": child.id})
         return child.state.result
 
-    async def task_start(
+    async def create_task(
         self, ctx: RunContext[None], args: dict[str, Any], admitted: Any
     ) -> Any:
         """Start the admitted Task and return at once; the front agent stays free."""
@@ -915,7 +1209,7 @@ class Session:
         self.start_child(child, child.state.task, None)
         return {"task_id": child.id, "status": "running"}
 
-    async def task_steer(
+    async def steer_task(
         self, ctx: RunContext[None], args: dict[str, Any], admitted: Any
     ) -> Any:
         delivered = await self.steer_subagent(
@@ -929,7 +1223,7 @@ class Session:
             return {"status": "denied", "reason": "task_finished"}
         return {"task_id": str(args.get("task_id", "")), "status": "steered"}
 
-    async def task_cancel(
+    async def cancel_task(
         self, ctx: RunContext[None], args: dict[str, Any], admitted: Any
     ) -> Any:
         # The daemon already recorded the cancellation; stop the child here.
@@ -944,6 +1238,8 @@ class Session:
         assert self.spec is not None
         spec = self.spec
         allowed = set(child.state.tools)
+        # Output references remain host-scoped; this does not grant filesystem reads.
+        allowed.add("read")
         model: Model
         if self.scripted is not None:
             child.scripted = self.scripted.for_subagent(
@@ -957,7 +1253,7 @@ class Session:
         else:
             model = await providers.build_model(
                 child.state.model,
-                [],
+                [model for model in spec.model.fallback if model != child.state.model],
                 spec.config.credentials,
                 credential_rpc=self.credential_client,
                 subagent=child.state.id,
@@ -970,17 +1266,29 @@ class Session:
                 tool_call_id, name, args, ticket, subagent=child.id
             )
 
-        instructions = [*spec.system_prompt_parts, SUBAGENT_INSTRUCTIONS]
+        policies = [SUBAGENT_INSTRUCTIONS]
         if "present" in allowed:
-            instructions.append(PRESENT_INSTRUCTIONS)
+            policies.append(PRESENT_INSTRUCTIONS)
+        child.prompt_sections = stable_sections(
+            spec.system_prompt_parts, policy="\n\n".join(policies)
+        )
+        if self.prompt_epoch is not None:
+            child.prompt_sections["profile"] = self.prompt_epoch.sections.get(
+                "profile", ""
+            )
+        child.state.prompt_epoch = PromptEpoch.assemble(
+            child.prompt_sections,
+            [tool for tool in spec.tools if tool.name in allowed],
+            child.state.prompt_epoch,
+        )
         agent = Agent(
             model,
             output_type=[str, DeferredToolRequests],
             deps_type=type(None),
-            instructions=instructions,
+            instructions=child.state.prompt_epoch.instructions,
             toolsets=[
                 proxy_toolset(
-                    [tool for tool in spec.tools if tool.name in allowed],
+                    child.state.prompt_epoch.tools,
                     call,
                     retries=self.retries,
                 )
@@ -1023,6 +1331,7 @@ class Session:
         assert self.spec is not None
         status: SubagentStatus = "failed"
         output = ""
+        diagnostic: str | None = None
         messages = child.state.messages
         pending: dict[str, PendingCall] = {}
         try:
@@ -1079,8 +1388,23 @@ class Session:
                 return
             messages = dump_messages(exc.all_messages())
             status = "cancelled"
-        except Exception:
+        except Exception as exc:
             status = "failed"
+            # The daemon owns the complete secret registry, including browser cookies.
+            diagnostic = f"{type(exc).__name__}: exception details unavailable"
+            try:
+                safe = await self.reverse_call(
+                    uuid4().hex,
+                    "__redact_diagnostic",
+                    {"diagnostic": f"{type(exc).__name__}: {exc}"},
+                    None,
+                    child.id,
+                )
+                if isinstance(safe, Done) and isinstance(safe.for_model, str):
+                    diagnostic = safe.for_model
+            except Exception:
+                # A diagnostic transport failure must not replace the primary failure.
+                pass
         finally:
             child.run = None
             child.task = None
@@ -1098,7 +1422,8 @@ class Session:
             child.state.result = {
                 "status": "failed",
                 "subagent_id": child.id,
-                "message": "Subagent run failed",
+                "error_code": "child_run_failed",
+                "message": diagnostic,
             }
         elif status == "cancelled":
             child.state.result = {"status": "cancelled", "subagent_id": child.id}
@@ -1107,6 +1432,8 @@ class Session:
                 subagent_id=child.id,
                 status=status,
                 output=output if status == "completed" else None,
+                error_code="child_run_failed" if status == "failed" else None,
+                diagnostic=diagnostic,
             )
         )
         await self.child_stopped(child)
@@ -1133,10 +1460,6 @@ class Session:
         if self.resume_if_ready():
             return
         if self.start_next(allow_steer=True):
-            return
-        # A finished Task's report is queued by the daemon and starts the next front
-        # run; settling here would announce a settled session just before it.
-        if child.state.background and child.state.status in TERMINAL:
             return
         if not self.children_active():
             await self.connection.send(Settled())
@@ -1206,6 +1529,10 @@ class Session:
             await asyncio.wait(tasks)
 
     async def abort(self) -> None:
+        self.idle_compaction.cancel()
+        if self.batch_timer is not None:
+            self.batch_timer.cancel()
+            self.batch_timer = None
         if self.run_task is not None:
             self.abort_requested = True
             if self.run is not None:
@@ -1224,6 +1551,18 @@ class Session:
                 message = await self.connection.receive()
                 if message is None:
                     break
+                if isinstance(
+                    message,
+                    (
+                        UserMessage,
+                        SubagentSteer,
+                        SubagentCancel,
+                        DiscardDeferred,
+                        Abort,
+                        Shutdown,
+                    ),
+                ):
+                    self.idle_compaction.cancel()
                 if isinstance(message, Error) and message.fatal:
                     self.fatal = True
                     break
@@ -1290,10 +1629,12 @@ class Session:
                             )
                         )
                         continue
-                    if self.run_task is None and not self.waiting():
-                        self.start(message)
-                    elif message.mode == "queue":
+                    if message.author_kind != "person" or message.mode == "queue":
                         self.queue.append(message)
+                        if self.run_task is None:
+                            self.start_next(allow_steer=True)
+                    elif self.run_task is None and not self.waiting():
+                        self.start(message)
                     else:
                         self.steer_buffer.append(message)
                         self.steer_received.set()
@@ -1327,6 +1668,9 @@ class Session:
                 await self.abort()
                 await self.stop_children()
                 await self.stop_title()
+                if self.memory_task is not None and not self.memory_task.done():
+                    self.memory_task.cancel()
+                    await asyncio.gather(self.memory_task, return_exceptions=True)
             finally:
                 try:
                     await self.stack.aclose()

@@ -140,3 +140,25 @@ async def test_result_refs_follow_nested_fields_and_list_indexes():
 
     assert (await agent.run("read it")).output == "done"
     assert seen == ["assigned-tab"]
+
+
+def test_result_refs_resolve_nested_attachment_arguments():
+    from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+
+    from openside_agent.scripted import resolve_refs
+
+    messages: list[ModelMessage] = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    "get_tasks",
+                    {"tasks": [{"artifacts": ["documents/tasks/task/report.md"]}]},
+                    tool_call_id="status",
+                )
+            ]
+        )
+    ]
+    assert resolve_refs(
+        {"attachments": [{"artifact": "{{result:status.tasks.0.artifacts.0}}"}]},
+        messages,
+    ) == {"attachments": [{"artifact": "documents/tasks/task/report.md"}]}

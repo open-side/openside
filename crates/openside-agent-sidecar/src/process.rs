@@ -149,8 +149,11 @@ impl AgentSession for SidecarSession {
         text: String,
         parts: Vec<ContentPart>,
         mode: QueueMode,
+        author_kind: openside_core::MessageAuthorKind,
     ) -> Result<(), RuntimeError> {
-        self.connection.send_with_parts(id, text, parts, mode).await
+        self.connection
+            .send_with_parts(id, text, parts, mode, author_kind)
+            .await
     }
 
     async fn abort(&mut self) -> Result<(), RuntimeError> {

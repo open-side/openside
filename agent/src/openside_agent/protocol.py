@@ -88,6 +88,7 @@ class UserMessage(Envelope):
     message_id: str
     text: str
     mode: Literal["queue", "steer", "now"]
+    author_kind: Literal["person", "agent_client", "channel", "internal"] = "person"
     parts: list[ContentPart] = Field(default_factory=list[ContentPart])
 
 
@@ -331,8 +332,11 @@ class SubagentLifecycle(WireModel):
     kind: Literal["subagent.lifecycle"] = "subagent.lifecycle"
     subagent_id: str
     status: str
-    # Final answer, only with status "completed".
+    # Failure diagnostics are redacted by the daemon before recording.
     output: str | None = None
+    known_subagents: list[str] | None = None
+    error_code: str | None = None
+    diagnostic: str | None = None
 
 
 class SubagentProgress(WireModel):

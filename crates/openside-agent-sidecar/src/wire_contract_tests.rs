@@ -229,6 +229,7 @@ fn daemon_samples() -> Vec<DaemonMessage> {
             message_id: MessageId::new("message-1"),
             text: "hello".into(),
             mode,
+            author_kind: openside_core::MessageAuthorKind::Person,
             parts: Vec::new(),
         });
     }
@@ -236,6 +237,7 @@ fn daemon_samples() -> Vec<DaemonMessage> {
         message_id: MessageId::new("message-2"),
         text: "see attached".into(),
         mode: MessageMode::Queue,
+        author_kind: openside_core::MessageAuthorKind::Channel,
         parts: vec![png_part(), stored_only_part()],
     });
     samples
@@ -430,11 +432,17 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
             subagent_id: "sub-1".into(),
             status: "running".into(),
             output: None,
+            known_subagents: None,
+            error_code: None,
+            diagnostic: None,
         },
         Event::SubagentLifecycle {
             subagent_id: "sub-1".into(),
             status: "completed".into(),
             output: Some("done".into()),
+            known_subagents: None,
+            error_code: None,
+            diagnostic: None,
         },
         Event::SubagentProgress {
             subagent_id: "sub-1".into(),
@@ -526,6 +534,7 @@ fn credential_attempt_bound_matches_the_daemon_owner() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn team_context_wire_caps_and_roles() {
     for role in [

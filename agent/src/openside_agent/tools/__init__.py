@@ -38,6 +38,8 @@ def proxy_toolset(
 
     def make_proxy(name: str) -> Callable[..., Awaitable[Any]]:
         async def proxy(ctx: RunContext[None], **args: Any) -> Any:
+            if name.startswith("__"):
+                raise ModelRetry("Internal runtime operations are not model tools")
             if ctx.tool_call_id is None:
                 raise RuntimeError("Tool call context has no call identifier")
             ticket: str | None = None

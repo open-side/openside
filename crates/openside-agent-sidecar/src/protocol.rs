@@ -6,6 +6,10 @@ use openside_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+fn person_author() -> openside_core::MessageAuthorKind {
+    openside_core::MessageAuthorKind::Person
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Envelope<T> {
     pub v: u8,
@@ -37,6 +41,8 @@ pub(crate) enum DaemonMessage {
         message_id: MessageId,
         text: String,
         mode: MessageMode,
+        #[serde(default = "person_author")]
+        author_kind: openside_core::MessageAuthorKind,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         parts: Vec<Part>,
     },
@@ -305,6 +311,12 @@ pub(crate) enum Event {
         status: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        known_subagents: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diagnostic: Option<String>,
     },
     #[serde(rename = "subagent.progress")]
     SubagentProgress {

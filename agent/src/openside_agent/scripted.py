@@ -171,6 +171,14 @@ def last_user_text(messages: list[ModelMessage]) -> str:
             for part in reversed(message.parts):
                 if isinstance(part, UserPromptPart) and isinstance(part.content, str):
                     return part.content
+                if isinstance(part, UserPromptPart) and isinstance(part.content, list):
+                    texts = [item for item in part.content if isinstance(item, str)]
+                    if texts:
+                        return (
+                            texts[1]
+                            if len(texts) > 1 and '"provenance"' in texts[0]
+                            else texts[0]
+                        )
     return ""
 
 
@@ -197,10 +205,22 @@ def resolve_refs(args: dict[str, Any], messages: list[ModelMessage]) -> dict[str
                         return "" if content is None else str(content)
         return ""
 
-    return {
-        key: REF.sub(value, item) if isinstance(item, str) else item
-        for key, item in args.items()
-    }
+    def resolve(item: Any) -> Any:
+        if isinstance(item, str):
+            if item == "{{user_text}}":
+                return last_user_text(messages)
+            if item == "{{media_digest}}":
+                return media_digest(messages)
+            return REF.sub(value, item)
+        if isinstance(item, list):
+            return [resolve(child) for child in cast(list[Any], item)]
+        if isinstance(item, dict):
+            return {
+                key: resolve(child) for key, child in cast(dict[str, Any], item).items()
+            }
+        return item
+
+    return {key: resolve(item) for key, item in args.items()}
 
 
 def media_digest(messages: list[ModelMessage]) -> str:
