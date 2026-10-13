@@ -70,3 +70,57 @@
 
 ## 9. 세션 삭제와 묘비
 삭제된 세션에는 **어떤 메시지 ID 로도** 이벤트를 추가할 수 없다(이전에 저장된 ID 를 되풀이하는 멱등 경로 포함). 삭제는 세션 액터 안에서 진행 중 실행·열린 티켓·대기 중 메시지를 닫고 묘비를 남긴 뒤 액터를 종료하므로, 삭제와 동시에 들어온 Deliver·heartbeat 가 런타임을 다시 열거나 도구를 실행하지 못한다.
+
+## 10. Agent proposals and owner consent
+
+The person's explicit `POST /v1/routines` action still creates a routine directly.
+The local CLI uses the Unix socket; the web app and paired person devices use their
+existing person credentials. Direct creation and payload-changing `PATCH` requests
+require `person_device` in addition to `admin` (the local socket is exempt). An agent
+client may pause an existing routine with `{"enabled":false}`, but may not change its
+name, schedule, action, catch-up setting or resume it without a new person action.
+
+Both the chief/front and workers can call `propose_routine`. Its arguments are the
+existing `CreateRoutineRequest`: `name`, `schedule`, `action`, optional `enabled`
+(default `true`) and `catch_up` (default `false`). The tool validates the request and
+its live target without inserting anything into `routines.db`. Secret-bearing text
+is refused rather than silently changing what will be approved.
+
+```json
+{
+  "name": "Morning briefing",
+  "schedule": {"type": "cron", "expr": "0 9 * * 1-5", "timezone": "Asia/Seoul"},
+  "action": {"type": "agent", "agent_id": "chief", "prompt": "Summarize today's priorities"},
+  "enabled": true,
+  "catch_up": false
+}
+```
+
+The result is an existing external `confirm` ticket and Confirmation Card. Its
+instructions show the complete normalized request, including the exact prompt,
+schedule/timezone and dispatch target. The durable `Ticket.tool.args` is the sole
+proposal payload; there is no in-memory proposal map and no briefly enabled routine
+that is disabled afterward. Agent targets resolve to that active agent's permanent
+home thread at dispatch, never to an arbitrary fallback session.
+
+Approval uses the existing `POST /v1/tickets/{id}/resolve` path and requires a
+distinct person identity with approval authority. The answer must be `true` or
+`"approve"`; it cannot supply an edited configuration. The daemon creates exactly
+the stored request and resolves the ticket with
+`{"approved":true,"status":"created","routine_id":"…"}`. Workers resume through
+the existing external-ticket result continuation, rather than calling creation
+again. A new prompt, schedule or target needs a fresh proposal and fresh approval;
+reusing the same tool-call identity with changed arguments is refused.
+
+Declining, rejecting, expiring or cancelling an unanswered proposal creates no
+routine. Pending tickets and their payloads survive daemon restart. Replaying the
+same proposal call reuses its original ticket, including a terminal one; replaying
+an HTTP resolution cannot create another routine.
+
+`routines.db` additionally stores `approved_routines` receipts, keyed by ticket id.
+The receipt and routine insertion commit in one SQLite transaction. If creation
+committed but the ticket-resolution append was interrupted, retry or ticket closure
+reports that prior approved creation instead of duplicating it or falsely claiming
+it was declined. Receipts retain the exact approved payload and outlive routine
+deletion, so replay cannot recreate a routine the person removed. They are creation
+receipts, not resumable external-side-effect workflows.

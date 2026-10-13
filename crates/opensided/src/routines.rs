@@ -7,6 +7,7 @@
 //! analysis can tell them from user messages.
 
 mod api;
+pub(crate) mod proposals;
 
 use std::{sync::Arc, time::Duration};
 

@@ -5,55 +5,55 @@ use serde::{Deserialize, Serialize};
 
 use crate::PolicyMode;
 
-/// When a routine fires.
+/// Wall-clock or elapsed-time trigger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RoutineSchedule {
-    /// POSIX five-field cron expression (minute hour day-of-month month day-of-week).
+    /// POSIX minute/hour/day/month/weekday.
     Cron {
-        /// Cron expression; `@hourly`/`@daily`-style aliases are accepted.
+        /// Accepts @hourly/@daily aliases.
         expr: String,
         /// IANA time zone name; UTC when omitted.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timezone: Option<String>,
     },
-    /// Fixed period anchored at the moment the routine was created or last rescheduled.
+    /// Anchored at creation or last reschedule.
     Interval {
-        /// Seconds between runs; at least one.
+        /// Seconds; >=1.
         secs: u64,
     },
 }
 
-/// What a routine does when it fires.
+/// Dispatch destination and payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RoutineAction {
-    /// Create a fresh session and submit the prompt as its first message.
+    /// First message in a fresh session.
     NewSession {
-        /// Prompt submitted to the new session.
+        /// Initial user message.
         prompt: String,
-        /// Permission mode override, or the daemon default when omitted.
+        /// Omitted: daemon default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<PolicyMode>,
-        /// Absolute workspace path, canonicalized by the daemon when the run starts.
+        /// Absolute path; canonicalized at dispatch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace: Option<String>,
-        /// Model override, or the configured default when omitted.
+        /// Omitted: configured model.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
     },
-    /// Deliver to the active owner's permanent home thread.
+    /// Active owner's permanent home thread.
     Agent {
-        /// Registry identity resolved at dispatch, never a fallback session.
+        /// Resolved at dispatch; never falls back to a session.
         agent_id: String,
-        /// Prompt queued only while the owner remains active.
+        /// Queued only while owner is active.
         prompt: String,
     },
-    /// Inject a follow-up (queue lane) message into an existing session.
+    /// Queue a follow-up in an existing session.
     Heartbeat {
-        /// Session that receives the message.
+        /// Existing destination.
         session_id: SessionId,
-        /// Message text.
+        /// Queued user message.
         prompt: String,
     },
 }
@@ -113,20 +113,20 @@ pub struct RoutineList {
     pub routines: Vec<Routine>,
 }
 
-/// Routine creation request.
+/// Schedule and dispatch configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRoutineRequest {
-    /// Human-readable name; must not be blank.
+    /// Nonblank display name.
     pub name: String,
-    /// Firing schedule.
+    /// Determines next occurrence.
     pub schedule: RoutineSchedule,
-    /// Action performed on each run.
+    /// Runs on each occurrence.
     pub action: RoutineAction,
-    /// Start enabled; defaults to true.
+    /// Default true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    /// Run once for the latest occurrence missed while the daemon was down; defaults to false.
+    /// Replay latest missed occurrence after downtime; default false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catch_up: Option<bool>,
 }

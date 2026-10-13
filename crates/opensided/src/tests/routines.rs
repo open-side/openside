@@ -759,6 +759,17 @@ async fn deleting_an_active_session_races_cleanly_with_queued_work_and_heartbeat
     let daemon = daemon_with_model(root.path(), &runtime).await;
     let session = create_session(&daemon, "busy", PolicyMode::Guard, None).await;
     let router = api::router(daemon.shared.clone(), true);
+    let (_, agent_token) = daemon
+        .shared
+        .db
+        .pair_as(
+            "Queued sender".into(),
+            vec![CapabilityScope::Admin],
+            DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap();
+    let queue_router = api::router(daemon.shared.clone(), false);
     // A genuinely running turn, with more work queued behind it.
     let (status, _) = send(
         &router,
@@ -769,13 +780,17 @@ async fn deleting_an_active_session_races_cleanly_with_queued_work_and_heartbeat
     .await;
     assert!(status.is_success());
     until(|| runtime.0.lock().sent.len() == 1).await;
-    let (status, _) = send(
-        &router,
-        "POST",
-        "/v1/sessions/busy/messages",
-        json!({"text":"later","mode":"queue"}),
-    )
-    .await;
+    let status = queue_router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/sessions/busy/messages",
+            json!({"text":"later","mode":"queue"}),
+            Some(&agent_token),
+        ))
+        .await
+        .unwrap()
+        .status();
     assert!(status.is_success());
     let id = heartbeat_to(&router, &session).await;
     let opens = || {
@@ -792,13 +807,17 @@ async fn deleting_an_active_session_races_cleanly_with_queued_work_and_heartbeat
     let attempts = async {
         let mut statuses = Vec::new();
         for round in 0..4 {
-            let (status, _) = send(
-                &router,
-                "POST",
-                "/v1/sessions/busy/messages",
-                json!({"text":format!("race {round}"),"mode":"queue"}),
-            )
-            .await;
+            let status = queue_router
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/v1/sessions/busy/messages",
+                    json!({"text":format!("race {round}"),"mode":"queue"}),
+                    Some(&agent_token),
+                ))
+                .await
+                .unwrap()
+                .status();
             statuses.push(status);
             let run = run_now(&router, &id).await;
             assert!(
@@ -1121,5 +1140,610 @@ async fn a_cursor_beyond_the_log_is_refused_and_a_current_cursor_still_ends_on_d
         .expect("the stream must end by itself")
         .unwrap();
     assert!(String::from_utf8_lossy(&body).contains("session.deleted"));
+    daemon.shutdown().await;
+}
+
+async fn propose_routine(
+    daemon: &Daemon,
+    session: &SessionId,
+    payload: Value,
+    call_id: &str,
+) -> Ticket {
+    let outcome = host(daemon, session)
+        .await
+        .call(call("propose_routine", payload, call_id))
+        .await;
+    let ToolOutcome::Deferred { ticket, kind } = outcome else {
+        panic!("Expected a routine confirmation: {outcome:?}");
+    };
+    assert_eq!(kind, DeferKind::External);
+    crate::tickets::get(&daemon.shared, &ticket)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn routine_proposal_is_inert_until_exact_payload_is_approved() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon_with_model(root.path(), &runtime).await;
+    let session = create_session(&daemon, "proposal-target", PolicyMode::Guard, None).await;
+    let payload = json!({
+        "name":"Daily summary",
+        "schedule":{"type":"cron","expr":"0 9 * * 1-5","timezone":"Asia/Seoul"},
+        "action":{"type":"heartbeat","session_id":session,"prompt":"Summarize the inbox exactly"},
+        "enabled":true,"catch_up":false
+    });
+    let ticket = propose_routine(&daemon, &session, payload.clone(), "routine-proposal").await;
+    assert_eq!(ticket.kind, TicketKind::Confirm);
+    assert_eq!(ticket.tool.as_ref().unwrap().args, payload);
+    let instructions = ticket.instructions.as_deref().unwrap();
+    for text in [
+        "Summarize the inbox exactly",
+        "0 9 * * 1-5",
+        "Asia/Seoul",
+        "proposal-target",
+    ] {
+        assert!(instructions.contains(text), "{instructions}");
+    }
+    let card = ticket.card.as_ref().unwrap();
+    assert_eq!(card.kind, CardKind::Confirmation);
+    assert_eq!(card.status, CardStatus::Pending);
+    assert!(card.actions.iter().any(|action| action.id == "approve"));
+    let scheduler = daemon.shared.routines.get().unwrap();
+    scheduler.tick().await.unwrap();
+    assert!(scheduler.list().unwrap().is_empty());
+    assert!(runtime.0.lock().sent.is_empty());
+
+    let response = person_resolve(&daemon, &ticket.id, json!(true)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let resolved = json_body(response).await;
+    assert_eq!(resolved["resolution"]["approved"], true);
+    let routine_id = resolved["resolution"]["routine_id"].as_str().unwrap();
+    let routine = scheduler.get(routine_id).unwrap();
+    assert_eq!(routine.name, payload["name"]);
+    assert_eq!(
+        serde_json::to_value(&routine.schedule).unwrap(),
+        payload["schedule"]
+    );
+    assert_eq!(
+        serde_json::to_value(&routine.action).unwrap(),
+        payload["action"]
+    );
+    assert!(routine.enabled);
+    assert!(!routine.catch_up);
+    let run = scheduler.run_now(routine_id).await.unwrap();
+    assert_eq!(run.session_id, Some(session.clone()));
+    until(|| !runtime.0.lock().sent.is_empty()).await;
+    assert_eq!(runtime.0.lock().sent[0].2, "Summarize the inbox exactly");
+
+    let replay = person_resolve(&daemon, &ticket.id, json!(true)).await;
+    assert_eq!(replay.status(), StatusCode::CONFLICT);
+    let replayed = propose_routine(&daemon, &session, payload, "routine-proposal").await;
+    assert_eq!(replayed.id, ticket.id);
+    assert_eq!(replayed.status, TicketStatus::Resolved);
+    assert_eq!(scheduler.list().unwrap().len(), 1);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn routine_proposal_front_and_worker_use_the_same_confirmation_surface() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = resolved_config(root.path());
+    config.loaded.config.agent.orchestration = openside_config::Orchestration::Front;
+    let runtime = TestRuntime::default();
+    let daemon = Daemon::open_runtime(config, runtime.clone()).await.unwrap();
+    let session = create_session(&daemon, "routine-front", PolicyMode::Full, None).await;
+    daemon
+        .shared
+        .command(&session, crate::engine::Action::Recover)
+        .await
+        .unwrap();
+    let opened = runtime.0.lock().opened.clone();
+    let config: Value = serde_json::from_str(&opened[0].agent_json).unwrap();
+    assert!(config["front_tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|name| name == "propose_routine"));
+    let payload = interval_routine(new_session_action("Check recurring work"));
+    let front = propose_routine(&daemon, &session, payload.clone(), "front-proposal").await;
+    assert!(front.origin.subagent_id.is_none());
+
+    let parent = host(&daemon, &session).await;
+    let admitted = parent
+        .call(call(
+            "create_task",
+            json!({"goal":"Propose recurring work","tools":["propose_routine"]}),
+            "routine-worker",
+        ))
+        .await;
+    let ToolOutcome::Done { for_model_json } = admitted else {
+        panic!("Expected worker admission: {admitted:?}");
+    };
+    let admitted: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(admitted["tools"], json!(["propose_routine"]));
+    let task_id = admitted["subagent_id"].as_str().unwrap();
+    let mut proposed = call("propose_routine", payload, "worker-proposal");
+    proposed.subagent = Some(task_id.into());
+    let outcome = parent.call(proposed).await;
+    let ToolOutcome::Deferred { ticket, kind } = outcome else {
+        panic!("Expected worker confirmation: {outcome:?}");
+    };
+    assert_eq!(kind, DeferKind::External);
+    let ticket = crate::tickets::get(&daemon.shared, &ticket)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ticket.origin.subagent_id.as_deref(), Some(task_id));
+    assert!(daemon
+        .shared
+        .routines
+        .get()
+        .unwrap()
+        .list()
+        .unwrap()
+        .is_empty());
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn routine_proposal_rejection_and_expiry_never_schedule() {
+    for expired in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = resolved_config(root.path());
+        if expired {
+            config.loaded.config.tickets.confirm_ttl_secs = 1;
+        }
+        let daemon = Daemon::open_runtime(config, TestRuntime::default())
+            .await
+            .unwrap();
+        let session = create_session(&daemon, "inert-proposal", PolicyMode::Guard, None).await;
+        let payload = interval_routine(new_session_action("Never before approval"));
+        let ticket = propose_routine(&daemon, &session, payload.clone(), "inert").await;
+        if expired {
+            tokio::time::sleep(Duration::from_millis(1100)).await;
+            crate::tickets::expire(&daemon.shared).await.unwrap();
+            let ticket = crate::tickets::get(&daemon.shared, &ticket.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(ticket.status, TicketStatus::Expired);
+        } else {
+            let response = person_resolve(&daemon, &ticket.id, json!(false)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(json_body(response).await["resolution"]["approved"], false);
+        }
+        let late = person_resolve(&daemon, &ticket.id, json!(true)).await;
+        assert_eq!(late.status(), StatusCode::CONFLICT);
+        let replay = propose_routine(&daemon, &session, payload, "inert").await;
+        assert_eq!(replay.id, ticket.id);
+        let scheduler = daemon.shared.routines.get().unwrap();
+        scheduler.tick().await.unwrap();
+        assert!(scheduler.list().unwrap().is_empty());
+        daemon.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn routine_proposal_changed_payload_needs_a_new_approval() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&daemon, "bound-proposal", PolicyMode::Guard, None).await;
+    let original = interval_routine(new_session_action("Original prompt"));
+    let ticket = propose_routine(&daemon, &session, original.clone(), "bound").await;
+    let parent = host(&daemon, &session).await;
+    for changed in [
+        interval_routine(new_session_action("Changed prompt")),
+        json!({"name":"hourly","schedule":{"type":"interval","secs":7200},"action":new_session_action("Original prompt")}),
+        interval_routine(
+            json!({"type":"heartbeat","session_id":session,"prompt":"Original prompt"}),
+        ),
+    ] {
+        let outcome = parent.call(call("propose_routine", changed, "bound")).await;
+        assert!(matches!(outcome, ToolOutcome::Failed { .. }), "{outcome:?}");
+    }
+    assert_eq!(
+        daemon
+            .shared
+            .db
+            .state(&session)
+            .await
+            .unwrap()
+            .tickets
+            .len(),
+        1
+    );
+    let changed = propose_routine(
+        &daemon,
+        &session,
+        interval_routine(new_session_action("Changed prompt")),
+        "fresh",
+    )
+    .await;
+    assert_ne!(changed.id, ticket.id);
+    assert!(daemon
+        .shared
+        .routines
+        .get()
+        .unwrap()
+        .list()
+        .unwrap()
+        .is_empty());
+    let response = person_resolve(
+        &daemon,
+        &ticket.id,
+        json!({"approved":true,"action":new_session_action("Changed prompt")}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = person_resolve(&daemon, &ticket.id, json!(true)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let routines = daemon.shared.routines.get().unwrap().list().unwrap();
+    assert_eq!(routines.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&routines[0].action).unwrap(),
+        original["action"]
+    );
+    assert_eq!(
+        crate::tickets::get(&daemon.shared, &changed.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        TicketStatus::Pending
+    );
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn routine_proposal_survives_restart_and_requires_a_person_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let first = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&first, "durable-proposal", PolicyMode::Guard, None).await;
+    let ticket = propose_routine(
+        &first,
+        &session,
+        interval_routine(new_session_action("Durable prompt")),
+        "durable",
+    )
+    .await;
+    first.shutdown().await;
+    drop(first);
+    let second = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let stored = crate::tickets::get(&second.shared, &ticket.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.tool.as_ref().unwrap().args,
+        ticket.tool.as_ref().unwrap().args
+    );
+    let (_, token) = second
+        .shared
+        .db
+        .pair_as(
+            "Agent proposer".into(),
+            vec![CapabilityScope::Admin],
+            DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap();
+    let remote = api::router(second.shared.clone(), false);
+    let response = remote
+        .oneshot(request(
+            "POST",
+            &format!("/v1/tickets/{}/resolve", ticket.id),
+            json!({"value":true}),
+            Some(&token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        json_body(response).await["code"],
+        "person_approval_required"
+    );
+    assert!(second
+        .shared
+        .routines
+        .get()
+        .unwrap()
+        .list()
+        .unwrap()
+        .is_empty());
+    let response = person_resolve(&second, &ticket.id, json!(true)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        second.shared.routines.get().unwrap().list().unwrap().len(),
+        1
+    );
+    let state = second.shared.db.state(&session).await.unwrap();
+    assert!(state.tickets[&ticket.id].resolution.as_ref().unwrap()["routine_id"].is_string());
+    daemon_owned_receipt_survives_deletion(&second, &ticket).await;
+    second.shutdown().await;
+}
+
+async fn daemon_owned_receipt_survives_deletion(daemon: &Daemon, ticket: &Ticket) {
+    let scheduler = daemon.shared.routines.get().unwrap();
+    let request: CreateRoutineRequest =
+        serde_json::from_value(ticket.tool.as_ref().unwrap().args.clone()).unwrap();
+    let id = scheduler
+        .approved_routine(ticket.id.as_str(), &request)
+        .unwrap()
+        .unwrap();
+    scheduler.delete(&id).await.unwrap();
+    assert!(scheduler
+        .create_approved(ticket.id.as_str(), request.clone())
+        .await
+        .is_err());
+    assert_eq!(
+        scheduler
+            .approved_routine(ticket.id.as_str(), &request)
+            .unwrap(),
+        Some(id)
+    );
+    assert!(scheduler.list().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn routine_proposal_reconciles_creation_before_ticket_resolution_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let first = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&first, "crash-window", PolicyMode::Guard, None).await;
+    let ticket = propose_routine(
+        &first,
+        &session,
+        interval_routine(new_session_action("Approved once")),
+        "crash-window",
+    )
+    .await;
+    let request: CreateRoutineRequest =
+        serde_json::from_value(ticket.tool.as_ref().unwrap().args.clone()).unwrap();
+    // Model the committed creation immediately before the approving HTTP request lost its
+    // ticket-resolution append; the atomic scheduler receipt already proves consent.
+    let created = first
+        .shared
+        .routines
+        .get()
+        .unwrap()
+        .create_approved(ticket.id.as_str(), request.clone())
+        .await
+        .unwrap();
+    first.shutdown().await;
+    drop(first);
+    let second = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let response = person_resolve(&second, &ticket.id, json!(false)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let resolved = json_body(response).await;
+    assert_eq!(resolved["resolution"]["approved"], true);
+    assert_eq!(resolved["resolution"]["routine_id"], created.id);
+    let scheduler = second.shared.routines.get().unwrap();
+    assert_eq!(scheduler.list().unwrap().len(), 1);
+    assert_eq!(
+        scheduler
+            .create_approved(ticket.id.as_str(), request.clone())
+            .await
+            .unwrap()
+            .id,
+        created.id
+    );
+    let mut changed = request;
+    changed.schedule = RoutineSchedule::Interval { secs: 7200 };
+    assert!(scheduler
+        .create_approved(ticket.id.as_str(), changed)
+        .await
+        .is_err());
+    assert_eq!(scheduler.list().unwrap().len(), 1);
+    second.shutdown().await;
+}
+
+#[tokio::test]
+async fn agent_clients_cannot_create_or_change_routines_without_person_consent() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let (_, token) = daemon
+        .shared
+        .db
+        .pair_as(
+            "External agent".into(),
+            vec![CapabilityScope::Admin],
+            DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap();
+    let remote = api::router(daemon.shared.clone(), false);
+    let response = remote
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/routines",
+            interval_routine(new_session_action("Bypass consent")),
+            Some(&token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(response).await["code"], "person_device_required");
+    let local = api::router(daemon.shared.clone(), true);
+    let (status, created) = send(
+        &local,
+        "POST",
+        "/v1/routines",
+        interval_routine(new_session_action("Person-created")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let path = format!("/v1/routines/{}", created["id"].as_str().unwrap());
+    for payload in [
+        json!({"schedule":{"type":"interval","secs":7200}}),
+        json!({"action":new_session_action("Changed without consent")}),
+        json!({"catch_up":true}),
+        json!({"enabled":true}),
+        json!({"name":"New payload"}),
+    ] {
+        let response = remote
+            .clone()
+            .oneshot(request("PATCH", &path, payload, Some(&token)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(json_body(response).await["code"], "person_device_required");
+    }
+    let response = remote
+        .oneshot(request(
+            "PATCH",
+            &path,
+            json!({"enabled":false}),
+            Some(&token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (status, updated) = send(
+        &local,
+        "PATCH",
+        &path,
+        json!({"action":new_session_action("Person-approved edit")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["action"]["prompt"], "Person-approved edit");
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn routine_proposal_never_persists_secret_bearing_payloads() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&daemon, "secret-proposal", PolicyMode::Guard, None).await;
+    let secret = openside_vault::Secret::new("routine-secret-canary-419".into());
+    daemon
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(openside_vault::Redactor::new([&secret]));
+    let outcome = host(&daemon, &session)
+        .await
+        .call(call(
+            "propose_routine",
+            interval_routine(new_session_action("Send routine-secret-canary-419")),
+            "secret",
+        ))
+        .await;
+    assert!(
+        matches!(outcome, ToolOutcome::Denied { reason, .. } if reason == "routine_contains_secret")
+    );
+    assert!(daemon
+        .shared
+        .db
+        .state(&session)
+        .await
+        .unwrap()
+        .tickets
+        .is_empty());
+    assert!(
+        !serde_json::to_string(&daemon.shared.db.events(&session, 0).await.unwrap())
+            .unwrap()
+            .contains("routine-secret-canary-419")
+    );
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn routine_proposal_keeps_validated_schema_under_short_secret_redaction() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&daemon, "schema-target", PolicyMode::Guard, None).await;
+    let secret = openside_vault::Secret::new("a".into());
+    daemon
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(openside_vault::Redactor::new([&secret]));
+    let payload = json!({
+        "name":"hourly","schedule":{"type":"interval","secs":3600},
+        "action":{"type":"heartbeat","session_id":session,"prompt":"Check work"},
+        "enabled":true,"catch_up":false
+    });
+    let ticket = propose_routine(&daemon, &session, payload.clone(), "schema-proposal").await;
+    assert_eq!(ticket.tool.as_ref().unwrap().args, payload);
+    assert!(ticket
+        .instructions
+        .as_deref()
+        .unwrap()
+        .contains("\"type\": \"heartbeat\""));
+    let response = person_resolve(&daemon, &ticket.id, json!(true)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let resolved = json_body(response).await;
+    let id = resolved["resolution"]["routine_id"].as_str().unwrap();
+    let routine = daemon.shared.routines.get().unwrap().get(id).unwrap();
+    assert_eq!(
+        serde_json::to_value(routine.action).unwrap(),
+        payload["action"]
+    );
+    let stored = crate::tickets::get(&daemon.shared, &ticket.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.resolution.as_ref().unwrap()["routine_id"], id);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn routine_proposal_revalidates_deleted_targets_at_approval() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&daemon, "proposer", PolicyMode::Guard, None).await;
+    let target = create_session(&daemon, "removed-target", PolicyMode::Guard, None).await;
+    let payload =
+        interval_routine(json!({"type":"heartbeat","session_id":target,"prompt":"Check work"}));
+    let ticket = propose_routine(&daemon, &session, payload, "removed-target").await;
+    let local = api::router(daemon.shared.clone(), true);
+    let (status, _) = send(&local, "DELETE", "/v1/sessions/removed-target", json!({})).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let response = person_resolve(&daemon, &ticket.id, json!(true)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response).await["code"], "target_session_missing");
+    assert!(daemon
+        .shared
+        .routines
+        .get()
+        .unwrap()
+        .list()
+        .unwrap()
+        .is_empty());
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn routine_proposal_approval_dispatches_to_the_exact_agent_home() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon_with_model(root.path(), &runtime).await;
+    let chief = daemon.shared.agents.get("chief").unwrap().unwrap();
+    let payload = interval_routine(
+        json!({"type":"agent","agent_id":"chief","prompt":"Chief recurring briefing"}),
+    );
+    let ticket = propose_routine(&daemon, &chief.home_session_id, payload, "chief-schedule").await;
+    let response = person_resolve(&daemon, &ticket.id, json!(true)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let resolved = json_body(response).await;
+    let scheduler = daemon.shared.routines.get().unwrap();
+    let id = resolved["resolution"]["routine_id"].as_str().unwrap();
+    let run = scheduler.run_now(id).await.unwrap();
+    assert_eq!(run.session_id, Some(chief.home_session_id.clone()));
+    let events = daemon
+        .shared
+        .db
+        .events(&chief.home_session_id, 0)
+        .await
+        .unwrap();
+    assert!(events.iter().any(|event| matches!(&event.kind,
+        EventKind::MessageQueued { text, mode: QueueMode::Queue, author_kind: MessageAuthorKind::Internal, .. }
+        if text == "Chief recurring briefing")));
     daemon.shutdown().await;
 }

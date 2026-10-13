@@ -17,6 +17,17 @@ use crate::{api::Caller, engine::Shared};
 
 type Result<T, E = ApiFailure> = std::result::Result<T, E>;
 
+fn person(caller: &Caller) -> Result<()> {
+    if caller.0.is_some() && caller.1 != openside_proto::DeviceKind::PersonDevice {
+        return Err(ApiFailure::new(
+            StatusCode::FORBIDDEN,
+            "person_device_required",
+            "Use propose_routine and ask the person to approve its confirmation",
+        ));
+    }
+    Ok(())
+}
+
 fn scheduler(shared: &Shared) -> Result<Arc<Sched>> {
     shared.routines.get().ok_or_else(ApiFailure::unavailable)
 }
@@ -50,6 +61,7 @@ pub(crate) async fn create(
     Extension(caller): Extension<Caller>,
     Json(request): Json<CreateRoutineRequest>,
 ) -> Result<(StatusCode, Json<Routine>)> {
+    person(&caller)?;
     ensure_not_widening(&s, &caller, &request.action)?;
     Ok((
         StatusCode::CREATED,
@@ -67,6 +79,14 @@ pub(crate) async fn patch(
     Path(id): Path<String>,
     Json(request): Json<UpdateRoutineRequest>,
 ) -> Result<Json<Routine>> {
+    if request.name.is_some()
+        || request.schedule.is_some()
+        || request.action.is_some()
+        || request.catch_up.is_some()
+        || request.enabled == Some(true)
+    {
+        person(&caller)?;
+    }
     if let Some(action) = &request.action {
         ensure_not_widening(&s, &caller, action)?;
     }
