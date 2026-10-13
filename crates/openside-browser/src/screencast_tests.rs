@@ -45,6 +45,30 @@ fn animated_cdp_producer_cannot_recycle_replacement_credits_between_preview_tick
     assert_eq!(eager.replace(frame(2)), Some(1));
 }
 
+// The unit-test binary runs these tests on the default thread pool, so both
+// Chromium launches would otherwise contend during startup; the library tests
+// have no `tests/common` serial gate. One launch at a time still leaves each
+// the full deadline below, and a dead browser is reported from its stderr long
+// before it — the deadline bounds only a slow start.
+static BROWSER_LAUNCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
+
+async fn launch(
+    executable: std::path::PathBuf,
+) -> (
+    Browser,
+    tokio::sync::mpsc::UnboundedReceiver<crate::BrowserEvent>,
+) {
+    let _launch = BROWSER_LAUNCH.lock().await;
+    Browser::launch(crate::BrowserConfig {
+        launch_timeout: LAUNCH_TIMEOUT,
+        ..crate::BrowserConfig::new(executable)
+    })
+    .await
+    .unwrap()
+}
+
 struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
     fn drop(&mut self) {
@@ -75,9 +99,7 @@ async fn static_navigation_retires_a_capture_with_unacknowledged_frames() {
                 })),
         ).await.unwrap();
     }));
-    let (browser, _) = Browser::launch(crate::BrowserConfig::new(executable))
-        .await
-        .unwrap();
+    let (browser, _) = launch(executable).await;
     let tab = browser
         .create_agent_tab("static-cast", &origin)
         .await
@@ -132,9 +154,7 @@ async fn animated_chromium_preview_captures_only_when_one_paced_ack_releases_a_c
             Html("<!doctype html><script>let n=0;setInterval(()=>document.body.style.backgroundColor=`rgb(${++n%255},0,0)`,16)</script><body>Animated CDP fixture")
         }))).await.unwrap();
     }));
-    let (browser, _) = Browser::launch(crate::BrowserConfig::new(executable))
-        .await
-        .unwrap();
+    let (browser, _) = launch(executable).await;
     let tab = browser
         .create_agent_tab("ack-test", &origin)
         .await

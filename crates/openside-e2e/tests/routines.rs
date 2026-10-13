@@ -5,8 +5,8 @@
 
 use std::{future::Future, time::Duration};
 
-use openside_e2e::Harness;
-use openside_proto::{EventKind, RunRecord, RunStatus};
+use openside_e2e::{Harness, SseReader};
+use openside_proto::{Event, EventKind, RunRecord, RunStatus};
 use serde_json::{json, Value};
 
 const CLI: &str = env!("CARGO_BIN_EXE_e2e-openside");
@@ -86,6 +86,42 @@ async fn wait_for_status(harness: &Harness, routine: &str, status: &str) {
             .then_some(())
     })
     .await;
+}
+
+/// Read events until the `AssistantFinal` with `expected` text arrives, then through
+/// the settle boundary that ends that turn.
+///
+/// `SseReader::settled` stops at the first `session.settled` boundary, and a parked
+/// turn's boundary can be committed between reading `last_seq` and resolving the
+/// ticket that resumes it. Waiting for the final plus its turn's settle makes the
+/// observation independent of that timing — and a settled session has already
+/// committed the turn's state snapshot, which the assertions below read. The
+/// failure dump keeps every event that did arrive.
+async fn collect_until_final(stream: &mut SseReader, expected: &str) -> Vec<Event> {
+    let mut events = Vec::new();
+    let mut seen_final = false;
+    let collect = async {
+        loop {
+            let event = stream.next().await;
+            match &event.kind {
+                EventKind::AssistantFinal { text, .. } if text == expected => {
+                    seen_final = true;
+                }
+                EventKind::SessionSettled {} if seen_final => {
+                    events.push(event);
+                    return;
+                }
+                _ => {}
+            }
+            events.push(event);
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), collect)
+        .await
+        .unwrap_or_else(|_| {
+            panic!("no '{expected}' final and settle within 30s; arrived: {events:#?}")
+        });
+    events
 }
 
 #[tokio::test]
@@ -536,9 +572,14 @@ async fn scripted_routine_proposal_resumes_once_after_owner_consent_across_resta
             "action":{"type":"heartbeat","session_id":session,"prompt":"Exact recurring briefing"},
             "enabled":true,"catch_up":false
         });
+        // A restart can queue an internal interruption report, and the scheduler's
+        // own dispatch is asynchronous, so the report turn and the first routine run
+        // can batch into one turn or take a turn each. echo replies with the last
+        // prompt either way, so one spare response covers every interleaving.
         harness.replace_script(&json!({"responses":[
             tool("propose_routine", payload.clone(), "routine-propose-call"),
             reply("Owner answered"),
+            {"parts":[{"type":"echo"}]},
             {"parts":[{"type":"echo"}]}
         ]}));
         let submitted = harness
@@ -604,9 +645,7 @@ async fn scripted_routine_proposal_resumes_once_after_owner_consent_across_resta
             .await;
         assert_eq!(resolved.status, 200, "{}", resolved.body);
         assert_eq!(resolved.body["resolution"]["approved"], approved);
-        let events = stream.settled().await;
-        assert!(events.iter().any(|event| matches!(&event.kind,
-            EventKind::AssistantFinal { text, .. } if text == "Owner answered")));
+        let events = collect_until_final(&mut stream, "Owner answered").await;
         let snapshot = harness.snapshot(session);
         assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
         let returns: Vec<_> = snapshot["messages"]
@@ -639,9 +678,7 @@ async fn scripted_routine_proposal_resumes_once_after_owner_consent_across_resta
                 )
                 .await;
             assert_eq!(run.status, 200, "{}", run.body);
-            let dispatched = stream.settled().await;
-            assert!(dispatched.iter().any(|event| matches!(&event.kind,
-                EventKind::AssistantFinal { text, .. } if text == "Exact recurring briefing")));
+            collect_until_final(&mut stream, "Exact recurring briefing").await;
         }
         let replayed = harness
             .human_request(
