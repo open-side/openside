@@ -25,6 +25,10 @@ use crate::remotes::{self, Transport};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 // Relays and tunnels add TLS, a WebSocket upgrade and a Noise handshake before the request.
 const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+// Response budget for routine local calls. A Unix-socket daemon that is merely busy (events
+// replay, queued database work, a loaded CI machine) can take far longer than the connect
+// budget, and a slow answer is not a dead daemon.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 // A REPL snippet may run for 30 s after waiting for the browser gate and a browser launch;
 // a direct browser tool call (navigate, login) can wait as long.
 const REPL_TIMEOUT: Duration = Duration::from_secs(90);
@@ -405,7 +409,7 @@ impl Client {
         } else if self.is_remote() {
             REMOTE_CONNECT_TIMEOUT
         } else {
-            CONNECT_TIMEOUT
+            REQUEST_TIMEOUT
         };
         let response = match &self.endpoint {
             #[cfg(not(unix))]
