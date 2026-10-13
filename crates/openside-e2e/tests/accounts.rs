@@ -328,7 +328,7 @@ async fn broker_rate_limit_rotates_same_session_and_accounts_api_is_secret_free(
     let initial = h
         .tcp_request("GET", "/v1/accounts", Some(&read), None)
         .await;
-    assert_eq!(initial.status, 200);
+    assert_eq!(initial.status, 200, "{}", initial.body);
     assert_eq!(
         initial.body["sources"][0]["accounts"]
             .as_array()

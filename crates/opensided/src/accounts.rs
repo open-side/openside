@@ -11,7 +11,7 @@ use crate::{api::HttpError, config::Resolved, engine::Shared};
 
 const TTL: Duration = Duration::from_secs(5);
 const OUTPUT_LIMIT: u64 = 1024 * 1024;
-const DEADLINE: Duration = Duration::from_secs(10);
+const MIN_DEADLINE: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub(crate) struct Service {
@@ -32,7 +32,11 @@ impl Service {
             "credentials": config.loaded.config.credentials,
             "models": config.loaded.config.models,
         });
-        let value = probe(&config.argv, &config_json).await;
+        // The command may first initialize a cold Python/uv environment, just as a
+        // session sidecar does; diagnostics must not impose a shorter startup budget.
+        let deadline =
+            Duration::from_millis(config.loaded.config.agent.startup_timeout_ms).max(MIN_DEADLINE);
+        let value = probe(&config.argv, &config_json, deadline).await;
         *cached = Some((Instant::now(), value.clone()));
         value.map_err(|_| unavailable())
     }
@@ -66,7 +70,11 @@ impl Drop for ProcessGroup {
     }
 }
 
-async fn probe(argv: &[String], config: &serde_json::Value) -> Result<AccountsResponse, ()> {
+async fn probe(
+    argv: &[String],
+    config: &serde_json::Value,
+    deadline: Duration,
+) -> Result<AccountsResponse, ()> {
     let program = argv.first().ok_or(())?;
     let mut command = Command::new(program);
     command
@@ -83,7 +91,7 @@ async fn probe(argv: &[String], config: &serde_json::Value) -> Result<AccountsRe
     // Cancellation must also kill wrapper descendants that keep stdout open.
     #[cfg(unix)]
     let _group = ProcessGroup(child.id());
-    let result = tokio::time::timeout(DEADLINE, async {
+    let result = tokio::time::timeout(deadline, async {
         let stdout = child.stdout.take().ok_or(())?;
         let mut bytes = Vec::new();
         stdout
@@ -151,7 +159,9 @@ mod tests {
                 "-c".into(),
                 format!("printf '%s' '{}'", output),
             ];
-            assert!(probe(&args, &serde_json::json!({})).await.is_err());
+            assert!(probe(&args, &serde_json::json!({}), MIN_DEADLINE)
+                .await
+                .is_err());
         }
     }
 
@@ -159,7 +169,9 @@ mod tests {
     #[tokio::test]
     async fn accounts_diagnostics_bound_stdout() {
         let args = vec!["sh".into(), "-c".into(), "yes x".into()];
-        assert!(probe(&args, &serde_json::json!({})).await.is_err());
+        assert!(probe(&args, &serde_json::json!({}), MIN_DEADLINE)
+            .await
+            .is_err());
     }
 
     #[cfg(unix)]
@@ -183,7 +195,7 @@ mod tests {
             source: None,
             warnings: Vec::new(),
         };
-        let config = crate::Config::default().resolve_loaded(loaded).unwrap();
+        let mut config = crate::Config::default().resolve_loaded(loaded).unwrap();
         let service = Service::default();
         let (first, second) = tokio::join!(service.get(&config), service.get(&config));
         assert!(first.is_ok() && second.is_ok());
@@ -193,5 +205,25 @@ mod tests {
         service.cached.lock().await.as_mut().unwrap().0 = Instant::now() - TTL;
         assert!(service.get(&config).await.is_ok());
         assert_eq!(std::fs::read_to_string(&count).unwrap(), "xx");
+        config.loaded.config.agent.startup_timeout_ms = 15_000;
+        config.argv = vec![
+            "sh".into(),
+            "-c".into(),
+            "sleep 11; printf '%s' '{\"sources\":[],\"cached_for_ms\":5,\"truncated\":false}'"
+                .into(),
+        ];
+        service.cached.lock().await.as_mut().unwrap().0 = Instant::now() - TTL;
+        assert!(service.get(&config).await.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn accounts_diagnostics_still_stop_at_their_deadline() {
+        let args = vec!["sh".into(), "-c".into(), "sleep 1".into()];
+        assert!(
+            probe(&args, &serde_json::json!({}), Duration::from_millis(20),)
+                .await
+                .is_err()
+        );
     }
 }

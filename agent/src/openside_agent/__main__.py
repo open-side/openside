@@ -10,8 +10,6 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 
 from openside_agent import __version__, providers
-from openside_agent.protocol import Hello, JsonLineConnection, Versions
-from openside_agent.runtime import Session
 
 
 def package_versions() -> dict[str, str]:
@@ -54,6 +52,10 @@ async def accounts() -> dict[str, Any]:
 
 
 async def sidecar() -> None:
+    # Diagnostics do not need the session runtime's startup work.
+    from openside_agent.protocol import Hello, JsonLineConnection, Versions
+    from openside_agent.runtime import Session
+
     socket_path = os.environ["OPENSIDE_SIDECAR_SOCKET"]
     nonce = os.environ["OPENSIDE_SIDECAR_NONCE"]
     reader, writer = await asyncio.open_unix_connection(socket_path)

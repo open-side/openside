@@ -11,6 +11,16 @@ initial profile, so its radio query includes `checked: true`. A standalone
 `--maxWorkers=2` run is not a substitute for the gate's command. Acceptance
 references use the full nested suite path when they include suite names.
 
+Configuration editors share an edit/save generation: an older response cannot
+replace a newer draft, saved document, or refusal. Document refreshes preserve
+editor identity instead of remounting it. Real-browser acceptance deliberately
+switches to JSON before the form-save response arrives and delays both responses;
+the local-socket refusal must remain visible without waiting for the earlier UI
+save to finish. Account diagnostics
+keep their five-second single-flight cache and 1 MiB output cap, but use the
+larger of ten seconds and `agent.startup_timeout_ms` for the subprocess deadline.
+The Python diagnostic entrypoint does not initialize the session runtime.
+
 Two acceptance rows require checks outside the ordinary Cargo suite. The
 `responsive first browser action` step runs only
 `responsive::cold_and_warm_first_browser_action` with `--ignored --exact`,

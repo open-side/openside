@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import sys
 
 from runtime_helpers import FakeDaemon, install_script, text_response
@@ -28,6 +29,32 @@ async def test_doctor_subprocess_one_json_without_canary(monkeypatch):
     assert {"python", "packages", "credentials", "models"} == set(value)
     assert value["models"]["default"] is None
     assert canary.encode() not in stdout + stderr
+
+
+def test_diagnostics_do_not_initialize_the_session_runtime(monkeypatch):
+    monkeypatch.setenv("OPENSIDE_DOCTOR_CONFIG", "{}")
+    for command in ("accounts", "doctor"):
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import runpy, sys; "
+                "sys.argv = ['openside_agent', sys.argv[1], '--json']\n"
+                "try:\n"
+                " runpy.run_module('openside_agent', run_name='__main__')\n"
+                "except SystemExit as result:\n"
+                " assert result.code == 0\n"
+                "assert 'openside_agent.runtime' not in sys.modules\n"
+                "assert 'openside_agent.protocol' not in sys.modules\n",
+                command,
+            ],
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+        assert process.returncode == 0, process.stderr
+        assert len(process.stdout.splitlines()) == 1
+        json.loads(process.stdout)
 
 
 async def test_real_sidecar_process_handshake_run_shutdown(tmp_path, monkeypatch):
