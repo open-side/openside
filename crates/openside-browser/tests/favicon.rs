@@ -27,7 +27,7 @@ async fn favicon_is_a_small_png_and_collection_omits_credentials_and_page_hooks(
     let captured = Arc::clone(&cookies);
     let app = Router::new()
         .route("/", get(|| async { Html("<!doctype html><title>Pricing</title><h1>Pricing</h1><script>window.fetch = () => { throw new Error('page fetch must not run'); };</script>") }))
-        .route("/icon.png", get(move |headers: HeaderMap| {
+        .route("/favicon.png", get(move |headers: HeaderMap| {
             let captured = Arc::clone(&captured);
             async move {
                 captured.lock().push(headers.get(header::COOKIE).is_some());
@@ -43,10 +43,22 @@ async fn favicon_is_a_small_png_and_collection_omits_credentials_and_page_hooks(
         .await
         .unwrap();
     common::ready(&browser, &tab).await;
-    browser.evaluate(&tab.id, "document.cookie='test_cookie=private; path=/'; const link = document.createElement('link'); link.rel='stylesheet'; link.href='/icon.png'; document.head.append(link); link.rel='icon';").await.unwrap();
-    // An uncached icon makes the collector's credential-free request observable even if
-    // Chromium also starts its ordinary favicon request when the link changes.
-    cookies.lock().clear();
+    assert!(browser.favicon("favicon", &tab.id).await.unwrap().is_none());
+    browser.evaluate(&tab.id, "document.cookie='test_cookie=private; path=/'; const img = document.createElement('img'); img.src='/favicon.png'; document.body.append(img);").await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while browser
+            .evaluate(&tab.id, "document.querySelector('img').complete")
+            .await
+            .unwrap()
+            != true
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let requests = cookies.lock().len();
+    browser.record_protocol(true);
     let data = browser
         .favicon("favicon", &tab.id)
         .await
@@ -59,7 +71,25 @@ async fn favicon_is_a_small_png_and_collection_omits_credentials_and_page_hooks(
     assert!(bytes.len() <= 8192);
     assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 1);
     assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 1);
-    assert!(cookies.lock().iter().any(|has_cookie| !has_cookie));
+    let source = base64::engine::general_purpose::STANDARD
+        .decode(ICON)
+        .unwrap();
+    assert_eq!(
+        image::load_from_memory(&bytes).unwrap().into_rgba8(),
+        image::load_from_memory(&source).unwrap().into_rgba8(),
+    );
+    assert_eq!(
+        cookies.lock().len(),
+        requests,
+        "icon collection must not request any resource"
+    );
+    assert!(browser
+        .take_protocol_log()
+        .iter()
+        .all(|(method, _)| !matches!(
+            method.as_str(),
+            "Runtime.evaluate" | "Runtime.callFunctionOn"
+        )));
     assert!(matches!(
         browser.favicon("another-session", &tab.id).await,
         Err(BrowserError::OwnershipDenied(_))

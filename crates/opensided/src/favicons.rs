@@ -243,19 +243,6 @@ async fn browser_pixels(origin: &str, ctx: &ToolEnv) -> Option<Vec<u8>> {
     None
 }
 
-async fn pixels(origin: &str, ctx: &ToolEnv) -> Option<Vec<u8>> {
-    if let Some(bytes) = browser_pixels(origin, ctx).await {
-        return Some(bytes);
-    }
-    if !origin.starts_with("https://") {
-        return None;
-    }
-    crate::card_media::fetch_normalized(&format!("{origin}/favicon.ico"), 65536, true, ctx)
-        .await
-        .ok()
-        .map(|(pixels, _)| pixels)
-}
-
 async fn populate_site(site: &mut CardSite, ctx: &ToolEnv, private: bool) {
     site.favicon_ref = None;
     let Some(origin) = site.origin.as_deref().filter(|origin| canonical(origin)) else {
@@ -268,7 +255,7 @@ async fn populate_site(site: &mut CardSite, ctx: &ToolEnv, private: bool) {
     site.favicon_ref = ctx
         .shared
         .favicons
-        .reference(key, private, pixels(origin, ctx))
+        .reference(key, private, browser_pixels(origin, ctx))
         .await;
 }
 

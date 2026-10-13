@@ -68,7 +68,7 @@ function AgentAccess({ connection, onOpen }: { connection: Connection; onOpen: (
       <span className="conn-agent-stack">
         {agents.slice(0, 5).map((agent) => (
           <span key={agent.id} className="conn-agent" data-access={accessOf(connection, agent)} title={`${agent.name}: ${ACCESS_LABEL[accessOf(connection, agent)]}`}>
-            <Avatar initials={agent.initials} color={agent.color} size={24} />
+            <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={24} />
           </span>
         ))}
         {agents.length > 5 ? <span className="conn-agent-more">+{agents.length - 5}</span> : null}

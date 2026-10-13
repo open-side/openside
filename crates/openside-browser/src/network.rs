@@ -620,9 +620,16 @@ pub(super) struct Tracker {
     /// Out-of-process iframe session → its tab's page session, whose requests it adds to.
     frames: SyncMutex<HashMap<String, String>>,
     connection_fences: SyncMutex<HashMap<String, ConnectionFence>>,
-    service_worker_bypass: SyncMutex<HashMap<String, bool>>,
+    pub(super) service_worker_bypass: SyncMutex<HashMap<String, bool>>,
     pub(super) document_policy: std::sync::RwLock<Option<DocumentCheck>>,
     pub(super) document_denials: SyncMutex<HashMap<String, DocumentPermission>>,
+    pub(super) connection_restrictions: std::sync::RwLock<Option<ConnectionRestrictions>>,
+    pub(super) request_modes: SyncMutex<HashMap<String, bool>>,
+    pub(super) request_epochs: SyncMutex<HashMap<String, requests::DocumentEpoch>>,
+    pub(super) worker_request_targets: SyncMutex<HashMap<String, String>>,
+    pub(super) worker_request_order: SyncMutex<VecDeque<String>>,
+    pub(super) worker_fence_active: std::sync::atomic::AtomicBool,
+    pub(super) worker_fence_gate: tokio::sync::Mutex<()>,
 }
 
 impl Tracker {
@@ -726,6 +733,7 @@ impl Tracker {
         }
         self.connection_fences.lock().remove(session);
         self.service_worker_bypass.lock().remove(session);
+        self.request_modes.lock().remove(session);
         self.frames
             .lock()
             .retain(|child, page| child != session && page != session);
@@ -972,7 +980,7 @@ impl Browser {
         origin: &str,
         mut request: Value,
         reuse: Option<&str>,
-        mut redact: impl FnMut(&str),
+        mut redact: impl FnMut(&str, bool),
     ) -> Result<Value, BrowserError> {
         let _interaction = self.inner.interaction_lock.lock().await;
         let session = self.owned_session(owner, tab).await?;
@@ -1020,7 +1028,7 @@ impl Browser {
             Vec::new()
         };
         for (_, value) in &headers {
-            redact(value);
+            redact(value, false);
         }
         {
             let mut fences = self.inner.network.connection_fences.lock();
@@ -1038,14 +1046,7 @@ impl Browser {
                 },
             );
         }
-        let bypass = self
-            .inner
-            .network
-            .service_worker_bypass
-            .lock()
-            .get(&session)
-            .copied()
-            .unwrap_or(false);
+        let bypass = self.inner.network.effective_bypass(&session);
         let result = async {
             self.inner.cdp.call(Some(&session), "Network.setBypassServiceWorker", json!({"bypass":true})).await?;
             self.inner.cdp.call(Some(&session), "Fetch.enable", json!({"patterns":[
@@ -1055,7 +1056,7 @@ impl Browser {
             let world = self.inner.cdp.call(Some(&session), "Page.createIsolatedWorld",
                 json!({"frameId":frame["id"],"worldName":format!("openside-connection-{:016x}",rand::random::<u64>()),"grantUniveralAccess":false})).await?;
             let context = world["executionContextId"].as_i64().ok_or(BrowserError::InvalidResponse("connection isolated world unavailable"))?;
-            self.connection_cookie_redactors(&session, std::slice::from_ref(&target), &mut redact).await?;
+            self.connection_cookie_redactors(&session, std::slice::from_ref(&target), &mut |value|redact(value,true)).await?;
             request["url"] = json!(target);
             request["origin"] = json!(origin);
             request["headers"] = json!(headers.iter().map(|(name, value)| (name, value.as_str())).collect::<HashMap<_, _>>());
@@ -1065,18 +1066,14 @@ impl Browser {
                 json!({"expression":expression.as_str(),"contextId":context,"returnByValue":true,"awaitPromise":true})).await;
             let urls = self.inner.network.connection_fences.lock().get(&session)
                 .map(|fence| fence.urls.clone()).ok_or(BrowserError::InvalidResponse("connection request fence ended"))?;
-            self.connection_cookie_redactors(&session, &urls, &mut redact).await?;
+            self.connection_cookie_redactors(&session, &urls, &mut |value|redact(value,true)).await?;
             let result = result.map_err(|_| BrowserError::InvalidResponse("connection fetch unavailable"))?;
             if result.get("exceptionDetails").is_some() {
                 return Err(BrowserError::InvalidResponse("connection fetch failed"));
             }
             Ok(result["result"]["value"].clone())
         }.await;
-        let disabled = self
-            .inner
-            .cdp
-            .call(Some(&session), "Fetch.disable", json!({}))
-            .await;
+        let disabled = self.restore_connection_requests(&session).await;
         let restored = self
             .inner
             .cdp

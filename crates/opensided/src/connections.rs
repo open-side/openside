@@ -200,6 +200,21 @@ impl Service {
     pub(crate) fn list(&self) -> Result<Vec<Connection>> {
         self.store.lock().rows(None)
     }
+
+    pub(crate) fn request_site(
+        &self,
+        site: &str,
+        account_space: Option<&str>,
+    ) -> Result<Vec<Connection>> {
+        if account_space.is_none() {
+            return self.shared_site(site);
+        }
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|row| row.site == site && row.account_space.as_deref() == account_space)
+            .collect())
+    }
     pub(crate) fn get(&self, id: &str) -> Result<Option<Connection>> {
         Ok(self.store.lock().rows(Some(id))?.pop())
     }
@@ -820,6 +835,7 @@ pub(crate) async fn after_login(
             .as_ref()
             .and_then(|probe| probe.identities.first().map(String::as_str))
     });
+    browser.rearm_connection_requests(None, true).await?;
     let row = shared.connections.record(Record {
         site: &site,
         keys: &keys,
@@ -836,6 +852,7 @@ pub(crate) async fn after_login(
     if let Some(probe) = probed.filter(|_| account_space.is_none()) {
         shared.connections.identify(&row, &probe.identities)?;
     }
+    browser.rearm_connection_requests(None, false).await?;
     if let Ok(icon) = browser.favicon(session.as_str(), tab_id).await {
         shared.connections.favicon(&row.id, icon)?;
     }
@@ -886,6 +903,7 @@ pub(crate) async fn imported<'a>(
             groups.entry(site).or_default().push(key);
         }
     }
+    browser.rearm_connection_requests(None, true).await?;
     for (site, keys) in groups {
         shared.connections.record(Record {
             site: &site,
@@ -901,6 +919,7 @@ pub(crate) async fn imported<'a>(
             account_space: None,
         })?;
     }
+    browser.rearm_connection_requests(None, false).await?;
     Ok(())
 }
 
@@ -1059,7 +1078,9 @@ pub(crate) async fn refresh(shared: &crate::engine::Shared) -> Result<()> {
             visited.push(site);
         }
     }
+    browser.rearm_connection_requests(None, true).await?;
     shared.connections.sweep(&cookies, &visited)?;
+    browser.rearm_connection_requests(None, false).await?;
     *shared.connections.last_sweep.lock() = Some(Instant::now());
     Ok(())
 }

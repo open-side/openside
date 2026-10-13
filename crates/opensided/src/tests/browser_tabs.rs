@@ -672,8 +672,7 @@ async fn incognito_browser_events_steer_and_human_steps_bind_incognito_tabs() {
     let mut kill = Kill(vec![incognito.process_id()]);
     drop(incognito);
 
-    // A tab closing in the incognito browser is steered into the running turn (the device
-    // approval below settles the run, after which notices are no longer injected).
+    // Browser notices are lower-priority internal work, never owner steering.
     let closing = open_tab(&daemon, &private, &format!("{origin}/"), "open-closing").await;
     model(
         tool(
@@ -687,7 +686,7 @@ async fn incognito_browser_events_steer_and_human_steps_bind_incognito_tabs() {
     );
     let closed = format!("[browser event] Tab {closing} was closed");
     wait_event(&daemon, &private, |kind| {
-        matches!(kind, EventKind::MessageQueued { text, mode: QueueMode::Steer, .. } if text.starts_with(&closed))
+        matches!(kind, EventKind::MessageQueued { text, mode: QueueMode::Queue, author_kind: openside_proto::MessageAuthorKind::Internal, .. } if text.starts_with(&closed))
     })
     .await;
 

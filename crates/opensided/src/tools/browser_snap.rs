@@ -87,10 +87,8 @@ static STORE: LazyLock<Mutex<Store>> = LazyLock::new(Mutex::default);
 pub(super) enum Scope {
     /// The whole document (default).
     Page,
-    /// Only nodes that overlap the viewport as it is now, with their ancestors; far smaller on
-    /// a long page. The capture is partial: it is never a `since` base and `since` is ignored
-    /// with it. Its refs and snapshot_id work as usual (paging, ref); take another one after
-    /// scrolling.
+    /// Visible nodes and ancestors; partial, never a since base (since is ignored).
+    /// Refs and snapshot_id support paging/ref reads; recapture after scrolling.
     Viewport,
 }
 
@@ -100,8 +98,7 @@ pub(super) struct SnapshotArgs {
     pub(super) tab_id: String,
     /// Page (default) or viewport; only for a new capture, not with snapshot_id.
     scope: Option<Scope>,
-    /// snapshot_id of the last complete page snapshot of this tab you received; the result is
-    /// then only the line diff against it (when the document is the same).
+    /// Last complete page snapshot_id received for this tab; same-document line diff.
     since: Option<String>,
     /// Read from an existing capture (with from_line or ref) instead of taking a new one.
     snapshot_id: Option<String>,
@@ -110,8 +107,7 @@ pub(super) struct SnapshotArgs {
     subtree: Option<String>,
     /// 1-based line to start from, as given by a previous warning's next_from_line.
     from_line: Option<usize>,
-    /// Characters of that line already received, as given by a previous warning's
-    /// next_from_char; continues a single line that is longer than one result.
+    /// Continue an oversized line at the warning's next_from_char character offset.
     from_char: Option<usize>,
 }
 

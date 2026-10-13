@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use chrono::{DateTime, Utc};
 use openside_browser::{DocumentPermission, DocumentRequest};
@@ -20,9 +23,23 @@ struct Request {
     site: String,
     requesting_origin: String,
     connection_ids: Vec<String>,
+    account_space: Option<String>,
 }
 
 type PermitKey = (SessionId, String, String, String);
+
+pub(crate) struct Policy<'a> {
+    pub service: &'a super::Service,
+    pub db: &'a Database,
+    pub agents: &'a crate::agents::Service,
+    pub ttl_secs: u32,
+    pub account_space: Option<&'a str>,
+}
+
+struct DocumentGrants {
+    epoch: u64,
+    connections: BTreeSet<String>,
+}
 
 pub(crate) struct Navigation {
     sender: tokio::sync::mpsc::UnboundedSender<Request>,
@@ -30,6 +47,7 @@ pub(crate) struct Navigation {
     pub(crate) grant_gate: tokio::sync::Mutex<()>,
     pending: parking_lot::Mutex<BTreeMap<(String, String), DateTime<Utc>>>,
     permits: Arc<parking_lot::Mutex<BTreeMap<PermitKey, usize>>>,
+    documents: parking_lot::Mutex<BTreeMap<(SessionId, String), DocumentGrants>>,
 }
 
 impl Default for Navigation {
@@ -41,6 +59,7 @@ impl Default for Navigation {
             grant_gate: Default::default(),
             pending: Default::default(),
             permits: Default::default(),
+            documents: Default::default(),
         }
     }
 }
@@ -91,16 +110,20 @@ impl Navigation {
 
     pub(crate) fn decide(
         &self,
-        service: &super::Service,
-        db: &Database,
-        agents: &crate::agents::Service,
+        policy: Policy<'_>,
         request: &DocumentRequest,
-        ttl_secs: u32,
     ) -> DocumentPermission {
+        let Policy {
+            service,
+            db,
+            agents,
+            ttl_secs,
+            account_space,
+        } = policy;
         let Some((site, _)) = super::site_url(&request.url) else {
             return DocumentPermission::Allowed;
         };
-        let Ok(rows) = service.shared_site(&site) else {
+        let Ok(rows) = service.request_site(&site, account_space) else {
             return DocumentPermission::ConnectionDenied;
         };
         if rows.is_empty() {
@@ -123,6 +146,10 @@ impl Navigation {
         }
         let missing: Vec<_> = {
             let permits = self.permits.lock();
+            let documents = self.documents.lock();
+            let document = documents
+                .get(&(session.clone(), request.tab_id.clone()))
+                .filter(|grant| grant.epoch == request.document_epoch);
             rows.iter()
                 .filter(|row| {
                     access(row, &agent) == ConnectionAccess::Ask
@@ -132,6 +159,7 @@ impl Navigation {
                             row.id.clone(),
                             agent.clone(),
                         ))
+                        && !document.is_some_and(|grant| grant.connections.contains(&row.id))
                 })
                 .map(|row| row.id.clone())
                 .collect()
@@ -143,6 +171,7 @@ impl Navigation {
             .claim_connection_document_grant(&session, &agent, &request.tab_id, &missing)
             .unwrap_or(false)
         {
+            self.activate(&session, &request.tab_id, request.document_epoch, &missing);
             self.release(&agent, &missing);
             return DocumentPermission::Allowed;
         }
@@ -168,6 +197,7 @@ impl Navigation {
                     site: site.clone(),
                     requesting_origin: request.requesting_origin.clone(),
                     connection_ids: ids.clone(),
+                    account_space: account_space.map(str::to_owned),
                 })
                 .is_err()
             {
@@ -181,6 +211,80 @@ impl Navigation {
             connection_id: missing[0].clone(),
             site,
         }
+    }
+
+    pub(crate) fn activate(&self, session: &SessionId, tab: &str, epoch: u64, ids: &[String]) {
+        let mut documents = self.documents.lock();
+        let grant = documents
+            .entry((session.clone(), tab.into()))
+            .or_insert_with(|| DocumentGrants {
+                epoch,
+                connections: BTreeSet::new(),
+            });
+        if grant.epoch != epoch {
+            grant.epoch = epoch;
+            grant.connections.clear();
+        }
+        grant.connections.extend(ids.iter().cloned());
+    }
+
+    pub(crate) fn document_allowed(
+        &self,
+        session: &SessionId,
+        tab: &str,
+        epoch: u64,
+        ids: &[String],
+    ) -> bool {
+        self.documents
+            .lock()
+            .get(&(session.clone(), tab.into()))
+            .is_some_and(|grant| {
+                grant.epoch == epoch && ids.iter().all(|id| grant.connections.contains(id))
+            })
+    }
+
+    pub(crate) fn close_tab(&self, session: &SessionId, tab: &str) {
+        self.documents.lock().remove(&(session.clone(), tab.into()));
+    }
+
+    pub(crate) fn invalidate_tab(&self, session: &SessionId, tab: &str, ids: &[String]) {
+        let mut documents = self.documents.lock();
+        let key = (session.clone(), tab.to_owned());
+        if let Some(grant) = documents.get_mut(&key) {
+            grant.connections.retain(|id| !ids.contains(id));
+            if grant.connections.is_empty() {
+                documents.remove(&key);
+            }
+        }
+    }
+
+    pub(crate) fn protected_sites(policy: Policy<'_>, owner: &str, force: bool) -> Vec<String> {
+        let Ok(agent) = policy
+            .db
+            .connection_document_principal(&SessionId::new(owner))
+        else {
+            return vec!["*".into()];
+        };
+        let active = policy
+            .agents
+            .get(&agent)
+            .ok()
+            .flatten()
+            .is_some_and(|agent| agent.status == AgentStatus::Active);
+        policy.service.list().map_or_else(
+            |_| vec!["*".into()],
+            |rows| {
+                rows.into_iter()
+                    .filter(|row| {
+                        row.account_space.as_deref() == policy.account_space
+                            && (force
+                                || !active
+                                || access(row, &agent) != ConnectionAccess::Allowed)
+                    })
+                    .map(|row| row.site)
+                    .collect()
+            },
+        )
     }
 
     pub(crate) fn release(&self, agent: &str, ids: &[String]) {
@@ -248,7 +352,9 @@ impl Navigation {
             .get(&request.agent)?
             .filter(|agent| agent.status == AgentStatus::Active)
             .ok_or("connection_denied")?;
-        let rows = shared.connections.shared_site(&request.site)?;
+        let rows = shared
+            .connections
+            .request_site(&request.site, request.account_space.as_deref())?;
         if rows.is_empty() {
             shared
                 .connections
@@ -335,12 +441,12 @@ impl Navigation {
         let binding = crate::tools::connections::grant_binding(&tool);
         crate::tickets::open(shared,&request.session,&call,TicketDeferral::External,TicketRequest {
             kind:TicketKind::Confirm,summary:format!("{} wants to use your sign-in at {} while on {}",agent.name,request.site,requesting_origin),
-            instructions:Some(format!("Accounts on this site: {accounts}. Allow once for the next navigation in this tab, or always for this agent. Retry the blocked navigation after approval.")),
+            instructions:Some(format!("Accounts on this site: {accounts}. Allow once for this tab's current document, including its requests and redirects, or always for this agent. Retry after approval; another top-level document needs a new grant.")),
             options:vec![TicketOption{value:"once".into(),label:"Allow once".into()},TicketOption{value:"always".into(),label:"Always for this agent".into()},TicketOption{value:"reject".into(),label:"Not now".into()}],
             target:None,resume_when:None,otp:None,otp_register:None,login:None,choice:None,approval:None,form:None,hire:None,pins:vec![],
         },Some(tool),Some(binding),None).await?;
         let _=shared.command(&request.session,crate::engine::Action::BrowserNotice(
-            format!("connection_grant_required: waiting for the person to allow access to {}. Retry the navigation after approval.",request.site))).await;
+            format!("connection_grant_required: waiting for the person to allow access to {}. Retry after approval.",request.site))).await;
         Ok(())
     }
 }

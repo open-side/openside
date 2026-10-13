@@ -42,6 +42,8 @@ pub use screencast::{Screencast, ScreencastFrame};
 mod cookies;
 #[path = "network.rs"]
 mod network;
+#[path = "requests.rs"]
+mod requests;
 #[path = "spaces.rs"]
 mod spaces;
 pub use cookies::{CookieBaseline, CookieKey};
@@ -361,6 +363,7 @@ struct State {
     /// Out-of-process iframe target id -> (owning tab id, flattened session), attached on
     /// demand by the frame helpers in `frames.rs`.
     oopif_sessions: HashMap<String, (String, String)>,
+    worker_sessions: HashMap<String, (String, String)>,
     uploads: HashMap<String, PathBuf>,
     upload_closing: HashSet<String>,
     upload_epochs: HashMap<String, u64>,
@@ -401,7 +404,7 @@ pub type NavigationCheck = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 /// to the URL (second argument) may proceed. See [`Browser::set_navigation_policy`].
 pub type OwnerNavigationCheck = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 
-/// Host-only admission context for a document request, including owned subframes.
+/// Host-only admission context for an owned document, resource or worker request.
 pub struct DocumentRequest {
     /// Immutable session owner of the top-level tab.
     pub owner: String,
@@ -411,6 +414,8 @@ pub struct DocumentRequest {
     pub requesting_origin: String,
     /// Destination before any request is allowed onto the network.
     pub url: String,
+    /// Top-document lifetime; redirect hops share the pending navigation's epoch.
+    pub document_epoch: u64,
 }
 
 /// Connection admission is independent of ordinary Browse policy.
@@ -448,6 +453,8 @@ impl DocumentPermission {
 
 /// Synchronous admission only; asking the person must be enqueued without blocking.
 pub type DocumentCheck = Arc<dyn Fn(&DocumentRequest) -> DocumentPermission + Send + Sync>;
+/// Whether a principal needs full-resource rather than Document-only interception.
+pub type ConnectionRestrictions = Arc<dyn Fn(&str, bool) -> Vec<String> + Send + Sync>;
 
 struct NavigationRule {
     active: Arc<std::sync::atomic::AtomicBool>,
@@ -506,8 +513,33 @@ async fn handle_paused(inner: &Arc<Inner>, event: &Value) {
         return;
     }
     if params["resourceType"] != DOCUMENT_INTERCEPTION {
-        return respond(inner, session.as_deref(), request_id, true);
+        let allowed = {
+            let state = inner.state.lock().await;
+            let target = state
+                .frames
+                .get(&frame)
+                .map(String::as_str)
+                .or_else(|| state.tabs.contains_key(&frame).then_some(frame.as_str()))
+                .or_else(|| {
+                    session
+                        .as_deref()
+                        .and_then(|session| requests::session_tab(&state, session))
+                });
+            let request_target = params["networkId"]
+                .as_str()
+                .and_then(|id| inner.network.worker_request_targets.lock().get(id).cloned());
+            let target = target.or(request_target.as_deref());
+            target.map_or(!inner.network.has_document_policy(), |target| {
+                connection_document_allowed(inner, &state, target, &url, false)
+            })
+        };
+        return respond(inner, session.as_deref(), request_id, allowed);
     }
+    let network_id = params["networkId"]
+        .as_str()
+        .or(params["requestId"].as_str())
+        .unwrap_or_default()
+        .to_owned();
     let known = {
         let mut state = inner.state.lock().await;
         state
@@ -517,6 +549,7 @@ async fn handle_paused(inner: &Arc<Inner>, event: &Value) {
         if state.pending_openers.contains_key(&frame) {
             None
         } else if state.tabs.contains_key(&frame) {
+            inner.network.begin_document(&frame, &network_id);
             Some(top_frame_allowed(inner, &state, &frame, &url))
         } else {
             state
@@ -533,9 +566,12 @@ async fn handle_paused(inner: &Arc<Inner>, event: &Value) {
     // ownership cannot be established within the attach timeout.
     let inner = Arc::clone(inner);
     tokio::spawn(async move {
-        let allowed = tokio::time::timeout(inner.attach_timeout, reconcile(&inner, &frame, &url))
-            .await
-            .unwrap_or(false);
+        let allowed = tokio::time::timeout(
+            inner.attach_timeout,
+            reconcile(&inner, &frame, &url, &network_id),
+        )
+        .await
+        .unwrap_or(false);
         respond(&inner, session.as_deref(), request_id, allowed);
     });
 }
@@ -580,7 +616,7 @@ fn settle_openers(state: &mut State) {
 /// Decide a document request whose frame is not in the ledger. Requests bypass the owner
 /// policy only when Chromium reports a non-page/subframe, or a default-context page with no
 /// opener. An unresolved isolated context or opener waits until the caller's deadline denies it.
-async fn reconcile(inner: &Inner, frame: &str, url: &str) -> bool {
+async fn reconcile(inner: &Inner, frame: &str, url: &str, network_id: &str) -> bool {
     loop {
         {
             let mut state = inner.state.lock().await;
@@ -588,6 +624,7 @@ async fn reconcile(inner: &Inner, frame: &str, url: &str) -> bool {
                 settle_openers(&mut state);
                 // A popup whose opener is still unknown keeps waiting for it.
                 if !state.pending_openers.contains_key(frame) {
+                    inner.network.begin_document(frame, network_id);
                     return top_frame_allowed(inner, &state, frame, url);
                 }
             } else if let Some(target) = state.frames.get(frame) {
@@ -688,7 +725,7 @@ fn top_frame_allowed(inner: &Inner, state: &State, target: &str, url: &str) -> b
                     .and_then(|owner| state.spaces.get(owner))
                     == Some(context)
         });
-    rule && owner && active_context && connection_document_allowed(inner, state, target, url)
+    rule && owner && active_context && connection_document_allowed(inner, state, target, url, true)
 }
 
 impl NavigationRule {
@@ -703,10 +740,16 @@ fn subframe_allowed(inner: &Inner, state: &State, target: &str, url: &str) -> bo
         .navigation_rules
         .get(target)
         .map_or(true, |rule| !rule.covers_frames() || (rule.allow)(url))
-        && connection_document_allowed(inner, state, target, url)
+        && connection_document_allowed(inner, state, target, url, false)
 }
 
-fn connection_document_allowed(inner: &Inner, state: &State, target: &str, url: &str) -> bool {
+fn connection_document_allowed(
+    inner: &Inner,
+    state: &State,
+    target: &str,
+    url: &str,
+    top_navigation: bool,
+) -> bool {
     let Some(tab) = state
         .tabs
         .get(target)
@@ -726,6 +769,7 @@ fn connection_document_allowed(inner: &Inner, state: &State, target: &str, url: 
         tab_id: target.into(),
         requesting_origin,
         url: url.into(),
+        document_epoch: inner.network.document_epoch(target, top_navigation),
     });
     if permission == DocumentPermission::Allowed {
         return true;
@@ -1740,8 +1784,19 @@ impl Browser {
                 if event["method"] == "Target.attachedToTarget" {
                     frames::adopt(&inner, &event).await;
                 }
+                requests::observe_request(&inner, &event).await;
+                let worker_closed = matches!(
+                    event["method"].as_str(),
+                    Some("Target.targetDestroyed" | "Target.detachedFromTarget")
+                );
                 inner.network.observe(&event);
                 handle_event(&inner, event).await;
+                if worker_closed && inner.network.worker_fence_active.load(Ordering::Acquire) {
+                    let inner = inner.clone();
+                    tokio::spawn(async move {
+                        let _ = requests::refresh_worker_fence(&inner).await;
+                    });
+                }
             }
         });
         let browser = Self {
@@ -2184,7 +2239,7 @@ impl Browser {
                 .call(Some(&session), "Page.getFrameTree", json!({}))
                 .await?;
             let mut state = self.inner.state.lock().await;
-            state.sessions.insert(id.to_owned(), session);
+            state.sessions.insert(id.to_owned(), session.clone());
             fn record_frames(state: &mut State, tree: &Value, target: &str) {
                 if let Some(frame) = tree["frame"]["id"].as_str() {
                     state.frames.insert(frame.into(), target.into());
@@ -2194,6 +2249,13 @@ impl Browser {
                 }
             }
             record_frames(&mut state, &frame_tree["frameTree"], id);
+            let restricted = state
+                .tabs
+                .get(id)
+                .and_then(|tab| tab.owner_session_id.as_deref())
+                .is_some_and(|owner| self.inner.network.owner_restricted(owner));
+            drop(state);
+            requests::arm_session(&self.inner, &session, restricted, false).await?;
             cleanup.armed = false;
             Ok(())
         })
@@ -3065,13 +3127,19 @@ impl Browser {
     }
 
     /// Connection admission applies to every owned shared-profile document, including frames.
-    pub fn set_document_policy(&self, check: DocumentCheck) {
+    pub fn set_document_policy(&self, check: DocumentCheck, restrictions: ConnectionRestrictions) {
         *self
             .inner
             .network
             .document_policy
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(check);
+        *self
+            .inner
+            .network
+            .connection_restrictions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(restrictions);
     }
 
     /// Consume a denial only for the caller's owned tab, after its tool operation settles.
@@ -3154,13 +3222,17 @@ impl Browser {
         owner: &str,
         tab_id: &str,
         method: &str,
-        params: Value,
+        mut params: Value,
     ) -> Result<Value, BrowserError> {
         cdp_scope::validate(method)?;
         let session = self.owned_session(owner, tab_id).await?;
         let bypass = (method == "Network.setBypassServiceWorker")
             .then(|| params["bypass"].as_bool())
             .flatten();
+        if bypass.is_some() && self.inner.network.request_modes.lock().get(&session) == Some(&true)
+        {
+            params["bypass"] = json!(true);
+        }
         let result = self.inner.cdp.call(Some(&session), method, params).await?;
         if let Some(bypass) = bypass {
             self.inner
@@ -3700,6 +3772,15 @@ async fn handle_event(inner: &Inner, event: Value) {
                 state.frames.retain(|_, target| target != id);
                 state.pending_openers.remove(id);
                 state.tab_contexts.remove(id);
+                inner.network.request_epochs.lock().remove(id);
+                state.worker_sessions.retain(|worker, (tab, session)| {
+                    if worker == id || tab == id {
+                        inner.cdp.forget_session(session);
+                        false
+                    } else {
+                        true
+                    }
+                });
                 state.oopif_sessions.retain(|frame, (tab, session)| {
                     if frame == id || tab == id {
                         inner.cdp.forget_session(session);
@@ -3719,6 +3800,9 @@ async fn handle_event(inner: &Inner, event: Value) {
                 state.sessions.retain(|_, value| value != session);
                 state
                     .oopif_sessions
+                    .retain(|_, (_, value)| value != session);
+                state
+                    .worker_sessions
                     .retain(|_, (_, value)| value != session);
             }
         }
@@ -3752,6 +3836,14 @@ async fn handle_event(inner: &Inner, event: Value) {
                     })
             });
             if let Some(target) = target {
+                if params["frame"]["parentId"].is_null()
+                    && params["frame"]["id"].as_str() == Some(target.as_str())
+                {
+                    inner.network.commit_document(
+                        &target,
+                        params["frame"]["loaderId"].as_str().unwrap_or_default(),
+                    );
+                }
                 if let Some(origin) = params["frame"]["url"].as_str().and_then(committed_origin) {
                     if state
                         .tabs

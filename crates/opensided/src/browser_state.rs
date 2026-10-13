@@ -152,7 +152,7 @@ fn card_owner(shared: &Shared, session: &SessionId, call: &ToolCall, tab: &str) 
         .or_else(|| shared.registry.browser.task_tabs.holder(session, tab))
 }
 
-/// Release the tabs of ended Tasks and show them as done.
+/// Close unreferenced agent tabs when a Task ends; keep evidence needed by Cards or people.
 pub(crate) async fn release_ended(shared: &Shared, session: &SessionId, tasks: &[Subagent]) {
     for task in tasks.iter().filter(|task| task.status.is_terminal()) {
         let ledger = &shared.registry.browser.task_tabs;
@@ -163,11 +163,36 @@ pub(crate) async fn release_ended(shared: &Shared, session: &SessionId, tasks: &
             continue;
         }
         let stamp = finish(shared, session, &task.id).await;
-        let _ = shared.registry.browser.persist(shared).await;
         for tab in released {
             let Some(browser) = shared.registry.browser.tab_browser(session, &tab).await else {
+                ledger.claim(session, &tab, &task.id);
                 continue;
             };
+            let Ok(session_state) = shared.db.state(session).await else {
+                ledger.claim(session, &tab, &task.id);
+                continue;
+            };
+            let referenced = session_state.tickets.values().any(|ticket| {
+                ticket
+                    .target
+                    .as_ref()
+                    .and_then(|target| target.tab_id.as_deref())
+                    == Some(tab.as_str())
+                    && (ticket.status == openside_proto::TicketStatus::Pending
+                        || ticket.card.is_some()
+                        || session_state
+                            .cards
+                            .values()
+                            .any(|card| card.ticket_id.as_ref() == Some(&ticket.id)))
+            });
+            if !referenced {
+                // The browser rejects person tabs even if a stale ledger claims ownership.
+                if let Err(error) = browser.close_agent_tab(session.as_str(), &tab).await {
+                    ledger.claim(session, &tab, &task.id);
+                    crate::diag!("opensided: task tab cleanup failed: {error}");
+                }
+                continue;
+            }
             if let Some(state) =
                 observe(shared, &browser, session, &tab, Some(task.id.clone())).await
             {
@@ -184,6 +209,7 @@ pub(crate) async fn release_ended(shared: &Shared, session: &SessionId, tasks: &
                 .await;
             }
         }
+        let _ = shared.registry.browser.persist(shared).await;
     }
 }
 
@@ -349,6 +375,16 @@ pub(crate) fn after(
             ledger.probe_started.notify_one();
             ledger.probe_gate.lock().await
         };
+        #[cfg(test)]
+        let _finished = {
+            struct Finished<'a>(&'a tokio::sync::Notify);
+            impl Drop for Finished<'_> {
+                fn drop(&mut self) {
+                    self.0.notify_one();
+                }
+            }
+            Finished(&shared.registry.browser.task_tabs.probe_finished)
+        };
         let mut state = {
             let _gate = shared.registry.browser.gate.lock().await;
             if !shared.registry.browser.available() {
@@ -372,13 +408,6 @@ pub(crate) fn after(
         }
         state.thumbnail = crate::preview::capture_thumbnail(&shared, &session, &tab).await;
         emit_current(&shared, &session, &stamp, state, false).await;
-        #[cfg(test)]
-        shared
-            .registry
-            .browser
-            .task_tabs
-            .probe_finished
-            .notify_one();
     });
 }
 
@@ -444,7 +473,7 @@ async fn current(browser: &Arc<Browser>, tab: &str, task: Option<String>) -> Opt
         .await
         .into_iter()
         .find(|info| info.id == tab)?;
-    let url = crate::browser::public_url(&info.url);
+    let url = crate::browser::display_url(&info.url);
     Some(BrowserState {
         task_id: task,
         tab_id: tab.to_owned(),

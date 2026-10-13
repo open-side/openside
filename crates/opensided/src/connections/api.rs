@@ -91,6 +91,7 @@ pub(crate) async fn update(
     Json(mut request): Json<UpdateConnectionRequest>,
 ) -> ApiResult<Json<Connection>> {
     spaces::person(&caller)?;
+    let _browser_gate = shared.registry.browser.gate.lock().await;
     let _gate = shared.connections.gate.lock().await;
     let row = shared
         .connections
@@ -112,7 +113,32 @@ pub(crate) async fn update(
     }) {
         return Err(HttpError::invalid_value());
     }
+    let downgraded: Vec<_> = request
+        .grants
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|grant| {
+            grant.access != ConnectionAccess::Allowed
+                && grant.access != navigation::access(&row, &grant.agent_id)
+        })
+        .map(|grant| grant.agent_id.clone())
+        .collect();
+    if !downgraded.is_empty() {
+        shared
+            .registry
+            .browser
+            .invalidate_connection(&shared, &row, Some(&downgraded))
+            .await
+            .map_err(internal)?;
+    }
     shared.connections.update(&id, request).map_err(internal)?;
+    if let Some(browser) = shared.registry.browser.connection_instance(&row).await {
+        browser
+            .rearm_connection_requests(None, false)
+            .await
+            .map_err(internal)?;
+    }
     Ok(Json(
         shared
             .connections
@@ -257,7 +283,6 @@ pub(crate) async fn check_in_session(
     authorization: Option<(&str, &[String])>,
     task: Option<&str>,
 ) -> ApiResult<Connection> {
-    let id = &row.id;
     let home = row
         .home_url
         .clone()
@@ -324,61 +349,7 @@ pub(crate) async fn check_in_session(
             .navigate(session.as_str(), &tab.id, &home)
             .await
             .map_err(document_error)?;
-        let snapshot = browser.snapshot(&tab.id).await.map_err(|_| unavailable())?;
-        let current = browser
-            .tabs()
-            .await
-            .into_iter()
-            .find(|item| item.id == tab.id)
-            .ok_or_else(unavailable)?;
-        let (kind, _) =
-            crate::browser_state::classify(&snapshot.nodes, &current.url, &current.title);
-        let frames = browser
-            .frames(session.as_str(), &tab.id)
-            .await
-            .map_err(|_| unavailable())?;
-        let mut unauthorized = false;
-        if let Some(frame) = frames.iter().find(|frame| frame.parent.is_none()) {
-            unauthorized = browser
-                .document_response(session.as_str(), &tab.id, &frame.loader)
-                .await
-                .map_err(|_| unavailable())?
-                .is_some_and(|response| matches!(response.status, 401 | 403));
-        }
-        let failed = unauthorized
-            || matches!(kind, PageKind::Login | PageKind::Otp)
-            || site_url(&current.url).map_or(true, |(site, _)| site != row.site);
-        let probe = if failed {
-            None
-        } else {
-            Some(
-                probe(browser, session.as_str(), &tab.id)
-                    .await
-                    .map_err(internal)?,
-            )
-        };
-        if failed {
-            shared
-                .connections
-                .mark(row, ConnectionStatus::NeedsLogin)
-                .map_err(internal)?;
-        } else if probe.as_ref().is_some_and(|probe| probe.signed_in) {
-            shared
-                .connections
-                .mark(row, ConnectionStatus::Active)
-                .map_err(internal)?;
-            if let Some(probe) = probe {
-                shared
-                    .connections
-                    .identify(row, &probe.identities)
-                    .map_err(internal)?;
-            }
-        }
-        shared
-            .connections
-            .get(id)
-            .map_err(internal)?
-            .ok_or_else(missing)
+        check_loaded(shared, row, session, browser, &tab.id).await
     }
     .await;
     if matches!(&result,Err(error) if error.1=="connection_grant_required") {
@@ -544,6 +515,12 @@ pub(crate) async fn revoke(
             .await?;
         }
     }
+    shared
+        .registry
+        .browser
+        .invalidate_connection(&shared, &row, None)
+        .await
+        .map_err(internal)?;
     if let Some(space) = row.account_space.as_deref() {
         let root = DataPath::AccountSpaces.path(&shared.config.data_dir);
         shared
@@ -635,6 +612,12 @@ pub(crate) async fn revoke(
         .connections
         .remove(&row, request.sign_out, false)
         .map_err(internal)?;
+    if let Some(browser) = shared.registry.browser.connection_instance(&row).await {
+        browser
+            .rearm_connection_requests(None, false)
+            .await
+            .map_err(internal)?;
+    }
     shared
         .connections
         .pending
@@ -642,4 +625,75 @@ pub(crate) async fn revoke(
         .await
         .retain(|_, (_, snapshot)| snapshot.site != row.site);
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn check_loaded(
+    shared: &Shared,
+    row: &Connection,
+    session: &SessionId,
+    browser: &openside_browser::Browser,
+    tab: &str,
+) -> ApiResult<Connection> {
+    let snapshot = browser.snapshot(tab).await.map_err(|_| unavailable())?;
+    let current = browser
+        .tabs()
+        .await
+        .into_iter()
+        .find(|item| item.id == tab)
+        .ok_or_else(unavailable)?;
+    let (kind, _) = crate::browser_state::classify(&snapshot.nodes, &current.url, &current.title);
+    let frames = browser
+        .frames(session.as_str(), tab)
+        .await
+        .map_err(|_| unavailable())?;
+    let mut unauthorized = false;
+    if let Some(frame) = frames.iter().find(|frame| frame.parent.is_none()) {
+        unauthorized = browser
+            .document_response(session.as_str(), tab, &frame.loader)
+            .await
+            .map_err(|_| unavailable())?
+            .is_some_and(|response| matches!(response.status, 401 | 403));
+    }
+    let failed = unauthorized
+        || matches!(kind, PageKind::Login | PageKind::Otp)
+        || site_url(&current.url).map_or(true, |(site, _)| site != row.site);
+    let probe = if failed {
+        None
+    } else {
+        Some(
+            probe(browser, session.as_str(), tab)
+                .await
+                .map_err(internal)?,
+        )
+    };
+    if failed {
+        shared
+            .connections
+            .mark(row, ConnectionStatus::NeedsLogin)
+            .map_err(internal)?;
+    } else if probe.as_ref().is_some_and(|probe| probe.signed_in) {
+        shared
+            .connections
+            .mark(row, ConnectionStatus::Active)
+            .map_err(internal)?;
+        if let Some(probe) = probe {
+            browser
+                .rearm_connection_requests(None, true)
+                .await
+                .map_err(internal)?;
+            shared
+                .connections
+                .identify(row, &probe.identities)
+                .map_err(internal)?;
+            browser
+                .rearm_connection_requests(None, false)
+                .await
+                .map_err(internal)?;
+        }
+    }
+    shared
+        .connections
+        .get(&row.id)
+        .map_err(internal)?
+        .ok_or_else(missing)
 }

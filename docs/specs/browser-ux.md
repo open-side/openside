@@ -23,3 +23,45 @@ B-8 defines the decomposition below, not a blanket claim that browser-chrome fea
 | UX-17 | Handle with openside | A trusted user gesture on the Gmail/Slack mock-page action sends only explicitly selected, untrusted page context to Ask; synthetic page clicks cannot submit or access credentials | MV3 stock-browser fallback / A-14 | implemented | `extension/tests/content.test.ts`; `crates/openside-e2e/tests/extension.rs` |
 
 Limitations: PiP here means the app's read-only minimized preview, not operating-system video PiP. Pinned-tab API coverage is not native tab-strip pin/unpin coverage. Scheduler web create/list/run/history coverage does not prove schedule editing. The patched P8/P11 entry points open the existing web UI (no privileged WebUI, no native Ask side panel); the native Ask side panel (UX-10 native parity) is not implemented and the MV3 side panel remains the Ask surface. P9 native UX items are observed enabled headlessly; headed interaction tests are still required before `implemented`. User action: run the headed vertical-tabs/split-view/bookmarks-sidebar interactions in the patched build before promoting UX-01, UX-02 and UX-04. Native items marked `not-implemented` need implementation plus a real UI test before their status can change.
+
+## Safe page variants and continuation
+
+Browser lifecycle URLs continue to omit credentials, every query parameter and
+fragments. Browser state and browsing-history identity use a separate display
+facet allowlist; they never copy arbitrary query strings. The first rule is:
+
+| Host and scheme | Paths | Key | Allowed values | Missing key |
+|---|---|---|---|---|
+| `https://github.com` (default port) | `/trending`, `/trending/developers` | `since` | `daily`, `weekly`, `monthly` | `daily` |
+
+Unknown keys, tokens and fragments are discarded. An unrecognized value or
+duplicate `since` key receives no facet. Other hosts, ports and paths receive
+no facet. Browser/status lines name the period, and daily and weekly visits have
+different history identities; omitted `since` and explicit `since=daily` share
+the daily identity. Existing query-stripped history is not reconstructed.
+The Rust allowlist and web status formatter must change together when adding a
+known page pattern. Regression evidence is in `browser.rs`'s `display_facets_`
+tests and `web/src/components/toolStatus.test.ts`.
+
+User-facing messages, `status_text` and narration follow the person's latest
+explicit language preference, otherwise their request's language. A page or
+tool's language does not override it; identifiers and quotations stay verbatim.
+Only `assistant.final` text is rendered in the transcript, including non-front
+sessions. Provisional deltas remain internal and are not translated into replies.
+
+After a takeover or person step resolves, the continuation starts with a fresh
+`browser_snapshot` of its tab (or `browser_repl`'s `page.snapshot()` when that is
+the exposed capture tool), checks whether the requested outcome occurred and
+continues remaining steps before replying. Ticket `done` means the person ended
+their step, not that login or the task succeeded. Earlier captures and refs remain
+invalid; the stale-ref denial is unchanged. The takeover resolution result repeats
+this nudge. The HS-6 continuation fixture checks the result, old-ref denial and
+fresh page capture.
+
+Before mutating a bulk scope after offering alternatives, a Task restates exactly
+which folders, categories or targets are included and excluded. A generic go-ahead
+cannot choose among unresolved alternatives; the Task asks which scope was meant.
+Counts come from observed rows or explicit tool totals, never estimates. Group
+sizes are summed with contributing groups named, and unread and total counts are
+kept separate; an unavailable exact count is stated without inventing a number.
+The Task policy snapshot is checked by `agent/tests/test_browse_policy.py`.

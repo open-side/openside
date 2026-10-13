@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use super::{Browser, Inner, PAGE_COMMANDS};
+use super::{requests, Browser, Inner, PAGE_COMMANDS};
 use crate::snapshot::FrameTree;
 use crate::BrowserError;
 
@@ -467,49 +467,76 @@ pub(super) async fn adopt(inner: &Arc<Inner>, event: &Value) {
     };
     let target = &params["targetInfo"];
     let iframe = target["type"] == "iframe";
-    if let (true, Some(id)) = (iframe, target["targetId"].as_str()) {
+    let worker = matches!(
+        target["type"].as_str(),
+        Some("worker" | "service_worker" | "shared_worker")
+    );
+    let tab = if let (true, Some(id)) = (iframe || worker, target["targetId"].as_str()) {
         let mut state = inner.state.lock().await;
-        let tab = state
-            .sessions
-            .iter()
-            .find(|(_, session)| *session == parent)
-            .map(|(tab, _)| tab.clone())
-            .or_else(|| {
-                state
-                    .oopif_sessions
-                    .values()
-                    .find(|(_, session)| session == parent)
-                    .map(|(tab, _)| tab.clone())
-            });
-        if let Some(tab) = tab {
-            state
-                .oopif_sessions
-                .entry(id.to_owned())
-                .or_insert_with(|| (tab, child.to_owned()));
+        let tab = requests::session_tab(&state, parent).map(str::to_owned);
+        if let Some(tab) = &tab {
+            let sessions = if iframe {
+                &mut state.oopif_sessions
+            } else {
+                &mut state.worker_sessions
+            };
+            sessions
+                .entry(id.into())
+                .or_insert_with(|| (tab.clone(), child.into()));
         }
-    }
-    let counted = iframe && inner.network.adopt(child, parent);
+        tab
+    } else {
+        None
+    };
+    let counted = (iframe || worker) && inner.network.adopt(child, parent);
     let waiting = params["waitingForDebugger"].as_bool().unwrap_or(false);
     if !counted && !waiting {
         return;
     }
     let inner = Arc::clone(inner);
     let child = child.to_owned();
+    let target_id = target["targetId"].as_str().unwrap_or_default().to_owned();
     // The event task must keep draining events while these calls wait for their responses.
     tokio::spawn(async move {
-        if counted {
-            let _ = inner
-                .cdp
-                .call(Some(&child), "Network.enable", json!({}))
-                .await;
-            let _ = inner
-                .cdp
-                .call(
-                    Some(&child),
-                    "Target.setAutoAttach",
-                    json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}),
-                )
-                .await;
+        if let Some(tab) = tab {
+            let restricted = {
+                let state = inner.state.lock().await;
+                state
+                    .tabs
+                    .get(&tab)
+                    .and_then(|tab| tab.owner_session_id.as_deref())
+                    .is_some_and(|owner| inner.network.owner_restricted(owner))
+            };
+            if requests::arm_session(&inner, &child, restricted, false)
+                .await
+                .is_err()
+            {
+                inner
+                    .network
+                    .document_denials
+                    .lock()
+                    .insert(tab, super::DocumentPermission::ConnectionDenied);
+                inner
+                    .cdp
+                    .send(None, "Target.closeTarget", json!({"targetId":target_id}));
+                return;
+            }
+            if counted && (iframe || restricted) {
+                let _ = inner
+                    .cdp
+                    .call(Some(&child), "Network.enable", json!({}))
+                    .await;
+                if iframe {
+                    let _ = inner
+                        .cdp
+                        .call(
+                            Some(&child),
+                            "Target.setAutoAttach",
+                            json!({"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}),
+                        )
+                        .await;
+                }
+            }
         }
         if waiting {
             let _ = inner

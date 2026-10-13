@@ -115,6 +115,15 @@ impl AccountSpaces {
         }
         None
     }
+
+    /// Inspect a running profile for permission changes without launching or extending its idle time.
+    pub async fn existing(&self, id: &str) -> Option<Arc<Browser>> {
+        self.running
+            .lock()
+            .await
+            .get(id)
+            .map(|entry| entry.browser.clone())
+    }
     /// Resolve the persistent profile identity without exposing profile contents.
     pub async fn space_for_tab(&self, tab: &str) -> Option<String> {
         for (id, entry) in self.running.lock().await.iter() {

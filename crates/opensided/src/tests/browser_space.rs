@@ -26,6 +26,8 @@ async fn site() -> (String, tokio::task::JoinHandle<()>) {
         .route("/", get(|| async { Html(PAGE) }))
         .route("/isolated", get(|| async { Html(PAGE) }))
         .route("/login", get(|| async { Html(PAGE) }))
+        .route("/article", get(|| async { Html("<!doctype html><title>Space guide</title><main><p>Browser spaces keep account storage separate while shared browsing can retain useful reading history. This guide explains how independent profiles protect private work and how archiving removes temporary browsing data.</p></main>") }))
+        .route("/isolated/article", get(|| async { Html("<!doctype html><title>Private guide</title><main><p>Browser spaces keep account storage separate while shared browsing can retain useful reading history. This guide explains how independent profiles protect private work and how archiving removes temporary browsing data.</p></main>") }))
         .route("/otp", get(|| async { Html("<!doctype html><title>Email verification</title><form><label>Email code<input name=code autocomplete=one-time-code></label><button>Verify</button></form>") }))
         .route("/choice", get(|| async { Html("<!doctype html><title>Choose verification</title><h2>Choose how to verify</h2><button>Text message</button><button>Email</button>") }))
         .route("/setup", get(|| async { Html("<!doctype html><title>Authenticator setup</title><a href='otpauth://totp/Space:alice?secret=JBSWY3DPEHPK3PXP&issuer=Space'>Add authenticator</a>") }))
@@ -293,6 +295,29 @@ async fn isolated_spaces_separate_storage_fill_the_vault_and_are_wiped_on_archiv
         json!(USERNAME)
     );
 
+    for (session, path) in [
+        (&normal, "/article"),
+        (&first, "/isolated/article"),
+        (&second, "/isolated/article"),
+    ] {
+        let article = open_tab(
+            &daemon,
+            session,
+            &format!("{origin}{path}"),
+            "history-article",
+        )
+        .await;
+        model(
+            tool(
+                &daemon,
+                session,
+                "browser_snapshot",
+                json!({"tab_id":article}),
+                "history-snapshot",
+            )
+            .await,
+        );
+    }
     // Space browsing leaves no history; shared browsing still does.
     let visits = daemon
         .shared

@@ -6,59 +6,111 @@ use super::{Browser, BrowserError};
 const MAX_FAVICON_BYTES: usize = 8192;
 const PNG_PREFIX: &str = "data:image/png;base64,";
 
-// Fetch in an isolated browser world, without credentials or redirects. Page scripts cannot
-// replace fetch/canvas intrinsics, and neither cookies nor icon URLs reach daemon HTTP clients.
-const FAVICON_JS: &str = r#"(async () => {
-    if (!['http:', 'https:'].includes(location.protocol)) return null;
-    const url = [...document.querySelectorAll('link[rel~=icon]')]
-        .map(link => { try { return new URL(link.getAttribute('href') || '', location.href); } catch (_) { return null; } })
-        .find(url => url && url.origin === location.origin && !url.username && !url.password) || new URL('/favicon.ico', location.origin);
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), 1500);
-    let image;
-    try {
-        const response = await fetch(url.href, {credentials: 'omit', redirect: 'error', signal: abort.signal, cache: 'force-cache'});
-        if (!response.ok || new URL(response.url).origin !== location.origin || !response.body) return null;
-        const mime = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-        if (!['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) return null;
-        if (Number(response.headers.get('content-length')) > 65536) return null;
-        const reader = response.body.getReader();
-        const chunks = [];
-        let size = 0;
-        while (true) {
-            const {done, value} = await reader.read();
-            if (done) break;
-            size += value.length;
-            if (size > 65536) { await reader.cancel(); return null; }
-            chunks.push(value);
-        }
-        if (!size) return null;
-        image = await createImageBitmap(new Blob(chunks, {type: mime}));
-        if (!image.width || !image.height || image.width > 4096 || image.height > 4096) return null;
-        const canvas = document.createElement('canvas');
-        const scale = Math.min(1, 32 / image.width, 32 / image.height);
-        canvas.width = Math.max(1, Math.round(image.width * scale));
-        canvas.height = Math.max(1, Math.round(image.height * scale));
-        canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-        const data = canvas.toDataURL('image/png');
-        return atob(data.split(',')[1]).length <= 8192 ? data : null;
-    } catch (_) { return null; }
-    finally { clearTimeout(timer); abort.abort(); if (image) image.close(); }
-})()"#;
+fn normalize_cached_icon(bytes: &[u8]) -> Option<String> {
+    use std::io::Cursor;
+    if bytes.is_empty() || bytes.len() > 65536 {
+        return None;
+    }
+    let format = image::guess_format(bytes).ok()?;
+    let mut reader = image::io::Reader::with_format(Cursor::new(bytes), format);
+    let mut limits = image::io::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(80 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode().ok()?;
+    let image = if image.width() > 32 || image.height() > 32 {
+        image.thumbnail(32, 32)
+    } else {
+        image
+    };
+    let mut output = Cursor::new(Vec::new());
+    image.write_to(&mut output, image::ImageFormat::Png).ok()?;
+    let bytes = output.into_inner();
+    if bytes.len() > MAX_FAVICON_BYTES {
+        return None;
+    }
+    Some(format!(
+        "{PNG_PREFIX}{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
 
 impl Browser {
-    /// A bounded icon for an owned tab; absence is normal for pages without a usable icon.
+    /// Read a bounded icon already cached for an owned tab, without executing page code or fetching.
     pub async fn favicon(&self, owner: &str, tab: &str) -> Result<Option<String>, BrowserError> {
         let _interaction = self.inner.interaction_lock.lock().await;
         let session = self.owned_session(owner, tab).await?;
-        let context = self.isolated_world(&session).await?;
-        let value = self.inner.cdp.call(Some(&session), "Runtime.evaluate", json!({
-            "expression": FAVICON_JS, "contextId": context, "returnByValue": true, "awaitPromise": true,
-        })).await?;
-        Ok(value["result"]["value"]
+        let tree = self
+            .inner
+            .cdp
+            .call(Some(&session), "Page.getResourceTree", json!({}))
+            .await?;
+        let frame = &tree["frameTree"];
+        let Some(page) = frame["frame"]["url"]
             .as_str()
-            .filter(|data| valid_favicon(data))
-            .map(str::to_owned))
+            .and_then(|value| url::Url::parse(value).ok())
+        else {
+            return Ok(None);
+        };
+        let Some(resources) = frame["resources"].as_array() else {
+            return Ok(None);
+        };
+        for resource in resources {
+            let Some(url) = resource["url"]
+                .as_str()
+                .and_then(|value| url::Url::parse(value).ok())
+            else {
+                continue;
+            };
+            if !matches!(url.scheme(), "http" | "https")
+                || url.origin() != page.origin()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || resource["type"] != "Image"
+                || !(url.path().to_lowercase().contains("favicon")
+                    || matches!(
+                        resource["mimeType"].as_str(),
+                        Some("image/x-icon" | "image/vnd.microsoft.icon")
+                    ))
+            {
+                continue;
+            }
+            let Ok(content) = self
+                .inner
+                .cdp
+                .call(
+                    Some(&session),
+                    "Page.getResourceContent",
+                    json!({
+                        "frameId": frame["frame"]["id"], "url": url.as_str(),
+                    }),
+                )
+                .await
+            else {
+                continue;
+            };
+            let Some(encoded) = content["content"]
+                .as_str()
+                .filter(|value| value.len() <= 65536_usize.div_ceil(3) * 4)
+            else {
+                continue;
+            };
+            if content["base64Encoded"] != true {
+                continue;
+            }
+            let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+                continue;
+            };
+            if let Some(icon) = tokio::task::spawn_blocking(move || normalize_cached_icon(&bytes))
+                .await
+                .ok()
+                .flatten()
+            {
+                return Ok(Some(icon));
+            }
+        }
+        Ok(None)
     }
 
     /// Validates the bounded normalized PNG wire format before any consumer displays it.
@@ -91,6 +143,7 @@ impl Browser {
     }
 }
 
+#[cfg(test)]
 fn valid_favicon(data: &str) -> bool {
     Browser::validated_favicon(data).is_some()
 }
@@ -128,5 +181,17 @@ mod tests {
         ));
         assert!(!valid_favicon("data:image/svg+xml;base64,PHN2Zz4="));
         assert!(!valid_favicon("data:image/png;base64,[REDACTED]"));
+    }
+
+    #[test]
+    fn cached_raster_normalization_bounds_input_and_output() {
+        let input = icon(64, 64, 100);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(input.strip_prefix(PNG_PREFIX).unwrap())
+            .unwrap();
+        let normalized = normalize_cached_icon(&bytes).unwrap();
+        assert!(valid_favicon(&normalized));
+        assert!(normalize_cached_icon(&vec![0; 65537]).is_none());
+        assert!(normalize_cached_icon(b"<svg/>").is_none());
     }
 }

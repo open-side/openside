@@ -98,14 +98,14 @@ export function AccessDialog({
       open={open}
       onClose={onClose}
       title="Agent access"
-      description={connection ? `Who may use the ${connection.site} sign-in (${identityLine(connection)}). “Ask me first” sends you a request each time.` : undefined}
+      description={connection ? `Who may use the ${connection.site} sign-in (${identityLine(connection)}). “Ask me first” sends you a request before the agent uses your sign-in; allowing it once covers the page the agent is on until it opens another.` : undefined}
     >
       {connection ? (
         <div className="dialog-form">
           <ul className="resource-list conn-access-list" aria-label="Agent access">
             {agents.map((agent) => (
               <li key={agent.id} className="conn-access-row">
-                <Avatar initials={agent.initials} color={agent.color} size={32} />
+                <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={32} />
                 <span className="conn-access-name">{agent.name}</span>
                 <Select
                   variant="inline"

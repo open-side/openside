@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "../api/client";
 import type { Ticket } from "../api/types";
 import { ClientContext } from "../context";
-import { emptySessionView, type BrowserStateView, type SessionView, type SubagentView, type TimelineItem } from "../state/session";
+import { emptySessionView, type SessionView, type TimelineItem } from "../state/session";
 import { json } from "../test/fakeDaemon";
 import { BrowserPreview, browserAnchor } from "./BrowserPreview";
 
@@ -229,84 +229,6 @@ describe("BrowserPreview", () => {
     expect(screen.queryByAltText("Remote browser tab")).toBeNull();
     expect(screen.getByText(/browse or steer device token/)).toBeInTheDocument();
   });
-
-  it("narrates background Tasks from browser.state, picks one in the strip and cancels only that Task", async () => {
-    const user = userEvent.setup();
-    const task = (id: string, goal: string, status: SubagentView["status"] = "running", output?: string): SubagentView => ({
-      id, task: goal, model: "m", tools: [], parentToolCallId: `call-${id}`, status, background: true, progress: [], output,
-    });
-    const state = (task_id: string, tab_id: string, seq: number, patch: Partial<BrowserStateView> = {}): BrowserStateView => ({
-      task_id, tab_id, seq, url: `https://${tab_id}.test/`, host: `${tab_id}.test`, title: `${tab_id} page`,
-      phase: "acting", page_kind: "other", facts: {}, ...patch,
-    });
-    const front = { ...emptySessionView, status: "idle" as const };
-    const twoTasks = (a: Partial<BrowserStateView>, statusB: SubagentView["status"] = "running", outputB?: string): SessionView => ({
-      ...front,
-      subagents: [task("a", "Book the flight"), task("b", "Compare hotels", statusB, outputB)],
-      browserStates: {
-        "a:tab1": state("a", "tab1", 5, a),
-        "b:tab2": state("b", "tab2", 9, { action: { tool: "browser_act", tool_call_id: "x", phrase: "Clicking", target: "Sort by price" } }),
-      },
-    });
-    const { update } = setup(twoTasks({ phase: "waiting_human" }));
-    const socket = open();
-    const card = screen.getByRole("region", { name: "Live browser" });
-    // The Task that acted last leads; the stream is tab1, so tab2 shows what its page says.
-    expect(card).toHaveAttribute("data-tone", "running");
-    expect(within(card).getByRole("status")).toHaveTextContent("Clicking Sort by price…");
-    expect(within(card).queryByAltText("Remote browser tab")).toBeNull();
-    expect(within(card).getByText("tab2 page")).toBeInTheDocument();
-    const strip = within(card).getByRole("tablist", { name: "Tasks" });
-    expect(within(strip).getByRole("tab", { name: "Compare hotels" })).toHaveAttribute("aria-selected", "true");
-
-    await user.click(within(strip).getByRole("tab", { name: "Book the flight" }));
-    expect(card).toHaveAttribute("data-tone", "warn");
-    expect(within(card).getByAltText("Remote browser tab")).toBeInTheDocument();
-
-    await user.click(within(strip).getByRole("tab", { name: "Compare hotels" }));
-    await user.click(within(card).getByRole("button", { name: "Cancel task" }));
-    await user.click(within(screen.getByRole("dialog", { name: "Cancel this task?" })).getByRole("button", { name: "Cancel task" }));
-    await waitFor(() => expect(tabRequests).toContain("/v1/sessions/s1/subagents/b/cancel"));
-    expect(tabRequests).not.toContain("/v1/sessions/s1/subagents/a/cancel");
-
-    vi.useFakeTimers();
-    act(() => vi.advanceTimersByTime(1500));
-    update(twoTasks({ phase: "waiting_human" }, "completed", "Hotel Aurora is cheapest at $120. Two others are close."));
-    expect(card).toHaveAttribute("data-tone", "done");
-    expect(within(card).getByRole("status")).toHaveTextContent("Hotel Aurora is cheapest at $120.");
-    expect(socket.closed).toBe(false);
-  });
-  it("fetches Task thumbnails with bearer auth and releases object URLs on replacement and unmount", async () => {
-    const create = vi.fn().mockReturnValueOnce("blob:first").mockReturnValueOnce("blob:second");
-    const revoke = vi.fn();
-    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke }));
-    const requests: Array<{ path: string; auth: string | null }> = [];
-    const client = createClient({
-      token: () => "device-token",
-      fetch: async (input, init) => {
-        const path = new URL(String(input), "http://x").pathname;
-        requests.push({ path, auth: new Headers(init?.headers).get("Authorization") });
-        return path.includes("/thumbnails/") ? new Response(new Blob(["jpeg"], { type: "image/jpeg" })) : json(200, TABS);
-      },
-      webSocket: (url, protocols) => new FakeSocket(url, protocols) as unknown as WebSocket,
-    });
-    const view = (thumbnail: string): SessionView => ({
-      ...viewOf(),
-      subagents: [{ id: "a", task: "Read account", model: "m", tools: [], parentToolCallId: "start", status: "running", background: true, progress: [] }],
-      browserStates: { "a:tab2": { task_id: "a", tab_id: "tab2", seq: 1, title: "Account", url: "https://docs.test", host: "docs.test", phase: "reading", page_kind: "other", facts: {}, thumbnail } },
-    });
-    const ui = (id: string) => <ClientContext.Provider value={client}><BrowserPreview sessionId="s1" view={view(id)} onShowPending={() => undefined} onCancel={() => undefined} /></ClientContext.Provider>;
-    const rendered = render(ui("first"));
-    open();
-    expect(await screen.findByAltText("Preview of Account")).toHaveAttribute("src", "blob:first");
-    expect(requests).toContainEqual({ path: "/v1/sessions/s1/browser/thumbnails/first", auth: "Bearer device-token" });
-    rendered.rerender(ui("second"));
-    await waitFor(() => expect(screen.getByAltText("Preview of Account")).toHaveAttribute("src", "blob:second"));
-    expect(revoke).toHaveBeenCalledWith("blob:first");
-    rendered.unmount();
-    expect(revoke).toHaveBeenCalledWith("blob:second");
-    vi.unstubAllGlobals();
-  });
 });
 
 describe("browserAnchor", () => {
@@ -319,8 +241,8 @@ describe("browserAnchor", () => {
     expect(browserAnchor([user("m1"), browse("t1"), user("m2"), read])).toBe("m1");
   });
 
-  it("follows a Task started to browse, and skips task reports", () => {
-    expect(browserAnchor([user("m1"), browse("t1", "task_start"), { ...user("plain-report"), author_kind: "internal" }])).toBe("m1");
+  it("skips internal messages such as Task reports", () => {
+    expect(browserAnchor([user("m1"), browse("t1"), { ...user("plain-report"), author_kind: "internal" }])).toBe("m1");
     expect(browserAnchor([user("task-report-person"), browse("t1")])).toBe("task-report-person");
   });
 

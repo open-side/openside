@@ -14,7 +14,7 @@ const NOW = Date.now();
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
 
 const AGENTS = [
-  { id: "chief", kind: "chief", name: "Juno", initials: "J", color: "#2f6fed", status: "active" },
+  { id: "chief", kind: "chief", name: "openside", initials: "o", color: "#2f6fed", status: "active" },
   { id: "mina", kind: "teammate", name: "Mina", initials: "M", color: "#a34dff", status: "active" },
   { id: "old", kind: "teammate", name: "Retired", initials: "R", color: "#888888", status: "retired" },
 ] as unknown as AgentSummary[];

@@ -31,16 +31,15 @@ enum PointerKind {
 struct PointerArgs {
     tab_id: String,
     action: PointerKind,
-    /// CSS pixels from the left edge of the 1440x900 viewport (screenshot coordinates).
+    /// CSS pixels from viewport left.
     x: f64,
-    /// CSS pixels from the top edge of the 1440x900 viewport.
+    /// CSS pixels from viewport top.
     y: f64,
-    /// type: text inserted into the element under the point after clicking it. There is no
-    /// submit; press the form's button with browser_act.
+    /// Click then type; never submits. Use browser_act for the form button.
     text: Option<String>,
-    /// scroll: horizontal wheel distance in CSS pixels.
+    /// Horizontal wheel CSS pixels.
     delta_x: Option<f64>,
-    /// scroll: vertical wheel distance in CSS pixels (positive scrolls down).
+    /// Vertical wheel CSS pixels; positive=down.
     delta_y: Option<f64>,
 }
 
@@ -120,7 +119,7 @@ impl DaemonTool for BrowserPointer {
     fn spec(&self) -> openside_core::ToolSpec {
         spec::<PointerArgs>(
             self.name(),
-            "Click, double-click, type or scroll at viewport coordinates (1440x900 CSS pixels, as in browser_screenshot) in a session-owned tab. Use only when browser_snapshot has no ref for the target, e.g. canvas-drawn controls. The element under the point gets the same checks as browser_act: payment, purchase, send and delete matches in its accessible name or role require human confirmation. Typed text is recorded as length only.",
+            "Click/double-click/type/scroll in an owned tab's 1440x900 CSS-pixel viewport (screenshot coordinates). Only when snapshot lacks a target ref, e.g. canvas. Like browser_act, payment/purchase/send/delete in accessible name or role requires human confirmation. Typed text logs length only.",
             ApprovalTier::Write,
             true,
         )

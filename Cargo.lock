@@ -2223,6 +2223,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "hmac",
+ "image",
  "jpeg-decoder",
  "jpeg-encoder",
  "nix 0.29.0",

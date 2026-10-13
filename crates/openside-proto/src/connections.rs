@@ -16,7 +16,7 @@ pub enum ConnectionProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionStatus {
-    /// Cookie/history heuristic, separated from confirmed connections.
+    /// Discovered sign-in suggested by cookies/history; authentication is not verified.
     Candidate,
     /// Imported cookies that have not been checked.
     Unverified,
@@ -99,7 +99,7 @@ pub struct Connection {
     pub identity: Option<String>,
     /// Evidence behind the label, not a trust level.
     pub identity_source: ConnectionIdentitySource,
-    /// Current confidence and liveness.
+    /// Authentication evidence: candidate means a discovered sign-in, not verified authentication; active means checked sign-in. Agent access is separate.
     pub status: ConnectionStatus,
     /// Strongest recorded sign-in source.
     pub source: ConnectionSource,
@@ -126,7 +126,7 @@ pub struct Connection {
     pub used_by: Option<String>,
     /// Latest live fingerprint expiry, or null for session cookies.
     pub expires_at: Option<DateTime<Utc>>,
-    /// Explicit overrides; unspecified teammates ask.
+    /// Per-agent authorization, independent of authentication status; unspecified teammates ask.
     pub grants: Vec<ConnectionGrant>,
 }
 
@@ -137,7 +137,7 @@ pub struct ConnectionList {
     pub browser_available: bool,
     /// Non-candidate rows in stable site/ID order.
     pub connections: Vec<Connection>,
-    /// Weak detections for the collapsed disclosure.
+    /// Discovered sign-ins suggested by cookies/history, not verified connections or agent authorization.
     pub candidates: Vec<Connection>,
 }
 

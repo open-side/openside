@@ -42,6 +42,10 @@ pub(crate) enum BrowserCommand {
     Login(CallArgs),
     /// request_choice: let a person pick among the page's options.
     Choice(CallArgs),
+    /// request_form: let a person complete a page form.
+    Form(CallArgs),
+    /// present: deliver a structured result card to the person.
+    Present(CallArgs),
     /// wait_for_approval: wait while a person approves the sign-in on their phone.
     WaitApproval(CallArgs),
     /// request_otp: fill a one-time code from the vault or from a person.
@@ -96,6 +100,8 @@ impl BrowserCommand {
             Self::Close(args) => ("browser_close_tab", args),
             Self::Login(args) => ("request_login", args),
             Self::Choice(args) => ("request_choice", args),
+            Self::Form(args) => ("request_form", args),
+            Self::Present(args) => ("present", args),
             Self::WaitApproval(args) => ("wait_for_approval", args),
             Self::Otp(args) => ("request_otp", args),
             Self::RegisterAuthenticator(args) => ("register_authenticator", args),

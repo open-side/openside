@@ -26,10 +26,10 @@ mod snapshot_view;
 
 pub use browser::{browser_shutdown_crashes, ProfileWriteGuard};
 pub use browser::{
-    ActOutcome, Action, Browser, BrowserConfig, BrowserEndpoint, BrowserEvent, DocumentCheck,
-    DocumentPermission, DocumentRequest, DownloadStatus, NavigationCheck, NavigationGuard,
-    NodeHandle, OpenedBy, OwnerNavigationCheck, PointHit, PointLabel, PointerAction, Screencast,
-    ScreencastFrame, TabInfo, PAGE_COMMANDS, VIEWPORT,
+    ActOutcome, Action, Browser, BrowserConfig, BrowserEndpoint, BrowserEvent,
+    ConnectionRestrictions, DocumentCheck, DocumentPermission, DocumentRequest, DownloadStatus,
+    NavigationCheck, NavigationGuard, NodeHandle, OpenedBy, OwnerNavigationCheck, PointHit,
+    PointLabel, PointerAction, Screencast, ScreencastFrame, TabInfo, PAGE_COMMANDS, VIEWPORT,
 };
 pub use browser::{CookieBaseline, CookieKey};
 pub use browser::{

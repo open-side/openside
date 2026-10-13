@@ -275,6 +275,11 @@ pub(crate) const GRANT_KEEP: &[&[&str]] = &[
 
 pub(crate) fn result_keep(name: &str) -> &'static [&'static [&'static str]] {
     match name {
+        "create_task" | "delegate" => {
+            &[&["subagent_id"], &["model"], &["tools", "*"], &["context"]]
+        }
+        "get_tasks" => &[&["tasks", "*", "task_id"]],
+        "steer_task" | "cancel_task" => &[&["task_id"]],
         "connections_list" => &[
             &["*", "id"],
             &["*", "site"],
@@ -401,6 +406,32 @@ async fn once_ticket(
     }
     Ok(false)
 }
+
+async fn document_grant(
+    ctx: &ToolEnv,
+    args: &Value,
+    rows: &[Connection],
+) -> Result<bool, ToolError> {
+    let Some(tab) = args["tab_id"].as_str() else {
+        return Ok(false);
+    };
+    let browser = ctx
+        .shared
+        .registry
+        .browser
+        .for_tab(&ctx.shared, &ctx.session, tab)
+        .await?;
+    let epoch = browser
+        .connection_document_epoch(ctx.session.as_str(), tab)
+        .await
+        .map_err(super::browser::browser_error)?;
+    let ids: Vec<_> = rows.iter().map(|row| row.id.clone()).collect();
+    Ok(ctx
+        .shared
+        .connections
+        .navigation
+        .document_allowed(&ctx.session, tab, epoch, &ids))
+}
 pub(crate) async fn admit_grant(
     ctx: &ToolEnv,
     name: &str,
@@ -429,6 +460,9 @@ pub(crate) async fn admit_grant(
         .iter()
         .all(|row| access(row, &agent_id) == ConnectionAccess::Allowed)
     {
+        return Ok(GrantAdmission::Allowed);
+    }
+    if name == "connection_fetch" && document_grant(ctx, args, &rows).await? {
         return Ok(GrantAdmission::Allowed);
     }
     let (tool, target) = grant_tool(ctx, name, &row, &rows, args["tab_id"].as_str()).await?;
@@ -492,6 +526,9 @@ async fn consume_grant(
         .iter()
         .all(|row| access(row, &agent) == ConnectionAccess::Allowed)
     {
+        return Ok(None);
+    }
+    if name == "connection_fetch" && document_grant(ctx, args, &rows).await? {
         return Ok(None);
     }
     let (tool, _) = grant_tool(ctx, name, row, &rows, args["tab_id"].as_str()).await?;
@@ -566,6 +603,12 @@ pub(crate) async fn resolve_grant(
             .connections
             .allow_agent(&rows, agent, &ticket.session_id)
             .map_err(|_| HttpError::internal())?;
+        if let Some(browser) = shared.registry.browser.connection_instance(&rows[0]).await {
+            browser
+                .rearm_connection_requests(None, false)
+                .await
+                .map_err(|_| HttpError::internal())?;
+        }
     }
     Ok(json!({"approved":answer != "reject","access":answer}))
 }
@@ -583,7 +626,7 @@ impl DaemonTool for ConnectionTool {
     }
     fn spec(&self) -> openside_core::ToolSpec {
         match self.0 {
-            Kind::List=>spec::<ConnectionsListArgs>(self.name(), "List allowed sign-in metadata, never credentials.", ApprovalTier::Read, false),
+            Kind::List=>spec::<ConnectionsListArgs>(self.name(), "Metadata only. status=candidate: discovered sign-in, not verified; active: checked. access: agent permission, separate from status. used_at: last successful use.", ApprovalTier::Read, false),
             Kind::Open=>spec::<ConnectionOpenArgs>(self.name(), "Open a signed-in site in an owned tab. Ask grants need person approval; Browse policy applies. Use request_login on needs_login.", ApprovalTier::Read, true),
             Kind::Check=>spec::<ConnectionCheckArgs>(self.name(), "Refresh connection metadata in a background tab under Browse policy.", ApprovalTier::Read, true),
             Kind::Confirm=>spec::<ConnectionConfirmArgs>(self.name(), "Label the visible account; labels are masked and grant no authority.", ApprovalTier::Read, false),
@@ -785,20 +828,6 @@ impl ConnectionTool {
                     .collect();
                 let target = home(&row, args_t.url.as_deref())?;
                 let browser = browser(ctx, &row).await?;
-                if row.status == ConnectionStatus::Unverified {
-                    let authorization = (!authorized_ids.is_empty())
-                        .then_some((agent.as_str(), authorized_ids.as_slice()));
-                    row = connections::api::check_in_session(
-                        &ctx.shared,
-                        &row,
-                        &ctx.session,
-                        &browser,
-                        authorization,
-                        ctx.subagent.as_deref(),
-                    )
-                    .await
-                    .map_err(|error| super::ToolError(error.1.into()))?;
-                }
                 let reuse = browser.tabs().await.into_iter().find(|tab| {
                     tab.opened_by == OpenedBy::Agent
                         && tab.owner_session_id.as_deref() == Some(ctx.session.as_str())
@@ -844,6 +873,29 @@ impl ConnectionTool {
                     .navigate(ctx.session.as_str(), &tab.id, &target)
                     .await
                     .map_err(super::browser::browser_error)?;
+                if !authorized_ids.is_empty() {
+                    let epoch = browser
+                        .connection_document_epoch(ctx.session.as_str(), &tab.id)
+                        .await
+                        .map_err(super::browser::browser_error)?;
+                    ctx.shared.connections.navigation.activate(
+                        &ctx.session,
+                        &tab.id,
+                        epoch,
+                        &authorized_ids,
+                    );
+                }
+                if row.status == ConnectionStatus::Unverified {
+                    row = connections::api::check_loaded(
+                        &ctx.shared,
+                        &row,
+                        &ctx.session,
+                        &browser,
+                        &tab.id,
+                    )
+                    .await
+                    .map_err(|error| super::ToolError(error.1.into()))?;
+                }
                 let url = browser
                     .url(&tab.id)
                     .await
@@ -930,7 +982,26 @@ impl ConnectionTool {
                 {
                     return Err(error("connection_write_needs_approval"));
                 }
-                consume_grant(ctx, self.name(), args, &row).await?;
+                let authorization = consume_grant(ctx, self.name(), args, &row).await?;
+                let ids: Vec<_> = authorization
+                    .as_ref()
+                    .and_then(|tool| tool.args["connection_ids"].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.as_str().map(str::to_owned))
+                    .collect();
+                if !ids.is_empty() {
+                    let epoch = browser
+                        .connection_document_epoch(ctx.session.as_str(), &args_t.tab_id)
+                        .await
+                        .map_err(super::browser::browser_error)?;
+                    ctx.shared.connections.navigation.activate(
+                        &ctx.session,
+                        &args_t.tab_id,
+                        epoch,
+                        &ids,
+                    );
+                }
                 ctx.shared
                     .registry
                     .browser
@@ -939,9 +1010,14 @@ impl ConnectionTool {
                     .map_err(|_| error("connection_browser_unavailable"))?;
                 let mut result=browser.connection_fetch(ctx.session.as_str(),&args_t.tab_id,&origin,
                     json!({"method":method,"path":path,"query":args_t.query,"json_body":args_t.json_body}),args_t.reuse_headers_from.as_deref(),
-                    |value| {
-                        let secret=openside_vault::Secret::new(value.into());
-                        let redactor=openside_vault::Redactor::new([&secret]);
+                    |value,is_cookie| {
+                        let redactor=if is_cookie {
+                            let Some(redactor)=openside_vault::Redactor::for_cookie(value) else{return;};
+                            redactor
+                        }else{
+                            let secret=openside_vault::Secret::new(value.into());
+                            openside_vault::Redactor::new([&secret])
+                        };
                         let mut installed=ctx.shared.registry.redactors.write();
                         if !redactor.covered_by(&installed) {installed.push(redactor);}
                     }).await.map_err(|_|error("connection_browser_unavailable"))?;

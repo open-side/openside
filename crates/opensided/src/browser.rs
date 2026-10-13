@@ -96,6 +96,61 @@ pub(crate) fn public_url(value: &str) -> String {
     }
 }
 
+struct DisplayFacetRule {
+    host: &'static str,
+    paths: &'static [&'static str],
+    key: &'static str,
+    values: &'static [&'static str],
+    default: &'static str,
+}
+
+const DISPLAY_FACETS: &[DisplayFacetRule] = &[DisplayFacetRule {
+    host: "github.com",
+    paths: &["/trending", "/trending/developers"],
+    key: "since",
+    values: &["daily", "weekly", "monthly"],
+    default: "daily",
+}];
+
+fn display_facet(url: &url::Url) -> Option<(&'static str, &'static str)> {
+    if url.scheme() != "https" || url.port().is_some() {
+        return None;
+    }
+    let rule = DISPLAY_FACETS
+        .iter()
+        .find(|rule| url.host_str() == Some(rule.host) && rule.paths.contains(&url.path()))?;
+    let mut pairs = url.query_pairs().filter(|(key, _)| key == rule.key);
+    let value = match pairs.next() {
+        Some((_, value)) => rule
+            .values
+            .iter()
+            .copied()
+            .find(|allowed| *allowed == value)?,
+        None => rule.default,
+    };
+    // Repeated keys have site-dependent semantics, so they cannot identify a safe facet.
+    if pairs.next().is_some() {
+        return None;
+    }
+    Some((rule.key, value))
+}
+
+/// Presentation and history may distinguish known page variants without restoring raw queries.
+pub(crate) fn display_url(value: &str) -> String {
+    let Ok(mut url) = url::Url::parse(value) else {
+        return String::new();
+    };
+    let facet = display_facet(&url);
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    if let Some((key, value)) = facet {
+        url.query_pairs_mut().append_pair(key, value);
+    }
+    url.to_string()
+}
+
 /// Nobody can answer a JavaScript dialog while the page's input call is blocked on it, and the
 /// dialog text is untrusted, so the answer is fixed: an alert or a leave-page prompt is
 /// acknowledged, while a confirm or prompt is cancelled rather than agreed to on the user's behalf.
@@ -216,6 +271,81 @@ mod tests {
             EventKind::TabClosed {
                 tab_id: "t1".into()
             }
+        );
+    }
+
+    #[test]
+    fn display_facets_allow_only_known_page_periods() {
+        for path in ["/trending", "/trending/developers"] {
+            for period in ["daily", "weekly", "monthly"] {
+                let raw = format!(
+                    "https://user:secret@github.com{path}?token=secret&since={period}&q=secret#secret"
+                );
+                assert_eq!(
+                    display_url(&raw),
+                    format!("https://github.com{path}?since={period}")
+                );
+                assert_eq!(public_url(&raw), format!("https://github.com{path}"));
+            }
+        }
+        assert_eq!(
+            display_url("https://github.com/trending?token=secret"),
+            "https://github.com/trending?since=daily"
+        );
+        for raw in [
+            "https://github.com/trending?since=secret",
+            "https://github.com/trending?since=weekly%26token%3Dsecret",
+            "https://github.com/trending?since=weekly&since=daily",
+            "https://github.com/trending?since=weekly&%73ince=secret",
+            "https://github.com/login?since=weekly&token=secret",
+            "https://github.com/trending/private?since=weekly&token=secret",
+            "https://github.com.evil.test/trending?since=weekly&token=secret",
+            "https://github.com:444/trending?since=weekly&token=secret",
+            "http://github.com/trending?since=weekly&token=secret",
+        ] {
+            assert_eq!(display_url(raw), public_url(raw), "{raw}");
+            assert!(!display_url(raw).contains("secret"));
+        }
+        assert!(display_url("not a URL?since=weekly&token=secret").is_empty());
+    }
+
+    #[test]
+    fn display_facets_keep_daily_and_weekly_history_distinct() {
+        let root = tempfile::tempdir().unwrap();
+        let store = openside_memory::MemoryStore::open(
+            &root.path().join("history.db"),
+            openside_memory::Options::default(),
+        )
+        .unwrap();
+        let daily = store
+            .record_visit(
+                &display_url("https://github.com/trending?token=secret"),
+                Some("Daily trending"),
+                Some("Daily repositories"),
+                "browser_history:test",
+            )
+            .unwrap();
+        let weekly = store
+            .record_visit(
+                &display_url("https://github.com/trending?since=weekly&token=secret"),
+                Some("Weekly trending"),
+                Some("Weekly repositories"),
+                "browser_history:test",
+            )
+            .unwrap();
+        assert_ne!(daily.id, weekly.id);
+        let revisited = store
+            .record_visit(
+                &display_url("https://github.com/trending?since=daily&session=other-secret"),
+                Some("Daily trending"),
+                Some("Updated daily repositories"),
+                "browser_history:test",
+            )
+            .unwrap();
+        assert_eq!(daily.id, revisited.id);
+        assert_eq!(
+            store.get(&weekly.id).unwrap().content,
+            "Weekly repositories"
         );
     }
     #[test]

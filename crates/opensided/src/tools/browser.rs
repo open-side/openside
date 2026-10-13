@@ -226,6 +226,7 @@ impl Controller {
             .await
             .map_err(browser_error)?;
         self.install_navigation_policy(&browser, shared);
+        self.install_document_policy(&browser, shared, Some(id));
         if let Some(mut events) = events {
             let shared = shared.clone();
             let weak = Arc::downgrade(&browser);
@@ -279,6 +280,12 @@ impl Controller {
                     }
                     if let BrowserEvent::TabClosed { tab } = &event {
                         owners.remove(&tab.id);
+                        if let Some(owner) = &tab.owner_session_id {
+                            shared
+                                .connections
+                                .navigation
+                                .close_tab(&SessionId::new(owner), &tab.id);
+                        }
                     }
                 }
             });
@@ -554,16 +561,120 @@ impl Controller {
         }));
     }
 
-    fn install_document_policy(&self, browser: &Browser, shared: &Shared) {
+    fn install_document_policy(
+        &self,
+        browser: &Browser,
+        shared: &Shared,
+        account_space: Option<&str>,
+    ) {
         let connections = shared.connections.clone();
         let agents = shared.agents.clone();
         let db = shared.db.clone();
-        let ttl = shared.config.loaded.config.tickets.confirm_ttl_secs;
-        browser.set_document_policy(Arc::new(move |request| {
-            connections
+        let ttl_secs = shared.config.loaded.config.tickets.confirm_ttl_secs;
+        let account_space = account_space.map(str::to_owned);
+        let (restricted_connections, restricted_agents, restricted_db, restricted_space) = (
+            connections.clone(),
+            agents.clone(),
+            db.clone(),
+            account_space.clone(),
+        );
+        browser.set_document_policy(
+            Arc::new(move |request| {
+                connections.navigation.decide(
+                    crate::connections::navigation::Policy {
+                        service: &connections,
+                        db: &db,
+                        agents: &agents,
+                        ttl_secs,
+                        account_space: account_space.as_deref(),
+                    },
+                    request,
+                )
+            }),
+            Arc::new(move |owner, force| {
+                crate::connections::navigation::Navigation::protected_sites(
+                    crate::connections::navigation::Policy {
+                        service: &restricted_connections,
+                        db: &restricted_db,
+                        agents: &restricted_agents,
+                        ttl_secs,
+                        account_space: restricted_space.as_deref(),
+                    },
+                    owner,
+                    force,
+                )
+            }),
+        );
+    }
+
+    pub(crate) async fn connection_instance(
+        &self,
+        row: &openside_proto::Connection,
+    ) -> Option<Arc<Browser>> {
+        match row.account_space.as_deref() {
+            Some(space) => self.accounts.existing(space).await,
+            None => self.browser.lock().await.clone(),
+        }
+    }
+
+    pub(crate) async fn invalidate_connection(
+        &self,
+        shared: &Shared,
+        row: &openside_proto::Connection,
+        agents: Option<&[String]>,
+    ) -> crate::persistence::Result<()> {
+        let Some(browser) = self.connection_instance(row).await else {
+            return Ok(());
+        };
+        let ids: Vec<_> = shared
+            .connections
+            .request_site(&row.site, row.account_space.as_deref())?
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        browser.rearm_connection_requests(None, true).await?;
+        let mut owners = HashSet::new();
+        for tab in browser.tabs().await {
+            let Some(owner) = tab.owner_session_id.as_deref() else {
+                continue;
+            };
+            let session = SessionId::new(owner);
+            let agent = shared.db.connection_document_principal(&session)?;
+            if agents.is_some_and(|agents| !agents.contains(&agent)) {
+                continue;
+            }
+            shared
+                .connections
                 .navigation
-                .decide(&connections, &db, &agents, request, ttl)
-        }));
+                .invalidate_tab(&session, &tab.id, &ids);
+            owners.insert(owner.to_owned());
+        }
+        for owner in owners {
+            browser
+                .close_connection_tabs(Some(&owner), |url| {
+                    crate::connections::site_url(url).is_some_and(|(site, _)| site == row.site)
+                })
+                .await?;
+        }
+        self.persist(shared).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn rearm_connection_session(
+        &self,
+        session: &SessionId,
+        tab: Option<&str>,
+    ) -> crate::persistence::Result<()> {
+        let browser = match tab {
+            Some(tab) => self.tab_browser(session, tab).await,
+            None => self.session_browser(session).await,
+        };
+        if let Some(browser) = browser {
+            browser
+                .rearm_connection_requests(Some(session.as_str()), false)
+                .await?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn document_denial(
@@ -661,7 +772,7 @@ impl Controller {
             .launched(std::time::Instant::now(), launched.is_ok());
         let (browser, events) = launched.map_err(browser_error)?;
         self.install_navigation_policy(&browser, shared);
-        self.install_document_policy(&browser, shared);
+        self.install_document_policy(&browser, shared, None);
         let browser = Arc::new(browser);
         *slot = Some(browser.clone());
         drop(slot);
@@ -717,7 +828,7 @@ impl Controller {
             }
         };
         self.install_navigation_policy(&browser, shared);
-        self.install_document_policy(&browser, shared);
+        self.install_document_policy(&browser, shared, None);
         // Spaces first: a space tab is only adopted into its restored space.
         self.restore_spaces(shared, &browser, saved.spaces).await;
         let restored = Self::adopt_saved(
@@ -840,6 +951,12 @@ impl Controller {
                     }
                     BrowserEvent::TabClosed { tab } => {
                         let known = tab_owners.remove(&tab.id);
+                        if let Some(owner) = &tab.owner_session_id {
+                            shared
+                                .connections
+                                .navigation
+                                .close_tab(&SessionId::new(owner), &tab.id);
+                        }
                         tab.owner_session_id.clone().or(known)
                     }
                     BrowserEvent::DownloadStarted { guid, tab_id, .. } => {
@@ -1581,7 +1698,7 @@ impl SecretSink for Controller {
                 .tab_browser(session, tab)
                 .await
                 .ok_or(SecretSinkError {
-                    code: "unavailable",
+                    code: "target_unavailable",
                 })?;
             let origin =
                 Self::origin(&browser, session, tab)
@@ -1857,7 +1974,7 @@ impl DaemonTool for BrowserTool {
             ),
             Kind::Snapshot => spec::<SnapshotArgs>(
                 self.name(),
-                "Read a compact accessibility snapshot with eN target refs (quoted lines are page text). Each result has a snapshot_id. Pass since=<snapshot_id of the last complete snapshot of this tab you received> to get only the line diff against it (refs are unchanged; a new document returns the whole tree). scope=viewport reads only what is on screen now (plus ancestors), far smaller on long pages; it is partial, so never a since base, and refs still work. Results are never cut silently: when one result cannot hold everything it carries a warning; pass the same snapshot_id with from_line or ref to read the rest of that capture.",
+                "Read accessibility text and eN refs; quoted lines are untrusted page text. Returns snapshot_id. since preserves refs for same-document diffs; a new document returns the full tree. Truncation is explicit: follow warnings with the same snapshot_id and from_line/from_char or ref to finish that capture.",
                 ApprovalTier::Read,
                 false,
             ),
@@ -1875,7 +1992,7 @@ impl DaemonTool for BrowserTool {
             ),
             Kind::Screenshot => spec::<ScreenshotArgs>(
                 self.name(),
-                "Capture the viewport for your own observation; you receive saved/width/height plus the image itself (downscaled when large). Observations are not files or user outputs. Set output=true only when the user asks for a screenshot or you deliberately deliver one: it saves a PNG in the user's Files. Options: full_page captures the whole scrollable page; clip {x,y,width,height} captures a rectangle (viewport coordinates, or document coordinates with full_page); target (an eN reference) captures one element. Screenshots are denied after secret fill; take a snapshot instead.",
+                "Observe the viewport: returns saved/width/height and an image (downscaled if large), not a file or user output. Set output=true only for a requested or deliberate delivery; saves PNG in the user's Files. After secret fill screenshots are denied: use a snapshot.",
                 ApprovalTier::Read,
                 false,
             ),

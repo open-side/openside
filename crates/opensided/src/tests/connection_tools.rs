@@ -587,7 +587,7 @@ async fn connection_tools_cookie_prefix_keeps_typed_ids_and_grant_bindings_usabl
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://localhost:{}", listener.local_addr().unwrap().port());
     let row = record(&daemon, "localhost", &format!("{origin}/"), "chief");
-    let cookie = Arc::new(row.id[..8].to_owned());
+    let cookie = Arc::new(row.id[..16].to_owned());
     let app = Router::new()
         .route(
             "/",
@@ -960,7 +960,7 @@ async fn connection_tools_isolated_fetch_fences_hostile_page_and_worker_and_path
             &origin,
             json!({"method":"GET","path":"/api/echo","json_body":{"invalid":true}}),
             None,
-            |_| {},
+            |_, _| {},
         )
         .await
         .unwrap();
@@ -1465,18 +1465,10 @@ async fn connection_tools_document_grants_cover_navigation_repl_frames_and_forge
         .shared_site("localhost")
         .unwrap()
         .is_empty());
-    assert_eq!(
-        model(
-            tool(
-                &daemon,
-                session,
-                "browser_navigate",
-                json!({"tab_id":tab,"url":bank}),
-                "forgotten-normal-site"
-            )
+    assert!(
+        !super::browser::open_tab(&daemon, session, &bank, "forgotten-normal-site")
             .await
-        )["url"],
-        bank
+            .is_empty()
     );
     assert_eq!(hits.load(Ordering::SeqCst), 5);
     assert!(authenticated.load(Ordering::SeqCst) >= 4);
@@ -1577,4 +1569,268 @@ async fn connection_tools_check_retries_the_same_once_authorized_probe_tab() {
     );
     daemon.shutdown().await;
     server.abort();
+}
+
+async fn change_grant(daemon: &Daemon, row: &Connection, agent: &str, access: ConnectionAccess) {
+    let response = api::router(daemon.shared.clone(), true)
+        .oneshot(request(
+            "PATCH",
+            &format!("/v1/connections/{}", row.id),
+            json!({"grants":[{"agent_id":agent,"access":access}]}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        json_body(response).await
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connection_tools_full_request_isolation_downgrade_sibling_worker_and_document_lifetime() {
+    use axum::{
+        http::HeaderMap,
+        response::{Html, IntoResponse},
+        routing::get,
+        Router,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open_runtime(config(root.path()).await, TestRuntime::default())
+        .await
+        .unwrap();
+    let draft:HireDraft=serde_json::from_value(json!({"name":"Mina","persona":{"role":"Checks sites","responsibilities":["Check signed-in sites"]}})).unwrap();
+    let mina = crate::agents::create(&daemon.shared, &draft, "mina")
+        .await
+        .unwrap_or_else(|error| panic!("{}", error.1));
+    let session = &mina.home_session_id;
+    let private = Arc::new(AtomicUsize::new(0));
+    let counter = private.clone();
+    let app = Router::new()
+        .route(
+            "/bank",
+            get(|| async {
+                (
+                    [(
+                        "set-cookie",
+                        "private=SIGNED_IN_ISOLATION; HttpOnly; Path=/",
+                    )],
+                    Html("<h1>Signed in</h1><a href='/logout'>Sign out</a>"),
+                )
+            }),
+        )
+        .route("/outside", get(|| async { Html("<h1>Outside</h1>") }))
+        .route(
+            "/outside2",
+            get(|| async { Html("<h1>Another document</h1>") }),
+        )
+        .route(
+            "/private",
+            get(move |headers: HeaderMap| {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let origin = headers
+                        .get("origin")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("*")
+                        .to_owned();
+                    (
+                        [
+                            ("access-control-allow-origin", origin),
+                            ("access-control-allow-credentials", "true".into()),
+                        ],
+                        "real-private-response",
+                    )
+                        .into_response()
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let sibling_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://localhost:{}", listener.local_addr().unwrap().port());
+    let sibling = format!(
+        "http://localhost:{}",
+        sibling_listener.local_addr().unwrap().port()
+    );
+    let outside = origin.replace("localhost", "127.0.0.1");
+    let sibling_app = app.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let sibling_server =
+        tokio::spawn(async move { axum::serve(sibling_listener, sibling_app).await.unwrap() });
+    let row = record(&daemon, "localhost", &format!("{origin}/bank"), "mina");
+    let bank_tab = super::browser::open_tab(
+        &daemon,
+        session,
+        &format!("{origin}/bank"),
+        "allowed-bank-tab",
+    )
+    .await;
+    let other_tab = super::browser::open_tab(
+        &daemon,
+        session,
+        &format!("{outside}/outside"),
+        "allowed-other-tab",
+    )
+    .await;
+    let chief = daemon.shared.agents.get("chief").unwrap().unwrap();
+    let chief_tab = super::browser::open_tab(
+        &daemon,
+        &chief.home_session_id,
+        &format!("{origin}/bank"),
+        "api-chief-isolation",
+    )
+    .await;
+    let browser = daemon
+        .shared
+        .registry
+        .browser
+        .for_tab(&daemon.shared, session, &bank_tab)
+        .await
+        .map_err(|error| error.0)
+        .unwrap();
+    assert_eq!(
+        browser
+            .evaluate(&bank_tab, "fetch('/private').then(r=>r.text())")
+            .await
+            .unwrap(),
+        "real-private-response"
+    );
+    assert_eq!(private.load(Ordering::SeqCst), 1);
+
+    change_grant(&daemon, &row, "mina", ConnectionAccess::Denied).await;
+    assert!(!browser.tabs().await.iter().any(|tab| tab.id == bank_tab));
+    assert!(matches!(tool(&daemon,session,"browser_repl",json!({"tab_id":bank_tab,"code":"await page.evaluate(() => fetch('/private').then(r=>r.text()))"}),"closed-bank-fetch").await,ToolOutcome::Denied{..}));
+    let xhr=format!("await page.evaluate(() => fetch({}, {{credentials:'include'}}).then(r=>r.text()).catch(()=> 'blocked'))",json!(format!("{sibling}/private")));
+    assert!(
+        matches!(tool(&daemon,session,"browser_repl",json!({"tab_id":other_tab,"code":xhr}),"denied-sibling-xhr").await,
+        ToolOutcome::Denied{reason,..} if reason=="connection_denied")
+    );
+    let image=format!("await page.evaluate(() => new Promise(resolve => {{const image=new Image(); image.onload=()=>resolve(true); image.onerror=()=>resolve(false); image.src={}; document.body.append(image);}}))",json!(format!("{sibling}/private?image=1")));
+    assert!(
+        matches!(tool(&daemon,session,"browser_repl",json!({"tab_id":other_tab,"code":image}),"denied-sibling-image").await,
+        ToolOutcome::Denied{reason,..} if reason=="connection_denied")
+    );
+    let worker_source=format!("onmessage=async()=>{{try{{const response=await fetch({},{{credentials:'include'}});postMessage(await response.text())}}catch{{postMessage('blocked')}}}}",json!(format!("{sibling}/private")));
+    browser.record_protocol(true);
+    let worker=format!("await page.evaluate(() => new Promise(resolve => {{const worker=new Worker(URL.createObjectURL(new Blob([{}],{{type:'text/javascript'}})));globalThis.isolationWorker=worker;worker.onmessage=event=>resolve(event.data);worker.postMessage('go');}}))",json!(worker_source));
+    let worker_result = tokio::time::timeout(
+        Duration::from_secs(5),
+        tool(
+            &daemon,
+            session,
+            "browser_repl",
+            json!({"tab_id":other_tab,"code":worker}),
+            "denied-worker",
+        ),
+    )
+    .await;
+    assert!(
+        worker_result.is_ok(),
+        "worker admission did not finish: {:?}",
+        browser.take_protocol_log()
+    );
+    assert!(
+        matches!(worker_result.unwrap(),ToolOutcome::Denied{reason,..} if reason=="connection_denied")
+    );
+    assert_eq!(private.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        browser
+            .evaluate(
+                &chief_tab,
+                &format!(
+                    "fetch({},{{credentials:'include'}}).then(r=>r.text())",
+                    json!(format!("{sibling}/private"))
+                )
+            )
+            .await
+            .unwrap(),
+        "real-private-response"
+    );
+    browser
+        .evaluate(&other_tab, "globalThis.isolationWorker.terminate();null")
+        .await
+        .unwrap();
+    assert_eq!(private.load(Ordering::SeqCst), 2);
+
+    change_grant(&daemon, &row, "mina", ConnectionAccess::Ask).await;
+    let mut events = daemon.shared.events.subscribe();
+    let blocked = model(
+        tool(
+            &daemon,
+            session,
+            "browser_repl",
+            json!({"tab_id":other_tab,"code":xhr}),
+            "ask-resource",
+        )
+        .await,
+    );
+    assert_eq!(blocked["error"], "connection_grant_required");
+    let ticket = document_ticket(&mut events, session).await;
+    answer(&daemon, &ticket.id, json!("once")).await;
+    for id in ["once-resource", "once-second-resource"] {
+        let fetched = model(
+            tool(
+                &daemon,
+                session,
+                "browser_repl",
+                json!({"tab_id":other_tab,"code":xhr}),
+                id,
+            )
+            .await,
+        );
+        assert_eq!(
+            fetched["return_value"], "real-private-response",
+            "{fetched}"
+        );
+    }
+    assert_eq!(private.load(Ordering::SeqCst), 4);
+    assert!(
+        matches!(tool(&daemon,session,"connection_fetch",json!({"connection_id":row.id,"tab_id":other_tab,"method":"GET","path":"/private"}),"wrong-origin-connection-fetch").await,
+        ToolOutcome::Denied{reason,..} if reason=="connection_cross_site")
+    );
+    let _ = model(
+        tool(
+            &daemon,
+            session,
+            "browser_navigate",
+            json!({"tab_id":other_tab,"url":format!("{outside}/outside2")}),
+            "new-document",
+        )
+        .await,
+    );
+    let expired = model(
+        tool(
+            &daemon,
+            session,
+            "browser_repl",
+            json!({"tab_id":other_tab,"code":xhr}),
+            "expired-document-grant",
+        )
+        .await,
+    );
+    assert_eq!(expired["error"], "connection_grant_required");
+    assert_eq!(private.load(Ordering::SeqCst), 4);
+    let always = document_ticket(&mut events, session).await;
+    answer(&daemon, &always.id, json!("always")).await;
+    assert_eq!(
+        model(
+            tool(
+                &daemon,
+                session,
+                "browser_repl",
+                json!({"tab_id":other_tab,"code":xhr}),
+                "always-resource"
+            )
+            .await
+        )["return_value"],
+        "real-private-response"
+    );
+    assert_eq!(private.load(Ordering::SeqCst), 5);
+    daemon.shutdown().await;
+    server.abort();
+    sibling_server.abort();
 }
