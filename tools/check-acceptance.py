@@ -202,6 +202,11 @@ def parse_junit(text: str, root: Path, prefixes: tuple[str, ...] = ("agent/", ""
     for case in tree.iter("testcase"):
         classname, name = case.get("classname", ""), case.get("name", "")
         parts = classname.split(".") if classname else []
+        rust_path = "/".join(parts) + ".rs"
+        if parts and parts[0] == "crates" and (root / rust_path).is_file():
+            ok = not any(case.find(t) is not None for t in ("failure", "error", "skipped"))
+            out[(rust_path, name)] = out.get((rust_path, name), True) and ok
+            continue
         # pytest classnames are relative to the project it ran in: agent/ and bench/ run from
         # their own directory, tools/ from the repo root.
         path, rest = prefixes[0] + "/".join(parts) + ".py", []
@@ -303,6 +308,15 @@ class Evidence:
             # the deps binary name is the file stem, so prefer exact binary matches first.
             sections.sort(key=lambda s: s.binary != stem)
         statuses = [st for s in sections for r, st in s.results.items() if _name_matches(r, name)]
+        # Dedicated gate journeys run ignored Rust tests with noisy --nocapture output.
+        # Their JUnit records cover every repetition; a main-suite skip is not that result.
+        junit = [ok for (p, n), ok in self.junit.items() if p == path and _name_matches(n, name)]
+        if junit:
+            if not all(junit):
+                return "fail", "JUnit reports failure/error/skip"
+            if any(status not in ("ok", "ignored") for status in statuses):
+                return "fail", f"cargo reports {'/'.join(sorted(set(statuses)))}"
+            return "pass", ""
         if "ok" in statuses:
             return "pass", ""
         if statuses:

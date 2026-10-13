@@ -266,6 +266,38 @@ class CargoMapping(unittest.TestCase):
         code, _ = self.verdict("crates/openside-policy/src/lib.rs::doc")
         self.assertEqual(code, 1)
 
+    def test_rust_junit_repeated_passes_cover_an_ignored_cargo_test(self):
+        (self.r.results / "journey.xml").write_text(
+            '<testsuite><testcase classname="crates.openside-policy.src.lib" name="slow_case"/>'
+            '<testcase classname="crates.openside-policy.src.lib" name="slow_case"/></testsuite>'
+        )
+        code, out = self.verdict("crates/openside-policy/src/lib.rs::slow_case")
+        self.assertEqual(code, 0, out)
+
+    def test_rust_junit_requires_every_repetition_even_when_cargo_passes(self):
+        for failure in ("failure", "error", "skipped"):
+            with self.subTest(failure=failure):
+                (self.r.results / "journey.xml").write_text(
+                    '<testsuite><testcase classname="crates.openside-policy.src.lib" name="default_mode_is_guard"/>'
+                    '<testcase classname="crates.openside-policy.src.lib" name="default_mode_is_guard">'
+                    f'<{failure}/></testcase></testsuite>'
+                )
+                code, out = self.verdict("crates/openside-policy/src/lib.rs::default_mode_is_guard")
+                self.assertEqual(code, 1, out)
+                self.assertIn("JUnit reports failure/error/skip", out)
+
+    def test_rust_junit_does_not_mask_cargo_failure_or_borrow_another_crate(self):
+        (self.r.results / "journey.xml").write_text(
+            '<testsuite><testcase classname="crates.openside-policy.src.lib" name="bad_case"/>'
+            '<testcase classname="crates.openside-policy.src.lib" name="default_mode_is_guard"/></testsuite>'
+        )
+        code, out = self.verdict("crates/openside-policy/src/lib.rs::bad_case")
+        self.assertEqual(code, 1, out)
+        self.assertIn("cargo reports FAILED", out)
+        code, out = self.verdict("crates/other-crate/src/lib.rs::default_mode_is_guard")
+        self.assertEqual(code, 1, out)
+        self.assertIn("not found in results", out)
+
 
 class JunitMapping(unittest.TestCase):
     XML = (
