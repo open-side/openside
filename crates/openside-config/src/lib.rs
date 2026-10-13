@@ -144,11 +144,16 @@ pub struct TeamConfig {
     #[serde(deserialize_with = "positive_team_slots")]
     #[schemars(range(min = 1))]
     pub max_running: usize,
+    /// Limits durable active teammates, excluding the chief.
+    pub max_active_teammates: usize,
 }
 
 impl Default for TeamConfig {
     fn default() -> Self {
-        Self { max_running: 3 }
+        Self {
+            max_running: 3,
+            max_active_teammates: 5,
+        }
     }
 }
 
@@ -412,9 +417,11 @@ pub struct AgentConfig {
     pub startup_timeout_ms: u64,
     /// Model retries after a denied or failed tool call before the run fails.
     pub tool_retries: u32,
-    /// Conversation length that triggers summarizing compaction.
-    pub compaction_max_messages: u32,
-    /// Most recent messages kept verbatim by compaction; must be below the maximum.
+    /// Optional legacy message-count trigger; size budgeting is the default.
+    pub compaction_max_messages: Option<u32>,
+    /// History budget estimated by the sidecar as serialized UTF-8 bytes / 3.
+    pub compaction_max_tokens: u32,
+    /// Recent messages retained verbatim; tool-call boundaries may extend this tail.
     pub compaction_keep_messages: u32,
     /// Tool and system-prompt profile: `full`, `browser-agent` or `ultrabrowse`.
     pub profile: AgentProfile,
@@ -451,7 +458,8 @@ impl Default for AgentConfig {
             dir: None,
             startup_timeout_ms: 30_000,
             tool_retries: 3,
-            compaction_max_messages: 100,
+            compaction_max_messages: None,
+            compaction_max_tokens: 64_000,
             compaction_keep_messages: 20,
             profile: AgentProfile::Full,
             orchestration: Orchestration::Front,
@@ -465,6 +473,7 @@ impl AgentConfig {
         serde_json::json!({
             "tool_retries": self.tool_retries,
             "compaction_max_messages": self.compaction_max_messages,
+            "compaction_max_tokens": self.compaction_max_tokens,
             "compaction_keep_messages": self.compaction_keep_messages,
             "profile": self.profile.as_str(),
             "orchestration": self.orchestration.as_str(),
@@ -646,12 +655,13 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
                 "startup_timeout_ms",
                 "tool_retries",
                 "compaction_max_messages",
+                "compaction_max_tokens",
                 "compaction_keep_messages",
                 "profile",
                 "orchestration",
             ],
         ),
-        ("team", &["max_running"]),
+        ("team", &["max_running", "max_active_teammates"]),
         ("models", &["default", "fallback", "front"]),
         ("credentials", &[]),
         (
@@ -840,11 +850,23 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
             "must be greater than zero",
         ));
     }
-    if config.agent.compaction_keep_messages >= config.agent.compaction_max_messages {
+    if config.agent.compaction_keep_messages < 2
+        || config
+            .agent
+            .compaction_max_messages
+            .is_some_and(|maximum| config.agent.compaction_keep_messages >= maximum)
+    {
         return Err(error(
             path,
             "agent.compaction_keep_messages",
-            "must be less than agent.compaction_max_messages",
+            "must be at least two and less than compaction_max_messages when configured",
+        ));
+    }
+    if config.agent.compaction_max_tokens == 0 {
+        return Err(error(
+            path,
+            "agent.compaction_max_tokens",
+            "must be greater than zero",
         ));
     }
     if config

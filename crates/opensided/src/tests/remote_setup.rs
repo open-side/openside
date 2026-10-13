@@ -61,6 +61,52 @@ async fn bootstrap(unix: &Router) -> Value {
 }
 
 #[tokio::test]
+async fn cloudflare_host_and_origin_allow_phone_exchange_but_never_local_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let unix = api::router(daemon.shared.clone(), true);
+    let tcp = api::router(daemon.shared.clone(), false);
+    let (status, offer) = send(
+        &unix,
+        request(
+            "POST",
+            "/v1/pairing",
+            json!({"name":"phone","scopes":["read"]}),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mut exchange = request(
+        "POST",
+        "/v1/pairing/exchange",
+        json!({"code":offer["code"]}),
+        None,
+    );
+    for (name, value) in [
+        ("host", "phone.trycloudflare.com"),
+        ("origin", "https://phone.trycloudflare.com"),
+        ("x-forwarded-proto", "https"),
+        ("cf-connecting-ip", "203.0.113.4"),
+    ] {
+        exchange.headers_mut().insert(
+            axum::http::HeaderName::from_static(name),
+            value.parse().unwrap(),
+        );
+    }
+    assert!(!crate::remote::local_tcp(&daemon.shared, &exchange));
+    let (status, paired) = send(&tcp, exchange).await;
+    assert_eq!(status, StatusCode::CREATED, "{paired}");
+    let mut health = request("GET", "/v1/health", Value::Null, paired["token"].as_str());
+    health
+        .headers_mut()
+        .insert("host", "phone.trycloudflare.com".parse().unwrap());
+    assert_eq!(send(&tcp, health).await.0, StatusCode::OK);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn remote_setup_local_web_pairing_refuses_each_proxy_origin_and_remote_admin_provenance() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();

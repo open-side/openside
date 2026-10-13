@@ -106,7 +106,30 @@ async fn quick_tunnel_url_goes_into_pairing_and_a_crashed_cloudflared_is_restart
     let args = std::fs::read_to_string(root.path().join("args")).unwrap();
     assert_eq!(
         args.lines().next().unwrap(),
-        "tunnel --no-autoupdate --url http://127.0.0.1:47999"
+        format!(
+            "tunnel --no-autoupdate --config {} --url http://127.0.0.1:47999",
+            daemon
+                .shared
+                .config
+                .loaded
+                .paths
+                .state_dir
+                .join("cloudflared-quick.yml")
+                .display()
+        )
+    );
+    assert_eq!(
+        std::fs::read_to_string(
+            daemon
+                .shared
+                .config
+                .loaded
+                .paths
+                .state_dir
+                .join("cloudflared-quick.yml")
+        )
+        .unwrap(),
+        "{}\n"
     );
 
     let (status, offer) = call(
@@ -160,6 +183,7 @@ async fn named_tunnel_gets_its_token_from_the_environment_and_reports_its_hostna
         cloudflare::Options {
             bin: bin.display().to_string(),
             listen: "127.0.0.1:47999".parse().unwrap(),
+            quick_config: root.path().join("cloudflared-quick.yml"),
             hostname: Some("desk.example.test".into()),
             token: Some(zeroize::Zeroizing::new("named-tunnel-token-secret".into())),
             initial_backoff: Duration::from_millis(20),

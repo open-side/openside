@@ -59,7 +59,9 @@ mode = "cloudflare"
 tunnel = "quick"
 ```
 
-데몬은 내부적으로 `cloudflared tunnel --no-autoupdate --url http://<listen>`을 실행하고, 표준 출력 및 표준 에러에서 생성된 `https://*.trycloudflare.com` 주소를 파싱한다. 빠른 터널은 프로세스를 재시작할 때마다 접속 주소가 바뀌므로 재시작 후에는 페어링 QR 코드를 다시 생성해야 한다. 터널 연결이 끊어지면 1초, 2초, 4초 순으로 최대 60초까지 지연 시간을 늘려 가며 재시작하고, 60초 이상 안정적으로 유지되면 지연 시간을 초기화한다. 데몬을 종료하면 자식 프로세스도 함께 정리한다.
+데몬은 `cloudflared tunnel --no-autoupdate --config <state_dir>/cloudflared-quick.yml --url http://<listen>` 명령으로 터널을 실행하고, 표준 출력과 표준 에러에서 발급된 `https://*.trycloudflare.com` 주소를 읽어 들인다. 퀵 터널 URL은 프로세스를 재시작할 때마다 바뀌므로 페어링 QR 코드를 다시 생성해야 한다. 터널 연결이 끊기면 1초, 2초, 4초 순으로 최대 60초까지 지연 시간을 늘려 가며 재시작을 시도하고, 60초 동안 안정적으로 연결을 유지하면 지연 시간을 초기화한다. 데몬이 종료될 때는 실행 중이던 자식 프로세스를 함께 정리한다.
+
+사용자의 `~/.cloudflared/config.yml`에 정의된 ingress 규칙이나 catch-all 설정이 퀵 터널의 로컬 데몬 대상을 덮어써 HTTP 404를 반환하지 않도록, 데몬 전용 빈 설정 파일을 생성해 분리 관리한다. 사용자가 지정한 다른 네임드 터널이나 기존 설정 파일은 건드리지 않고 그대로 둔다. `openside doctor`의 `remote.cloudflare.inherited_ingress` 점검 항목은 기존 ingress 설정이 존재하는지 확인하며, 이전 터널에서 여전히 HTTP 404 오류가 난다면 최신 데몬으로 업데이트할 것을 권장한다.
 
 도메인을 직접 지정하는 네임드 터널(Named Tunnel)을 쓰려면 Cloudflare 대시보드에서 터널과 호스트명을 먼저 만든 뒤, 발급받은 토큰을 권한이 제한된 파일(`chmod 0600`)에 저장한다.
 

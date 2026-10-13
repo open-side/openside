@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RemoteStatus } from "../api/types";
-import { offStatus, tailscaleOn } from "./testDaemon";
-import { pairingOptions, recommendation, transportViews } from "./transports";
+import { offStatus, quickTunnel, tailscaleOn } from "./testDaemon";
+import { connectionProblem, oneClickTransport, pairingOptions, recommendation, transportViews } from "./transports";
 
 const view = (status: RemoteStatus, id: string) => transportViews(status).find((item) => item.id === id)!;
 
@@ -70,5 +70,41 @@ describe("pairingOptions", () => {
     expect(pairingOptions(offStatus({ public_url: "https://proxy.example.com" }))).toEqual([
       { via: null, label: "Saved address", url: "https://proxy.example.com" },
     ]);
+  });
+});
+
+describe("connectionProblem", () => {
+  it("says nothing is on for a fresh computer", () => {
+    expect(connectionProblem(offStatus(), null)).toEqual({ kind: "none" });
+  });
+
+  it("words a tunnel's first start and its restarts differently", () => {
+    expect(connectionProblem(quickTunnel({ state: "starting" }), null)).toMatchObject({ kind: "starting", message: expect.stringMatching(/^Starting Cloudflare Tunnel/) });
+    expect(connectionProblem(quickTunnel({ state: "restarting", restarts: 1 }), null)).toEqual({
+      kind: "starting",
+      id: "cloudflare",
+      message: "The tunnel isn't reachable yet. Retrying…",
+    });
+  });
+
+  it("passes on the daemon's reason for a failed connection and prefers one that is still coming up", () => {
+    expect(connectionProblem(quickTunnel({ state: "failed", last_error: "cloudflared not found" }), null)).toMatchObject({ kind: "error", id: "cloudflare" });
+    const starting = quickTunnel({ state: "starting" });
+    const both = { ...starting, tailscale: { installed: true, state: "stopped", url: null, last_error: null }, configuration: { ...starting.configuration, tailscale: { enabled: true, public_url: null } } };
+    expect(connectionProblem(both, null).kind).toBe("starting");
+  });
+
+  it("reports a chosen connection that was turned off meanwhile", () => {
+    expect(connectionProblem(offStatus(), "relay")).toEqual({ kind: "error", id: "relay", message: "Your own relay is turned off." });
+  });
+});
+
+describe("oneClickTransport", () => {
+  it("is Tailscale where installed, a saved relay next, otherwise a quick tunnel", () => {
+    expect(oneClickTransport(offStatus())).toBe("tailscale");
+    const missing = { installed: false, state: "unavailable", url: null, last_error: null };
+    expect(oneClickTransport(offStatus({ tailscale: missing }))).toBe("cloudflare");
+    const base = offStatus().configuration;
+    expect(oneClickTransport(offStatus({ tailscale: missing, configuration: { ...base, relay: { enabled: false, url: "https://relay.example.com", token_file: null } } }))).toBe("relay");
   });
 });

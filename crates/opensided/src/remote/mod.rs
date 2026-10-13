@@ -185,7 +185,12 @@ fn spawn_cloudflare(shared: &Shared, remote: &RemoteConfig, listen: SocketAddr) 
         })
         .flatten();
     *shared.transports.cloudflare.lock() = Some(cloudflare::spawn(
-        cloudflare::Options::from_config(&remote.cloudflare, listen, token),
+        cloudflare::Options::from_config(
+            &remote.cloudflare,
+            listen,
+            &shared.config.loaded.paths.state_dir,
+            token,
+        ),
         shared.shutdown.subscribe(),
     ));
 }

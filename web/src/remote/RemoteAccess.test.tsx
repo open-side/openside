@@ -45,7 +45,7 @@ describe("RemoteAccess", () => {
     expect(within(tailscale).getByText(/Tailscale is already on this computer/)).toBeInTheDocument();
     expect(within(await card("Cloudflare Tunnel")).queryByText("Recommended")).toBeNull();
     expect(within(await card("Your own relay")).getByText("Off")).toBeInTheDocument();
-    expect(screen.getByText(/Turn on a connection first/)).toBeInTheDocument();
+    expect(screen.getByText("Your phone needs a way to reach this computer.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "See paired devices" })).toHaveAttribute("href", "/devices");
   });
 
@@ -69,7 +69,7 @@ describe("RemoteAccess", () => {
     expect(within(tailscale).getByText("https://desk.tail1234.ts.net")).toBeInTheDocument();
     expect(within(tailscale).getByRole("button", { name: "Copy the Tailscale address" })).toBeInTheDocument();
     expect(within(tailscale).getByRole("button", { name: "Turn off Tailscale" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show QR code" })).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: /QR code to connect/ })).toBeInTheDocument();
   });
 
   it("starts a quick Cloudflare tunnel, shows it starting and then its public address", async () => {

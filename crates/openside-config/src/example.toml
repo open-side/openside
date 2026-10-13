@@ -31,9 +31,14 @@ takeover_ttl_secs = 1800
 # dir = "./agent"                              # OPENSIDE_AGENT_DIR
 startup_timeout_ms = 30000
 tool_retries = 3                  # model retries after a denied/failed tool call
-compaction_max_messages = 100     # summarize the conversation beyond this length
-compaction_keep_messages = 20     # recent messages kept verbatim (< max)
+# compaction_max_messages = 100   # optional legacy message-count trigger
+compaction_max_tokens = 64000     # serialized UTF-8 history bytes / 3
+compaction_keep_messages = 20     # normal tail; oversized tails keep at least two
 profile = "full"                  # full | browser-agent | ultrabrowse (docs/specs/profiles.md)
+
+[team]
+max_running = 3
+max_active_teammates = 5          # excludes the chief; zero blocks hires and restores
 
 [models]
 # default = "provider:your-model"               # OPENSIDE_MODEL

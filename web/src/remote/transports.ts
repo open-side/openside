@@ -1,3 +1,4 @@
+import type { Client } from "../api/client";
 import type { RemoteStatus } from "../api/types";
 
 export type TransportId = "tailscale" | "cloudflare" | "relay";
@@ -108,4 +109,63 @@ export function pairingOptions(status: RemoteStatus): PairingOption[] {
     .map((view): PairingOption => ({ via: view.id, label: TRANSPORT_NAMES[view.id], url: view.url! }));
   if (options.length === 0 && status.public_url) options.push({ via: null, label: "Saved address", url: status.public_url });
   return options;
+}
+
+/** What stands between a phone and a QR code when no connection can carry one. */
+export type ConnectionProblem =
+  | { kind: "none" }
+  | { kind: "starting"; id: TransportId; message: string }
+  | { kind: "error"; id: TransportId; message: string };
+
+const UNREACHABLE: Record<TransportId, string> = {
+  tailscale: "Tailscale isn't reachable yet.",
+  cloudflare: "The tunnel isn't reachable yet.",
+  relay: "The relay isn't reachable yet.",
+};
+
+/** The tunnel was up before and went away, or a first start is still under way. */
+function retrying(status: RemoteStatus, id: TransportId): boolean {
+  if (id === "cloudflare") return status.cloudflare ? status.cloudflare.state === "restarting" || status.cloudflare.restarts > 0 : false;
+  return false;
+}
+
+/**
+ * Why there is no usable connection, from the one the person chose (`via`) or from every
+ * connection that is turned on. A connection that is coming up wins over one that failed, because
+ * it may fix itself while the person watches.
+ */
+export function connectionProblem(status: RemoteStatus, via: TransportId | null): ConnectionProblem {
+  const views = transportViews(status).filter((view) => (via ? view.id === via : view.phase !== "off"));
+  const starting = views.find((view) => view.phase === "starting");
+  if (starting) {
+    const message = retrying(status, starting.id)
+      ? `${UNREACHABLE[starting.id]} Retrying…`
+      : `Starting ${TRANSPORT_NAMES[starting.id]}… The QR code appears as soon as it is ready.`;
+    return { kind: "starting", id: starting.id, message };
+  }
+  const failed = views.find((view) => view.phase === "error");
+  if (failed) return { kind: "error", id: failed.id, message: failed.hint ?? `${TRANSPORT_NAMES[failed.id]} needs attention.` };
+  const off = views.find((view) => view.phase === "off");
+  // A chosen connection that was turned off meanwhile is as good as none turned on.
+  return off && via ? { kind: "error", id: off.id, message: `${TRANSPORT_NAMES[off.id]} is turned off.` } : { kind: "none" };
+}
+
+/**
+ * The one connection a first-time person can turn on with a single click: Tailscale where it is
+ * installed, a relay whose address is already saved, otherwise a Cloudflare quick tunnel, which
+ * needs no account. A relay without an address cannot be one click.
+ */
+export function oneClickTransport(status: RemoteStatus): TransportId {
+  if (status.tailscale.installed) return "tailscale";
+  if (status.configuration.relay.url) return "relay";
+  return "cloudflare";
+}
+
+/** Turns a connection on with the settings already saved for it. */
+export function enableTransport(client: Client, id: TransportId, status: RemoteStatus): Promise<RemoteStatus> {
+  const { cloudflare, relay } = status.configuration;
+  if (id === "tailscale") return client.setTailscale(true);
+  if (id === "relay") return client.setRelay({ enabled: true, url: relay.url ?? null, token_file: relay.token_file ?? null });
+  const named = cloudflare.tunnel === "named" && !!cloudflare.hostname;
+  return client.setCloudflare({ enabled: true, tunnel: named ? "named" : "quick", hostname: named ? cloudflare.hostname : null, token_file: cloudflare.token_file ?? null });
 }

@@ -224,9 +224,12 @@ function RemoteBody({ status, onStatus, onStale }: { status: RemoteStatus; onSta
   const anyOn = views.some((view) => view.phase !== "off");
   return (
     <>
+      <SectionList title="Connect your phone" label="Connect your phone">
+        <ConnectPhone status={status} onStatusStale={onStale} />
+      </SectionList>
       <SectionList
         title="Ways to reach this computer"
-        description="Turn on one way in. Your phone then connects to openside from anywhere, using a QR code from this screen."
+        description="Turn on one way in. Your phone then connects to openside from anywhere, using the QR code above."
       >
         {!status.configure_allowed && <LocalOnlyNotice what="change these connections" onChanged={onStale} />}
         {status.restart_required && <RestartNotice onRestarted={onStale}>Saved. Restart openside to finish turning this on.</RestartNotice>}
@@ -244,9 +247,6 @@ function RemoteBody({ status, onStatus, onStale }: { status: RemoteStatus; onSta
             </li>
           ))}
         </ul>
-      </SectionList>
-      <SectionList title="Connect a phone" label="Connect a phone">
-        <ConnectPhone status={status} onStatusStale={onStale} />
       </SectionList>
       <SectionList title="Paired devices" label="Paired devices link">
         <p className="section-list-description">Phones and agents that are connected now, with the option to revoke any of them.</p>

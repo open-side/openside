@@ -752,6 +752,7 @@ fn changed_value(path: &str, schema: &Value, current: &Value) -> Value {
     }
     let samples: BTreeMap<&str, Value> = BTreeMap::from([
         ("daemon.listen", json!("127.0.0.1:9")),
+        ("agent.compaction_max_messages", json!(100)),
         ("remote.public_url", json!("https://desk.example.test")),
         ("remote.push_contact", json!("mailto:me@example.test")),
         ("remote.mode", json!(["cloudflare"])),
@@ -1060,7 +1061,20 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
             .replace("{sid}", "unknown")
             .replace("{thumbnail_id}", "unknown")
             .replace("{path}", "transcript.jsonl")
+            .replace("{key}", "unknown")
+            .replace("{origin}", "https%3A%2F%2Fexample.test")
+            .replace("{provider}", "anthropic")
+            .replace("{source}", "claude-code")
+            .replace("{kind}", "telegram")
+            .replace("{account_id}", "unknown-account")
+            .replace("{key_id}", "unknown-key")
+            .replace("{space_id}", "unknown-space")
+            .replace("{ticket}", "unknown-ticket")
             .replace("{name}", "unknown");
+        assert!(
+            !path.contains('{'),
+            "unsubstituted path parameter in {path}"
+        );
         let body = if route.request_schema.is_some() {
             json!({})
         } else {
@@ -1115,8 +1129,33 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
             .into_iter()
             .map(|spec| spec.name)
             .collect();
+        let teammate = crate::team::hire(
+            &daemon.shared,
+            &serde_json::from_value(json!({"name":"Mina","persona":{"role":"Researcher","voice":"","responsibilities":["Track prices"],"boundaries":[]}})).unwrap(),
+            "visibility",
+        )
+        .await
+        .unwrap();
+        let chief = daemon.shared.agents.get("chief").unwrap().unwrap();
+        let chief_host = host(&daemon, &chief.home_session_id).await;
+        let teammate_host = host(&daemon, &teammate.home_session_id).await;
         for name in daemon.shared.registry.names() {
             let shown = visible.iter().any(|v| v == name);
+            if name.starts_with("team_") {
+                assert!(!shown, "{name} must require a team role");
+                let chief_only = !matches!(name, "team_ask_chief" | "team_report");
+                for (role, role_host, expected) in [
+                    ("chief", &chief_host, chief_only),
+                    ("teammate", &teammate_host, !chief_only),
+                ] {
+                    assert_eq!(
+                        role_host.specs().iter().any(|spec| spec.name == name),
+                        expected,
+                        "{name} visibility for {role} in {orchestration:?}"
+                    );
+                }
+                continue;
+            }
             if crate::tasks::is_task_tool(name) || name == "delegate" {
                 let expected = if name == "delegate" {
                     orchestration == openside_config::Orchestration::Single

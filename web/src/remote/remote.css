@@ -144,91 +144,180 @@
   color: var(--muted);
 }
 
-/* The QR code is always black on white; the white tile is what makes it scannable in dark mode. */
-.remote-offer {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
+/* One centred column: the QR code first, then status, link, expiry and the secondary controls.
+ * Where the card is wide (the Remote access dialog on a desktop) the code sits left of its status. */
+.pair-frame {
+  container-type: inline-size;
 }
+.pair-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.pair {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+}
+.pair > * {
+  min-width: 0;
+  max-width: 100%;
+}
+/* The QR code is always black on white; the white tile is what makes it scannable in dark mode. */
 .remote-qr {
   position: relative;
+  width: min(288px, 100%);
+  aspect-ratio: 1;
   padding: 12px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: #fff;
   line-height: 0;
 }
 .remote-qr .qr-code {
   display: block;
-  width: 208px;
-  height: 208px;
+  width: 100%;
+  height: 100%;
+}
+.remote-qr[data-state="empty"] {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.remote-qr-empty {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
 }
 .remote-qr-veil {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: rgb(255 255 255 / 0.9);
   color: #3a3f4b;
   font-size: 0.9375rem;
   font-weight: 650;
   line-height: 1.4;
 }
-.remote-steps {
-  display: grid;
-  gap: 6px;
+.pair-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  font-size: 1rem;
+  font-weight: 620;
+  line-height: 1.4;
+  text-align: center;
+}
+.pair-status--error {
+  color: var(--danger);
+}
+.pair-hint {
   margin: 0;
-  padding-left: 20px;
-  font-size: 0.875rem;
-  line-height: 1.55;
-}
-.remote-steps li::marker {
   color: var(--muted);
-  font-weight: 600;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  text-align: center;
 }
-.remote-facts {
-  display: grid;
-  gap: 6px;
-  margin: 14px 0 0;
+.pair-link {
+  width: 100%;
+  margin-top: 4px;
 }
-.remote-facts > div {
+.pair-link code {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pair-expiry,
+.pair-via {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
-  font-size: 0.875rem;
-}
-.remote-facts dt {
-  min-width: 5.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 8px;
+  margin: 0;
   color: var(--muted);
   font-size: 0.8125rem;
 }
-.remote-facts dd {
-  margin: 0;
+.pair-expiry [role="timer"] {
+  color: var(--text);
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
 }
-.remote-facts [data-expired] {
-  color: var(--danger);
+.pair-via strong {
+  color: var(--text);
+  font-weight: 620;
 }
-@media (max-width: 560px) {
-  .remote-offer {
-    grid-template-columns: minmax(0, 1fr);
-    justify-items: center;
+.pair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.pair-secondary {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--glass-inset-border);
+}
+.pair-secondary .remote-form {
+  width: 100%;
+  justify-self: stretch;
+}
+.pair-options-toggle {
+  margin: 0;
+}
+.pair-secondary .ui-segment {
+  white-space: nowrap;
+}
+@container (min-width: 520px) {
+  .pair {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 28px;
+    max-width: none;
+    justify-items: stretch;
+    align-items: center;
   }
-  .remote-offer-copy {
-    justify-self: stretch;
+  .pair .remote-qr {
+    width: 248px;
   }
-  .remote-qr .qr-code {
-    width: min(208px, 60vw);
-    height: min(208px, 60vw);
+  .pair-body {
+    justify-items: stretch;
+    align-content: center;
+  }
+  .pair-status,
+  .pair-hint,
+  .pair-expiry,
+  .pair-actions {
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .pair-secondary {
+    grid-column: 1 / -1;
+    justify-items: start;
+  }
+  .pair-via {
+    justify-content: flex-start;
   }
 }
 
 .remote-result {
-  padding: 16px;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 24px 16px;
+  text-align: center;
   border: 1px solid color-mix(in srgb, var(--success) 30%, var(--glass-inset-border));
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--success) 7%, transparent);
@@ -238,11 +327,24 @@
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: 1.0625rem;
   font-weight: 650;
 }
-.remote-result-title svg {
+.remote-result-mark {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--success) 18%, transparent);
   color: var(--success);
+}
+.remote-result .ui-button {
+  text-decoration: none;
+}
+.remote-result .remote-actions {
+  justify-content: center;
 }
 
 .remote-local {
@@ -289,8 +391,15 @@
   }
   .remote-url .ui-button--compact,
   .remote-actions .ui-button,
+  .pair-actions .ui-button,
+  .pair-expiry .ui-button,
+  .pair-via .ui-button,
+  .pair-options-toggle,
   .remote-local .ui-button {
     min-height: 44px;
+  }
+  .remote-qr {
+    width: min(240px, 100%);
   }
   .remote-scope {
     min-height: 48px;

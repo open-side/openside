@@ -554,6 +554,30 @@ fn transport_checks(
     }
     if remote.has(RemoteMode::Cloudflare) {
         let cloudflare = &remote.cloudflare;
+        if cloudflare.tunnel == CloudflareTunnel::Quick {
+            let mut directories = vec![
+                PathBuf::from("/etc/cloudflared"),
+                PathBuf::from("/usr/local/etc/cloudflared"),
+            ];
+            if let Some(home) = dirs::home_dir() {
+                directories.push(home.join(".cloudflared"));
+                directories.push(home.join(".cloudflare-warp"));
+                directories.push(home.join("cloudflare-warp"));
+            }
+            for directory in directories {
+                for filename in ["config.yml", "config.yaml"] {
+                    let path = directory.join(filename);
+                    if has_ingress(&path) {
+                        add(
+                            "remote.cloudflare.inherited_ingress",
+                            Status::Warn,
+                            format!("{} contains ingress rules that can override a Quick Tunnel's origin and return 404; openside isolates its Quick Tunnel with an empty config", path.display()),
+                            Some("Keep other tunnels' configuration intact. If pairing still returns 404, update and restart openside so its cloudflared child uses --config with the private quick-tunnel config."),
+                        );
+                    }
+                }
+            }
+        }
         let token = (cloudflare.tunnel == CloudflareTunnel::Named).then(|| {
             secret_check(
                 cloudflare.token_file.as_deref(),
@@ -619,10 +643,26 @@ fn transport_checks(
     }
 }
 
+fn has_ingress(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path)
+        .is_ok_and(|config| config.lines().any(|line| line.starts_with("ingress:")))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
     use crate::doctor::{DoctorReport, Status};
+
+    #[test]
+    fn inherited_ingress_is_detected_without_reading_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.yml");
+        assert!(!super::has_ingress(&path));
+        std::fs::write(&path, "{}\n").unwrap();
+        assert!(!super::has_ingress(&path));
+        std::fs::write(&path, "ingress:\n  - service: http_status:404\n").unwrap();
+        assert!(super::has_ingress(&path));
+    }
 
     fn loaded(root: &std::path::Path, edit: impl FnOnce(&mut crate::Config)) -> crate::Loaded {
         let mut config = crate::Config::default();

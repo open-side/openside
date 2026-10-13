@@ -1,7 +1,7 @@
 //! Supervised `cloudflared` (remote.mode = "cloudflare").
 //!
-//! A quick tunnel runs `cloudflared tunnel --no-autoupdate --url http://<listen>` and its
-//! public URL is the first `https://….trycloudflare.com` the process prints; it changes on
+//! A quick tunnel uses an owned empty `--config` so named-tunnel ingress cannot override
+//! `--url http://<listen>`. Its URL is the first `https://….trycloudflare.com` it prints; it changes on
 //! every start, so pairing links issued before a restart stop working. A named tunnel runs
 //! `cloudflared tunnel --no-autoupdate run` with the token in `TUNNEL_TOKEN` (never argv,
 //! which other local users can read) and is reachable at `https://<hostname>` once it logs a
@@ -9,6 +9,7 @@
 
 use std::{
     net::SocketAddr,
+    path::PathBuf,
     process::Stdio,
     sync::Arc,
     time::{Duration, Instant},
@@ -33,6 +34,7 @@ const HEALTHY_RUN: Duration = Duration::from_secs(60);
 pub(crate) struct Options {
     pub(crate) bin: String,
     pub(crate) listen: SocketAddr,
+    pub(crate) quick_config: PathBuf,
     /// `Some(hostname)` for a named tunnel.
     pub(crate) hostname: Option<String>,
     pub(crate) token: Option<Zeroizing<String>>,
@@ -44,11 +46,13 @@ impl Options {
     pub(crate) fn from_config(
         config: &CloudflareConfig,
         listen: SocketAddr,
+        state_dir: &std::path::Path,
         token: Option<String>,
     ) -> Self {
         Self {
             bin: config.bin.clone(),
             listen,
+            quick_config: state_dir.join("cloudflared-quick.yml"),
             hostname: match config.tunnel {
                 CloudflareTunnel::Quick => None,
                 CloudflareTunnel::Named => config.hostname.clone(),
@@ -135,6 +139,24 @@ pub(crate) fn spawn(options: Options, mut shutdown: broadcast::Receiver<()>) -> 
     let (stop_tx, mut stop) = oneshot::channel();
     let shared = Arc::clone(&status);
     let task = tokio::spawn(async move {
+        if options.hostname.is_none() {
+            // A user's named-tunnel ingress overrides --url, including its catch-all 404.
+            // An explicit empty config keeps this child independent of their other tunnels.
+            let configured = async {
+                if let Some(parent) = options.quick_config.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                tokio::fs::write(&options.quick_config, b"{}\n").await
+            }
+            .await;
+            if let Err(error) = configured {
+                set(&shared, |s| {
+                    s.state = "failed".into();
+                    s.last_error = Some(format!("cannot write quick tunnel config: {error}"));
+                });
+                return;
+            }
+        }
         let mut backoff = options.initial_backoff;
         let mut first = true;
         loop {
@@ -156,6 +178,7 @@ pub(crate) fn spawn(options: Options, mut shutdown: broadcast::Receiver<()>) -> 
             command.args(["tunnel", "--no-autoupdate"]);
             match &options.hostname {
                 None => {
+                    command.arg("--config").arg(&options.quick_config);
                     command.args(["--url", &format!("http://{}", options.listen)]);
                 }
                 Some(_) => {

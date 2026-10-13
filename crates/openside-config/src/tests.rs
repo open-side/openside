@@ -161,7 +161,7 @@ fn agent_runtime_options_reach_the_sidecar_and_keep_must_stay_below_max() {
     .unwrap_or_else(|err| panic!("tuned: {err}"));
     assert_eq!(
         tuned.agent.runtime_options(),
-        serde_json::json!({"tool_retries": 1, "compaction_max_messages": 40, "compaction_keep_messages": 39, "profile": "browser-agent", "orchestration": "front"})
+        serde_json::json!({"tool_retries": 1, "compaction_max_messages": 40, "compaction_max_tokens": 64000, "compaction_keep_messages": 39, "profile": "browser-agent", "orchestration": "front"})
     );
     validate(&tuned, path).unwrap_or_else(|err| panic!("tuned validation: {err}"));
     let equal = parse_config(
@@ -173,6 +173,23 @@ fn agent_runtime_options_reach_the_sidecar_and_keep_must_stay_below_max() {
         .err()
         .unwrap_or_else(|| panic!("keep == max must be rejected"));
     assert_eq!(error.key, "agent.compaction_keep_messages");
+    let defaults = AgentConfig::default().runtime_options();
+    assert!(defaults["compaction_max_messages"].is_null());
+    assert_eq!(defaults["compaction_max_tokens"], 64_000);
+    for source in [
+        "[agent]\ncompaction_max_tokens = 0",
+        "[agent]\ncompaction_keep_messages = 1",
+    ] {
+        let invalid = parse_config(path, source)
+            .unwrap_or_else(|err| panic!("parse invalid thresholds: {err}"));
+        assert!(validate(&invalid, path).is_err());
+    }
+    let budget = parse_config(path, "[agent]\ncompaction_max_tokens = 32000")
+        .unwrap_or_else(|err| panic!("token budget: {err}"));
+    assert_eq!(
+        budget.agent.runtime_options()["compaction_max_tokens"],
+        32_000
+    );
 }
 
 #[test]
@@ -660,6 +677,14 @@ fn front_is_default_without_a_separate_model_and_single_remains_explicit() {
 fn team_concurrency_defaults_and_rejects_zero() {
     let default: Config = toml::from_str("").unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(default.team.max_running, 3);
+    assert_eq!(default.team.max_active_teammates, 5);
+    let capped: Config = toml::from_str("[team]\nmax_active_teammates=2\n")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(capped.team.max_active_teammates, 2);
+    let disabled: Config = toml::from_str("[team]\nmax_active_teammates=0\n")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(disabled.team.max_active_teammates, 0);
+    assert!(toml::from_str::<Config>("[team]\nmax_active_teammates=-1\n").is_err());
     let configured: Config =
         toml::from_str("[team]\nmax_running=2\n").unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(configured.team.max_running, 2);

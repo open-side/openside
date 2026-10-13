@@ -36,6 +36,17 @@ export function tailscaleOn(patch: Partial<RemoteStatus> = {}): RemoteStatus {
   } as Partial<RemoteStatus>);
 }
 
+/** A quick Cloudflare tunnel in the given state, with Tailscale off. */
+export function quickTunnel(runtime: { state: string; url?: string | null; restarts?: number; last_error?: string | null }, patch: Partial<RemoteStatus> = {}): RemoteStatus {
+  const base = offStatus().configuration;
+  return offStatus({
+    modes: ["cloudflare"],
+    configuration: { ...base, cloudflare: { ...base.cloudflare, enabled: true } },
+    cloudflare: { state: runtime.state, url: runtime.url ?? null, restarts: runtime.restarts ?? 0, last_error: runtime.last_error ?? null },
+    ...patch,
+  });
+}
+
 export function offer(patch: Partial<PairingOffer> = {}): PairingOffer {
   return {
     code: "K7QM2XPD",
