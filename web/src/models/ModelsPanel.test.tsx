@@ -39,7 +39,7 @@ describe("ModelsPanel", () => {
     expect(within(await provider("Google")).queryByRole("button", { name: /account$/ })).toBeNull();
 
     const models = within(anthropic).getByRole("list", { name: "Anthropic models" });
-    expect(within(models).getByText("Claude Sonnet 4.5")).toBeInTheDocument();
+    expect(within(models).getByText("Claude Sonnet 5.5")).toBeInTheDocument();
     expect(within(models).getAllByText("Unavailable")).toHaveLength(2);
     expect(within(models).getAllByText(/No credential yet/)).toHaveLength(2);
     expect(screen.getByRole("status")).toHaveTextContent("No model is ready yet");
@@ -220,24 +220,77 @@ describe("ModelsPanel", () => {
     expect(within(dialog).getByRole("button", { name: "Stop using" })).toBeInTheDocument();
   });
 
-  it("sets the default model from available models only and lists fallbacks in order", async () => {
+  it("sets the reasoning model from available models only and lists fallbacks in order", async () => {
     const user = userEvent.setup();
     const daemon = modelsDaemon({ keys: [keyInfo("openai", "k1", "Main", "1111")], pools: { openai: [ref("vault", "k1")] } });
     open(daemon.client);
-    const select = await screen.findByLabelText("Model");
+    const select = await screen.findByLabelText("Reasoning model");
     await user.click(select);
-    const sonnet = await screen.findByRole("option", { name: /Claude Sonnet 4.5/ });
+    const sonnet = await screen.findByRole("option", { name: /Claude Sonnet 5.5/ });
     expect(sonnet).toHaveAttribute("aria-disabled", "true");
     expect(sonnet).toHaveTextContent("(unavailable)");
-    await user.click(screen.getByRole("option", { name: /GPT-5$/ }));
-    await waitFor(() => expect(daemon.state.defaultModel).toBe("openai:gpt-5"));
-    expect(daemon.calls).toContainEqual(expect.objectContaining({ method: "PUT", path: "/v1/settings/models", body: { default_model: "openai:gpt-5", fallback_models: [] } }));
+    await user.click(screen.getByRole("option", { name: /^GPT-6.1 Sol/ }));
+    await waitFor(() => expect(daemon.state.defaultModel).toBe("openai:gpt-6.1-sol"));
+    expect(daemon.calls).toContainEqual(
+      expect.objectContaining({ method: "PUT", path: "/v1/settings/models", body: { default_model: "openai:gpt-6.1-sol", fast_model: null, fallback_models: [] } }),
+    );
 
-    await chooseOption(user, await screen.findByLabelText("Add a fallback"), /GPT-5 mini/);
+    await chooseOption(user, await screen.findByLabelText("Add a fallback"), /GPT-6 Luna/);
     const chips = await screen.findByRole("group", { name: "Fallback models" });
-    expect(within(chips).getByText("openai:gpt-5-mini")).toBeInTheDocument();
-    await user.click(within(chips).getByRole("button", { name: "Remove fallback openai:gpt-5-mini" }));
+    expect(within(chips).getByText("openai:gpt-6-luna")).toBeInTheDocument();
+    await user.click(within(chips).getByRole("button", { name: "Remove fallback openai:gpt-6-luna" }));
     await waitFor(() => expect(daemon.state.fallbacks).toEqual([]));
+  });
+
+  it("offers the fast model as the reasoning model or any available one, recommended first, and keeps it when other settings change", async () => {
+    const user = userEvent.setup();
+    const daemon = modelsDaemon({
+      keys: [keyInfo("openai", "k1", "Main", "1111")],
+      pools: { openai: [ref("vault", "k1")] },
+      defaultModel: "openai:gpt-6.1-sol",
+    });
+    open(daemon.client);
+    const fast = await screen.findByLabelText("Fast model");
+    expect(fast).toHaveTextContent("Same as reasoning model");
+    expect(screen.getByText("Answers quickly and hands bigger work to the reasoning model.")).toBeInTheDocument();
+    expect(screen.getByText("Does the thinking for tasks and teammates.")).toBeInTheDocument();
+
+    await user.click(fast);
+    const listbox = await screen.findByRole("listbox");
+    const names = within(listbox).getAllByRole("option").map((option) => option.textContent);
+    // The same-as option first, then the recommended fast models (labelled by provider), then the rest by provider.
+    expect(names.slice(0, 3)).toEqual(["Same as reasoning model", expect.stringContaining("Claude Haiku 5.5"), expect.stringContaining("GPT-6 Luna")]);
+    expect(within(listbox).getByText("Recommended")).toBeInTheDocument();
+    expect(within(listbox).getAllByRole("option", { name: /GPT-6 Luna/ })).toHaveLength(1);
+    await user.click(within(listbox).getByRole("option", { name: /GPT-6 Luna/ }));
+    await waitFor(() => expect(daemon.state.fastModel).toBe("openai:gpt-6-luna"));
+    expect(daemon.calls).toContainEqual(
+      expect.objectContaining({ method: "PUT", path: "/v1/settings/models", body: { default_model: "openai:gpt-6.1-sol", fast_model: "openai:gpt-6-luna", fallback_models: [] } }),
+    );
+
+    // A fallback change re-sends the fast model rather than clearing it.
+    await chooseOption(user, await screen.findByLabelText("Add a fallback"), /GPT-6 Luna/);
+    await waitFor(() => expect(daemon.state.fallbacks).toEqual(["openai:gpt-6-luna"]));
+    expect(daemon.state.fastModel).toBe("openai:gpt-6-luna");
+
+    await chooseOption(user, screen.getByLabelText("Fast model"), "Same as reasoning model");
+    await waitFor(() => expect(daemon.state.fastModel).toBeNull());
+  });
+
+  it("lists the recommended reasoning models first in the reasoning select", async () => {
+    const user = userEvent.setup();
+    open(modelsDaemon({ keys: [keyInfo("openai", "k1", "Main", "1111")], pools: { openai: [ref("vault", "k1")] } }).client);
+    await user.click(await screen.findByLabelText("Reasoning model"));
+    const listbox = await screen.findByRole("listbox");
+    const names = within(listbox).getAllByRole("option").map((option) => option.textContent);
+    expect(names.slice(0, 2)).toEqual([expect.stringContaining("Claude Sonnet 5.5"), expect.stringContaining("GPT-6.1 Sol")]);
+    expect(within(listbox).getByText("Recommended")).toBeInTheDocument();
+    // Each option carries its tier as a tag and the curated strengths as a muted line.
+    const sonnet = within(listbox).getByRole("option", { name: /Claude Sonnet 5.5/ });
+    expect(sonnet).toHaveTextContent("Reasoning");
+    expect(sonnet).toHaveTextContent("Anthropic · Multi-step research, coding");
+    expect(within(listbox).getByRole("option", { name: /GPT-6 Astra/ })).toHaveTextContent("Frontier");
+    expect(within(listbox).getByRole("option", { name: /Gemini 2.5 Pro/ })).toHaveTextContent("Not in current catalog");
   });
 
   it("shows broker accounts with usage and rate-limit blocks, and the credential sources", async () => {
@@ -251,7 +304,9 @@ describe("ModelsPanel", () => {
     open(daemon.client);
     const anthropic = await provider("Anthropic");
     expect(rowOf("Anthropic", "w***@example.com")).toBeInTheDocument();
-    expect(within(anthropic).getByRole("meter", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "82.4");
+    const meter = within(anthropic).getByRole("meter", { name: "5h remaining" });
+    expect(Number(meter.getAttribute("aria-valuenow"))).toBeCloseTo(17.6);
+    expect(within(anthropic).getByText(/^18% left/)).toBeInTheDocument();
     expect(within(anthropic).getByText(/Rate limited until/)).toBeInTheDocument();
     // Accounts configured outside the UI have no key or sign-in controls.
     expect(within(rowOf("Anthropic", "w***@example.com")).queryByRole("button")).toBeNull();
@@ -259,7 +314,7 @@ describe("ModelsPanel", () => {
     expect(within(sources).getByText("No provider key in the environment.")).toBeInTheDocument();
   });
 
-  it("gives a limited device status only: no account, rotation or default controls", async () => {
+  it("gives a limited device status only: no account, rotation or model controls", async () => {
     const daemon = modelsDaemon({
       admin: false,
       keys: [keyInfo("anthropic", "k1", "Work", SECRET.slice(-4))],
@@ -275,7 +330,9 @@ describe("ModelsPanel", () => {
     expect(document.querySelector(".key-mask")).toBeNull();
     expect(screen.queryByRole("button", { name: /API key|account|Manage|Move|Remove/ })).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
-    expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.queryByLabelText("Fast model")).toBeNull();
+    expect(screen.queryByLabelText("Reasoning model")).toBeNull();
+    expect(screen.getByText("Same as reasoning model")).toBeInTheDocument();
     expect(daemon.calls.filter((call) => call.method !== "GET")).toEqual([]);
   });
 });

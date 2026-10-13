@@ -119,6 +119,7 @@ pub(crate) struct Policy {
     next_observation: u64,
     report_rate: HashMap<SessionId, (tokio::time::Instant, u32)>,
     models: HashMap<SessionId, Vec<String>>,
+    fallbacks: HashMap<SessionId, Vec<String>>,
 }
 
 fn now() -> u64 {
@@ -569,6 +570,7 @@ impl Policy {
             .retain(|(owner, _), _| owner != session);
         self.report_rate.remove(session);
         self.models.remove(session);
+        self.fallbacks.remove(session);
     }
     fn shared_report_allowed(&mut self, session: &SessionId) -> bool {
         let current = tokio::time::Instant::now();
@@ -728,11 +730,19 @@ struct IndexProvider {
     provider: String,
     models: Vec<IndexModel>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IndexModel {
     id: String,
     label: String,
+    #[serde(default)]
+    recommended_for: Option<openside_proto::ModelRole>,
+    #[serde(default)]
+    in_catalog: bool,
+    #[serde(default)]
+    tier: openside_proto::ModelTier,
+    #[serde(default)]
+    strengths: String,
 }
 
 pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
@@ -764,7 +774,7 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                 || p.models.len() > 256
                 || p.models
                     .iter()
-                    .any(|m| m.id.len() > 256 || m.label.len() > 256)
+                    .any(|m| m.id.len() > 256 || m.label.len() > 256 || m.strengths.len() > 256)
         })
     {
         return Err(HttpError::invalid_value());
@@ -780,23 +790,16 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                 provider: provider.provider.clone(),
                 accounts: vec![],
             });
-        let mut candidates: BTreeMap<String, String> = provider
+        let mut candidates: BTreeMap<_, _> = provider
             .models
             .iter()
-            .map(|m| (m.id.clone(), m.label.clone()))
+            .map(|m| (m.id.clone(), m.clone()))
             .collect();
         for id in models
             .default
             .iter()
             .chain(models.front.iter())
             .chain(&models.fallback)
-            .chain(
-                inventory
-                    .accounts
-                    .iter()
-                    .filter(|a| a.provider == provider.provider)
-                    .flat_map(|a| &a.models),
-            )
         {
             let qualified = if id.contains(':') {
                 id.clone()
@@ -807,17 +810,24 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                 .split_once(':')
                 .is_some_and(|(name, model)| name == provider.provider && !model.is_empty())
             {
-                candidates.entry(qualified.clone()).or_insert_with(|| {
-                    qualified
-                        .split_once(':')
-                        .map(|(_, model)| model.to_owned())
-                        .unwrap_or_default()
-                });
+                candidates
+                    .entry(qualified.clone())
+                    .or_insert_with(|| IndexModel {
+                        label: qualified
+                            .split_once(':')
+                            .map(|(_, model)| model.to_owned())
+                            .unwrap_or_default(),
+                        id: qualified,
+                        recommended_for: None,
+                        in_catalog: false,
+                        tier: openside_proto::ModelTier::Reasoning,
+                        strengths: "Explicitly configured model; capabilities not curated".into(),
+                    });
             }
         }
         let models = candidates
             .into_iter()
-            .map(|(id, label)| {
+            .map(|(id, metadata)| {
                 let mut rows: Vec<_> = inventory
                     .accounts
                     .iter()
@@ -849,8 +859,12 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                 });
                 let selected = rows.iter().find(|row| row.available);
                 CatalogModel {
+                    recommended_for: metadata.recommended_for,
+                    in_catalog: metadata.in_catalog,
+                    tier: metadata.tier,
+                    strengths: metadata.strengths,
                     id,
-                    label,
+                    label: metadata.label,
                     available: selected.is_some(),
                     reason: selected.map(|row| row.reason.clone()).unwrap_or_else(|| {
                         if inventory.broker_failed
@@ -877,6 +891,7 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
     Ok(ModelCatalog {
         providers,
         default_model: models.default,
+        fast_model: models.front,
         fallback_models: models.fallback,
         cached_for_ms: 5000,
         truncated: false,
@@ -1143,10 +1158,18 @@ async fn permitted(
     let effective_model =
         crate::engine::session_model(s, &state, agent.as_ref()).ok_or_else(invalid)?;
     let valid_model = if let Some(child) = &request.subagent {
-        crate::subagents::get(s, session, child)
+        let child = crate::subagents::get(s, session, child)
             .await
-            .map_err(|_| invalid())?
-            .is_some_and(|child| !child.status.is_terminal() && child.model == request.model)
+            .map_err(|_| invalid())?;
+        let policy = s.models.policy.lock().await;
+        child.is_some_and(|child| {
+            !child.status.is_terminal()
+                && (child.model == request.model
+                    || policy
+                        .fallbacks
+                        .get(session)
+                        .is_some_and(|chain| chain.contains(&request.model)))
+        })
     } else {
         let policy = s.models.policy.lock().await;
         if let Some(binding) = policy.models.get(session) {
@@ -1778,6 +1801,8 @@ pub(crate) async fn update_pool(
             .set_pools(&BTreeMap::from([(provider, pool.clone())]));
         drop(change);
         s.models.invalidate(&s).await;
+        drop(_writer);
+        crate::models_api::auto_select(&s).await?;
         Ok(Json(pool))
     })
     .await
@@ -1863,12 +1888,9 @@ pub(crate) async fn bind_session(
     if let Some(front) = s.models.front_model() {
         allowed.push(front);
     }
-    s.models
-        .policy
-        .lock()
-        .await
-        .models
-        .insert(session.clone(), allowed);
+    let mut policy = s.models.policy.lock().await;
+    policy.models.insert(session.clone(), allowed);
+    policy.fallbacks.insert(session.clone(), fallback.to_vec());
 }
 
 #[cfg(test)]

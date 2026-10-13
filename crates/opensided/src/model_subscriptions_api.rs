@@ -72,6 +72,7 @@ pub(crate) async fn create(
             .create(&s, &source, &request.label)
             .await
             .map_err(error)?;
+        let _ = crate::models_api::auto_select(&s).await;
         Ok((StatusCode::CREATED, Json(account)))
     })
     .await
@@ -89,7 +90,8 @@ pub(crate) async fn update(
         crate::models_api::authorized(&s, &caller)?;
         crate::model_accounts::initialize(&s).await?;
         crate::models_api::authorized(&s, &caller)?;
-        s.managed_subscriptions
+        let account = s
+            .managed_subscriptions
             .update(
                 &s,
                 &source,
@@ -99,8 +101,9 @@ pub(crate) async fn update(
                 request.reserve_percent,
             )
             .await
-            .map(Json)
-            .map_err(error)
+            .map_err(error)?;
+        let _ = crate::models_api::auto_select(&s).await;
+        Ok(Json(account))
     })
     .await
     .map_err(|_| HttpError::internal())?

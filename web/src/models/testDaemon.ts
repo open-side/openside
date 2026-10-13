@@ -4,16 +4,26 @@ import { fakeClient, json, type Call } from "../test/fakeDaemon";
 const NEEDS_CREDENTIAL = "No credential yet: add an API key or sign in to a subscription.";
 const NOT_IN_POOL = "No account is in the rotation.";
 
-const CURATED: Record<string, { id: string; label: string }[]> = {
+interface Curated {
+  id: string;
+  label: string;
+  recommended_for: "fast" | "reasoning" | null;
+  tier: "fast" | "reasoning" | "frontier";
+  strengths: string;
+  in_catalog: boolean;
+}
+
+const CURATED: Record<string, Curated[]> = {
   anthropic: [
-    { id: "anthropic:claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
-    { id: "anthropic:claude-haiku-4-5", label: "Claude Haiku 4.5" },
+    { id: "anthropic:claude-sonnet-5-5", label: "Claude Sonnet 5.5", recommended_for: "reasoning", tier: "reasoning", strengths: "Multi-step research, coding", in_catalog: true },
+    { id: "anthropic:claude-haiku-5-5", label: "Claude Haiku 5.5", recommended_for: "fast", tier: "fast", strengths: "Quick lookups, simple edits", in_catalog: true },
   ],
   openai: [
-    { id: "openai:gpt-5", label: "GPT-5" },
-    { id: "openai:gpt-5-mini", label: "GPT-5 mini" },
+    { id: "openai:gpt-6.1-sol", label: "GPT-6.1 Sol", recommended_for: "reasoning", tier: "reasoning", strengths: "Multi-step research, coding", in_catalog: true },
+    { id: "openai:gpt-6-astra", label: "GPT-6 Astra", recommended_for: "reasoning", tier: "frontier", strengths: "Hard reasoning, architecture", in_catalog: true },
+    { id: "openai:gpt-6-luna", label: "GPT-6 Luna", recommended_for: "fast", tier: "fast", strengths: "Quick lookups, simple edits", in_catalog: true },
   ],
-  google: [{ id: "google-gla:gemini-2.5-pro", label: "Gemini 2.5 Pro" }],
+  google: [{ id: "google-gla:gemini-2.5-pro", label: "Gemini 2.5 Pro", recommended_for: null, tier: "reasoning", strengths: "", in_catalog: false }],
 };
 
 const SUBSCRIPTION_PROVIDER: Record<string, string> = { "claude-code": "anthropic", "codex-cli": "openai" };
@@ -27,6 +37,8 @@ export interface ModelState {
   installed: Record<string, boolean>;
   pools: Record<string, ModelAccountRef[]>;
   defaultModel: string | null;
+  /** Null: the fast role follows the reasoning model. */
+  fastModel: string | null;
   fallbacks: string[];
   accounts: AccountsResponse;
   /** Every key value the daemon was sent, for "never rendered back" assertions. */
@@ -52,6 +64,7 @@ export function modelState(patch: Partial<ModelState> = {}): ModelState {
     installed: { "claude-code": true, "codex-cli": false },
     pools: {},
     defaultModel: null,
+    fastModel: null,
     fallbacks: [],
     accounts: { sources: [], cached_for_ms: 0, truncated: false },
     received: [],
@@ -143,6 +156,7 @@ function catalog(state: ModelState): ModelCatalog {
       };
     }),
     default_model: state.defaultModel,
+    fast_model: state.fastModel,
     fallback_models: state.fallbacks,
     cached_for_ms: 0,
     truncated: false,
@@ -176,13 +190,15 @@ export function modelRoutes(state: ModelState): (call: Call) => Response | undef
       });
     }
     if (key === "PUT /v1/settings/models") {
-      const request = call.body as { default_model: string; fallback_models: string[] };
+      const request = call.body as { default_model: string; fast_model?: string | null; fallback_models: string[] };
       const all = catalog(state).providers.flatMap((provider) => provider.models);
-      const unusable = [request.default_model, ...request.fallback_models].find((id) => !all.some((model) => model.id === id && model.available));
+      const unusable = [request.default_model, request.fast_model, ...request.fallback_models].find((id) => id && !all.some((model) => model.id === id && model.available));
       if (unusable) return json(400, { code: "model_unavailable", message: `${unusable} is unavailable` });
       state.defaultModel = request.default_model;
+      // Like the daemon: a fast model equal to the reasoning model is stored as null.
+      state.fastModel = request.fast_model && request.fast_model !== request.default_model ? request.fast_model : null;
       state.fallbacks = request.fallback_models;
-      return json(200, { default_model: request.default_model, fallback_models: request.fallback_models, restart_required: false, effective: "new_sessions_and_home_next_turn" });
+      return json(200, { default_model: request.default_model, fast_model: state.fastModel, fallback_models: request.fallback_models, restart_required: false, effective: "new_sessions_and_home_next_turn" });
     }
 
     const pool = /^PUT \/v1\/settings\/pools\/([^/]+)$/.exec(key);

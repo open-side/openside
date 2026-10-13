@@ -199,6 +199,60 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
     Ok(report)
 }
 
+pub(crate) async fn auto_select(s: &Shared) -> Result<(), HttpError> {
+    let models = s.models.models();
+    if models.default.is_some() || models.front.is_some() {
+        return Ok(());
+    }
+    let catalog = catalog(s).await?;
+    let Some((provider, reasoning)) = catalog.providers.iter().find_map(|provider| {
+        provider
+            .models
+            .iter()
+            .find(|model| {
+                model.available
+                    && model.recommended_for == Some(openside_proto::ModelRole::Reasoning)
+            })
+            .map(|model| (provider, model))
+    }) else {
+        return Ok(());
+    };
+    let fast = provider
+        .models
+        .iter()
+        .chain(
+            catalog
+                .providers
+                .iter()
+                .filter(|other| other.provider != provider.provider)
+                .flat_map(|other| &other.models),
+        )
+        .find(|model| {
+            model.available && model.recommended_for == Some(openside_proto::ModelRole::Fast)
+        })
+        .map(|model| model.id.clone());
+    let _writer = crate::settings_api::WRITE.lock().await;
+    let mut current = crate::settings_api::stored(s).await?;
+    if current.models.default.is_some() || current.models.front.is_some() {
+        return Ok(());
+    }
+    current.models.default = Some(reasoning.id.clone());
+    current.models.front = fast.clone();
+    crate::settings_api::persist(
+        s,
+        serde_json::to_value(current).map_err(|_| HttpError::internal())?,
+    )
+    .await?;
+    {
+        let mut live = s.models.live.write();
+        live.0.default = Some(reasoning.id.clone());
+        live.0.front = fast;
+        s.models.default_generation.fetch_add(1, Ordering::Release);
+    }
+    s.models.invalidate(s).await;
+    Ok(())
+}
+
 pub(crate) async fn get(State(s): State<Shared>) -> Result<Json<ModelCatalog>, HttpError> {
     catalog(&s).await.map(Json)
 }
@@ -214,6 +268,10 @@ pub(crate) async fn put(
         let _writer = crate::settings_api::WRITE.lock().await;
         authorized(&s, &caller)?;
         let mut current = crate::settings_api::stored(&s).await?;
+        let fast_model = request
+            .fast_model
+            .filter(|model| model != &request.default_model);
+        current.models.front = fast_model.clone();
         current.models.default = Some(request.default_model.clone());
         current.models.fallback = request.fallback_models.clone();
         crate::settings_api::persist(
@@ -224,9 +282,11 @@ pub(crate) async fn put(
         {
             let mut live = s.models.live.write();
             let changed = live.0.default.as_deref() != Some(request.default_model.as_str())
-                || live.0.fallback != request.fallback_models;
+                || live.0.fallback != request.fallback_models
+                || live.0.front != fast_model;
             live.0.default = Some(request.default_model.clone());
             live.0.fallback = request.fallback_models.clone();
+            live.0.front = fast_model.clone();
             if changed {
                 s.models.default_generation.fetch_add(1, Ordering::Release);
             }
@@ -235,6 +295,7 @@ pub(crate) async fn put(
         crate::pairing::audit(&s, "models", "written", json!({})).await;
         Ok(Json(ModelSelection {
             default_model: request.default_model,
+            fast_model,
             fallback_models: request.fallback_models,
             restart_required: false,
             effective: "new_sessions_and_home_next_turn".into(),
@@ -256,7 +317,10 @@ fn validate_selection(
     {
         return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_models"));
     }
-    for id in std::iter::once(&request.default_model).chain(&request.fallback_models) {
+    for id in std::iter::once(&request.default_model)
+        .chain(&request.fallback_models)
+        .chain(request.fast_model.iter())
+    {
         if !catalog
             .providers
             .iter()
@@ -424,6 +488,7 @@ async fn write_key(
         drop(guard);
         drop(change);
         s.models.invalidate(&s).await;
+        let _ = auto_select(&s).await;
         info(result.map_err(key_error)?)
     })
     .await
@@ -455,6 +520,7 @@ pub(crate) async fn update_key(
         drop(guard);
         drop(change);
         s.models.invalidate(&s).await;
+        let _ = auto_select(&s).await;
         info(result.map_err(key_error)?).map(Json)
     })
     .await

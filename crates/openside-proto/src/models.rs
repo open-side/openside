@@ -11,6 +11,8 @@ pub struct ModelCatalog {
     pub providers: Vec<ModelProvider>,
     /// Current default for new sessions and unoverridden Team homes on their next idle turn.
     pub default_model: Option<String>,
+    /// Fast chief front-agent model; null uses the reasoning model.
+    pub fast_model: Option<String>,
     /// Running model fallback chain, independent of credential-source order.
     pub fallback_models: Vec<String>,
     /// Maximum metadata cache lifetime; managed writes invalidate it immediately.
@@ -31,6 +33,29 @@ pub struct ModelProvider {
     pub pool: ProviderPool,
 }
 
+/// Curated role hint; any available model may serve either role.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRole {
+    /// Low-latency chief replies and Task dispatch.
+    Fast,
+    /// Task execution and ordinary session work.
+    Reasoning,
+}
+
+/// Curated task-routing tier, not an entitlement or performance guarantee.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTier {
+    /// Quick lookups and simple work.
+    Fast,
+    /// General multi-step work; also the neutral tier for uncataloged configured ids.
+    #[default]
+    Reasoning,
+    /// The family's highest-capability models for hard work.
+    Frontier,
+}
+
 /// One candidate and the credential source that would serve a new sidecar.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +64,17 @@ pub struct CatalogModel {
     pub id: String,
     /// Model-name portion, never an account label or private identity.
     pub label: String,
+    /// Curated family recommendation, not a routing restriction.
+    pub recommended_for: Option<ModelRole>,
+    /// False for an explicitly configured id outside the current curated generations.
+    #[serde(default)]
+    pub in_catalog: bool,
+    /// Task-routing guidance, independent of credential readiness.
+    #[serde(default)]
+    pub tier: ModelTier,
+    /// Short curated guidance; unknown configured models have no capability claim.
+    #[serde(default)]
+    pub strengths: String,
     /// Local credential readiness under source priority and broker fail-close.
     pub available: bool,
     /// Credential-value-free readiness or refusal explanation.
@@ -89,6 +125,9 @@ pub struct ModelAccount {
 pub struct UpdateModelsRequest {
     /// Available provider-qualified catalog id; must not be a fallback duplicate.
     pub default_model: String,
+    /// Fast chief front-agent model; null uses the reasoning model.
+    #[serde(default)]
+    pub fast_model: Option<String>,
     /// At most 16 distinct available catalog ids in fallback order.
     pub fallback_models: Vec<String>,
 }
@@ -99,6 +138,8 @@ pub struct UpdateModelsRequest {
 pub struct ModelSelection {
     /// The newly running default, after successful private-file persistence.
     pub default_model: String,
+    /// Persisted fast model; null uses the reasoning model.
+    pub fast_model: Option<String>,
     /// The newly running ordered fallback chain.
     pub fallback_models: Vec<String>,
     /// Always false: dedicated selection applies without restarting the daemon.

@@ -1,5 +1,5 @@
 /*
- * Models & accounts: provider sections, the default-model controls and the model picker's
+ * Models & accounts: provider sections, the fast/reasoning model controls and the model picker's
  * provider groups. Built on the grouped-list language in pages/pages.css; tokens only.
  */
 
@@ -110,6 +110,32 @@
 .default-model-row > label {
   font-size: 0.9375rem;
   font-weight: 600;
+}
+.model-role {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.model-role-copy {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+.model-role-copy label {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.model-role-copy p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.model-role > .ui-select,
+.model-role > .default-model-value {
+  flex: 1 1 14rem;
+  max-width: 22rem;
 }
 .default-model .ui-select {
   width: auto;

@@ -37,16 +37,23 @@ async fn fixture(root: &Path) -> (Daemon, TestRuntime) {
     fixture_sources(root, None).await
 }
 async fn fixture_sources(root: &Path, credentials: Option<Value>) -> (Daemon, TestRuntime) {
+    fixture_model_selection(root, credentials, true).await
+}
+async fn fixture_model_selection(
+    root: &Path,
+    credentials: Option<Value>,
+    explicit: bool,
+) -> (Daemon, TestRuntime) {
     let mut config = resolved_config(root);
     config.loaded.config.vault.path = Some(root.join("model-vault"));
-    config.loaded.config.models.default = Some("anthropic:test-ready".into());
+    config.loaded.config.models.default = explicit.then(|| "anthropic:test-ready".into());
     config.loaded.config.credentials = json!({"order":{"anthropic":["vault"],"openai":["vault"],"google":["vault"]},"env":{"anthropic":[],"openai":[],"google":[],"openai-codex":[],"github-copilot":[]}});
     if let Some(credentials) = credentials {
         config.loaded.config.credentials = credentials;
     }
     #[cfg(unix)]
     {
-        let index = json!({"providers":[{"provider":"anthropic","models":[{"id":"anthropic:test-ready","label":"test-ready"},{"id":"anthropic:test-second","label":"test-second"}]},{"provider":"openai","models":[{"id":"openai:test-unavailable","label":"test-unavailable"}]},{"provider":"google","models":[]} ]});
+        let index = json!({"providers":[{"provider":"anthropic","models":[{"id":"anthropic:test-ready","label":"test-ready","recommended_for":"reasoning","in_catalog":true,"tier":"reasoning","strengths":"multi-step research, coding"},{"id":"anthropic:test-second","label":"test-second","recommended_for":"fast","in_catalog":true,"tier":"fast","strengths":"quick lookups, simple edits"}]},{"provider":"openai","models":[{"id":"openai:test-unavailable","label":"test-unavailable"}]},{"provider":"google","models":[]} ]});
         config.argv = vec!["sh".into(), "-c".into(), format!("printf '%s' '{}'", index)];
     }
     let runtime = TestRuntime::default();
@@ -1034,7 +1041,8 @@ async fn broker_credentials_never_reach_diagnostics_events_or_sidecar_options() 
     let root = tempfile::tempdir().unwrap();
     let mut data = snapshot();
     data["credentials"][0]["provider"] = json!("anthropic");
-    data["credentials"][0]["models"] = json!(["anthropic:test-ready"]);
+    data["credentials"][0]["models"] =
+        json!(["anthropic:test-ready", "anthropic:claude-sonnet-4-6"]);
     let server = FakeBroker::start(data, json!({"reports":[]}), json!({"ok":true})).await;
     let token = root.path().join("broker.token");
     std::fs::write(&token, TOKEN).unwrap();
@@ -1061,6 +1069,12 @@ async fn broker_credentials_never_reach_diagnostics_events_or_sidecar_options() 
     for path in ["/v1/settings/models", "/v1/doctor", "/v1/accounts"] {
         let (status, body) = call(&local, "GET", path, json!({}), None).await;
         assert_eq!(status, StatusCode::OK);
+        if path == "/v1/settings/models" {
+            assert!(
+                !body.to_string().contains("claude-sonnet-4-6"),
+                "reported superseded model returned to catalog"
+            );
+        }
         surfaces.push(body.to_string());
     }
     surfaces
@@ -1076,5 +1090,274 @@ async fn broker_credentials_never_reach_diagnostics_events_or_sidecar_options() 
             assert!(!surface.contains(secret), "broker secret leaked");
         }
     }
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn fast_model_selection_validates_normalizes_and_clears() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, _) = fixture(root.path()).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let key = add(&router, KEY, "Work").await;
+    pool(&router, &[&key]).await;
+    for (fast, expected_status, expected_fast) in [
+        (
+            json!("openai:test-unavailable"),
+            StatusCode::BAD_REQUEST,
+            Value::Null,
+        ),
+        (
+            json!("anthropic:test-second"),
+            StatusCode::OK,
+            json!("anthropic:test-second"),
+        ),
+        (json!("anthropic:test-ready"), StatusCode::OK, Value::Null),
+        (
+            json!("anthropic:test-second"),
+            StatusCode::OK,
+            json!("anthropic:test-second"),
+        ),
+        (Value::Null, StatusCode::OK, Value::Null),
+    ] {
+        let (status, response) = call(
+            &router,
+            "PUT",
+            "/v1/settings/models",
+            json!({"default_model":"anthropic:test-ready","fast_model":fast,"fallback_models":[]}),
+            None,
+        )
+        .await;
+        assert_eq!(status, expected_status);
+        if status == StatusCode::OK {
+            assert_eq!(response["fast_model"], expected_fast);
+            let stored = crate::settings_api::stored(&daemon.shared).await.unwrap();
+            assert_eq!(json!(stored.models.front), expected_fast);
+            assert_eq!(json!(daemon.shared.models.front_model()), expected_fast);
+        } else {
+            assert!(response.to_string().contains("model_unavailable"));
+        }
+    }
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn automatic_models_choose_recommended_pair_and_preserve_explicit_choices() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, _) = fixture_model_selection(root.path(), None, false).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let key = add(&router, KEY, "Work").await;
+    pool(&router, &[&key]).await;
+    assert_eq!(
+        daemon.shared.models.default_model().as_deref(),
+        Some("anthropic:test-ready")
+    );
+    assert_eq!(
+        daemon.shared.models.front_model().as_deref(),
+        Some("anthropic:test-second")
+    );
+    call(
+        &router,
+        "PUT",
+        "/v1/settings/models",
+        json!({"default_model":"anthropic:test-second","fast_model":null,"fallback_models":[]}),
+        None,
+    )
+    .await;
+    crate::models_api::auto_select(&daemon.shared)
+        .await
+        .unwrap();
+    assert_eq!(
+        daemon.shared.models.default_model().as_deref(),
+        Some("anthropic:test-second")
+    );
+    assert_eq!(daemon.shared.models.front_model(), None);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn task_model_routing_validates_connected_models_and_masks_usage() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, _) = fixture(root.path()).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let first = add(&router, KEY, "private-account-label@example.test").await;
+    let second = add(&router, SECOND, "Other").await;
+    pool(&router, &[&first, &second]).await;
+    let chief = daemon.shared.agents.get("chief").unwrap().unwrap();
+    let session = chief.home_session_id.clone();
+    let h = host(&daemon, &session).await;
+    let lease = h.credentials(acquire("measured", 0)).await.unwrap();
+    let mut measured = report(&lease, CredentialOutcome::Success, false);
+    measured.usage_windows = vec![CredentialUsageWindow {
+        name: "5h".into(),
+        used_percent: Some(70.0),
+        reset_at_ms: Some(4_000_000_000_000.0),
+    }];
+    h.credential_report(measured).await.unwrap();
+    let ToolOutcome::Done { for_model_json, .. } =
+        h.call(super::call("get_models", json!({}), "models")).await
+    else {
+        panic!("get_models failed");
+    };
+    let listing: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(listing["models"].as_array().unwrap().len(), 2);
+    let model = &listing["models"][0];
+    assert!(model["id"].is_string());
+    assert!(model["display_name"].is_string());
+    assert!(model["tier"].is_string());
+    assert!(model["strengths"].is_string());
+    assert!(model["accounts"].as_array().unwrap().iter().any(|account| {
+        account["usage_windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|window| window["remaining_percent"] == 30.0)
+    }));
+    assert_eq!(model["tier"], "reasoning");
+    assert_eq!(model["strengths"], "multi-step research, coding");
+    assert_eq!(model["remaining_percent"], 30.0);
+    assert!(model["resets_at"].is_number());
+    assert!(model["accounts"].as_array().unwrap().iter().any(|account| {
+        account["remaining_percent"].is_null() && account["resets_at"].is_null()
+    }));
+    for private in [
+        KEY,
+        SECOND,
+        &first,
+        &second,
+        "private-account-label@example.test",
+        "account_id",
+        "\"source\"",
+    ] {
+        assert!(!for_model_json.contains(private), "private metadata leaked");
+    }
+    let unavailable = h
+        .call(super::call(
+            "create_task",
+            json!({"goal":"work","model":"openai:test-unavailable"}),
+            "unavailable",
+        ))
+        .await;
+    assert!(
+        matches!(unavailable, ToolOutcome::Denied { reason, .. } if reason == "model_unavailable")
+    );
+    let selected = h
+        .call(super::call(
+            "create_task",
+            json!({"goal":"work","model":"anthropic:test-second"}),
+            "selected",
+        ))
+        .await;
+    let ToolOutcome::Done { for_model_json, .. } = selected else {
+        panic!("valid task was refused");
+    };
+    let selected: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(selected["model"], "anthropic:test-second");
+    let mut restricted = chief;
+    restricted.account_pool = Some(vec![account(&second)]);
+    daemon
+        .shared
+        .agents
+        .put(&restricted, "test-restriction")
+        .unwrap();
+    call(
+        &router,
+        "PATCH",
+        &format!("/v1/settings/keys/anthropic/{second}"),
+        json!({"enabled":false}),
+        None,
+    )
+    .await;
+    let outside = h
+        .call(super::call(
+            "create_task",
+            json!({"goal":"work","model":"anthropic:test-second"}),
+            "outside",
+        ))
+        .await;
+    assert!(matches!(outside, ToolOutcome::Denied { reason, .. } if reason == "model_not_in_pool"));
+    let ToolOutcome::Done { for_model_json, .. } = h
+        .call(super::call("get_models", json!({}), "restricted-models"))
+        .await
+    else {
+        panic!("restricted get_models failed");
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(&for_model_json).unwrap()["models"],
+        json!([])
+    );
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn task_credentials_admit_only_the_captured_fallback_chain() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, _) = fixture(root.path()).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let key = add(&router, KEY, "Work").await;
+    pool(&router, &[&key]).await;
+    let session = daemon
+        .shared
+        .agents
+        .get("chief")
+        .unwrap()
+        .unwrap()
+        .home_session_id;
+    let h = host(&daemon, &session).await;
+    crate::model_accounts::bind_session(&daemon.shared, &session, "anthropic:test-ready", &[])
+        .await;
+    let ToolOutcome::Done { for_model_json, .. } = h
+        .call(super::call(
+            "create_task",
+            json!({"goal":"work","model":"anthropic:test-second"}),
+            "fallback-task",
+        ))
+        .await
+    else {
+        panic!("task refused");
+    };
+    let admitted: Value = serde_json::from_str(&for_model_json).unwrap();
+    let child = admitted["subagent_id"].as_str().unwrap().to_owned();
+    call(
+        &router,
+        "PUT",
+        "/v1/settings/models",
+        json!({
+            "default_model":"anthropic:test-second","fallback_models":["anthropic:test-ready"]
+        }),
+        None,
+    )
+    .await;
+    let request = |id: &str| CredentialRequest {
+        subagent: Some(child.clone()),
+        ..acquire(id, 0)
+    };
+    assert_eq!(
+        h.credentials(request("not-captured"))
+            .await
+            .unwrap_err()
+            .code,
+        CredentialErrorCode::InvalidCredentialRequest
+    );
+    crate::model_accounts::bind_session(
+        &daemon.shared,
+        &session,
+        "anthropic:test-second",
+        &["anthropic:test-ready".into()],
+    )
+    .await;
+    call(
+        &router,
+        "PUT",
+        "/v1/settings/models",
+        json!({
+            "default_model":"anthropic:test-ready","fallback_models":[]
+        }),
+        None,
+    )
+    .await;
+    let lease = h.credentials(request("captured")).await.unwrap();
+    h.credential_report(report(&lease, CredentialOutcome::Success, false))
+        .await
+        .unwrap();
     daemon.shutdown().await;
 }

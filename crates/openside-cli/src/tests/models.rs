@@ -39,7 +39,13 @@ async fn model_catalog_and_key_commands_use_public_routes_and_stdin_without_echo
         vec!["key", "rm", "anthropic", "key1"],
         vec!["key", "set", "anthropic", "--key-id", "key1"],
         vec!["key", "update", "anthropic", "key1", "--enabled", "false"],
-        vec!["models", "set", "anthropic:test-ready"],
+        vec![
+            "models",
+            "set",
+            "anthropic:test-ready",
+            "--fast",
+            "anthropic:test-fast",
+        ],
         vec!["models", "pool", "list"],
         vec!["models", "pool", "set", "anthropic", "vault:key1"],
         vec!["models", "account", "session-1", "vault:key1"],
@@ -48,6 +54,7 @@ async fn model_catalog_and_key_commands_use_public_routes_and_stdin_without_echo
         vec!["accounts", "enable", "codex-cli", "sub1"],
         vec!["accounts", "disable", "codex-cli", "sub1"],
         vec!["accounts", "rm", "codex-cli", "sub1"],
+        vec!["models", "set", "anthropic:test-ready", "--fast", "none"],
     ] {
         let mut argv = vec![
             OsString::from("openside"),
@@ -61,6 +68,13 @@ async fn model_catalog_and_key_commands_use_public_routes_and_stdin_without_echo
         assert_eq!(code, 0);
         assert!(!String::from_utf8_lossy(&out).contains(KEY));
         assert!(!String::from_utf8_lossy(&err).contains(KEY));
+        if args == ["models"] {
+            let text = String::from_utf8_lossy(&out);
+            assert!(text.contains("Not in current catalog"));
+            assert!(text.contains("Reasoning model"));
+            assert!(text.contains("Fast model"));
+            assert!(text.contains("REMAINING USAGE"));
+        }
     }
     let requests = seen.lock();
     assert_eq!(requests[0].1, "/v1/settings/models");
@@ -73,6 +87,8 @@ async fn model_catalog_and_key_commands_use_public_routes_and_stdin_without_echo
     assert!(requests[4].2["key"] == KEY);
     assert_eq!(requests[5].2["enabled"], false);
     assert_eq!(requests[6].2["default_model"], "anthropic:test-ready");
+    assert_eq!(requests[6].2["fast_model"], "anthropic:test-fast");
+    assert_eq!(requests[15].2["fast_model"], Value::Null);
     assert_eq!(requests[8].2["accounts"][0]["account_id"], "key1");
     assert_eq!(requests[9].2["account"]["source"], "vault");
     assert_eq!(requests[10].2["label"], "Work");
@@ -97,4 +113,25 @@ async fn key_set_rejects_argv_secrets_without_echoing_them() {
     assert!(!String::from_utf8_lossy(&out).contains(KEY));
     assert!(!String::from_utf8_lossy(&err).contains(KEY));
     assert!(String::from_utf8_lossy(&err).contains("stdin"));
+}
+
+#[test]
+fn model_remaining_usage_preserves_unknowns_and_resets() {
+    let model: openside_proto::CatalogModel = serde_json::from_value(json!({
+        "id":"anthropic:claude-haiku-5-5", "label":"Haiku", "available":true,
+        "reason":"Ready", "source":"vault", "account_id":"key1",
+        "accounts":[{
+            "source":"vault", "account_id":"key1", "label":"Work", "in_pool":true,
+            "available":true, "reason":"Ready",
+            "usage_windows":[
+                {"name":"5h","used_percent":70.0,"reset_at_ms":2000000000000.0},
+                {"name":"7d","used_percent":null,"reset_at_ms":null}
+            ]
+        }]
+    }))
+    .unwrap();
+    let text = crate::models::remaining_usage(&model);
+    assert!(text.contains("30% remaining"));
+    assert!(text.contains("2000000000000 Unix ms"));
+    assert!(text.contains("7d: unknown"));
 }

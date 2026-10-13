@@ -1,6 +1,6 @@
 import { CircleAlert, Lock, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { ModelAccountRef, ModelCatalog, SubscriptionAccount } from "../api/types";
+import type { ModelAccountRef, ModelCatalog, ModelProvider, ModelRole, ModelTier, SubscriptionAccount } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
 import { ErrorNote, ResourceCard, ResourceView, SectionList, useConfirm, useDialogState } from "../pages/blocks";
@@ -14,43 +14,83 @@ import "./models.css";
 
 const MAX_FALLBACKS = 16;
 
-function DefaultModel({ catalog, readOnly, busy, onSave }: { catalog: ModelCatalog; readOnly: boolean; busy: boolean; onSave: (model: string, fallbacks: string[]) => void }) {
-  const current = catalog.default_model ?? null;
-  const known = catalog.providers.some((provider) => provider.models.some((model) => model.id === current));
-  const taken = new Set([current, ...catalog.fallback_models]);
+type CatalogModel = ModelProvider["models"][number];
 
-  const groups = (skip: (id: string) => boolean): SelectGroup[] =>
-    catalog.providers.flatMap((provider) => {
-      const models = provider.models.filter((model) => !skip(model.id));
-      return models.length
-        ? [
-            {
-              label: providerLabel(provider.provider),
-              options: models.map((model) => ({
-                value: model.id,
-                label: model.available ? model.label : `${model.label} (unavailable)`,
-                disabled: !model.available,
-              })),
-            },
-          ]
-        : [];
+/** The pick for each role plus the shared fallback chain; `fast` null means "same as the reasoning model". */
+interface Roles {
+  reasoning: string;
+  fast: string | null;
+  fallbacks: string[];
+}
+
+const SAME_AS_REASONING = "";
+const TIER_LABEL: Record<ModelTier, string> = { fast: "Fast", reasoning: "Reasoning", frontier: "Frontier" };
+
+function ModelRoles({ catalog, readOnly, busy, onSave }: { catalog: ModelCatalog; readOnly: boolean; busy: boolean; onSave: (next: Roles) => void }) {
+  const reasoning = catalog.default_model ?? null;
+  const fast = catalog.fast_model ?? null;
+  const known = (id: string | null) => catalog.providers.some((provider) => provider.models.some((model) => model.id === id));
+  const taken = new Set([reasoning, ...catalog.fallback_models]);
+  const save = (patch: Partial<Roles>) => onSave({ reasoning: reasoning ?? "", fast, fallbacks: catalog.fallback_models, ...patch });
+
+  const option = (model: CatalogModel, provider?: string) => ({
+    value: model.id,
+    label: model.available ? model.label : `${model.label} (unavailable)`,
+    tag: TIER_LABEL[model.tier],
+    detail: [provider, model.in_catalog ? model.strengths : "Not in current catalog"].filter(Boolean).join(" · ") || undefined,
+    disabled: !model.available,
+  });
+
+  /** Models the daemon recommends for `role` come first, labelled with their provider; the rest follow by provider. */
+  const groups = (role: ModelRole | null, skip: (id: string) => boolean): SelectGroup[] => {
+    const recommended = (model: CatalogModel) => role !== null && model.recommended_for === role;
+    const top = catalog.providers.flatMap((provider) =>
+      provider.models.filter((model) => recommended(model) && !skip(model.id)).map((model) => option(model, providerLabel(provider.provider))),
+    );
+    const rest = catalog.providers.flatMap((provider) => {
+      const models = provider.models.filter((model) => !recommended(model) && !skip(model.id));
+      return models.length ? [{ label: providerLabel(provider.provider), options: models.map((model) => option(model)) }] : [];
     });
+    return [...(top.length ? [{ label: "Recommended", options: top }] : []), ...rest];
+  };
+
+  const missing = (id: string | null) => (id !== null && !known(id) ? [{ value: id, label: `${id} (not in the catalog)` }] : []);
 
   return (
-    <SectionList title="Default model" description="New conversations start with this model unless you pick another one in the message box.">
+    <SectionList title="Models" description="Chosen once here and used for every conversation.">
       <div className="default-model" data-section="default-model">
-        <div className="default-model-row">
-          <label htmlFor="default-model">Model</label>
+        <div className="model-role">
+          <div className="model-role-copy">
+            <label htmlFor="fast-model">Fast model</label>
+            <p>Answers quickly and hands bigger work to the reasoning model.</p>
+          </div>
           {readOnly ? (
-            <span className="default-model-value">{current ?? "Not set"}</span>
+            <span className="default-model-value">{fast ?? "Same as reasoning model"}</span>
           ) : (
             <Select
-              id="default-model"
-              value={current ?? ""}
+              id="fast-model"
+              value={fast ?? SAME_AS_REASONING}
+              disabled={busy || reasoning === null}
+              options={[{ value: SAME_AS_REASONING, label: "Same as reasoning model" }, ...missing(fast), ...groups("fast", () => false)]}
+              onChange={(value) => save({ fast: value === SAME_AS_REASONING ? null : value })}
+            />
+          )}
+        </div>
+        <div className="model-role">
+          <div className="model-role-copy">
+            <label htmlFor="reasoning-model">Reasoning model</label>
+            <p>Does the thinking for tasks and teammates.</p>
+          </div>
+          {readOnly ? (
+            <span className="default-model-value">{reasoning ?? "Not set"}</span>
+          ) : (
+            <Select
+              id="reasoning-model"
+              value={reasoning ?? ""}
               disabled={busy}
               placeholder="Choose a model…"
-              options={[...(current !== null && !known ? [{ value: current, label: `${current} (not in the catalog)` }] : []), ...groups(() => false)]}
-              onChange={(value) => onSave(value, catalog.fallback_models.filter((id) => id !== value))}
+              options={[...missing(reasoning), ...groups("reasoning", () => false)]}
+              onChange={(value) => save({ reasoning: value, fast: fast === value ? null : fast, fallbacks: catalog.fallback_models.filter((id) => id !== value) })}
             />
           )}
         </div>
@@ -63,12 +103,7 @@ function DefaultModel({ catalog, readOnly, busy, onSave }: { catalog: ModelCatal
                   <li key={id} className="fallback-chip">
                     <span title={id}>{id}</span>
                     {readOnly ? null : (
-                      <IconButton
-                        label={`Remove fallback ${id}`}
-                        size="small"
-                        disabled={busy}
-                        onClick={() => onSave(current ?? "", catalog.fallback_models.filter((other) => other !== id))}
-                      >
+                      <IconButton label={`Remove fallback ${id}`} size="small" disabled={busy} onClick={() => save({ fallbacks: catalog.fallback_models.filter((other) => other !== id) })}>
                         <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
                       </IconButton>
                     )}
@@ -80,7 +115,7 @@ function DefaultModel({ catalog, readOnly, busy, onSave }: { catalog: ModelCatal
             )}
           </div>
         ) : null}
-        {readOnly || current === null || catalog.fallback_models.length >= MAX_FALLBACKS ? null : (
+        {readOnly || reasoning === null || catalog.fallback_models.length >= MAX_FALLBACKS ? null : (
           <div className="default-model-row">
             <label htmlFor="add-fallback">Add a fallback</label>
             <Select
@@ -88,8 +123,8 @@ function DefaultModel({ catalog, readOnly, busy, onSave }: { catalog: ModelCatal
               value=""
               disabled={busy}
               placeholder="Choose a model…"
-              options={groups((id) => taken.has(id))}
-              onChange={(value) => value && onSave(current, [...catalog.fallback_models, value])}
+              options={groups(null, (id) => taken.has(id))}
+              onChange={(value) => value && save({ fallbacks: [...catalog.fallback_models, value] })}
             />
           </div>
         )}
@@ -99,7 +134,7 @@ function DefaultModel({ catalog, readOnly, busy, onSave }: { catalog: ModelCatal
 }
 
 /**
- * Providers, how each one is connected and which models that gives, plus the default model.
+ * Providers, how each one is connected and which models that gives, plus the fast and reasoning models.
  * Shared by the Models & accounts dialog and the first-run step (`compact`).
  */
 export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean; onCatalog?: (catalog: ModelCatalog) => void }) {
@@ -139,10 +174,10 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
     }
   }
 
-  const saveModels = (model: string, fallbacks: string[]) =>
+  const saveModels = (next: Roles) =>
     run("models", async () => {
-      await client.setModels({ default_model: model, fallback_models: fallbacks });
-      toast.notify("Default model saved.");
+      await client.setModels({ default_model: next.reasoning, fast_model: next.fast, fallback_models: next.fallbacks });
+      toast.notify("Models saved.");
       await catalog.reload();
     });
 
@@ -225,14 +260,14 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
               <div className="models-callout models-callout--info" role="note">
                 <Lock size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
                 <p>
-                  This device can see which models are ready but cannot change them. Accounts, rotation and the default model are
+                  This device can see which models are ready but cannot change them. Accounts, rotation and the fast and reasoning models are
                   managed on the computer running openside or from an admin device.
                 </p>
               </div>
             ) : null}
             {!readOnly && keys.error ? <ErrorNote>{`Saved keys cannot be read right now. ${keys.error}`}</ErrorNote> : null}
             {error ? <ErrorNote>{error}</ErrorNote> : null}
-            {compact ? null : <DefaultModel catalog={data} readOnly={readOnly} busy={busy === "models"} onSave={(model, fallbacks) => void saveModels(model, fallbacks)} />}
+            {compact ? null : <ModelRoles catalog={data} readOnly={readOnly} busy={busy === "models"} onSave={(next) => void saveModels(next)} />}
             <SectionList
               title={compact ? undefined : "Providers"}
               summary={compact ? "Connect at least one provider to use a model." : undefined}

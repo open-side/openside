@@ -10,7 +10,7 @@ export interface ModelSettings {
   subscriptions: Resource<SubscriptionList>;
   pools: Resource<ProviderPoolList>;
   accounts: Resource<AccountsResponse>;
-  /** This device may read status but not change keys, accounts, rotation or the default model. */
+  /** This device may read status but not change keys, accounts, rotation or the fast and reasoning models. */
   readOnly: boolean;
   reload: () => Promise<void>;
 }

@@ -1,7 +1,16 @@
 import type { ModelCatalog, ModelProvider } from "../api/types";
 import type { SubscriptionSource } from "./accounts";
 
-const LABELS: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" };
+/** The one place a provider namespace becomes a name a person reads; unknown namespaces are capitalised. */
+const LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  "openai-codex": "OpenAI (ChatGPT plan)",
+  google: "Google",
+  "google-gla": "Google",
+  "google-vertex": "Google",
+  "github-copilot": "GitHub Copilot",
+};
 
 /** Providers the daemon can hold API keys for. */
 export const KEY_PROVIDERS = new Set(["anthropic", "openai", "google"]);

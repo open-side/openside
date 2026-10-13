@@ -37,11 +37,14 @@ pub(crate) enum KeyCommand {
 }
 #[derive(Subcommand)]
 pub(crate) enum ModelCommand {
-    /// Set default/fallback selection; Team homes update on their next turn.
+    /// Set reasoning/fast models and fallbacks; Team homes update on their next turn.
     Set {
         model: String,
         #[arg(long = "fallback")]
         fallbacks: Vec<String>,
+        /// Fast front-agent model, or none to use the reasoning model.
+        #[arg(long)]
+        fast: Option<String>,
     },
     /// List or replace explicit ordered provider account pools.
     Pool {
@@ -79,20 +82,33 @@ pub(crate) async fn list<W: Write>(
     }
     writeln!(
         stdout,
-        "PROVIDER\tMODEL\tAVAILABLE\tSOURCE\tACCOUNT\tREASON"
+        "Reasoning model: {}\nFast model: {}",
+        catalog.default_model.as_deref().unwrap_or("not configured"),
+        catalog.fast_model.as_deref().unwrap_or("same as reasoning"),
+    )
+    .map_err(output_error)?;
+    writeln!(
+        stdout,
+        "PROVIDER\tMODEL\tAVAILABLE\tSOURCE\tACCOUNT\tREASON\tREMAINING USAGE\tCATALOG"
     )
     .map_err(output_error)?;
     for provider in &catalog.providers {
         for model in &provider.models {
             writeln!(
                 stdout,
-                "{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 provider.provider,
                 model.id,
                 model.available,
                 model.source.as_deref().unwrap_or("-"),
                 model.account_id.as_deref().unwrap_or("-"),
-                model.reason
+                model.reason,
+                remaining_usage(model),
+                if model.in_catalog {
+                    "current"
+                } else {
+                    "Not in current catalog"
+                },
             )
             .map_err(output_error)?;
         }
@@ -111,6 +127,50 @@ pub(crate) async fn list<W: Write>(
         .map_err(output_error)?;
     }
     Ok(())
+}
+
+pub(crate) fn remaining_usage(model: &openside_proto::CatalogModel) -> String {
+    let accounts: Vec<_> = model
+        .accounts
+        .iter()
+        .filter(|account| account.in_pool)
+        .enumerate()
+        .map(|(index, account)| {
+            let label = if account.label.is_empty() {
+                format!("Account {}", index + 1)
+            } else {
+                account.label.clone()
+            };
+            let windows: Vec<_> = account
+                .usage_windows
+                .iter()
+                .map(|window| {
+                    let remaining = window
+                        .used_percent
+                        .map(|used| format!("{:.0}% remaining", (100.0 - used).clamp(0.0, 100.0)))
+                        .unwrap_or_else(|| "unknown".into());
+                    let reset = window
+                        .reset_at_ms
+                        .map(|ms| format!("; resets at {ms:.0} Unix ms"))
+                        .unwrap_or_default();
+                    format!("{}: {remaining}{reset}", window.name)
+                })
+                .collect();
+            format!(
+                "{label}: {}",
+                if windows.is_empty() {
+                    "unknown".into()
+                } else {
+                    windows.join(", ")
+                }
+            )
+        })
+        .collect();
+    if accounts.is_empty() {
+        "unknown".into()
+    } else {
+        accounts.join("; ")
+    }
 }
 
 pub(crate) fn component(value: &str) -> Result<&str, String> {
@@ -156,18 +216,23 @@ pub(crate) async fn run<W: Write>(
         return list(client, json_output, stdout).await;
     };
     match command {
-        ModelCommand::Set { model, fallbacks } => {
+        ModelCommand::Set {
+            model,
+            fallbacks,
+            fast,
+        } => {
             let value: ModelSelection = client
                 .json(
                     "PUT",
                     "/v1/settings/models",
-                    Some(&json!({"default_model":model,"fallback_models":fallbacks})),
+                    Some(&json!({"default_model":model,"fallback_models":fallbacks,
+                        "fast_model":fast.as_deref().filter(|id| *id != "none")})),
                 )
                 .await?;
             if json_output {
                 emit(stdout, &value)
             } else {
-                writeln!(stdout,"Default {} (new conversations and Team homes on their next turn); fallbacks: {}",value.default_model,value.fallback_models.join(", ")).map_err(output_error)
+                writeln!(stdout,"Reasoning model: {}; Fast model: {} (new conversations and Team homes on their next turn); fallbacks: {}",value.default_model,value.fast_model.as_deref().unwrap_or("same as reasoning"),value.fallback_models.join(", ")).map_err(output_error)
             }
         }
         ModelCommand::Pool {

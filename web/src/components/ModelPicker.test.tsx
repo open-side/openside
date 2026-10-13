@@ -32,25 +32,25 @@ describe("ModelPicker", () => {
   it("groups the catalog by provider and disables models that cannot run, saying why", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    const daemon = modelsDaemon({ keys: [keyInfo("openai", "k1", "Main", "1111")], pools: { openai: [{ source: "vault", account_id: "k1" }] }, defaultModel: "openai:gpt-5" });
+    const daemon = modelsDaemon({ keys: [keyInfo("openai", "k1", "Main", "1111")], pools: { openai: [{ source: "vault", account_id: "k1" }] }, defaultModel: "openai:gpt-6.1-sol" });
     open(daemon.client, "", onChange);
-    expect(await screen.findByRole("button", { name: /Default \(openai:gpt-5\)/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Default \(openai:gpt-6.1-sol\)/ })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Default/ }));
     const dialog = screen.getByRole("dialog", { name: "Models" });
 
     const openai = within(dialog).getByRole("group", { name: "OpenAI" });
-    expect(within(openai).getByRole("radio", { name: /GPT-5 mini/ })).toBeEnabled();
+    expect(within(openai).getByRole("radio", { name: /GPT-6 Luna/ })).toBeEnabled();
     const anthropic = within(dialog).getByRole("group", { name: "Anthropic" });
-    const sonnet = within(anthropic).getByRole("radio", { name: /Claude Sonnet 4.5/ });
+    const sonnet = within(anthropic).getByRole("radio", { name: /Claude Sonnet 5.5/ });
     expect(sonnet).toBeDisabled();
     // Every Anthropic model shares one reason, so it is said once under the provider.
     expect(within(anthropic).getAllByText(/No credential yet/)).toHaveLength(1);
     await user.click(sonnet);
     expect(onChange).not.toHaveBeenCalled();
 
-    expect(within(dialog).getByRole("radio", { name: /Default \(openai:gpt-5\)/ })).toBeEnabled();
-    await user.click(within(openai).getByRole("radio", { name: /GPT-5 mini/ }));
-    expect(onChange).toHaveBeenCalledWith("openai:gpt-5-mini");
+    expect(within(dialog).getByRole("radio", { name: /Default \(openai:gpt-6.1-sol\)/ })).toBeEnabled();
+    await user.click(within(openai).getByRole("radio", { name: /GPT-6 Luna/ }));
+    expect(onChange).toHaveBeenCalledWith("openai:gpt-6-luna");
   });
 
   it("keeps free-text custom models", async () => {

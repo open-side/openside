@@ -19,7 +19,7 @@ from pydantic_ai.models import (
     StreamedResponse,
 )
 from pydantic_ai.models.wrapper import WrapperModel
-from pydantic_ai.settings import ModelSettings
+from pydantic_ai.settings import ModelSettings, merge_model_settings
 from pydantic_ai.usage import RequestUsage
 
 from .errors import AuthUnavailable
@@ -79,11 +79,36 @@ class RequestCredentialModel(WrapperModel):
         self.subagent = subagent
         self.max_attempts = max_attempts
         self._entered = 0
+        self._last_account_digest: str | None = None
 
     def __repr__(self) -> str:
         return (
             f"RequestCredentialModel(provider={self.provider_name!r}, "
             "credentials=**********)"
+        )
+
+    @property
+    def settings(self) -> ModelSettings | None:
+        if self.provider_name in {
+            "anthropic",
+            "openai",
+            "openai-chat",
+            "openai-responses",
+            "openai-codex",
+        }:
+            return merge_model_settings(
+                ModelSettings(cache=True), self.wrapped.settings
+            )
+        return self.wrapped.settings
+
+    def _log_identity(self, lease: CredentialLease) -> None:
+        from openside_agent.runtime.prompt_epoch import log_request_identity
+
+        self._last_account_digest = log_request_identity(
+            self.provider_name,
+            self.identifier,
+            lease.account_id,
+            self._last_account_digest,
         )
 
     async def __aenter__(self) -> Self:
@@ -152,6 +177,7 @@ class RequestCredentialModel(WrapperModel):
             lease = await self.rpc.acquire(
                 self.provider_name, self.identifier, request_id, attempt, self.subagent
             )
+            self._log_identity(lease)
             marker = CURRENT_ATTEMPT.set(lease.credential)
             try:
                 try:
@@ -188,7 +214,9 @@ class RequestCredentialModel(WrapperModel):
     ) -> ModelResponse:
         return await self._execute(
             lambda: self.wrapped.request(
-                messages, model_settings, model_request_parameters
+                messages,
+                merge_model_settings(self.settings, model_settings),
+                model_request_parameters,
             )
         )
 
@@ -204,7 +232,9 @@ class RequestCredentialModel(WrapperModel):
             )
         return await self._execute(
             lambda: self.wrapped.count_tokens(
-                messages, model_settings, model_request_parameters
+                messages,
+                merge_model_settings(self.settings, model_settings),
+                model_request_parameters,
             )
         )
 
@@ -242,13 +272,17 @@ class RequestCredentialModel(WrapperModel):
             lease = await self.rpc.acquire(
                 self.provider_name, self.identifier, request_id, attempt, self.subagent
             )
+            self._log_identity(lease)
             marker = CURRENT_ATTEMPT.set(lease.credential)
             started = False
             stream: StreamedResponse | None = None
             try:
                 try:
                     async with self.wrapped.request_stream(
-                        messages, model_settings, model_request_parameters, run_context
+                        messages,
+                        merge_model_settings(self.settings, model_settings),
+                        model_request_parameters,
+                        run_context,
                     ) as stream:
                         started = True
                         yield stream
