@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { SettingsDocument } from "../api/types";
@@ -168,6 +168,105 @@ describe("ConfigPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Only the computer running openside can make this change (local socket); paired devices cannot.",
     );
+  });
+
+  it.each(["before", "after"] as const)("preserves the JSON draft and refusal when an earlier form response arrives %s it", async (order) => {
+    const user = userEvent.setup();
+    let releaseForm!: (response: Response) => void;
+    let releaseJson!: (response: Response) => void;
+    let saves = 0;
+    const document = (config = CONFIG): SettingsDocument => ({
+      config,
+      file_only: ["credentials"],
+      restart_required: JSON.stringify(config) !== JSON.stringify(CONFIG),
+      schema: SCHEMA,
+      remote_editable: REMOTE_EDITABLE,
+      remote: true,
+    });
+    const fake = fakeClient((call) => {
+      if (call.method === "GET") return json(200, document());
+      return new Promise<Response>((resolve) => {
+        if (++saves === 1) releaseForm = resolve;
+        else releaseJson = resolve;
+      });
+    });
+    render(
+      <ClientContext.Provider value={fake.client}>
+        <ConfigPage />
+      </ClientContext.Provider>,
+    );
+    await screen.findByRole("note");
+    const ttl = within(field("tickets.confirm_ttl_secs")).getByRole("spinbutton");
+    await user.clear(ttl);
+    await user.type(ttl, "1234");
+    await user.click(screen.getByRole("button", { name: "Save (1)" }));
+    await waitFor(() => expect(fake.calls.filter((call) => call.method === "PUT")).toHaveLength(1));
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const editor = screen.getByLabelText("Configuration document (JSON form of config.toml)");
+    const changed = { ...CONFIG, agent: { ...CONFIG.agent, command: ["/tmp/evil"] } };
+    await user.clear(editor);
+    await user.click(editor);
+    await user.paste(JSON.stringify(changed));
+    await user.click(screen.getByRole("button", { name: "Save JSON" }));
+    await waitFor(() => expect(fake.calls.filter((call) => call.method === "PUT")).toHaveLength(2));
+    const completeForm = async () => {
+      await act(async () => releaseForm(json(200, document({ ...CONFIG, tickets: { ...CONFIG.tickets, confirm_ttl_secs: 1234 } }))));
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.getByLabelText("Configuration document (JSON form of config.toml)")).toHaveValue(JSON.stringify(changed));
+    };
+    if (order === "before") await completeForm();
+    await act(async () => releaseJson(json(403, { code: "local_socket_required", message: "local_socket_required" })));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Only the computer running openside can make this change (local socket); paired devices cannot.",
+    );
+    if (order === "after") await completeForm();
+    expect(screen.getByRole("alert")).toHaveTextContent("Only the computer running openside can make this change");
+    expect(screen.getByLabelText("Configuration document (JSON form of config.toml)")).toBe(editor);
+  });
+
+  it.each([false, true])("ignores an older JSON response after a newer edit (saved: %s)", async (saved) => {
+    const user = userEvent.setup();
+    const pending: Array<(response: Response) => void> = [];
+    const document = (config = CONFIG): SettingsDocument => ({
+      config,
+      file_only: ["credentials"],
+      restart_required: JSON.stringify(config) !== JSON.stringify(CONFIG),
+      schema: SCHEMA,
+      remote_editable: REMOTE_EDITABLE,
+      remote: true,
+    });
+    const fake = fakeClient((call) => call.method === "GET"
+      ? json(200, document())
+      : new Promise<Response>((resolve) => pending.push(resolve)));
+    render(
+      <ClientContext.Provider value={fake.client}>
+        <ConfigPage />
+      </ClientContext.Provider>,
+    );
+    await screen.findByRole("note");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const editor = screen.getByLabelText("Configuration document (JSON form of config.toml)");
+    const first = { ...CONFIG, tickets: { ...CONFIG.tickets, confirm_ttl_secs: 1234 } };
+    const latest = { ...CONFIG, tickets: { ...CONFIG.tickets, confirm_ttl_secs: 2345 } };
+    for (const next of [first, latest]) {
+      await user.clear(editor);
+      await user.click(editor);
+      await user.paste(JSON.stringify(next));
+      if (next === first || saved) await user.click(screen.getByRole("button", { name: "Save JSON" }));
+    }
+    await waitFor(() => expect(pending).toHaveLength(saved ? 2 : 1));
+    if (saved) await act(async () => pending[1]!(json(200, document(latest))));
+    await act(async () => pending[0]!(json(200, document(first))));
+    expect(JSON.parse((screen.getByLabelText("Configuration document (JSON form of config.toml)") as HTMLTextAreaElement).value)).toEqual(latest);
+    expect(screen.getByLabelText("Configuration document (JSON form of config.toml)")).toBe(editor);
+    if (!saved) {
+      expect(screen.queryByRole("status")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Save JSON" }));
+      await waitFor(() => expect(pending).toHaveLength(2));
+      await act(async () => pending[1]!(json(200, document(latest))));
+    }
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    expect(within(field("tickets.confirm_ttl_secs")).getByRole("spinbutton")).toHaveValue(2345);
   });
   it("over the local socket every key is editable and a missing number is caught before sending", async () => {
     const user = userEvent.setup();

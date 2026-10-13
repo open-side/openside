@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { SettingsDocument } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
@@ -76,8 +76,13 @@ function FieldInput({
   }
 }
 
-function ConfigForm({ document, onSaved }: { document: SettingsDocument; onSaved: (next: SettingsDocument) => void }) {
-  const client = useClient();
+type ConfigEditorProps = {
+  document: SettingsDocument;
+  onSave: (config: unknown) => Promise<SettingsDocument | null>;
+  onEdit: () => void;
+};
+
+function ConfigForm({ document, onSave, onEdit }: ConfigEditorProps) {
   const toast = useToast();
   const fields = useMemo(() => schemaFields(document.schema, document.file_only), [document]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -90,7 +95,8 @@ function ConfigForm({ document, onSaved }: { document: SettingsDocument; onSaved
     setBusy(true);
     setError(null);
     try {
-      onSaved(await client.updateSettingsConfig(applyDrafts(document.config, fields, drafts)));
+      const next = await onSave(applyDrafts(document.config, fields, drafts));
+      if (!next) return;
       setDrafts({});
       toast.notify("Settings saved.");
     } catch (cause) {
@@ -137,7 +143,10 @@ function ConfigForm({ document, onSaved }: { document: SettingsDocument; onSaved
                         field={field}
                         value={value}
                         locked={locked}
-                        onChange={(next) => setDrafts((current) => ({ ...current, [field.path]: next }))}
+                        onChange={(next) => {
+                          onEdit();
+                          setDrafts((current) => ({ ...current, [field.path]: next }));
+                        }}
                       />
                     </div>
                   </div>
@@ -152,7 +161,13 @@ function ConfigForm({ document, onSaved }: { document: SettingsDocument; onSaved
           <span className="config-save-status" role="status">
             {changed} unsaved {changed === 1 ? "change" : "changes"}
           </span>
-          <Button variant="ghost" onClick={() => setDrafts({})}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              onEdit();
+              setDrafts({});
+            }}
+          >
             Discard
           </Button>
           <Button type="submit" variant="primary" disabled={busy}>
@@ -164,10 +179,10 @@ function ConfigForm({ document, onSaved }: { document: SettingsDocument; onSaved
   );
 }
 
-function ConfigJson({ document, onSaved }: { document: SettingsDocument; onSaved: (next: SettingsDocument) => void }) {
-  const client = useClient();
+function ConfigJson({ document, onSave, onEdit }: ConfigEditorProps) {
   const toast = useToast();
-  const [text, setText] = useState(() => JSON.stringify(document.config, null, 2));
+  const [draft, setDraft] = useState<string | null>(null);
+  const text = draft ?? JSON.stringify(document.config, null, 2);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
@@ -179,10 +194,10 @@ function ConfigJson({ document, onSaved }: { document: SettingsDocument; onSaved
       return;
     }
     try {
-      const next = await client.updateSettingsConfig(parsed);
+      const next = await onSave(parsed);
+      if (!next) return;
       setError(null);
-      setText(JSON.stringify(next.config, null, 2));
-      onSaved(next);
+      setDraft(null);
       toast.notify("Settings saved.");
     } catch (cause) {
       setError(errorMessage(cause));
@@ -193,7 +208,15 @@ function ConfigJson({ document, onSaved }: { document: SettingsDocument; onSaved
     <div className="dialog-form config-json">
       <label className="field">
         <span>Configuration document (JSON form of config.toml)</span>
-        <textarea rows={20} value={text} spellCheck={false} onChange={(e) => setText(e.target.value)} />
+        <textarea
+          rows={20}
+          value={text}
+          spellCheck={false}
+          onChange={(e) => {
+            onEdit();
+            setDraft(e.target.value);
+          }}
+        />
       </label>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
       <div className="config-save">
@@ -213,6 +236,25 @@ export function ConfigPage() {
   const [saved, setSaved] = useState<SettingsDocument | null>(null);
   const [view, setView] = useState<"form" | "json">("form");
   const document = saved ?? settings.data;
+  const generation = useRef(0);
+
+  function edit() {
+    generation.current += 1;
+  }
+
+  async function save(config: unknown): Promise<SettingsDocument | null> {
+    const request = ++generation.current;
+    try {
+      const next = await client.updateSettingsConfig(config);
+      // A response belongs to the draft that sent it, even after switching editors.
+      if (request !== generation.current) return null;
+      setSaved(next);
+      return next;
+    } catch (cause) {
+      if (request !== generation.current) return null;
+      throw cause;
+    }
+  }
 
   return (
     <div className="manage-body" data-section="config">
@@ -248,9 +290,9 @@ export function ConfigPage() {
             ) : null}
           </div>
           {view === "form" ? (
-            <ConfigForm key={JSON.stringify(document.config)} document={document} onSaved={setSaved} />
+            <ConfigForm document={document} onSave={save} onEdit={edit} />
           ) : (
-            <ConfigJson key={JSON.stringify(document.config)} document={document} onSaved={setSaved} />
+            <ConfigJson document={document} onSave={save} onEdit={edit} />
           )}
         </>
       )}

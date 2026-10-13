@@ -60,7 +60,8 @@ impl Page<'_> {
                 let text = self
                     .eval("document.body ? document.body.innerText : ''")
                     .await;
-                panic!("timed out waiting for {what}; page text: {text}");
+                let saves = self.eval("window.__configSaves ?? []").await;
+                panic!("timed out waiting for {what}; page text: {text}; config saves: {saves}");
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -269,11 +270,24 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
             .await,
         true
     );
+    // Persistence can finish before the browser receives the save response.
+    page.eval(
+        "(() => { const fetch = window.fetch; let first = true; window.__configSaves = []; \
+         window.fetch = async (...args) => { const response = await fetch(...args); \
+         if (args[0].endsWith('/v1/settings/config') && args[1]?.method === 'PUT') { \
+         const doc = JSON.parse(args[1].body).config; \
+         window.__configSaves.push({ mode: doc.policy.mode, ttl: doc.tickets.confirm_ttl_secs, status: response.status }); \
+         const delay = first ? 1000 : 1500; first = false; \
+         await new Promise((resolve) => setTimeout(resolve, delay)); \
+         } return response; }; return true; })()",
+    )
+    .await;
     page.eval(
         "(() => { __os.fill(document.getElementById('setting-tickets.confirm_ttl_secs'), '1234'); \
          __os.button(document.querySelector('[data-section=config]'), 'Save (1)').click(); return true })()",
     )
     .await;
+    // Switch editors while the browser's first save response is still pending.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let stored = loop {
         let stored = harness.request("GET", "/v1/settings/config", None).await;
@@ -287,6 +301,7 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
+    assert_eq!(stored.body["config"]["tickets"]["confirm_ttl_secs"], 1234);
     assert_eq!(stored.body["config"]["policy"]["mode"], "full");
     assert!(config_file(&harness).contains("confirm_ttl_secs = 1234"));
 
@@ -312,6 +327,14 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
     .await;
     let after = harness.request("GET", "/v1/settings/config", None).await;
     assert_eq!(after.body["config"]["policy"]["mode"], "full");
+    assert_eq!(after.body["config"]["tickets"]["confirm_ttl_secs"], 1234);
+    assert_eq!(
+        page.eval("window.__configSaves").await,
+        json!([
+            {"mode":"full","ttl":1234,"status":200},
+            {"mode":"read-only","ttl":600,"status":403},
+        ])
+    );
     assert!(config_file(&harness).contains("mode = \"full\""));
     assert_eq!(page.eval("window.__violations.length").await, 0);
 
