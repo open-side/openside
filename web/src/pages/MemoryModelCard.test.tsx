@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { MemoryModelStatus } from "../api/types";
@@ -23,7 +23,7 @@ function status(patch: Partial<MemoryModelStatus> = {}): MemoryModelStatus {
   };
 }
 
-function setup(handler: (call: Call) => Response | undefined) {
+function setup(handler: (call: Call) => Response | Promise<Response> | undefined) {
   const fake = fakeClient((call) => handler(call) ?? json(404, { code: "not_found", message: "nope" }));
   const changed = vi.fn();
   render(
@@ -74,9 +74,13 @@ describe("MemoryModelCard", () => {
 
   it("cancels a running download", async () => {
     const user = userEvent.setup();
+    let cancelled = false;
     const { calls } = setup((call) => {
-      if (call.method === "POST" && call.path === "/v1/memory/model/cancel") return json(200, status({ state: "cancelled" }));
-      if (call.path === "/v1/memory/model") return json(200, status({ state: "downloading", files_total: 2, bytes_done: 10, bytes_total: 100 }));
+      if (call.method === "POST" && call.path === "/v1/memory/model/cancel") {
+        cancelled = true;
+        return json(200, status({ state: "cancelled" }));
+      }
+      if (call.path === "/v1/memory/model") return json(200, cancelled ? status({ state: "cancelled" }) : status({ state: "downloading", files_total: 2, bytes_done: 10, bytes_total: 100 }));
       return undefined;
     });
     await user.click(await screen.findByRole("button", { name: "Cancel" }));
@@ -84,6 +88,34 @@ describe("MemoryModelCard", () => {
     expect(calls.some((call) => call.method === "POST" && call.path === "/v1/memory/model/cancel")).toBe(true);
     expect(screen.getByText(/Nothing was installed/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("does not let an older status poll overwrite a cancellation", async () => {
+    const user = userEvent.setup();
+    const pendingPolls: ((response: Response) => void)[] = [];
+    let cancel: ((response: Response) => void) | undefined;
+    let initial = true;
+    setup((call) => {
+      if (call.path === "/v1/memory/model/cancel") return new Promise<Response>((resolve) => { cancel = resolve; });
+      if (call.path !== "/v1/memory/model") return undefined;
+      if (initial) {
+        initial = false;
+        return json(200, status({ state: "downloading" }));
+      }
+      return new Promise<Response>((resolve) => pendingPolls.push(resolve));
+    });
+    const button = await screen.findByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(pendingPolls.length).toBeGreaterThan(0));
+    await user.click(button);
+    expect(cancel).toBeDefined();
+    await act(async () => {
+      cancel!(json(200, status({ state: "cancelled" })));
+      for (const resolve of pendingPolls) resolve(json(200, status({ state: "downloading" })));
+    });
+    expect(screen.getByText("Cancelled")).toBeInTheDocument();
+    expect(screen.getByText(/Nothing was installed/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).toBeNull();
   });
 
   it("says why a download failed in plain words and offers to try again", async () => {

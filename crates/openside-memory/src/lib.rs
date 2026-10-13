@@ -165,6 +165,26 @@ impl NewMemory {
     }
 }
 
+/// A recall record retains its author without granting that author instruction authority.
+#[derive(Debug, Clone)]
+pub struct ContextMemory {
+    /// Live, ownership-filtered record selected for recall.
+    pub memory: Memory,
+    /// Last writer, retained as data rather than instruction authority.
+    pub actor: String,
+}
+
+/// Only a daemon-issued scope can authorize edits to previously shown versions.
+#[derive(Debug, Clone)]
+pub struct ConsolidationEdit {
+    /// Identifier that must occur in the daemon-issued shown set.
+    pub id: String,
+    /// Exact shown version; concurrent edits invalidate the operation.
+    pub version: u32,
+    /// None deletes; some replaces only the text, preserving ownership and provenance.
+    pub content: Option<String>,
+}
+
 /// SQLite-backed memory store; all methods are blocking and thread-safe.
 pub struct MemoryStore {
     conn: Mutex<Connection>,
@@ -201,6 +221,11 @@ impl MemoryStore {
              CREATE INDEX IF NOT EXISTS memory_versions_id ON memory_versions(memory_id, seq);
              CREATE TABLE IF NOT EXISTS sync_ids(
                  sync_id TEXT PRIMARY KEY, memory_id TEXT NOT NULL UNIQUE);",
+        )?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS consolidation_scopes(
+                 id TEXT PRIMARY KEY, session TEXT NOT NULL, owner TEXT, shown TEXT NOT NULL,
+                 expires_at INTEGER NOT NULL, applied INTEGER NOT NULL DEFAULT 0);",
         )?;
         let has_owner = conn
             .prepare("PRAGMA table_info(memories)")?
@@ -325,6 +350,11 @@ impl MemoryStore {
 
     fn insert(&self, tx: &Connection, new: NewMemory, actor: &str, now: i64) -> Result<Memory> {
         let retention = new.retention.unwrap_or(self.default_retention);
+        let retention = if new.tags.iter().any(|tag| tag == "scratch") {
+            Retention::Hours24
+        } else {
+            retention
+        };
         // Screen raw input first so a secret is never reported as a mere format error.
         self.screen(
             &new.content,
@@ -433,6 +463,9 @@ impl MemoryStore {
             actor,
         )?;
         memory.updated_at = to_time(now);
+        if memory.tags.iter().any(|tag| tag == "scratch") {
+            memory.retention = Retention::Hours24;
+        }
         memory.expires_at = expiry(memory.retention, now).map(to_time);
         memory.version += 1;
         let embedding = self.embedding(&memory);
@@ -517,6 +550,175 @@ impl MemoryStore {
             id: id.to_owned(),
             versions,
         })
+    }
+
+    /// The last recorded writer is provenance, never instruction authority.
+    pub fn last_actor(&self, id: &str) -> Result<String> {
+        self.conn
+            .lock()
+            .query_row(
+                "SELECT actor FROM memory_versions WHERE memory_id=?1 ORDER BY seq DESC LIMIT 1",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// Select explicit context layers after ownership and expiry filtering.
+    pub fn context_layer(
+        &self,
+        owner: Option<&str>,
+        layer: &str,
+        query: &str,
+    ) -> Result<Vec<ContextMemory>> {
+        if !matches!(layer, "profile" | "event_log" | "scratch") {
+            return Err(Error::Invalid("unknown memory layer"));
+        }
+        let now = self.now_ms();
+        let terms: Vec<String> = query
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|term| !term.is_empty())
+            .take(32)
+            .map(str::to_lowercase)
+            .collect();
+        let conn = self.conn.lock();
+        let mut statement = conn.prepare(&format!(
+            "SELECT {COLUMNS},
+             COALESCE((SELECT actor FROM memory_versions v WHERE v.memory_id = m.id
+                       ORDER BY seq DESC LIMIT 1), 'unknown')
+             FROM memories m WHERE {LIVE} AND (m.owner IS NULL OR m.owner IS ?2)
+             AND m.kind = 'note'
+             AND EXISTS(SELECT 1 FROM json_each(m.tags) WHERE value = ?3)
+             AND (?3 != 'event_log' OR m.updated_at >= ?4)
+             ORDER BY CASE WHEN ?3 = 'profile' THEN 0 ELSE
+                 (SELECT COUNT(*) FROM json_each(?5) WHERE instr(lower(m.content), value) > 0)
+                 END DESC, m.updated_at DESC, m.id LIMIT ?6"
+        ))?;
+        let rows = statement
+            .query_map(
+                params![
+                    now,
+                    owner,
+                    layer,
+                    now - 30 * DAY_MS,
+                    tags_json(&terms),
+                    if layer == "profile" { 100 } else { 30 }
+                ],
+                |row| {
+                    Ok(ContextMemory {
+                        memory: read_memory(row)?,
+                        actor: row.get(12)?,
+                    })
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Persist a server-selected allowlist, bound to one session and owner.
+    pub fn consolidation_scope(
+        &self,
+        session: &str,
+        owner: Option<&str>,
+        shown: &[(String, u32)],
+    ) -> Result<String> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = self.now_ms();
+        let mut bound = Vec::with_capacity(shown.len());
+        for (id, version) in shown {
+            let memory = fetch(&tx, id, now)?.ok_or(Error::NotFound)?;
+            if memory.version != *version
+                || (memory.owner.is_some() && memory.owner.as_deref() != owner)
+            {
+                return Err(Error::Invalid("memory scope changed"));
+            }
+            bound.push((id, version, memory.owner));
+        }
+        let scope = new_id();
+        tx.execute(
+            "DELETE FROM consolidation_scopes WHERE expires_at <= ?1",
+            [now],
+        )?;
+        tx.execute(
+            "INSERT INTO consolidation_scopes(id,session,owner,shown,expires_at) VALUES (?1,?2,?3,?4,?5)",
+            params![scope, session, owner, serde_json::to_string(&bound)
+                .map_err(|_| Error::Invalid("invalid memory scope"))?, now + DAY_MS],
+        )?;
+        tx.commit()?;
+        Ok(scope)
+    }
+
+    /// Atomically apply a bounded pass; replay is inert and concurrent edits win.
+    pub fn consolidate(
+        &self,
+        scope: &str,
+        session: &str,
+        owner: Option<&str>,
+        edits: Vec<ConsolidationEdit>,
+        additions: Vec<NewMemory>,
+        actor: &str,
+    ) -> Result<bool> {
+        if edits.len() > 100 || additions.len() > 20 {
+            return Err(Error::Invalid("consolidation limit exceeded"));
+        }
+        check_actor(actor)?;
+        if self.secret(actor) {
+            return Err(Error::SecretDetected);
+        }
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = self.now_ms();
+        let state: Option<(String, bool)> = tx.query_row(
+            "SELECT shown,applied FROM consolidation_scopes WHERE id=?1 AND session=?2 AND owner IS ?3 AND expires_at>?4",
+            params![scope, session, owner, now], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        let (shown, applied) = state.ok_or(Error::Invalid("invalid consolidation scope"))?;
+        if applied {
+            return Ok(false);
+        }
+        let shown: Vec<(String, u32, Option<String>)> = serde_json::from_str(&shown)
+            .map_err(|_| Error::Invalid("invalid consolidation scope"))?;
+        let mut seen = std::collections::HashSet::new();
+        for edit in &edits {
+            if !seen.insert(&edit.id)
+                || !shown
+                    .iter()
+                    .any(|(id, version, _)| id == &edit.id && *version == edit.version)
+            {
+                return Err(Error::Invalid("unshown consolidation edit"));
+            }
+            let memory = fetch(&tx, &edit.id, now)?.ok_or(Error::NotFound)?;
+            let shown_owner = shown
+                .iter()
+                .find(|(id, _, _)| id == &edit.id)
+                .and_then(|(_, _, owner)| owner.as_deref());
+            if memory.version != edit.version || memory.owner.as_deref() != shown_owner {
+                return Err(Error::Invalid("stale consolidation edit"));
+            }
+        }
+        for edit in edits {
+            let mut memory = fetch(&tx, &edit.id, now)?.ok_or(Error::NotFound)?;
+            if let Some(content) = edit.content {
+                memory.content = content;
+                self.rewrite(&tx, memory, actor, now)?;
+            } else {
+                remove(&tx, &memory, MemoryOp::Delete, actor, now)?;
+            }
+        }
+        for new in additions {
+            let memory = self.insert(&tx, new, actor, now)?;
+            tx.execute(
+                "UPDATE memories SET owner=?2 WHERE id=?1",
+                params![memory.id, owner],
+            )?;
+        }
+        tx.execute(
+            "UPDATE consolidation_scopes SET applied=1 WHERE id=?1",
+            [scope],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// Hybrid (or lexical-only) search; an empty query lists recent memories.
@@ -980,6 +1182,7 @@ fn parse_retention(value: &str) -> rusqlite::Result<Retention> {
         "permanent" => Ok(Retention::Permanent),
         "days_90" => Ok(Retention::Days90),
         "days_30" => Ok(Retention::Days30),
+        "hours_24" => Ok(Retention::Hours24),
         _ => Err(conversion("retention")),
     }
 }
@@ -1034,4 +1237,233 @@ fn dot(query: &[f32], blob: &[u8]) -> Option<f32> {
             .map(|(chunk, q)| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) * q)
             .sum(),
     )
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    struct FakeClock(AtomicI64);
+    impl Clock for FakeClock {
+        fn now(&self) -> DateTime<Utc> {
+            to_time(self.0.load(Ordering::SeqCst))
+        }
+    }
+
+    fn note(text: &str, layer: &str) -> NewMemory {
+        NewMemory {
+            tags: vec![layer.into()],
+            ..NewMemory::note(text)
+        }
+    }
+
+    #[test]
+    fn layers_scope_relevance_limits_expiry_and_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("memory.db");
+        let clock = Arc::new(FakeClock(AtomicI64::new(100 * DAY_MS)));
+        let options = || Options {
+            clock: clock.clone(),
+            ..Options::default()
+        };
+        let store = MemoryStore::open(&path, options()).unwrap();
+        let shared = store.create(note("shared fact", "profile"), "api").unwrap();
+        for n in 0..120 {
+            store
+                .create_owned(
+                    note(&format!("private {n}"), "profile"),
+                    "api",
+                    Some("other"),
+                )
+                .unwrap();
+            store
+                .create_owned(
+                    note(&format!("own 東京 {n}"), "profile"),
+                    "api",
+                    Some("chief"),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store
+                .context_layer(Some("chief"), "profile", "")
+                .unwrap()
+                .len(),
+            100
+        );
+        let only_shared = store.context_layer(None, "profile", "").unwrap();
+        assert_eq!(only_shared.len(), 1);
+        assert_eq!(only_shared[0].memory.id, shared.id);
+        let relevant = store
+            .create(note("orchid delivery confirmed", "event_log"), "api")
+            .unwrap();
+        clock.0.fetch_add(1000, Ordering::SeqCst);
+        for n in 0..60 {
+            store
+                .create(note(&format!("unrelated {n}"), "event_log"), "api")
+                .unwrap();
+        }
+        let selected = store.context_layer(None, "event_log", "orchid").unwrap();
+        assert_eq!(selected.len(), 30);
+        assert_eq!(selected[0].memory.id, relevant.id);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|row| &row.memory.id)
+                .collect::<Vec<_>>(),
+            store
+                .context_layer(None, "event_log", "orchid")
+                .unwrap()
+                .iter()
+                .map(|row| &row.memory.id)
+                .collect::<Vec<_>>()
+        );
+        let scratch = store
+            .create(note("temporary detail", "scratch"), "api")
+            .unwrap();
+        assert_eq!(scratch.retention, Retention::Hours24);
+        clock.0.fetch_add(DAY_MS, Ordering::SeqCst);
+        assert!(store.context_layer(None, "scratch", "").unwrap().is_empty());
+        assert!(store.get(&shared.id).is_ok());
+        drop(store);
+        let store = MemoryStore::open(&path, options()).unwrap();
+        assert!(store.context_layer(None, "scratch", "").unwrap().is_empty());
+        assert!(store.get(&shared.id).is_ok());
+        clock.0.fetch_add(30 * DAY_MS, Ordering::SeqCst);
+        assert!(store
+            .context_layer(None, "event_log", "")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn consolidation_rejects_unshown_stale_transferred_and_secret_edits_atomically() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("memory.db");
+        let store = MemoryStore::open(&path, Options::default()).unwrap();
+        let shown = store.create(note("shown", "profile"), "api").unwrap();
+        let unseen = store.create(note("unseen", "profile"), "api").unwrap();
+        let scope = store
+            .consolidation_scope("session", Some("chief"), &[(shown.id.clone(), 1)])
+            .unwrap();
+        let edit = |memory: &Memory| ConsolidationEdit {
+            id: memory.id.clone(),
+            version: memory.version,
+            content: None,
+        };
+        assert!(store
+            .consolidate(
+                &scope,
+                "session",
+                Some("chief"),
+                vec![edit(&unseen)],
+                vec![],
+                "agent:test"
+            )
+            .is_err());
+        assert!(store
+            .consolidate(
+                &scope,
+                "wrong_session",
+                Some("chief"),
+                vec![edit(&shown)],
+                vec![],
+                "agent:test"
+            )
+            .is_err());
+        assert!(store
+            .consolidate(
+                &scope,
+                "session",
+                Some("other"),
+                vec![edit(&shown)],
+                vec![],
+                "agent:test"
+            )
+            .is_err());
+        assert!(store
+            .consolidate(
+                &scope,
+                "session",
+                Some("chief"),
+                vec![edit(&shown)],
+                vec![note("password=not-for-memory-123", "profile")],
+                "agent:test"
+            )
+            .is_err());
+        assert!(store.get(&shown.id).is_ok());
+        store
+            .update(
+                &shown.id,
+                UpdateMemoryRequest {
+                    content: Some("owner correction".into()),
+                    ..Default::default()
+                },
+                "api",
+            )
+            .unwrap();
+        assert!(store
+            .consolidate(
+                &scope,
+                "session",
+                Some("chief"),
+                vec![edit(&shown)],
+                vec![],
+                "agent:test"
+            )
+            .is_err());
+        assert_eq!(store.get(&shown.id).unwrap().content, "owner correction");
+        let owned = store
+            .create_owned(note("owned", "profile"), "api", Some("chief"))
+            .unwrap();
+        let scope = store
+            .consolidation_scope("session", Some("chief"), &[(owned.id.clone(), 1)])
+            .unwrap();
+        store
+            .transfer_owner(&owned.id, Some("chief"), None)
+            .unwrap();
+        assert!(store
+            .consolidate(
+                &scope,
+                "session",
+                Some("chief"),
+                vec![edit(&owned)],
+                vec![],
+                "agent:test"
+            )
+            .is_err());
+        let fresh = store.get(&shown.id).unwrap();
+        let scope = store
+            .consolidation_scope(
+                "session",
+                Some("chief"),
+                &[(fresh.id.clone(), fresh.version)],
+            )
+            .unwrap();
+        assert!(store
+            .consolidate(
+                &scope,
+                "session",
+                Some("chief"),
+                vec![edit(&fresh)],
+                vec![note("new fact", "profile")],
+                "agent:test"
+            )
+            .unwrap());
+        let count = store.count().unwrap();
+        drop(store);
+        let store = MemoryStore::open(&path, Options::default()).unwrap();
+        assert!(!store
+            .consolidate(
+                &scope,
+                "session",
+                Some("chief"),
+                vec![edit(&fresh)],
+                vec![note("duplicate", "profile")],
+                "agent:test"
+            )
+            .unwrap());
+        assert_eq!(store.count().unwrap(), count);
+    }
 }

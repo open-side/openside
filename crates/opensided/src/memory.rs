@@ -2,6 +2,9 @@
 //! `/v1/memory` API. The store itself (`openside-memory`) never touches the network;
 //! embedding weights are only read from `memory.embedding.model_dir`.
 
+pub(crate) mod consolidation;
+pub(crate) mod context;
+
 use std::{sync::Arc, time::Duration};
 
 use axum::{

@@ -61,18 +61,21 @@ export function MemoryModelCard({ onChanged, pollMs = 1_000 }: { onChanged?: () 
   const [model, setModel] = useState<MemoryModelStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const requestGeneration = useRef(0);
   const changed = useRef(onChanged);
   changed.current = onChanged;
   const current = model ?? resource.data;
   const active = current ? ACTIVE.includes(current.state) : false;
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || busy) return;
+    const generation = requestGeneration.current;
     let stopped = false;
     const timer = window.setInterval(() => {
+      if (generation !== requestGeneration.current) return;
       client.memoryModel().then(
         (next) => {
-          if (stopped) return;
+          if (stopped || generation !== requestGeneration.current) return;
           setModel(next);
           if (!ACTIVE.includes(next.state)) changed.current?.();
         },
@@ -85,9 +88,11 @@ export function MemoryModelCard({ onChanged, pollMs = 1_000 }: { onChanged?: () 
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [active, client, pollMs]);
+  }, [active, busy, client, pollMs]);
 
   async function act(call: () => Promise<MemoryModelStatus>) {
+    // A pre-action status response must not overwrite the download/cancel result.
+    requestGeneration.current += 1;
     setBusy(true);
     setError(null);
     try {

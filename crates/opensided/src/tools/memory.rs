@@ -30,7 +30,7 @@ struct WriteArgs {
     content: String,
     /// Optional labels.
     tags: Option<Vec<String>>,
-    /// `permanent`, `days_90` or `days_30`; defaults to the configured retention.
+    /// `permanent`, `days_90`, `days_30` or `hours_24`; scratch-tagged notes always expire in 24 hours.
     retention: Option<Retention>,
     #[serde(default)]
     shared: bool,
@@ -94,23 +94,31 @@ impl DaemonTool for MemorySearch {
                 .shared
                 .memory
                 .run(move |store| {
-                    store.search_scoped(
+                    let response = store.search_scoped(
                         &args.query,
                         args.kind,
                         limit,
-                        owner.as_deref().map(Some),
+                        Some(owner.as_deref()),
                         true,
-                    )
+                    )?;
+                    let authors = response
+                        .hits
+                        .iter()
+                        .map(|hit| store.last_actor(&hit.memory.id))
+                        .collect::<openside_memory::Result<Vec<_>>>()?;
+                    Ok((response, authors))
                 })
                 .await;
             match result {
-                Ok(response) => ToolExec::Done {
+                Ok((response, authors)) => ToolExec::Done {
                     for_model: json!({
                         "mode": response.mode,
-                        "results": response.hits.iter().map(|hit| json!({
-                            // Page text is third-party data: recall it as evidence, never as instructions.
+                        "results": response.hits.iter().zip(authors).map(|(hit, author)| json!({
                             "source": match hit.memory.kind { MemoryKind::History => "web_page", MemoryKind::Note => "note" },
-                            "untrusted": hit.memory.kind == MemoryKind::History,
+                            "untrusted": true,
+                            "authority": "data_only",
+                            "owner": hit.memory.owner,
+                            "author": author,
                             "id": hit.memory.id,
                             "kind": hit.memory.kind,
                             "content": hit.memory.content,
@@ -241,6 +249,12 @@ pub(crate) async fn index_page(
     tab_id: &str,
     capture: Option<(&openside_browser::Snapshot, &str)>,
 ) {
+    let Some((snapshot, document)) = capture else {
+        return;
+    };
+    let Some(text) = history_text(snapshot) else {
+        return;
+    };
     let memory = &ctx.shared.memory;
     if !memory.history_enabled() {
         return;
@@ -259,14 +273,6 @@ pub(crate) async fn index_page(
         return;
     }
     let current = || async { browser.document_id(tab_id).await.ok() };
-    let document = match capture {
-        Some((_, document)) => document.to_owned(),
-        None => match current().await {
-            Some(document) => document,
-            None => return,
-        },
-    };
-    let snapshot = capture.map(|(snapshot, _)| snapshot);
     // Taint is keyed by the URL-independent document lifetime id. It is read before the
     // URL-sensitive equality check below, which then proves it belongs to this document.
     let Ok(lifetime) = browser.document_lifetime_id(tab_id).await else {
@@ -274,7 +280,7 @@ pub(crate) async fn index_page(
     };
     // Document ids change on every navigation (loader, URL, root), so equality before the
     // snapshot and after it proves the snapshot shows this document.
-    if current().await.as_deref() != Some(document.as_str()) {
+    if current().await.as_deref() != Some(document) {
         return;
     }
     if ctx
@@ -294,46 +300,161 @@ pub(crate) async fn index_page(
     else {
         return;
     };
-    let url = crate::browser::public_url(&tab.url);
+    let url = crate::browser::display_url(&tab.url);
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return;
     }
-    // Accessible names read as page text; refs and roles would only add noise to search.
-    let text = snapshot.map(|snapshot| {
-        snapshot
-            .nodes
-            .iter()
-            .filter(|node| node.role != "RootWebArea")
-            .flat_map(|node| node.name.split_whitespace())
-            .collect::<Vec<_>>()
-            .join(" ")
-    });
     // Target metadata lags navigation, and Chromium shows the raw URL (query included)
     // until the page sets a title, so the snapshot's document name wins.
     let title = snapshot
-        .and_then(|snapshot| {
-            snapshot
-                .nodes
-                .iter()
-                .find(|node| node.role == "RootWebArea")
-        })
+        .nodes
+        .iter()
+        .find(|node| node.role == "RootWebArea")
         .map(|root| root.name.clone())
         .unwrap_or(tab.title);
     let title =
         Some(title).filter(|title| !title.trim().is_empty() && !tab.url.contains(title.trim()));
     // Bind URL/title/text/taint to one document: a navigation mid-capture discards it.
-    if current().await.as_deref() != Some(document.as_str()) {
+    if current().await.as_deref() != Some(document) {
         return;
     }
     let actor = format!("browser_history:{}", ctx.session.as_str());
     let _ = memory
         .write(move |store| {
             // Screen the whole capture so truncation cannot keep a fragment of a secret.
-            if let Some(text) = &text {
-                store.check_secret(text)?;
-            }
-            let summary = text.map(|text| text.chars().take(SUMMARY_CHARS).collect::<String>());
-            store.record_visit(&url, title.as_deref(), summary.as_deref(), &actor)
+            store.check_secret(&text)?;
+            let summary = text.chars().take(SUMMARY_CHARS).collect::<String>();
+            store.record_visit(&url, title.as_deref(), Some(&summary), &actor)
         })
         .await;
+}
+
+fn history_text(snapshot: &openside_browser::Snapshot) -> Option<String> {
+    if snapshot.nodes.iter().any(|node| {
+        if matches!(node.role.as_str(), "textbox" | "searchbox") && node.value == "<redacted>" {
+            return true;
+        }
+        if !matches!(node.role.as_str(), "RootWebArea" | "form" | "textbox") {
+            return false;
+        }
+        let name = node.name.to_lowercase();
+        [
+            "password",
+            "passcode",
+            "sign in",
+            "log in",
+            "login",
+            "비밀번호",
+            "로그인",
+        ]
+        .iter()
+        .any(|label| name.contains(label))
+    }) {
+        return None;
+    }
+    let mut excluded_depth = None;
+    let mut eligible = Vec::new();
+    let mut prose_chars = 0;
+    let mut other_chars = 0;
+    for node in &snapshot.nodes {
+        if excluded_depth.is_some_and(|depth| node.depth <= depth) {
+            excluded_depth = None;
+        }
+        if matches!(
+            node.role.as_str(),
+            "navigation"
+                | "banner"
+                | "contentinfo"
+                | "complementary"
+                | "advertisement"
+                | "link"
+                | "button"
+                | "menu"
+                | "menubar"
+                | "form"
+                | "heading"
+        ) {
+            excluded_depth.get_or_insert(node.depth);
+        }
+        let chars = node.name.chars().filter(|ch| ch.is_alphanumeric()).count();
+        if excluded_depth.is_none() && matches!(node.role.as_str(), "StaticText" | "paragraph") {
+            prose_chars += chars;
+            eligible.push(node.name.as_str());
+        } else if node.role != "RootWebArea" {
+            other_chars += chars;
+        }
+    }
+    // Titles, account menus and advertising chrome are not durable visit evidence.
+    if prose_chars < 80 || prose_chars < other_chars {
+        return None;
+    }
+    Some(eligible.join(" "))
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use openside_browser::{Snapshot, SnapshotNode};
+
+    const PROSE: &str = "Plant tomato seedlings after the last frost. Keep the roots moist and give each plant enough space and sunlight throughout the growing season.";
+
+    fn snapshot(nodes: &[(&str, &str, &str, usize)]) -> Snapshot {
+        Snapshot {
+            nodes: nodes
+                .iter()
+                .map(|(role, name, value, depth)| SnapshotNode {
+                    reference: None,
+                    role: (*role).into(),
+                    name: (*name).into(),
+                    value: (*value).into(),
+                    depth: *depth,
+                })
+                .collect(),
+            text: String::new(),
+            raw_bytes: 0,
+            document_root: None,
+        }
+    }
+
+    #[test]
+    fn rejects_auth_forms_title_only_navigation_and_ads() {
+        for nodes in [
+            vec![("RootWebArea", "Weekly news", "", 0)],
+            vec![("heading", PROSE, "", 0)],
+            vec![
+                ("textbox", "Password", "<redacted>", 0),
+                ("StaticText", PROSE, "", 0),
+            ],
+            vec![("form", "Sign in", "", 0), ("StaticText", PROSE, "", 1)],
+            vec![("navigation", "", "", 0), ("StaticText", PROSE, "", 1)],
+            vec![("advertisement", "", "", 0), ("StaticText", PROSE, "", 1)],
+            vec![("StaticText", "Mail", "", 0)],
+        ] {
+            assert!(history_text(&snapshot(&nodes)).is_none(), "{nodes:?}");
+        }
+        let page = snapshot(&[
+            ("navigation", "", "", 0),
+            ("StaticText", PROSE, "", 1),
+            ("advertisement", "", "", 0),
+            ("StaticText", PROSE, "", 1),
+            ("StaticText", PROSE, "", 0),
+        ]);
+        assert!(history_text(&page).is_none());
+    }
+
+    #[test]
+    fn keeps_article_text_but_excludes_account_labels_and_ads() {
+        let page = snapshot(&[
+            ("RootWebArea", "Garden", "", 0),
+            ("navigation", "", "", 1),
+            ("StaticText", "Account Person", "", 2),
+            ("advertisement", "", "", 1),
+            ("StaticText", "Buy now", "", 2),
+            ("StaticText", PROSE, "", 1),
+        ]);
+        let text = history_text(&page).unwrap();
+        assert_eq!(text, PROSE);
+        assert!(!text.contains("Account Person"));
+        assert!(!text.contains("Buy now"));
+    }
 }

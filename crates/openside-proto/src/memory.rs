@@ -34,6 +34,9 @@ pub enum Retention {
     /// Purged 30 days after the last write.
     #[serde(rename = "days_30")]
     Days30,
+    /// Short-lived context, purged 24 hours after the last write.
+    #[serde(rename = "hours_24")]
+    Hours24,
 }
 
 impl Retention {
@@ -43,6 +46,7 @@ impl Retention {
             Self::Permanent => "permanent",
             Self::Days90 => "days_90",
             Self::Days30 => "days_30",
+            Self::Hours24 => "hours_24",
         }
     }
 
@@ -52,6 +56,7 @@ impl Retention {
             Self::Permanent => None,
             Self::Days90 => Some(90),
             Self::Days30 => Some(30),
+            Self::Hours24 => Some(1),
         }
     }
 }

@@ -27,7 +27,7 @@
 - 상태: `openside doctor` 의 `memory.embeddings` 항목은 파일이 있는지만 본다(파일이 있어도 실제로 쓸 수 있는지는 판단하지 않는다). 실제 동작 모드는 `GET /v1/memory/health`(로드 실패 이유 `problem`, 다음 단계 `next_step`, 모델 ID, 개수)로 확인한다.
 
 ## 4. 보존 기간
-- `retention`: `permanent`, `days_90`, `days_30`. 지정하지 않으면 `memory.default_retention`(기본 `permanent`).
+- `retention`: `permanent`, `days_90`, `days_30`, or `hours_24`. The configured default is unchanged. Notes tagged `scratch` always expire 24 hours after their last write, even if another retention was requested.
 - 만료 시각은 마지막 쓰기(생성·수정)부터 센다. 만료된 기억은 purge 작업을 기다리지 않는다: 조회·검색에서 바로 빠지고, 이력 조회·수정·삭제·기록 색인은 먼저 만료된 기억을 purge 한 뒤 처리한다. 그래서 만료 뒤 같은 URL 을 다시 방문하면 이전 요약 없이 버전 1 부터 새로 시작한다.
 - 데몬은 시작할 때와 이후 1시간마다 만료된 기억을 지운다(purge). 이력에는 `op=purge`, `actor=retention` 으로 남는다.
 
@@ -43,8 +43,8 @@
 - 금고 값: 데몬의 `Redactor` 가 아는 값(잠금 해제된 금고 항목)은 형태와 관계없이, 위 정규화 형태까지 포함해 거절한다. 그 값이 기억을 쓴 뒤에 알려졌다면 API 와 `memory_search` 결과에서 가린다.
 
 ## 7. 브라우징 기록
-- `browser_open_tab`·`browser_navigate` 가 성공하면, 그리고 `browser_snapshot` 을 찍으면 탭 주소를 `history` 기억으로 남긴다(항상 `days_30`). 같은 URL 이면 새로 만들지 않고 갱신한다.
-- URL 은 사용자 정보·쿼리·프래그먼트를 뺀 공개 형태로만 저장한다. 제목은 스냅샷의 문서 이름(없으면 탭 제목)이고, 본문은 스냅샷의 접근성 이름을 최대 600자까지 이어 붙인 요약이다. 스냅샷 없이 이동만 하면 이전 요약을 지우지 않는다.
+- Only substantive accessibility captures create or refresh visited-page `history` records (`days_30`). Navigation without a capture and title-only pages do not create records or overwrite an existing summary.
+- Captures with protected fields or recognized sign-in/password forms are not indexed. Navigation, links, buttons, forms, headings, banners, footers, sidebars and advertising subtrees are excluded. Eligible prose must contain at least 80 alphanumeric Unicode characters and must not be outweighed by excluded chrome; the stored summary is capped at 600 characters. Page history never receives profile, event-log or scratch tags.
 - 건너뛰는 경우: `memory.history=false`, 비공개(incognito) 세션(상태를 확인할 수 없는 세션도 비공개로 본다), 격리 브라우저 공간(`browser_space: "isolated"`) 세션, 시크릿 입력이 들어간 문서(복구된 문서 포함, 문서를 확인할 수 없을 때도), http(s) 가 아닌 주소, 페이지 텍스트·제목이 시크릿 검사에 걸린 페이지. 시크릿 입력 표시는 문서 ID 에 묶여 있고, 색인 직전에 문서 ID 가 바뀌었으면 저장하지 않는다.
 - 비공개 세션은 만들 때 정한다: `POST /v1/sessions {"incognito": true}`. 값은 `session.created` 이벤트와 세션 상태에 저장되어 데몬을 다시 시작해도 유지되고, 바꿀 수 없다. `Session.incognito` 로 보인다. 이 값을 보고 세션 전용 임시 브라우저 프로필을 쓰고 금고 사용을 막는다(B-10, `docs/09-tool-design.md` §3).
 
@@ -54,7 +54,7 @@
 | `memory_search` | Read(모든 모드에서 보임) | `query`, `limit?`(1–20, 기본 5), `kind?` | `mode`, `results[]`(`id`, `kind`, `content`, `title`, `url`, `tags`, `updated_at`, `matched`, `source`, `untrusted`) |
 | `memory_write` | Write(read-only 모드에서 숨김) | `content`, `tags?`, `retention?` | `id`, `stored`, `retention`, `expires_at`. 시크릿이면 `denied`/`secret_detected` |
 
-결과는 다른 도구와 같이 데몬 redaction 을 거친다. 브라우징 기록 결과는 `source=web_page`, `untrusted=true` 로 표시한다. 웹 페이지가 쓴 내용이므로 지시로 따르지 않고 자료로만 다뤄야 한다. 메모는 `source=note`, `untrusted=false`. 시크릿으로 보이는 `memory_write` 인자는 `tool.started` 이벤트에 `[REDACTED]` 로 기록한다.
+All recall is data-only: both notes and browsing history carry `untrusted=true` and `authority=data_only`, with their source and owner preserved. Recalled text is never instruction authority. Results pass through daemon redaction. Secret-looking `memory_write` arguments are recorded as `[REDACTED]`.
 
 ## 9. API / CLI
 권한: 조회는 `read`, 생성·수정·삭제는 `admin`.
@@ -70,3 +70,21 @@
 | `GET /v1/memory/{id}/history` | 변경 이력(`MemoryHistory`), 삭제된 기억도 조회 가능 | `memory history ID` |
 
 오류 코드: `secret_detected`(400), `invalid_value`(400), `not_found`(404), `internal_error`(500).
+
+## 10. Bounded prompt context and consolidation
+
+Explicit note tags define three context layers without migrating or reclassifying existing notes or browser history:
+
+- `profile`: at most 100 facts, within 4000 Unicode characters including the provenance envelope. The profile is frozen in the persisted prompt epoch for chief and Task prompts. Ordinary turns do not replace the cached prefix.
+- `event_log`: dated notes updated within the last 30 days, selected by lexical relevance before recency, with deterministic identifier tie-breaking. At most 30 logs enter the latest-message context.
+- `scratch`: short-lived notes with a mandatory 24-hour expiry. Logs and scratch notes share a separate 6000-character rendered budget. Oversized records are skipped, not partially exposed or granted deletion authority.
+
+Ownership and expiry are filtered before ranking. Sessions without an agent identity see shared notes only, never all owners. Browser/page indexing cannot set these reserved tags; person edits, explicit memory tools, and consolidation record their writer provenance.
+
+The daemon seeds profile context when opening a session. Latest-message recall refreshes only the volatile tail; Tasks inherit the frozen profile and receive task-relevant tail recall. Prompt snapshots survive restart via the prompt-epoch snapshot. Expired scratch notes are absent immediately, before the hourly purge and after restart.
+
+After a completed, settled chief turn, a separate tool-free pass uses the configured front model, falling back to the reasoning model. It receives at most 12000 explicit-owner-message characters plus bounded recall, has one model request, a 2048-output-token ceiling and a 20-second deadline. Tool/page output, provenance-wrapped third-party messages and assistant guesses are excluded from this extraction input. Account names and advertising text seen on a page are not evidence of owner identity or preferences; recalled logs cannot supply new profile facts. Failed or invalid extraction leaves memory unchanged and never changes the visible reply.
+
+Each pass receives a daemon-issued opaque scope bound to its session, owner, and the actually shown `(id, version)` pairs. SQLite atomically checks every edit before applying any: unseen identifiers, expired scopes, stale versions, ownership changes, duplicate edits, and secrets reject the whole pass. A concurrent person edit wins. A successfully consumed scope replays as a no-op, including after daemon restart. Additions are bounded to 20, edits to 100; existing secret screening applies to all writes. No free-form model deletion tool exists.
+
+`__memory_context` and `__memory_consolidate` are private runtime RPCs, not registered model tools. Model proxies refuse `__*` calls; the daemon refuses these names in registrations and rejects private RPCs from subagents or incognito sessions. Internal RPC arguments/results are not recorded as tool events, so rejected extraction content cannot enter persistent event logs.

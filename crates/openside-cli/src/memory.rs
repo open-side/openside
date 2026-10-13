@@ -85,6 +85,8 @@ pub(crate) enum RetentionArg {
     Days90,
     #[value(name = "days_30")]
     Days30,
+    #[value(name = "hours_24")]
+    Hours24,
 }
 
 impl From<RetentionArg> for Retention {
@@ -93,6 +95,7 @@ impl From<RetentionArg> for Retention {
             RetentionArg::Permanent => Self::Permanent,
             RetentionArg::Days90 => Self::Days90,
             RetentionArg::Days30 => Self::Days30,
+            RetentionArg::Hours24 => Self::Hours24,
         }
     }
 }
