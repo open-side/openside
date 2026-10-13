@@ -353,6 +353,14 @@ fn ended<'a>(events: &'a [Event], call: &str) -> (&'a Value, bool) {
                 is_error,
                 ..
             } if tool_call_id == call => Some((result, *is_error)),
+            EventKind::SubagentProgress { progress, .. }
+                if progress["kind"] == "tool.ended" && progress["tool_call_id"] == call =>
+            {
+                Some((
+                    &progress["result"],
+                    progress["is_error"].as_bool().expect("child tool outcome"),
+                ))
+            }
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing {call}: {events:?}"))
@@ -440,7 +448,7 @@ async fn step_with(
     let events = stream.settled().await;
     assert!(
         events.iter().any(
-            |event| matches!(&event.kind, EventKind::AssistantFinal { text } if *text == final_text)
+            |event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if *text == final_text)
         ),
         "turn missing final {final_text}: {events:?}"
     );

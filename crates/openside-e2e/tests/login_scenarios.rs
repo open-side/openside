@@ -316,7 +316,7 @@ runpy.run_module('openside_agent', run_name='__main__')
         let events = self.stream.settled().await;
         assert!(
             events.iter().any(
-                |event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == final_text)
+                |event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == final_text)
             ),
             "missing final {final_text:?}: {events:?}"
         );
@@ -747,7 +747,7 @@ async fn live_attempt(
                 pending.remove(ticket_id);
                 steps.push(json!({"resolution":resolution}));
             }
-            EventKind::AssistantFinal { text } => steps.push(json!({"reply":text})),
+            EventKind::AssistantFinal { text, .. } => steps.push(json!({"reply":text})),
             EventKind::MessageCompleted {
                 outcome, reason, ..
             } => {

@@ -32,10 +32,11 @@ async fn create(harness: &Harness) -> String {
 
 async fn submit(harness: &Harness, id: &str, mid: &str, mode: &str) -> u16 {
     harness
-        .request(
+        .request_as(
             "POST",
             &format!("/v1/sessions/{id}/messages"),
             Some(json!({"message_id":mid,"text":mid,"mode":mode})),
+            (mode == "queue" && mid != "promoted-p").then_some("mcp"),
         )
         .await
         .status
@@ -135,7 +136,11 @@ async fn steer_lands_at_the_next_request_boundary_and_queue_edits_are_honored() 
             None,
         )
         .await;
-    assert_eq!(promote.status, 200, "{}", promote.body);
+    assert_eq!(
+        promote.status, 409,
+        "owner messages already steer: {}",
+        promote.body
+    );
     let edit = harness
         .request(
             "PATCH",
@@ -195,7 +200,7 @@ async fn steer_lands_at_the_next_request_boundary_and_queue_edits_are_honored() 
     });
     let first_final = seq_of(
         &events,
-        |kind| matches!(kind, EventKind::AssistantFinal { text } if text == "first done"),
+        |kind| matches!(kind, EventKind::AssistantFinal { text, .. } if text == "first done"),
     );
     let (steer, promoted) = (
         seq_of(&events, injected("steer-s")),
@@ -418,8 +423,8 @@ async fn fuzz(seed: u64) {
     })
     .await
     .unwrap_or_else(|_| panic!("seed {seed}: queue never drained"));
-    for (index, event) in events.iter().enumerate() {
-        assert_eq!(event.seq, index as u64 + 1, "seed {seed}: sequence gap");
+    for pair in events.windows(2) {
+        assert_eq!(pair[1].seq, pair[0].seq + 1, "seed {seed}: sequence gap");
     }
 
     let mut completed: BTreeMap<String, Vec<MessageOutcome>> = BTreeMap::new();
@@ -482,7 +487,7 @@ async fn fuzz(seed: u64) {
         events.len()
     );
 
-    // The model saw each delivered message at most once.
+    // The model saw each delivered message at most once, including recovery notices.
     let prompts: Vec<String> = harness.snapshot(&id)["messages"]
         .as_array()
         .unwrap()

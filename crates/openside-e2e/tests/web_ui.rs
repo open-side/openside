@@ -168,14 +168,14 @@ impl Ui {
         self.browser.shutdown().await.unwrap();
     }
 
-    /// RGB of the screenshot pixel at (x, y) CSS px inside the `index`th visual frame. The
-    /// frame is scrolled into view, the tab captured over DevTools, and the PNG decoded by
-    /// the page itself (no access to the sandboxed document is needed or possible).
+    /// RGB of the screenshot pixel at (x, y) CSS px inside the `index`th visual image. The
+    /// image is scrolled into view, the tab captured over DevTools, and the PNG decoded by
+    /// the page itself, so what is checked is what the person sees.
     async fn frame_pixel(&self, index: usize, x: i64, y: i64) -> Vec<i64> {
         use base64::Engine;
         let rect = self
             .eval(&format!(
-                "(() => {{ const f = document.querySelectorAll('.visuals iframe')[{index}]; f.scrollIntoView({{ block: 'center' }}); \
+                "(() => {{ const f = document.querySelectorAll('.visuals img.visual-image')[{index}]; f.scrollIntoView({{ block: 'center' }}); \
                  const r = f.getBoundingClientRect(); return [r.left, r.top, r.width, r.height] }})()"
             ))
             .await;
@@ -294,7 +294,7 @@ const APPROVE: &str =
 
 const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 40 20" preserveAspectRatio="none"><rect width="40" height="20" fill="#2f6fed"/></svg>"##;
 const HTML: &str = r##"<!doctype html><html><body style="margin:0;height:100vh;background:#d23c3c"><h1 style="margin:0;color:#fff">Quarterly summary</h1></body></html>"##;
-const CHART: &str = r##"<!doctype html><html><body style="margin:0;background:#fff">
+const CHART: &str = r##"<!doctype html><html><body style="margin:0;height:160px;background:#fff">
 <div style="position:absolute;left:20px;top:100px;width:40px;height:50px;background:#1f9d55"></div>
 <div style="position:absolute;left:80px;top:30px;width:40px;height:120px;background:#1f9d55"></div>
 </body></html>"##;
@@ -406,14 +406,19 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
             .await,
         json!([child.as_str().unwrap(), "Write the report outside the workspace asked"])
     );
-    // Live progress: the child's event stream is listed under it.
+    // The read-only sheet summarizes the child's durable progress without steer/cancel controls.
     ui.eval("document.querySelector('.subagent-list details').open = true; true")
         .await;
     ui.wait(
-        "subagent progress events",
-        "document.querySelectorAll('.subagent-list .subagent-events li').length > 0",
+        "child progress steps",
+        "document.querySelectorAll('.subagent-list .task-steps li').length > 0",
     )
     .await;
+    assert_eq!(
+        ui.eval("document.querySelectorAll('.subagent-list button, .subagent-list textarea, .subagent-list input').length")
+            .await,
+        0
+    );
     assert!(!outside.exists(), "the write must wait for approval");
     ui.eval("document.querySelector('.tray-sheet button[aria-label=\"Close\"]').click(); true")
         .await;
@@ -452,18 +457,23 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
         Some(json!({"name":"report-style"})),
         "the mention loaded the skill"
     );
-    // A-15: each visual renders in a script-free sandboxed iframe from its signed preview
-    // URL. Rendering is checked from outside the frame, on screenshot pixels: a full-bleed
-    // SVG, an HTML page and a static HTML bar chart whose bars have different heights.
+    // A-15: each visual is an inert image (no script, no frame, no loads). Rendering is
+    // checked on screenshot pixels: a full-bleed SVG, an HTML page and a static HTML bar
+    // chart whose bars have different heights.
     ui.wait(
-        "visual frames",
-        "document.querySelectorAll('.visuals iframe.sandbox-frame').length === 3",
+        "visual images",
+        "Array.from(document.querySelectorAll('.visuals img.visual-image'), (i) => i.complete && i.naturalWidth > 0).filter(Boolean).length === 3",
     )
     .await;
     assert_eq!(
-        ui.eval("Array.from(document.querySelectorAll('.visuals iframe'), (f) => f.getAttribute('sandbox'))")
+        ui.eval("Array.from(document.querySelectorAll('.visuals img.visual-image'), (i) => i.src.startsWith('data:image/svg+xml') && !decodeURIComponent(i.src).includes('<script'))")
             .await,
-        json!(["", "", ""])
+        json!([true, true, true])
+    );
+    assert_eq!(
+        ui.eval("document.querySelectorAll('.visuals iframe').length")
+            .await,
+        json!(0)
     );
     const BLUE: [i64; 3] = [0x2f, 0x6f, 0xed];
     const RED: [i64; 3] = [0xd2, 0x3c, 0x3c];
@@ -471,7 +481,7 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
     const WHITE: [i64; 3] = [0xff, 0xff, 0xff];
     for (frame, x, y, color) in [
         (0, 20, 20, BLUE),
-        (0, 300, 200, BLUE),
+        (0, 300, 120, BLUE),
         (1, 300, 300, RED),
         (2, 40, 140, GREEN),
         (2, 40, 60, WHITE),
@@ -479,7 +489,7 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
         (2, 100, 140, GREEN),
         (2, 160, 140, WHITE),
     ] {
-        // Frames load independently; a sample may precede its frame's first paint.
+        // Images load independently; a sample may precede its image's first paint.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             let got = ui.frame_pixel(frame, x, y).await;
@@ -566,6 +576,102 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
+    // The chief renders background work as a TaskUnit, not the delegated-child sheet.
+    let task_output = harness.root().join("task-outside.txt");
+    harness.replace_script(&json!({
+        "responses": [
+            tool("create_task", json!({"goal":"Write the chief report"}), "chief-task"),
+            tool("stay_silent", json!({}), "chief-wait"),
+            tool("send_message", json!({"text":"Chief report saved"}), "chief-reply"),
+        ],
+        "subagents": {
+            "chief-task": [
+                tool("write", json!({"path":task_output,"content":"from Task"}), "task-write"),
+                text("Chief report saved"),
+            ]
+        }
+    }));
+    let chief = harness
+        .request("PATCH", "/v1/agents/chief", Some(json!({"mode":"guard"})))
+        .await;
+    assert_eq!(chief.status, 200, "{}", chief.body);
+    let home = chief.body["home_session_id"].as_str().unwrap();
+    ui.goto("/agents/chief").await;
+    ui.wait(
+        "chief composer",
+        "!!document.querySelector('.composer textarea')",
+    )
+    .await;
+    ui.eval("__os.fill(document.querySelector('.composer textarea'), 'Write the chief report'); __os.button(document.querySelector('.composer'), 'Send').click(); true").await;
+    ui.wait(
+        "Task unit waiting for its approval",
+        &format!(
+            "!!document.querySelector('.task-browser[data-status=waiting_human]') && !!{APPROVE}"
+        ),
+    )
+    .await;
+    assert!(
+        !task_output.exists(),
+        "the Task write must wait for approval"
+    );
+    assert_eq!(
+        ui.eval("document.querySelectorAll('.agents-pill, .subagent-list').length")
+            .await,
+        0
+    );
+    let task_id = ui
+        .eval("document.querySelector('.task-browser').dataset.task")
+        .await;
+    assert_eq!(
+        ui.eval("document.querySelector('.task-browser .task-browser-line').textContent")
+            .await,
+        "Waiting for you"
+    );
+    ui.eval(&format!("{APPROVE}.click()")).await;
+    ui.wait(
+        "completed Task and chief reply",
+        "!!document.querySelector('.task-browser[data-status=completed]') && __os.finalText('Chief report saved')",
+    )
+    .await;
+    assert_eq!(std::fs::read_to_string(&task_output).unwrap(), "from Task");
+    let resolved = harness
+        .request("GET", "/v1/tickets?status=resolved", None)
+        .await;
+    let approvals: Vec<_> = resolved.body["tickets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|ticket| ticket["session_id"] == home && ticket["tool_call_id"] == "task-write")
+        .collect();
+    assert_eq!(
+        approvals.len(),
+        1,
+        "one approval resumes the original Task call"
+    );
+    assert_eq!(approvals[0]["resolution"]["approved"], true);
+    assert_eq!(tool_returns(&harness, home, "chief-task").await.len(), 1);
+    ui.eval("document.querySelectorAll('main.session .oc-card[data-open=true] .oc-close').forEach(b=>b.click()); true").await;
+    ui.wait(
+        "Task approval announcement delivered",
+        "Array.from(document.querySelectorAll('main.session .oc-sr')).every(e=>!e.textContent)",
+    )
+    .await;
+    let before = ui.eval(SCREEN).await;
+    ui.goto("/agents/chief").await;
+    ui.wait(
+        "chief thread rebuilt from durable events",
+        &format!(
+            "JSON.stringify({SCREEN}) === JSON.stringify({})",
+            json!(before)
+        ),
+    )
+    .await;
+    assert_eq!(
+        ui.eval("document.querySelector('.task-browser').dataset.task")
+            .await,
+        task_id
+    );
 
     ui.close().await;
     harness.kill().await;
@@ -730,7 +836,7 @@ async fn until_final(stream: &mut SseReader, final_text: &str) -> Vec<Event> {
     loop {
         let event = stream.next().await;
         let done = matches!(event.kind, EventKind::SessionSettled {})
-            && events.iter().any(|e: &Event| matches!(&e.kind, EventKind::AssistantFinal { text } if text == final_text));
+            && events.iter().any(|e: &Event| matches!(&e.kind, EventKind::AssistantFinal { text, .. } if text == final_text));
         events.push(event);
         if done {
             return events;

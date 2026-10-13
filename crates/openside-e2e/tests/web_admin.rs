@@ -190,16 +190,13 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
         browser: &browser,
         tab: tab.id.clone(),
     };
+    // The shell can render on `/` a moment before the index route redirects to the assistant.
     page.wait(
-        "app after pairing",
-        "!!document.querySelector('.session-list')",
+        "app after pairing, on the assistant's thread",
+        "!!document.querySelector('.session-list') && location.pathname + location.hash === '/agents/chief'",
     )
     .await;
     page.eval(HELPERS).await;
-    assert_eq!(
-        page.eval("location.pathname + location.hash").await,
-        "/agents/chief"
-    );
     let device = page.eval("localStorage.getItem('openside.device')").await;
     let device = device.as_str().expect("device id stored").to_owned();
     assert!(page
@@ -336,7 +333,7 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
         "local authority refusal",
         "window.__configSaves.some(s => s.status === 403 && s.code === 'local_access_required') \
          && Array.from(document.querySelectorAll('[data-section=config] [role=alert]')).some((a) => \
-         a.textContent.includes('Reopen openside from the computer it runs on'))",
+         a.textContent.includes('Reopen openside using the desktop launcher on the computer it runs on'))",
     )
     .await;
     let after = harness.request("GET", "/v1/settings/config", None).await;

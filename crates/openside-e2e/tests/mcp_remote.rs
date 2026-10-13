@@ -3,6 +3,10 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod ui_support;
+
+use ui_support::send;
+
 use std::{
     os::unix::fs::PermissionsExt,
     process::{Output, Stdio},
@@ -190,7 +194,7 @@ async fn remote_agent_and_browser(relay: bool) {
     let mut harness = Harness::prepare(
         DAEMON,
         &json!({"responses":[
-            {"parts":[{"type":"text","text":"remote scripted answer"}]}
+            send("remote scripted answer")
         ]}),
     )
     .expect("scripted Python runtime is required");
@@ -358,6 +362,7 @@ async fn remote_agent_and_browser(relay: bool) {
         "{snapshot}"
     );
 
+    harness.replace_script(&json!({"responses":[ui_support::text("remote scripted answer")]}));
     let mut mcp = computer.mcp("desk").await;
     let run = ok(
         &mcp,

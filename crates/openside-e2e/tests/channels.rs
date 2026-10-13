@@ -209,7 +209,7 @@ impl Rig {
                 ..
             } = event.kind
             {
-                if author_kind == openside_proto::MessageAuthorKind::Person {
+                if author_kind == openside_proto::MessageAuthorKind::Channel {
                     assert_eq!(from_agent, None);
                     texts.push(text);
                 }

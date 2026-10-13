@@ -933,8 +933,8 @@
         "id": "participants",
         "from": {
           "agent_id": "chief",
-          "name": "Juno",
-          "initials": "J",
+          "name": "openside",
+          "initials": "o",
           "color": null,
           "role": null
         },

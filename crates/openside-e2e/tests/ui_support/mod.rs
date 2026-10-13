@@ -18,6 +18,23 @@ pub const KOREAN_TITLE: &str = "다음 주 팀 워크숍 장소 예약과 참석
 pub fn text(value: &str) -> Value {
     json!({"parts":[{"type":"text","text":value}]})
 }
+
+/// Front scripts end through output tools; worker scripts continue to use `text`.
+pub fn send(value: &str) -> Value {
+    static NEXT_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tool(
+        "send_message",
+        json!({"text":value}),
+        &format!("send-message-{id}"),
+    )
+}
+
+pub fn silent() -> Value {
+    static NEXT_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tool("stay_silent", json!({}), &format!("stay-silent-{id}"))
+}
 pub fn tool(name: &str, args: Value, id: &str) -> Value {
     json!({"parts":[{"type":"tool_call","name":name,"args":args,"id":id}]})
 }
@@ -190,7 +207,7 @@ impl Fixture {
         let executable = openside_config::discover_browser(&openside_config::Config::default())
             .expect("visual acceptance requires Chromium");
         let reply = format!("The page lives at {LONG_TITLE}\n\n`{}`\n\n```text\n{}\n```\n\n| URL | Result |\n| --- | --- |\n| {LONG_TITLE} | Ready |", "x".repeat(160), "y".repeat(400));
-        let script = json!({"responses":[tool("task_start", json!({"goal":format!("Compare {LONG_TITLE}")}), "visual-task"), text(&reply), text("The comparison is ready.")],
+        let script = json!({"responses":[tool("create_task", json!({"goal":format!("Compare {LONG_TITLE}")}), "visual-task"), send(&reply), send("The comparison is ready.")],
             "subagents":{"visual-task":[text(&format!("Task report: {LONG_TITLE}"))]}});
         let mut harness = Harness::prepare(env!("CARGO_BIN_EXE_e2e-opensided"), &script)
             .expect("uv sync --project agent is required");
@@ -348,7 +365,7 @@ pub async fn direct(harness: &Harness, session: &str, name: &str, args: Value) -
 }
 
 pub async fn thinking_session(harness: &Harness) -> String {
-    harness.replace_script(&json!({"responses":[{"parts":[{"type":"wait_steer","timeout_ms":1500},{"type":"text","text":"The answer is ready."}]}]}));
+    harness.replace_script(&json!({"responses":[{"parts":[{"type":"wait_steer","timeout_ms":1500},send("The answer is ready.")["parts"][0]]}]}));
     create(harness, "Transient status acceptance").await
 }
 

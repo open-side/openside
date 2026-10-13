@@ -155,7 +155,7 @@ async fn every_created_data_config_runtime_and_cache_path_is_documented() {
         })
         .unwrap();
     script["responses"].as_array_mut().unwrap().extend([
-        json!({"parts":[{"type":"tool_call","name":"browser_screenshot","args":{"tab_id":tab},"id":"capture"}]}), done,
+        json!({"parts":[{"type":"tool_call","name":"browser_screenshot","args":{"tab_id":tab,"output":true},"id":"capture"}]}), done,
     ]);
     h.replace_script(&script);
     h.kill_sidecar();

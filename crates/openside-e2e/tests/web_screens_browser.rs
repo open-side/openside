@@ -495,7 +495,7 @@ async fn until_final(stream: &mut SseReader, final_text: &str) -> Vec<Event> {
     loop {
         let event = stream.next().await;
         let done = matches!(event.kind, EventKind::SessionSettled {})
-            && events.iter().any(|e: &Event| matches!(&e.kind, EventKind::AssistantFinal { text } if text == final_text));
+            && events.iter().any(|e: &Event| matches!(&e.kind, EventKind::AssistantFinal { text, .. } if text == final_text));
         events.push(event);
         if done {
             return events;
@@ -841,8 +841,8 @@ async fn web_screens_browser_capture() {
                 ui.snap(&file("card-running")).await;
             }
             if wanted("card-cancel") {
-                ui.click(".browser-card", "Cancel task").await;
-                ui.wait("cancel dialog", "Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === 'Cancel this task?')").await;
+                ui.click(".browser-card", "Stop").await;
+                ui.wait("stop dialog", "Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === 'Stop everything?')").await;
                 ui.snap(&file("card-cancel")).await;
                 ui.click(".stop-task-dialog", "Keep running").await;
                 ui.wait(

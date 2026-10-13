@@ -2,14 +2,18 @@
 //! task runs. Five experiments on the scripted model and real Chromium, each printing one
 //! `RESPONSIVE {json}` line with client-observed milliseconds.
 //!
-//!   flock --close /tmp/openside-heavy.lock nice -n 10 cargo test -j 4 -p openside-e2e --test responsive \
-//!     -- --ignored --nocapture --test-threads=2
+//!   /tmp/openside-heavy-run cargo test -j 2 -p openside-e2e --test responsive \
+//!     -- --ignored --nocapture --test-threads=1
 //!
 //! `OPENSIDE_RESPONSIVE_MODE=single` scripts the single agent (long tools run in the
 //! conversation itself); the default scripts the front agent with background tasks.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod ui_support;
+
+use ui_support::send;
 
 use std::{
     sync::Arc,
@@ -152,10 +156,17 @@ fn delta(kind: &EventKind) -> bool {
     )
 }
 fn final_with(expected: &'static str) -> impl Fn(&EventKind) -> bool {
-    move |kind| matches!(kind, EventKind::AssistantFinal { text } if text.contains(expected))
+    move |kind| matches!(kind, EventKind::AssistantFinal { text, .. } if text.contains(expected))
 }
 fn tool_started(name: &'static str) -> impl Fn(&EventKind) -> bool {
-    move |kind| matches!(kind, EventKind::ToolStarted { name: n, .. } if n == name)
+    move |kind| {
+        matches!(kind, EventKind::ToolStarted { name: n, .. } if n == name)
+            || matches!(kind, EventKind::SubagentProgress { progress, .. } if progress["kind"] == "tool.started" && progress["name"] == name)
+    }
+}
+fn tool_ended(kind: &EventKind, call: &str) -> bool {
+    matches!(kind, EventKind::ToolEnded { tool_call_id, .. } if tool_call_id == call)
+        || matches!(kind, EventKind::SubagentProgress { progress, .. } if progress["kind"] == "tool.ended" && progress["tool_call_id"] == call)
 }
 fn settled(kind: &EventKind) -> bool {
     matches!(kind, EventKind::SessionSettled {})
@@ -246,19 +257,19 @@ fn report(name: &str, value: Value) {
 }
 
 /// Two rounds of "open the page". Front mode: the session script is the front agent's
-/// turns; each task runs the `subagents[<task_start call>]` turns.
+/// turns; each task runs the `subagents[<create_task call>]` turns.
 fn script_cold(url: &str) -> Value {
     let open = |call: &str| tool("browser_open_tab", json!({"url":url}), call);
     if single() {
         json!({"responses":[open("open-1"), text("opened"), open("open-2"), text("opened")]})
     } else {
         json!({"responses":[
-            tool("task_start", json!({"goal":"open the page"}), "task-1"),
-            text("Started."),
-            text("Opened the page."),
-            tool("task_start", json!({"goal":"open the page"}), "task-2"),
-            text("Started."),
-            text("Opened the page."),
+            tool("create_task", json!({"goal":"open the page"}), "task-1"),
+            send("Started."),
+            send("Opened the page."),
+            tool("create_task", json!({"goal":"open the page"}), "task-2"),
+            send("Started."),
+            send("Opened the page."),
         ], "subagents": {
             "task-1": [open("open-1"), text("opened")],
             "task-2": [open("open-2"), text("opened")],
@@ -301,7 +312,8 @@ async fn cold_and_warm_first_browser_action() {
         let call = format!("open-{round}");
         let open_ended = {
             let call = call.clone();
-            log.wait(sent, Duration::from_secs(60), move |k| matches!(k, EventKind::ToolEnded { tool_call_id, .. } if *tool_call_id == call)).await
+            log.wait(sent, Duration::from_secs(60), move |k| tool_ended(k, &call))
+                .await
         };
         log.wait(sent, Duration::from_secs(60), settled).await;
         rows.push(json!({
@@ -332,24 +344,24 @@ fn prewarm() -> bool {
 }
 
 /// Front mode: the front agent starts one Task; `steer` routes the person's correction to it.
-/// Both agents `echo`, so the final text proves which instruction reached the Task.
+/// The worker echoes its instruction and the front sends the report text it actually receives.
 fn script_long(final_text: &str, steer: bool) -> Value {
     if single() {
         json!({"responses":[sleep_call("long-1"), text(final_text), text("quick answer: 4"), text("[unused]")]})
     } else if steer {
         json!({"responses":[
-            tool("task_start", json!({"goal":"wait then answer"}), "task-1"),
-            text("Started the long task."),
-            tool("task_steer", json!({"task_id":"{{result:task-1.task_id}}","message":"change the final answer to BETA"}), "steer-1"),
-            text("Steered the task."),
-            {"parts":[{"type":"echo"}]},
+            tool("create_task", json!({"goal":"wait then answer"}), "task-1"),
+            send("Started the long task."),
+            tool("steer_task", json!({"task_id":"{{result:task-1.task_id}}","message":"change the final answer to BETA"}), "steer-1"),
+            send("Steered the task."),
+            send("{{user_text}}"),
         ], "subagents": {"task-1": [sleep_call("long-1"), {"parts":[{"type":"echo"}]}]}})
     } else {
         json!({"responses":[
-            tool("task_start", json!({"goal":"wait then answer"}), "task-1"),
-            text("Started the long task."),
-            text("quick answer: 4"),
-            {"parts":[{"type":"echo"}]},
+            tool("create_task", json!({"goal":"wait then answer"}), "task-1"),
+            send("Started the long task."),
+            send("quick answer: 4"),
+            send("{{user_text}}"),
         ], "subagents": {"task-1": [sleep_call("long-1"), text(final_text)]}})
     }
 }
@@ -414,7 +426,7 @@ async fn e2_quick_question_while_a_long_task_runs() {
         .await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     let asked = say(&harness, &id, "q1", "what is 2+2?", "queue").await;
-    let reply = log.wait(asked, Duration::from_secs(60), |k| matches!(k, EventKind::AssistantDelta { text } if text.contains("quick") || text.contains("task")) ).await;
+    let reply = log.wait(asked, Duration::from_secs(60), |k| matches!(k, EventKind::AssistantDelta { text } | EventKind::AssistantFinal { text, .. } if text.contains("quick") || text.contains("task")) ).await;
     log.wait(sent, Duration::from_secs(90), settled).await;
     report(
         "e2_quick_question",
@@ -422,7 +434,7 @@ async fn e2_quick_question_while_a_long_task_runs() {
             "question_queued": log.first(asked, |k| matches!(k, EventKind::MessageQueued { message_id, .. } if message_id.as_str() == "q1")),
             "question_injected": log.first(asked, |k| matches!(k, EventKind::MessageInjected { message_id } if message_id.as_str() == "q1")),
             "question_first_reply_delta": reply,
-            "task_completion": log.first(sent, |k| matches!(k, EventKind::ToolEnded { tool_call_id, .. } if tool_call_id == "long-1")),
+            "task_completion": log.first(sent, |k| tool_ended(k, "long-1")),
             "settled": log.first(sent, settled),
         }),
     );
@@ -467,7 +479,7 @@ async fn e3_cancel_only_the_task() {
             matches!(
                 k,
                 EventKind::SessionStopped {} | EventKind::SubagentEnded { .. }
-            ) || matches!(k, EventKind::ToolEnded { tool_call_id, .. } if tool_call_id == "long-1")
+            ) || tool_ended(k, "long-1")
         })
         .await;
     // Can the conversation continue right away?
@@ -535,12 +547,12 @@ fn script_two() -> Value {
         json!({"responses":[sleep_call("long-1"), sleep_call("long-2"), text("both done"), text("[unused]")]})
     } else {
         json!({"responses":[
-            tool("task_start", json!({"goal":"first"}), "task-1"),
-            text("Started the first task."),
-            tool("task_start", json!({"goal":"second"}), "task-2"),
-            text("Started the second task."),
-            text("First finished."),
-            text("Second finished."),
+            tool("create_task", json!({"goal":"first"}), "task-1"),
+            send("Started the first task."),
+            tool("create_task", json!({"goal":"second"}), "task-2"),
+            send("Started the second task."),
+            send("First finished."),
+            send("Second finished."),
         ], "subagents": {
             "task-1": [sleep_call("long-1"), text("first done")],
             "task-2": [sleep_call("long-2"), text("second done")],
@@ -562,19 +574,14 @@ async fn e5_two_parallel_tasks() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let second = say(&harness, &id, "m2", "second long task", "queue").await;
     log.wait(sent, Duration::from_secs(120), settled).await;
-    let ended = |call: &'static str| {
-        log.first(
-            sent,
-            move |k| matches!(k, EventKind::ToolEnded { tool_call_id, .. } if tool_call_id == call),
-        )
-    };
+    let ended = |call: &'static str| log.first(sent, move |k| tool_ended(k, call));
     report(
         "e5_parallel",
         json!({
             "second_sent_at": second.duration_since(sent).as_millis(),
             "second_first_reply": log.first(second, delta),
             "first_task_tool_ended": ended("long-1"),
-            "second_task_tool_started": log.first(second, |k| matches!(k, EventKind::ToolStarted { tool_call_id, .. } if tool_call_id == "long-2")),
+            "second_task_tool_started": log.first(second, |k| matches!(k, EventKind::ToolStarted { tool_call_id, .. } if tool_call_id == "long-2") || matches!(k, EventKind::SubagentProgress { progress, .. } if progress["kind"] == "tool.started" && progress["tool_call_id"] == "long-2")),
             "second_task_tool_ended": ended("long-2"),
             "settled": log.first(sent, settled),
         }),

@@ -80,7 +80,7 @@ async fn displayless_task_drives_headless_chromium_to_a_settled_answer() {
     let answer = events
         .iter()
         .find_map(|event| match &event.kind {
-            EventKind::AssistantFinal { text } => Some(text.clone()),
+            EventKind::AssistantFinal { text, .. } => Some(text.clone()),
             _ => None,
         })
         .unwrap_or_else(|| panic!("no final answer: {events:?}"));

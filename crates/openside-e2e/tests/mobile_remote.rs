@@ -5,6 +5,10 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod ui_support;
+
+use ui_support::{send, silent};
+
 use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -240,6 +244,7 @@ impl Transport {
 struct Remote {
     transport: Transport,
     origin: String,
+    blue_preview: String,
 }
 
 async fn open_public_shell(browser: &Browser, tab: &str, origin: &str) {
@@ -291,6 +296,16 @@ async fn desktop_offer(desktop: &mut Cdp, transport: Transport, name: &str, out:
         )
         .await;
     desktop.eval("Array.from(document.querySelectorAll('.remote-result button')).find(b => b.textContent.trim() === 'Connect another phone')?.click(); true").await;
+    // The code is issued on arrival with the default name; the name and permissions sit behind a toggle.
+    desktop
+        .wait(
+            "first desktop pairing QR",
+            "!!document.querySelector('.remote-qr svg.qr-code')",
+        )
+        .await;
+    desktop
+        .eval("document.querySelector('.pair-options-toggle').click(); true")
+        .await;
     desktop
         .wait(
             "phone pairing form",
@@ -305,10 +320,14 @@ async fn desktop_offer(desktop: &mut Cdp, transport: Transport, name: &str, out:
     desktop
         .eval("document.querySelector('.remote-form button[type=submit]').click(); true")
         .await;
+    // The code made with the default name is replaced by one for this phone.
     desktop
         .wait(
-            "desktop pairing QR",
-            "!!document.querySelector('.remote-qr svg.qr-code')",
+            "desktop pairing QR for this phone",
+            &format!(
+                "document.querySelector('.remote-qr svg.qr-code')?.getAttribute('aria-label') === {}",
+                json!(format!("QR code to connect {name}"))
+            ),
         )
         .await;
     desktop.eval("document.querySelector('.remote-qr').scrollIntoView({block:'center',behavior:'instant'}); true").await;
@@ -371,7 +390,7 @@ async fn phone(
         browser.navigate(OWNER, &tab, &link).await.unwrap();
         page.wait("paired mobile PWA", "!!document.querySelector('.shell') && location.hash === ''").await;
         page.eval(PROBE).await;
-        desktop.wait("desktop notices the paired phone", &format!("document.querySelector('.remote-result-title')?.textContent.includes({}) === true", json!(format!("{profile} is connected")))).await;
+        desktop.wait("desktop notices the paired phone", &format!("document.querySelector('.remote-result-title')?.textContent.includes({}) === true", json!(format!("Connected as {profile}")))).await;
         desktop.capture(&out.join(format!("desktop-{profile}-connected.png"))).await;
         assert_eq!(page.eval("[innerWidth,innerHeight,devicePixelRatio,navigator.maxTouchPoints]").await, json!([390,844,3,5]));
         assert_eq!(page.eval("navigator.userAgent").await, ua);
@@ -426,17 +445,18 @@ async fn phone(
         let loads = page.eval("performance.timeOrigin").await;
         page.wait("approval streamed to phone", &format!("!!({APPROVE})")).await;
         page.wait("delegated task attribution", &format!("Array.from(document.querySelectorAll('.oc-asker')).some(e=>e.textContent.includes({}))", json!(format!("Prepare {profile} phone preview asked")))).await;
+        let pending = harness.request("GET", "/v1/tickets?status=pending", None).await;
+        let ticket = pending.body["tickets"].as_array().unwrap().iter().find(|ticket| ticket["session_id"] == session).unwrap();
+        let task = ticket["origin"]["subagent_id"].as_str().expect("delegated approval task").to_owned();
+        let ticket = ticket["id"].as_str().unwrap().to_owned();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let state = harness.request("GET", &format!("/v1/sessions/{session}"), None).await;
-                assert_eq!(state.status, 200, "{}", state.body);
-                assert_eq!(state.body["agent_id"], "chief");
-                if state.body["status"] == "waiting_human" { break; }
+                let tasks = harness.request("GET", &format!("/v1/sessions/{session}/subagents"), None).await;
+                assert_eq!(tasks.status, 200, "{}", tasks.body);
+                if tasks.body["subagents"].as_array().unwrap().iter().any(|child| child["id"] == task && child["status"] == "waiting_human") { break; }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-        }).await.expect("daemon waits for the phone's approval");
-        let pending = harness.request("GET", "/v1/tickets?status=pending", None).await;
-        let ticket = pending.body["tickets"].as_array().unwrap().iter().find(|ticket| ticket["session_id"] == session).unwrap()["id"].as_str().unwrap().to_owned();
+        }).await.expect("delegated task waits for the phone's approval");
         let local_denied = harness.request("POST", &format!("/v1/tickets/{ticket}/resolve"), Some(json!({"value":true}))).await;
         assert_eq!(local_denied.status, 403);
         assert_eq!(local_denied.body["code"], "person_approval_required");
@@ -480,7 +500,8 @@ async fn phone(
         page.wait("settled ticket notification dismissed", "navigator.serviceWorker.ready.then(r => r.getNotifications()).then(all => !all.some(n => n.data?.kind === 'ticket'))").await;
         let store = openside_sessions::Store::open(harness.data_dir.join("events.db")).unwrap();
         let snapshot = store.events_after(&openside_proto::SessionId::new(&session), 0, usize::MAX).unwrap();
-        assert!(snapshot.iter().any(|event| matches!(event.kind, EventKind::AssistantDelta {..})), "real incremental assistant events required");
+        assert!(snapshot.iter().any(|event| matches!(event.kind, EventKind::AssistantFinal {..})), "complete assistant messages required");
+        assert!(!snapshot.iter().any(|event| matches!(event.kind, EventKind::AssistantDelta {..})), "chief must not stream message fragments");
         assert!(snapshot.iter().any(|event| matches!(&event.kind, EventKind::MessageQueued { text, .. } if text == &message)), "the phone's relay message must reach the chief home session");
         let poll_requests = page.events.iter().filter(|event| event["method"] == "Network.requestWillBeSent")
             .filter_map(|event| event["params"]["request"]["url"].as_str())
@@ -492,6 +513,13 @@ async fn phone(
         let mut observations = page.eval("({streaming_mutations:window.__mobile.streaming.length,badge_calls:window.__mobile.badges,emulation:[innerWidth,innerHeight,devicePixelRatio,navigator.maxTouchPoints]})").await;
         observations["event_poll_requests"] = json!(poll_requests);
         std::fs::write(out.join(format!("{profile}-observations.json")), serde_json::to_vec_pretty(&observations).unwrap()).unwrap();
+        // Closing the completed Task's tab and reporting its result wake the chief separately.
+        let expected_cursor = if profile == "iphone" { 4 } else { 9 };
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while harness.snapshot(&session)["script_cursor"] != expected_cursor {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }).await.expect("task report consumed before the next phone message");
         page.eval(&format!("(() => {{const data = new DataTransfer(); data.items.add(new File([Uint8Array.from(atob({}), c=>c.charCodeAt(0))], 'phone-photo.png', {{type:'image/png'}})); const input=document.querySelector('.composer input[type=file]'); input.files=data.files; input.dispatchEvent(new Event('change',{{bubbles:true}})); return true;}})()", json!(IMAGE))).await;
         page.wait("image attachment selected", "!!document.querySelector('.composer .attachment-chip img')").await;
         page.fill(".composer textarea", "Read the attached phone photo and change the preview to blue.").await;
@@ -499,6 +527,12 @@ async fn phone(
         page.click("document.querySelector('.composer button[type=submit]')").await;
         let digest: String = ring::digest::digest(&ring::digest::SHA256, &base64::engine::general_purpose::STANDARD.decode(IMAGE).unwrap()).as_ref().iter().map(|byte| format!("{byte:02x}")).collect();
         page.wait("photo reaches scripted model", &format!("document.body.innerText.includes({}) && document.querySelector('main.session')?.dataset.status === 'idle'", json!(format!("media image/png:{digest}")))).await;
+        // A person-owned preview survives Task completion; terminal Tasks intentionally close their tabs.
+        let preview = harness.request(
+            "POST", &format!("/v1/sessions/{session}/tools/browser_open_tab"),
+            Some(json!({"args":{"url":remote.blue_preview}})),
+        ).await;
+        assert_eq!(preview.status, 200, "{}", preview.body);
         page.wait("blue browser preview pixels", "(() => { const i=document.querySelector('.browser-card img'); if(!i?.naturalWidth)return false; const c=document.createElement('canvas'); c.width=i.naturalWidth;c.height=i.naturalHeight; const x=c.getContext('2d');x.drawImage(i,0,0);const p=x.getImageData(300,200,1,1).data;return p[2]>180 && p[0]<30;})()").await;
         page.capture(&out.join(format!("{profile}-completed.png"))).await;
         page.call("Emulation.setEmulatedMedia", json!({"features":[{"name":"prefers-color-scheme","value":"dark"},{"name":"prefers-reduced-motion","value":"reduce"}]})).await;
@@ -552,21 +586,16 @@ async fn journey(transport: Transport) {
     let mut subagents = serde_json::Map::new();
     for profile in ["iphone", "android"] {
         responses.extend([
-            json!({"parts":[{"type":"tool_call","name":"task_start","id":format!("{profile}-preview"),"args":{"goal":format!("Prepare {profile} phone preview")}}]}),
-            json!({"parts":[{"type":"text","text":format!("Phone {profile} preview task started.")}]}),
-            json!({"parts":[{"type":"text","text":format!("Phone {profile} approval resumed the same task.")}]}),
-            json!({"parts":[{"type":"tool_call","name":"task_start","id":format!("{profile}-update"),"args":{"goal":format!("Update {profile} phone preview")}}]}),
-            json!({"parts":[{"type":"media_digest"}]}),
-            json!({"parts":[{"type":"echo"}]}),
+            json!({"parts":[{"type":"tool_call","name":"create_task","id":format!("{profile}-preview"),"args":{"goal":format!("Prepare {profile} phone preview")}}]}),
+            send(&format!("Phone {profile} preview task started.")),
+            send(&format!("Phone {profile} approval resumed the same task.")),
+            silent(),
+            send("{{media_digest}}"),
         ]);
         subagents.insert(format!("{profile}-preview"), json!([
             {"parts":[{"type":"tool_call","name":"browser_open_tab","id":format!("{profile}-open"),"args":{"url":format!("{site_origin}/red")}}]},
             {"parts":[{"type":"tool_call","name":"request_human_step","id":format!("{profile}-confirm"),"args":{"kind":"confirm","summary":"Approve this remote phone task"}}]},
             {"parts":[{"type":"text","text":"The person approved the phone preview."}]}
-        ]));
-        subagents.insert(format!("{profile}-update"), json!([
-            {"parts":[{"type":"tool_call","name":"browser_open_tab","id":format!("{profile}-blue"),"args":{"url":format!("{site_origin}/blue")}}]},
-            {"parts":[{"type":"text","text":format!("Phone {profile} blue preview is ready.")}]}
         ]));
     }
     let script = json!({"delay_ms":400,"responses":responses,"subagents":subagents});
@@ -602,6 +631,14 @@ async fn journey(transport: Transport) {
             .unwrap();
         })))
     } else {
+        // A pre-existing named tunnel must not hijack the disposable Quick Tunnel's ingress.
+        let cloudflared = harness.root().join("home/.cloudflared");
+        std::fs::create_dir_all(&cloudflared).unwrap();
+        std::fs::write(
+            cloudflared.join("config.yml"),
+            "ingress:\n  - service: http_status:404\n",
+        )
+        .unwrap();
         harness.append_config(
             "[remote]\nmode = \"cloudflare\"\n[remote.cloudflare]\ntunnel = \"quick\"\n",
         );
@@ -652,7 +689,7 @@ async fn journey(transport: Transport) {
             )
             .await
             .unwrap();
-        let remote = Remote { transport, origin };
+        let remote = Remote { transport, origin, blue_preview: format!("{site_origin}/blue") };
         for profile in ["iphone", "android"] {
             phone(
                 &harness,

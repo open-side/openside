@@ -280,7 +280,7 @@ async fn mcp_client_lists_tools_sends_a_message_and_reads_the_reply() {
         .await;
     assert_eq!(sent["status"], "settled", "{sent}");
     assert_eq!(sent["replies"], json!(["hello from the real sidecar"]));
-    assert!(sent["message"]["status"].as_str().is_some());
+    assert_eq!(sent["message"]["status"], json!({"queued":"queue"}));
     assert_eq!(sent["message"]["author_kind"], "agent_client");
     assert!(sent["message"]["from_agent"].is_null());
 

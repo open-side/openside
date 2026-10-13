@@ -3,6 +3,10 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod ui_support;
+
+use ui_support::{send, silent};
+
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -27,7 +31,7 @@ fn tool(name: &str, args: Value, call: &str) -> Value {
     json!({"parts":[{"type":"tool_call","name":name,"args":args,"id":call}]})
 }
 fn start(call: &str, goal: &str) -> Value {
-    tool("task_start", json!({"goal":goal}), call)
+    tool("create_task", json!({"goal":goal}), call)
 }
 fn blocked(call: &str, marker: &str) -> Value {
     tool(
@@ -84,10 +88,12 @@ async fn until(stream: &mut SseReader, want: impl Fn(&EventKind) -> bool) -> Vec
     }
 }
 fn final_is(kind: &EventKind, expected: &str) -> bool {
-    matches!(kind, EventKind::AssistantFinal { text } if text == expected)
+    matches!(kind, EventKind::AssistantFinal { text, .. } if text == expected)
 }
 fn tool_started(kind: &EventKind, call: &str) -> bool {
     matches!(kind, EventKind::ToolStarted { tool_call_id, .. } if tool_call_id == call)
+        || matches!(kind, EventKind::SubagentProgress { progress, .. }
+            if progress["kind"] == "tool.started" && progress["tool_call_id"] == call)
 }
 fn task_id(events: &[Event], call: &str) -> String {
     events
@@ -119,8 +125,290 @@ fn durable_events(harness: &Harness, session: &str) -> Vec<Event> {
 }
 
 #[tokio::test]
+async fn owner_priority_keeps_task_report_behind_owner_without_effect_replay() {
+    let script = json!({
+        "responses": [
+            start("priority-task", "perform one effect"),
+            {"parts":[{"type":"wait_steer","timeout_ms":10000},send("generation finished")["parts"][0]]},
+            send("{{user_text}}"),
+            send("{{user_text}}")
+        ],
+        "subagents": {
+            "priority-task": [
+                tool("bash", json!({"command":"printf x >> priority-effect"}), "one-effect"),
+                text("effect complete")
+            ]
+        }
+    });
+    let mut harness = harness(&script, false).await;
+    let session = create(&harness).await;
+    let mut stream = harness.events(&session, 0).await;
+    say(&harness, &session, "initial-owner").await;
+    let mut seen = until(&mut stream, |kind| {
+        matches!(
+            kind,
+            EventKind::MessageQueued {
+                author_kind: openside_proto::MessageAuthorKind::Internal,
+                ..
+            }
+        )
+    })
+    .await;
+    let report = seen
+        .iter()
+        .find_map(|event| match &event.kind {
+            EventKind::MessageQueued {
+                message_id,
+                author_kind: openside_proto::MessageAuthorKind::Internal,
+                ..
+            } => Some(message_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(!seen.iter().any(|event| matches!(&event.kind,
+        EventKind::MessageInjected { message_id } if message_id == &report)));
+    say(&harness, &session, "updated-owner").await;
+    seen.extend(
+        until(&mut stream, |kind| {
+            matches!(kind,
+                EventKind::MessageCompleted { message_id, .. } if message_id == &report
+            )
+        })
+        .await,
+    );
+    let owner = seen
+        .iter()
+        .position(|event| {
+            matches!(&event.kind,
+        EventKind::MessageInjected { message_id } if message_id.as_str() == "updated-owner")
+        })
+        .unwrap();
+    let report_read = seen
+        .iter()
+        .position(|event| {
+            matches!(&event.kind,
+        EventKind::MessageInjected { message_id } if message_id == &report)
+        })
+        .unwrap();
+    assert!(owner < report_read);
+    assert_eq!(
+        std::fs::read_to_string(harness.workspace().join("priority-effect")).unwrap(),
+        "x"
+    );
+    assert_eq!(
+        seen.iter()
+            .filter(|event| tool_started(&event.kind, "one-effect"))
+            .count(),
+        1
+    );
+    harness.kill().await;
+}
+
+#[tokio::test]
+async fn idle_task_report_burst_settles_each_message_in_one_batch() {
+    let script = json!({
+        "responses": [
+            {"parts":[
+                start("batch-a", "first")["parts"][0],
+                start("batch-b", "second")["parts"][0],
+                start("batch-c", "third")["parts"][0]
+            ]},
+            {"parts":[{"type":"wait_steer","timeout_ms":10000},silent()["parts"][0]]},
+            send("owner update read"),
+            send("all reports read")
+        ],
+        "subagents": {
+            "batch-a":[text("first done")],
+            "batch-b":[text("second done")],
+            "batch-c":[text("third done")]
+        }
+    });
+    let mut harness = harness(&script, false).await;
+    let session = create(&harness).await;
+    let mut stream = harness.events(&session, 0).await;
+    say(&harness, &session, "batch-owner").await;
+    let mut seen = Vec::new();
+    while seen.iter().filter(|event: &&Event| matches!(&event.kind,
+        EventKind::MessageQueued { message_id, .. } if message_id.as_str().starts_with("task-report-"))).count() < 3
+    {
+        seen.push(stream.next().await);
+    }
+    say(&harness, &session, "batch-owner-update").await;
+    while seen.iter().filter(|event: &&Event| matches!(&event.kind,
+        EventKind::MessageCompleted { message_id, .. } if message_id.as_str().starts_with("task-report-"))).count() < 3
+    {
+        seen.push(stream.next().await);
+    }
+    let reports: Vec<_> = seen
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::MessageCompleted {
+                message_id,
+                outcome,
+                ..
+            } if message_id.as_str().starts_with("task-report-") => {
+                assert_eq!(*outcome, openside_proto::MessageOutcome::Completed);
+                Some(message_id)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports.len(), 3);
+    let first_report = seen.iter().position(|event| matches!(&event.kind,
+        EventKind::MessageInjected { message_id } if message_id.as_str().starts_with("task-report-"))).unwrap();
+    assert_eq!(
+        seen[first_report..]
+            .iter()
+            .filter(|event| matches!(&event.kind, EventKind::TurnStarted { .. }))
+            .count(),
+        1
+    );
+    harness.kill().await;
+}
+
+#[tokio::test]
+async fn configured_fast_front_starts_tasks_on_reasoning_model() {
+    for fast in [Some("openai:gpt-6-luna"), None] {
+        let script = json!({"responses":[start("role-task", "reason about this"), send("Started"), send("{{user_text}}")],
+            "subagents":{"role-task":[text("Reasoned")]}});
+        let mut harness = Harness::prepare(BIN, &script).expect("scripted Python environment");
+        let config = harness.root().join("config/openside/config.toml");
+        let original = std::fs::read_to_string(&config).unwrap();
+        let mut configured = original.replace("orchestration = \"single\"\n", "");
+        if let Some(fast) = fast {
+            configured = configured.replace("[models]", &format!("[models]\nfront = {fast:?}"));
+        }
+        std::fs::write(config, configured).unwrap();
+        harness.launch().await;
+        let session = create(&harness).await;
+        let mut stream = harness.events(&session, 0).await;
+        say(&harness, &session, "start-role").await;
+        let seen = until(&mut stream, |kind| {
+            matches!(
+                kind,
+                EventKind::SubagentEnded {
+                    status: SubagentStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .await;
+        assert!(seen.iter().any(|event| matches!(&event.kind,
+            EventKind::SubagentStarted { parent_tool_call_id, model, background: true, .. }
+            if parent_tool_call_id == "role-task" && model == "script")));
+        harness.kill().await;
+    }
+}
+
+#[tokio::test]
+async fn chief_selects_an_available_connected_task_model() {
+    let selected = "anthropic:claude-haiku-5-5";
+    let script = json!({"responses":[
+        tool("get_models", json!({}), "connected-models"),
+        tool("create_task", json!({"goal":"quick lookup","model":selected}), "selected-task"),
+        send("Task admitted"), send("{{user_text}}")
+    ], "subagents":{"selected-task":[text("Selected model completed the work")]}});
+    let mut harness = Harness::prepare(BIN, &script).expect("scripted Python environment");
+    let config = harness.root().join("config/openside/config.toml");
+    let original = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(config, original.replace("orchestration = \"single\"\n", "")).unwrap();
+    harness.append_config("[credentials.order]\nanthropic = [\"command\"]\n[credentials.command]\nanthropic = [\"printf\", \"offline-test-key\"]\n");
+    harness.launch().await;
+    let session = create(&harness).await;
+    let mut stream = harness.events(&session, 0).await;
+    say(&harness, &session, "select-model").await;
+    until(&mut stream, |kind| {
+        matches!(
+            kind,
+            EventKind::SubagentEnded {
+                status: SubagentStatus::Completed,
+                ..
+            }
+        )
+    })
+    .await;
+    let events = durable_events(&harness, &session);
+    assert!(events.iter().any(|event| matches!(&event.kind,
+        EventKind::SubagentStarted { parent_tool_call_id, model, .. }
+        if parent_tool_call_id == "selected-task" && model == selected)));
+    assert!(events.iter().any(|event| matches!(&event.kind,
+        EventKind::SubagentEnded { output: Some(output), status: SubagentStatus::Completed, .. }
+        if output == "Selected model completed the work")));
+    harness.kill().await;
+}
+
+#[tokio::test]
+async fn front_sends_complete_result_and_task_steps_stay_in_task_history() {
+    let site = site().await;
+    let card = json!({"card":{"id":"","kind":"table","site":{"origin":site.origin,"name":"Local page","favicon_ref":null},"title":"Result","status":"done","blocks":[{"type":"table","id":"table","columns":[{"id":"name","label":"Name"}],"rows":[[{"type":"text","text":"Signed in"}]],"layout":"grid"}],"actions":[],"interaction":"none","collapsed_summary":"One result"},"images":[]});
+    let script = json!({"responses":[
+        start("browse-task", "Read the local page"),
+        tool("stay_silent", json!({}), "wait-browse"),
+        tool("send_message", json!({"text":"The local page says Signed in."}), "say-result")
+    ], "subagents":{"browse-task":[
+        tool("browser_open_tab", json!({"url":format!("{}/login", site.origin)}), "open-local"),
+        tool("browser_snapshot", json!({"tab_id":"{{result:open-local.tab_id}}"}), "read-local"),
+        tool("present", card, "show-result"),
+        text("The local page says Signed in.")
+    ]}});
+    let mut harness = harness(&script, true).await;
+    let id = create(&harness).await;
+    let mut stream = harness.events(&id, 0).await;
+    say(&harness, &id, "read-local-page").await;
+    let seen = until(&mut stream, |kind| {
+        matches!(kind, EventKind::SessionSettled {})
+    })
+    .await;
+    assert_eq!(
+        seen.iter()
+            .filter(|event| final_is(&event.kind, "The local page says Signed in."))
+            .count(),
+        1
+    );
+    let completed = seen
+        .iter()
+        .find(|event| {
+            matches!(
+                &event.kind,
+                EventKind::SubagentEnded {
+                    status: SubagentStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let delivered = seen
+        .iter()
+        .find(|event| final_is(&event.kind, "The local page says Signed in."))
+        .unwrap();
+    assert!(
+        completed.seq < delivered.seq,
+        "the result message must follow the Task report"
+    );
+    assert!(!seen.iter().any(|event| matches!(
+        &event.kind,
+        EventKind::AssistantDelta { .. } | EventKind::ThinkingDelta { .. }
+    )));
+    for call in ["open-local", "read-local", "show-result"] {
+        assert!(seen.iter().any(|event| matches!(&event.kind,
+            EventKind::SubagentProgress { progress, .. }
+            if progress["kind"] == "tool.ended" && progress["tool_call_id"] == call)));
+        assert!(!seen.iter().any(|event| matches!(&event.kind,
+            EventKind::ToolStarted { tool_call_id, .. } | EventKind::ToolEnded { tool_call_id, .. }
+            if tool_call_id == call)));
+    }
+    assert!(seen.iter().any(|event| matches!(&event.kind,
+        EventKind::SubagentProgress { progress, .. }
+        if progress["kind"] == "tool.ended" && progress["tool_call_id"] == "open-local"
+            && progress["status_text"] == "Opened 127.0.0.1")));
+    assert!(seen.iter().any(|event| matches!(&event.kind,
+        EventKind::CardPresented { card, .. } if card.title == "Result")));
+    harness.kill().await;
+}
+
+#[tokio::test]
 async fn front_replies_before_task_ends_and_status_arrives_within_300ms() {
-    let script = json!({"responses":[start("task-1", "long work"), text("Started"), text("4"), echo()],
+    let script = json!({"responses":[start("task-1", "long work"), send("Started"), send("4"), send("{{user_text}}")],
         "subagents":{"task-1":[blocked("work-1", "release-1"), text("finished")]}});
     let mut harness = harness(&script, false).await;
     let id = create(&harness).await;
@@ -161,11 +449,11 @@ async fn front_replies_before_task_ends_and_status_arrives_within_300ms() {
 #[tokio::test]
 async fn steer_reaches_only_the_addressed_task_and_cancel_leaves_the_other_running() {
     let script = json!({"responses":[
-        {"parts":[{"type":"tool_call","name":"task_start","args":{"goal":"first"},"id":"task-1"},{"type":"tool_call","name":"task_start","args":{"goal":"second"},"id":"task-2"}]},
-        text("Started both"),
-        tool("task_steer",json!({"task_id":"{{result:task-2.task_id}}","message":"answer BETA"}),"steer"), text("Steered"),
-        tool("task_cancel",json!({"task_id":"{{result:task-1.task_id}}"}),"cancel"),
-        tool("task_status",json!({}),"status"), text("Cancelled first"), echo()],
+        {"parts":[{"type":"tool_call","name":"create_task","args":{"goal":"first"},"id":"task-1"},{"type":"tool_call","name":"create_task","args":{"goal":"second"},"id":"task-2"}]},
+        send("Started both"),
+        tool("steer_task",json!({"task_id":"{{result:task-2.task_id}}","message":"answer BETA"}),"steer"), send("Steered"),
+        tool("cancel_task",json!({"task_id":"{{result:task-1.task_id}}"}),"cancel"),
+        tool("get_tasks",json!({}),"status"), send("Cancelled first"), send("{{user_text}}")],
         "subagents":{"task-1":[blocked("work-1","release-1"), echo()],"task-2":[blocked("work-2","release-2"), echo()]}});
     let mut harness = harness(&script, false).await;
     let id = create(&harness).await;
@@ -206,8 +494,60 @@ async fn steer_reaches_only_the_addressed_task_and_cancel_leaves_the_other_runni
 }
 
 #[tokio::test]
+async fn ordinary_owner_message_automatically_steers_running_task() {
+    let script = json!({"responses":[
+        start("weekly-task", "research a daily summary"),
+        send("The current cadence is daily."),
+        tool("steer_task", json!({"task_id":"{{result:weekly-task.task_id}}","message":"make it weekly instead"}), "weekly-steer"),
+        send("The cadence is now weekly."),
+        send("Weekly summary ready.")
+    ], "subagents":{"weekly-task":[blocked("weekly-work", "weekly-release"), echo()]}});
+    let mut harness = harness(&script, false).await;
+    let session = create(&harness).await;
+    let mut stream = harness.events(&session, 0).await;
+    say(&harness, &session, "research daily").await;
+    let mut seen = until(&mut stream, |kind| tool_started(kind, "weekly-work")).await;
+    let task = task_id(&seen, "weekly-task");
+    while !seen.iter().any(|event| {
+        matches!(&event.kind,
+        EventKind::MessageCompleted { message_id, .. } if message_id.as_str() == "research daily")
+    }) {
+        seen.push(stream.next().await);
+    }
+    say(&harness, &session, "make it weekly instead").await;
+    seen.extend(
+        until(&mut stream, |kind| {
+            matches!(kind,
+                EventKind::SubagentProgress { subagent_id, progress }
+                if subagent_id == &task && progress["kind"] == "steer_queued"
+            )
+        })
+        .await,
+    );
+    assert!(seen.iter().any(|event| matches!(&event.kind,
+        EventKind::ToolStarted { name, args, .. }
+        if name == "steer_task" && args["task_id"] == task && args["message"] == "make it weekly instead")));
+    release(&harness, "weekly-release");
+    seen.extend(
+        until(&mut stream, |kind| {
+            matches!(kind,
+                EventKind::SubagentEnded { subagent_id, .. } if subagent_id == &task
+            )
+        })
+        .await,
+    );
+    assert!(seen.iter().any(|event| matches!(&event.kind,
+        EventKind::SubagentProgress { subagent_id, progress }
+        if subagent_id == &task && progress["kind"] == "steer_injected")));
+    assert!(seen.iter().any(|event| matches!(&event.kind,
+        EventKind::SubagentEnded { subagent_id, output: Some(output), .. }
+        if subagent_id == &task && output == "make it weekly instead")));
+    harness.kill().await;
+}
+
+#[tokio::test]
 async fn task_report_is_delivered_exactly_once_across_daemon_crash_and_restart() {
-    let script = json!({"responses":[start("task-1","durable work"),text("Started"),echo(),text("still here")],
+    let script = json!({"responses":[start("task-1","durable work"),send("Started"),send("{{user_text}}"),send("still here")],
         "subagents":{"task-1":[blocked("work","release"),text("durable result")]}});
     let mut harness = harness(&script, false).await;
     let id = create(&harness).await;
@@ -232,7 +572,7 @@ async fn task_report_is_delivered_exactly_once_across_daemon_crash_and_restart()
         .any(|event| matches!(&event.kind, EventKind::MessageQueued {
         message_id, author_kind: openside_proto::MessageAuthorKind::Internal, from_agent: None, ..
     } if message_id.as_str() == report)));
-    assert_eq!(all.iter().filter(|e| matches!(&e.kind, EventKind::AssistantFinal { text } if text.contains("[task report]") && text.contains("durable result"))).count(),1);
+    assert_eq!(all.iter().filter(|e| matches!(&e.kind, EventKind::AssistantFinal { text, .. } if text.contains("[task report]") && text.contains("durable result"))).count(),1);
     let next = until(&mut replay, |k| final_is(k, "still here")).await;
     assert!(!next.iter().any(|e| matches!(&e.kind,EventKind::MessageQueued { message_id,.. } if message_id.as_str() == report)));
     replay.settled().await;
@@ -291,13 +631,13 @@ async fn site() -> Site {
 }
 
 #[tokio::test]
-async fn tasks_share_cookies_not_tabs_and_front_reads_but_cannot_act() {
+async fn tasks_share_cookies_not_tabs_and_front_cannot_read_or_act() {
     let site = site().await;
-    let script = json!({"responses":[start("task-1","sign in"),text("First started"),start("task-2","check login"),text("Second started"),
+    let script = json!({"responses":[start("task-1","sign in"),send("First started"),start("task-2","check login"),send("Second started"),
         tool("browser_tabs",json!({}),"front-tabs"),
-        tool("browser_snapshot",json!({"tab_id":"{{result:front-tabs.0.tab_id}}"}),"front-read"),
-        tool("browser_navigate",json!({"tab_id":"{{result:front-tabs.0.tab_id}}","url":format!("{}/check",site.origin)}),"front-act"),
-        text("Read only"),echo(),echo()],
+        tool("browser_snapshot",json!({"tab_id":"task-tab"}),"front-read"),
+        tool("browser_navigate",json!({"tab_id":"task-tab","url":format!("{}/check",site.origin)}),"front-act"),
+        send("Delegation only"),send("{{user_text}}"),send("{{user_text}}")],
         "subagents":{"task-1":[tool("browser_open_tab",json!({"url":format!("{}/login",site.origin)}),"open-1"),blocked("work-1","release-1"),text("first done")],
         "task-2":[tool("browser_tabs",json!({}),"other-tabs"),
         tool("browser_navigate",json!({"tab_id":"{{result:other-tabs.0.tab_id}}","url":format!("{}/check",site.origin)}),"steal-tab"),
@@ -339,11 +679,11 @@ async fn tasks_share_cookies_not_tabs_and_front_reads_but_cannot_act() {
     let snapshot = seen
         .iter()
         .find_map(|e| match &e.kind {
-            EventKind::ToolEnded {
-                tool_call_id,
-                result,
-                ..
-            } if tool_call_id == "snapshot-2" => Some(result),
+            EventKind::SubagentProgress { progress, .. }
+                if progress["kind"] == "tool.ended" && progress["tool_call_id"] == "snapshot-2" =>
+            {
+                Some(&progress["result"])
+            }
             _ => None,
         })
         .unwrap();
@@ -362,15 +702,19 @@ async fn tasks_share_cookies_not_tabs_and_front_reads_but_cannot_act() {
     if !seen.iter().any(|e| final_is(&e.kind, "Second started")) {
         seen.extend(until(&mut stream, |k| final_is(k, "Second started")).await);
     }
-    say(&harness, &id, "read first but do not act").await;
-    seen.extend(until(&mut stream, |k| final_is(k, "Read only")).await);
-    assert!(seen.iter().any(|e| matches!(&e.kind,EventKind::ToolEnded { tool_call_id, result, is_error:true,.. } if tool_call_id == "steal-tab" && result.to_string().contains("tab_owned_by_task"))));
-    assert!(seen.iter().any(|e| matches!(&e.kind,EventKind::ToolEnded { tool_call_id, result, is_error:true,.. } if tool_call_id == "implicit-steal" && result.to_string().contains("tab_owned_by_task"))));
-    assert!(seen.iter().any(|e| matches!(&e.kind,EventKind::ToolEnded { tool_call_id, is_error:false,.. } if tool_call_id == "front-read")));
-    assert!(
-        !seen.iter().any(|e| tool_started(&e.kind, "front-act")),
-        "front must not expose acting tools"
-    );
+    say(&harness, &id, "try reading and acting").await;
+    seen.extend(until(&mut stream, |k| final_is(k, "Delegation only")).await);
+    for call in ["steal-tab", "implicit-steal"] {
+        assert!(seen.iter().any(|e| matches!(&e.kind, EventKind::SubagentProgress { progress, .. }
+            if progress["kind"] == "tool.ended" && progress["tool_call_id"] == call
+                && progress["is_error"] == true && progress["result"].to_string().contains("tab_owned_by_task"))));
+    }
+    for call in ["front-tabs", "front-read", "front-act"] {
+        assert!(
+            !seen.iter().any(|e| tool_started(&e.kind, call)),
+            "front must not expose browser tools"
+        );
+    }
     let tabs = harness.request("GET", "/v1/browser/tabs", None).await;
     assert!(tabs.body["tabs"]
         .as_array()
@@ -498,7 +842,7 @@ async fn prewarm_creates_no_window_or_focus_and_disposes_unused_tabs() {
             "prewarm opened a desktop window"
         );
     } else {
-        eprintln!("SKIP compositor focus/window assertion: Hyprland IPC unavailable");
+        eprintln!("SKIP compositor focus/window assertion: compositor IPC unavailable");
     }
     let restored = parked_tab(&harness, &id).await;
     harness.crash_daemon().await;
@@ -583,8 +927,8 @@ async fn prewarm_creates_no_window_or_focus_and_disposes_unused_tabs() {
 
 #[tokio::test]
 async fn interrupted_front_summary_preserves_one_task_finished_row_across_two_restarts() {
-    let script = json!({"responses":[start("task-1","durable result"),text("Started"),
-        {"parts":[{"type":"wait_steer","timeout_ms":30000},{"type":"echo"}]}],
+    let script = json!({"responses":[start("task-1","durable result"),send("Started"),
+        {"parts":[{"type":"wait_steer","timeout_ms":30000},send("{{user_text}}")["parts"][0]]}],
         "subagents":{"task-1":[blocked("work","release"),text("stored Task output")]}});
     let mut harness = harness(&script, false).await;
     let id = create(&harness).await;
@@ -599,12 +943,12 @@ async fn interrupted_front_summary_preserves_one_task_finished_row_across_two_re
     release(&harness, "release");
     seen.extend(until(&mut stream, |kind|matches!(kind,EventKind::MessageInjected { message_id } if message_id.as_str() == report)).await);
     assert!(!seen.iter().any(
-        |e| matches!(&e.kind,EventKind::AssistantFinal { text } if text.contains("[task report]"))
+        |e| matches!(&e.kind,EventKind::AssistantFinal { text, .. } if text.contains("[task report]"))
     ));
     harness.kill_sidecar();
     seen.extend(until(&mut stream, |kind|matches!(kind,EventKind::MessageCompleted { message_id, outcome:openside_proto::MessageOutcome::Failed, reason:Some(reason) } if message_id.as_str() == report && reason == "interrupted")).await);
     let mut resumed_script = script.clone();
-    resumed_script["responses"][2] = text("still here");
+    resumed_script["responses"][2] = send("still here");
     harness.replace_script(&resumed_script);
     harness.crash_daemon().await;
     harness.launch().await;
@@ -615,7 +959,7 @@ async fn interrupted_front_summary_preserves_one_task_finished_row_across_two_re
     assert_eq!(all.iter().filter(|e|matches!(&e.kind,EventKind::MessageInjected { message_id } if message_id.as_str() == report)).count(),1);
     assert_eq!(all.iter().filter(|e|matches!(&e.kind,EventKind::SubagentEnded { subagent_id, output:Some(output), .. } if subagent_id == &task && output == "stored Task output")).count(),1);
     assert!(!all.iter().any(
-        |e| matches!(&e.kind,EventKind::AssistantFinal { text } if text.contains("[task report]"))
+        |e| matches!(&e.kind,EventKind::AssistantFinal { text, .. } if text.contains("[task report]"))
     ));
     replay.settled().await;
     harness.crash_daemon().await;
@@ -637,8 +981,8 @@ async fn interrupted_front_summary_preserves_one_task_finished_row_across_two_re
 async fn a_failed_task_does_not_stop_a_parallel_task() {
     let invalid = tool("not_a_tool", json!({}), "invalid");
     let script = json!({"responses":[
-        {"parts":[{"type":"tool_call","name":"task_start","args":{"goal":"first"},"id":"task-1"},{"type":"tool_call","name":"task_start","args":{"goal":"second"},"id":"task-2"}]},
-        text("Started both"),echo(),echo()],
+        {"parts":[{"type":"tool_call","name":"create_task","args":{"goal":"first"},"id":"task-1"},{"type":"tool_call","name":"create_task","args":{"goal":"second"},"id":"task-2"}]},
+        send("Started both"),send("{{user_text}}"),send("{{user_text}}")],
         "subagents":{"task-1":[blocked("work-1","release-1"),invalid.clone(),invalid.clone(),invalid.clone(),invalid],
             "task-2":[blocked("work-2","release-2"),text("second completed")]}});
     let mut harness = harness(&script, false).await;
@@ -688,8 +1032,8 @@ async fn wait_file(harness: &Harness, file: &str) {
 #[tokio::test]
 async fn cancelled_task_host_shell_cannot_perform_its_delayed_effect_while_sibling_completes() {
     let script = json!({"responses":[
-    {"parts":[{"type":"tool_call","name":"task_start","args":{"goal":"first"},"id":"task-1"},{"type":"tool_call","name":"task_start","args":{"goal":"second"},"id":"task-2"}]},
-    text("Started both"), echo()],
+    {"parts":[{"type":"tool_call","name":"create_task","args":{"goal":"first"},"id":"task-1"},{"type":"tool_call","name":"create_task","args":{"goal":"second"},"id":"task-2"}]},
+    send("Started both"), send("{{user_text}}")],
     "subagents":{
         "task-1":[tool("bash", json!({"command":"touch first-entered; while [ ! -f first-release ]; do sleep 0.05; done; touch forbidden-effect"}), "delayed-effect"), text("must not finish")],
         "task-2":[blocked("sibling-work", "sibling-release"), tool("bash", json!({"command":"touch sibling-effect"}), "sibling-effect"), text("sibling completed")]
@@ -739,9 +1083,51 @@ async fn cancelled_task_host_shell_cannot_perform_its_delayed_effect_while_sibli
 }
 
 #[tokio::test]
+async fn waiting_task_wakes_front_once_without_another_person_message() {
+    let script = json!({"responses":[
+        start("needs-choice", "Choose a destination"),
+        tool("stay_silent", json!({}), "wait-choice"),
+        tool("send_message", json!({"text":"Which destination do you prefer?"}), "ask-person")
+    ],"subagents":{"needs-choice":[
+        blocked("wait-before-question", "allow-question"),
+        tool("ask_user", json!({"question":"Choose a destination"}), "choice"),
+        text("Chosen")
+    ]}});
+    let mut harness = harness(&script, false).await;
+    let id = create(&harness).await;
+    let mut stream = harness.events(&id, 0).await;
+    say(&harness, &id, "choose-for-me").await;
+    until(&mut stream, |kind| {
+        matches!(kind, EventKind::MessageCompleted { message_id, .. }
+        if message_id.as_str() == "choose-for-me")
+    })
+    .await;
+    release(&harness, "allow-question");
+    until(&mut stream, |kind| {
+        final_is(kind, "Which destination do you prefer?")
+    })
+    .await;
+    let events = durable_events(&harness, &id);
+    assert_eq!(events.iter().filter(|event| matches!(&event.kind,
+        EventKind::MessageQueued { message_id, text, author_kind: openside_proto::MessageAuthorKind::Internal, .. }
+        if message_id.as_str().contains("-waiting-") && text.contains("Needs you: Choose a destination"))).count(), 1);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| final_is(&event.kind, "Which destination do you prefer?"))
+            .count(),
+        1
+    );
+    assert!(!events
+        .iter()
+        .any(|event| matches!(&event.kind, EventKind::AssistantDelta { .. })));
+    harness.kill().await;
+}
+
+#[tokio::test]
 async fn waiting_task_keeps_its_repl_claimed_prewarm_tab_across_restart_and_stale_lease_expiry() {
     let site = site().await;
-    let script = json!({"responses":[start("task-1", "wait in my tab"), text("First started"), start("task-2", "open my own tab"), text("Second started"), echo(), echo()],
+    let script = json!({"responses":[start("task-1", "wait in my tab"), send("First started"), send("Needs your answer"), start("task-2", "open my own tab"), send("Second started"), send("{{user_text}}"), send("{{user_text}}")],
     "subagents":{
         "task-1":[tool("browser_repl", json!({"code":"await page.title()"}), "claim-warm"),
             tool("ask_user", json!({"question":"Continue the waiting Task?"}), "wait"),
@@ -763,6 +1149,12 @@ async fn waiting_task_keeps_its_repl_claimed_prewarm_tab_across_restart_and_stal
         .any(|event| final_is(&event.kind, "First started"))
     {
         seen.extend(until(&mut stream, |kind| final_is(kind, "First started")).await);
+    }
+    if !seen
+        .iter()
+        .any(|event| final_is(&event.kind, "Needs your answer"))
+    {
+        seen.extend(until(&mut stream, |kind| final_is(kind, "Needs your answer")).await);
     }
     let first = task_id(&seen, "task-1");
     let ticket = seen
@@ -837,18 +1229,20 @@ async fn waiting_task_keeps_its_repl_claimed_prewarm_tab_across_restart_and_stal
     say(&harness, &id, "start competitor").await;
     let mut seen = until(&mut stream, |kind| tool_started(kind, "sibling-wait")).await;
     assert!(seen.iter().any(
-        |event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, is_error: true, result, .. }
-        if tool_call_id == "steal-restored" && result.to_string().contains("tab_owned_by_task"))
+        |event| matches!(&event.kind, EventKind::SubagentProgress { progress, .. }
+        if progress["kind"] == "tool.ended" && progress["tool_call_id"] == "steal-restored"
+            && progress["is_error"] == true && progress["result"].to_string().contains("tab_owned_by_task"))
     ));
     let opened = seen
         .iter()
         .find_map(|event| match &event.kind {
-            EventKind::ToolEnded {
-                card: _,
-                tool_call_id,
-                result,
-                is_error: false,
-            } if tool_call_id == "own-tab" => Some(result),
+            EventKind::SubagentProgress { progress, .. }
+                if progress["kind"] == "tool.ended"
+                    && progress["tool_call_id"] == "own-tab"
+                    && progress["is_error"] == false =>
+            {
+                Some(&progress["result"])
+            }
             _ => None,
         })
         .unwrap();
@@ -861,12 +1255,95 @@ async fn waiting_task_keeps_its_repl_claimed_prewarm_tab_across_restart_and_stal
         )
         .await;
     assert_eq!(resumed.status, 200, "{}", resumed.body);
-    seen.extend(until(&mut stream, |kind| matches!(kind, EventKind::ToolEnded { tool_call_id, .. } if tool_call_id == "resume-own")).await);
+    seen.extend(
+        until(&mut stream, |kind| {
+            matches!(kind, EventKind::SubagentProgress { progress, .. }
+        if progress["kind"] == "tool.ended" && progress["tool_call_id"] == "resume-own")
+        })
+        .await,
+    );
     assert!(seen.iter().any(
-        |event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, result, is_error: false, .. }
-        if tool_call_id == "resume-own" && result["tab_id"] == parked)
+        |event| matches!(&event.kind, EventKind::SubagentProgress { progress, .. }
+        if progress["kind"] == "tool.ended" && progress["tool_call_id"] == "resume-own"
+            && progress["is_error"] == false && progress["result"]["tab_id"] == parked)
     ));
     release(&harness, "release-sibling");
     stream.settled().await;
+    harness.kill().await;
+}
+
+#[tokio::test]
+async fn task_document_attaches_to_chief_message_and_fetches_by_reference() {
+    let markdown = "# Comparison\n\n| Plan | Cost |\n| --- | --- |\n| Basic | Free |\n";
+    let script = json!({
+        "responses": [
+            start("document-task", "Write a Markdown comparison"),
+            tool("stay_silent", json!({}), "wait-document"),
+            tool("get_tasks", json!({}), "document-status"),
+            tool("send_message", json!({
+                "text": "Here is the comparison.",
+                "attachments": [{
+                    "artifact": "{{result:document-status.tasks.0.artifacts.0}}",
+                    "title": "Plan comparison",
+                    "display": "panel"
+                }]
+            }), "deliver-document"),
+        ],
+        "subagents": {"document-task": [
+            tool("write_document", json!({"title":"Plan comparison","markdown":markdown}), "write-comparison"),
+            text("The comparison document is ready.")
+        ]}
+    });
+    let mut harness = harness(&script, false).await;
+    let session = create(&harness).await;
+    let mut stream = harness.events(&session, 0).await;
+    say(&harness, &session, "compare").await;
+    let events = tokio::time::timeout(
+        Duration::from_secs(20),
+        until(&mut stream, |kind| {
+            final_is(kind, "Here is the comparison.")
+        }),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "document delivery stalled; events={:#?}; snapshot={}",
+            durable_events(&harness, &session),
+            harness.snapshot(&session),
+        )
+    });
+    let attachment = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            EventKind::AssistantFinal { text, attachments }
+                if text == "Here is the comparison." =>
+            {
+                assert_eq!(attachments.len(), 1);
+                Some(attachments[0].clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(attachment.title, "Plan comparison");
+    assert_eq!(attachment.display, openside_proto::DocumentDisplay::Panel);
+    assert_eq!(attachment.bytes, markdown.len() as u64);
+    assert_eq!(attachment.content_type, "text/markdown");
+    let (status, bytes) = harness
+        .get_bytes(&format!(
+            "/v1/sessions/{session}/artifacts/{}",
+            attachment.path.replace('/', "%2F"),
+        ))
+        .await;
+    assert_eq!((status, bytes), (200, markdown.as_bytes().to_vec()));
+    assert!(events.iter().any(|event| matches!(&event.kind,
+        EventKind::ArtifactSaved { tool, path, .. } if tool == "write_document" && path.ends_with("/write-comparison.md"))));
+    tokio::time::timeout(Duration::from_secs(20), stream.settled())
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "document turn did not settle: {:#?}",
+                durable_events(&harness, &session)
+            )
+        });
     harness.kill().await;
 }

@@ -45,7 +45,7 @@ fn final_text(events: &[Event]) -> String {
     events
         .iter()
         .find_map(|event| match &event.kind {
-            EventKind::AssistantFinal { text } => Some(text.clone()),
+            EventKind::AssistantFinal { text, .. } => Some(text.clone()),
             _ => None,
         })
         .unwrap_or_else(|| panic!("no final answer: {events:?}"))

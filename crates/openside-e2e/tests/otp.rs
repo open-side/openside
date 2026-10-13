@@ -221,16 +221,16 @@ async fn turn(
     let events = stream.settled().await;
     assert!(
         events.iter().any(
-            |event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == final_text)
+            |event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == final_text)
         ),
         "turn missing final: {events:?}"
     );
     events
 }
 fn final_text(events: &[Event], expected: &str) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == expected))
+    events.iter().any(
+        |event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == expected),
+    )
 }
 
 /// Daemon with Chromium and an empty passphrase vault; `None` skips without Chromium.

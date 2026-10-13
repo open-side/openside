@@ -118,7 +118,7 @@ async fn run_now_from_the_cli_starts_a_real_session_and_the_run_completes() {
     wait_for_status(&harness, &id, "completed").await;
     let events = harness.events(&session, 0).await.settled().await;
     assert!(events.iter().any(
-        |e| matches!(&e.kind, EventKind::AssistantFinal { text } if text == "inbox summarized")
+        |e| matches!(&e.kind, EventKind::AssistantFinal { text, .. } if text == "inbox summarized")
     ));
     assert!(events.iter().any(
         |e| matches!(&e.kind, EventKind::MessageQueued { text, .. } if text == "summarize my inbox")
@@ -142,7 +142,18 @@ async fn heartbeat_follows_up_an_existing_session_and_deleting_it_pauses_the_rou
         String::from_utf8_lossy(&task.stderr)
     );
     let first = harness.request("GET", "/v1/sessions", None).await;
-    let session = first.body["sessions"][0]["id"].as_str().unwrap().to_owned();
+    let initial_sessions = first.body["sessions"].as_array().unwrap();
+    let initial_ids: std::collections::BTreeSet<_> = initial_sessions
+        .iter()
+        .map(|session| session["id"].as_str().unwrap())
+        .collect();
+    let session = initial_sessions
+        .iter()
+        .find(|session| session["agent_id"].is_null())
+        .expect("the CLI created an ordinary one-shot session")["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let added = cli_json(
         &harness,
@@ -173,8 +184,13 @@ async fn heartbeat_follows_up_an_existing_session_and_deleting_it_pauses_the_rou
     // The follow-up landed in the same session, in the queue lane, under a routine message id.
     let sessions = harness.request("GET", "/v1/sessions", None).await;
     assert_eq!(
-        sessions.body["sessions"].as_array().unwrap().len(),
-        1,
+        sessions.body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>(),
+        initial_ids,
         "no new session"
     );
     let mut stream = harness.events(&session, 0).await;
@@ -197,7 +213,7 @@ async fn heartbeat_follows_up_an_existing_session_and_deleting_it_pauses_the_rou
                 }
                 queued.push((message_id.to_string(), text.clone(), format!("{mode:?}")));
             }
-            EventKind::AssistantFinal { text } => finals.push(text.clone()),
+            EventKind::AssistantFinal { text, .. } => finals.push(text.clone()),
             EventKind::SessionSettled {} if finals.len() == 2 => break event.seq,
             _ => {}
         }
@@ -230,7 +246,19 @@ async fn heartbeat_follows_up_an_existing_session_and_deleting_it_pauses_the_rou
         404
     );
     let sessions = harness.request("GET", "/v1/sessions", None).await;
-    assert!(sessions.body["sessions"].as_array().unwrap().is_empty());
+    let remaining_ids: std::collections::BTreeSet<_> = initial_ids
+        .into_iter()
+        .filter(|id| *id != session.as_str())
+        .collect();
+    assert_eq!(
+        sessions.body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>(),
+        remaining_ids,
+    );
 
     let paused = cli_json(&harness, &["routine", "show", &id]).await;
     assert_eq!(
@@ -485,4 +513,144 @@ async fn a_run_parked_on_a_ticket_survives_a_daemon_restart_and_completes_after_
     wait_for_status(&harness, &id, "completed").await;
     assert_eq!(run_status(&harness, &id).await, "started");
     harness.kill().await;
+}
+
+#[tokio::test]
+async fn scripted_routine_proposal_resumes_once_after_owner_consent_across_restart() {
+    for approved in [false, true] {
+        let Some(mut harness) = Harness::start(
+            env!("CARGO_BIN_EXE_e2e-opensided"),
+            &json!({"responses":[]}),
+        )
+        .await
+        else {
+            return;
+        };
+        let created = harness
+            .request("POST", "/v1/sessions", Some(json!({"mode":"guard"})))
+            .await;
+        assert_eq!(created.status, 201, "{}", created.body);
+        let session = created.body["id"].as_str().unwrap();
+        let payload = json!({
+            "name":"Approved briefing","schedule":{"type":"interval","secs":3600},
+            "action":{"type":"heartbeat","session_id":session,"prompt":"Exact recurring briefing"},
+            "enabled":true,"catch_up":false
+        });
+        harness.replace_script(&json!({"responses":[
+            tool("propose_routine", payload.clone(), "routine-propose-call"),
+            reply("Owner answered"),
+            {"parts":[{"type":"echo"}]}
+        ]}));
+        let submitted = harness
+            .request(
+                "POST",
+                &format!("/v1/sessions/{session}/messages"),
+                Some(
+                    serde_json::to_value(openside_proto::SubmitMessageRequest {
+                        message_id: Some(openside_proto::MessageId::new("routine-request")),
+                        text: "Propose a recurring briefing".into(),
+                        mode: openside_proto::MessageMode::Queue,
+                        attachments: Vec::new(),
+                    })
+                    .unwrap(),
+                ),
+            )
+            .await;
+        assert!(submitted.status < 300, "{}", submitted.body);
+        let ticket = until("the routine confirmation", || async {
+            let tickets = harness
+                .request("GET", "/v1/tickets?status=pending", None)
+                .await;
+            tickets.body["tickets"].as_array().and_then(|tickets| {
+                tickets
+                    .iter()
+                    .find(|ticket| ticket["tool_call_id"] == "routine-propose-call")
+                    .cloned()
+            })
+        })
+        .await;
+        assert_eq!(ticket["kind"], "confirm");
+        assert_eq!(ticket["tool"]["args"], payload);
+        until("the proposal turn to park", || async {
+            let state = harness
+                .request("GET", &format!("/v1/sessions/{session}"), None)
+                .await;
+            (state.body["status"] == "waiting_human").then_some(())
+        })
+        .await;
+        assert!(
+            harness.request("GET", "/v1/routines", None).await.body["routines"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        if approved {
+            harness.crash_daemon().await;
+            harness.launch().await;
+        }
+        let ticket_id = ticket["id"].as_str().unwrap();
+        let state = harness
+            .request("GET", &format!("/v1/sessions/{session}"), None)
+            .await;
+        let mut stream = harness
+            .events(session, state.body["last_seq"].as_u64().unwrap())
+            .await;
+        let resolved = harness
+            .human_request(
+                "POST",
+                &format!("/v1/tickets/{ticket_id}/resolve"),
+                Some(json!({"value":approved})),
+            )
+            .await;
+        assert_eq!(resolved.status, 200, "{}", resolved.body);
+        assert_eq!(resolved.body["resolution"]["approved"], approved);
+        let events = stream.settled().await;
+        assert!(events.iter().any(|event| matches!(&event.kind,
+            EventKind::AssistantFinal { text, .. } if text == "Owner answered")));
+        let snapshot = harness.snapshot(session);
+        assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
+        let returns: Vec<_> = snapshot["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|message| message["parts"].as_array().into_iter().flatten())
+            .filter(|part| {
+                part["part_kind"] == "tool-return" && part["tool_call_id"] == "routine-propose-call"
+            })
+            .collect();
+        assert_eq!(returns.len(), 1);
+        assert_eq!(returns[0]["content"]["approved"], approved);
+        let routines = harness.request("GET", "/v1/routines", None).await;
+        assert_eq!(
+            routines.body["routines"].as_array().unwrap().len(),
+            usize::from(approved)
+        );
+        if approved {
+            let routine = &routines.body["routines"][0];
+            assert_eq!(routine["action"], payload["action"]);
+            assert_eq!(routine["schedule"], payload["schedule"]);
+            assert_eq!(returns[0]["content"]["routine_id"], routine["id"]);
+            let mut stream = harness.events(session, events.last().unwrap().seq).await;
+            let run = harness
+                .request(
+                    "POST",
+                    &format!("/v1/routines/{}/run", routine["id"].as_str().unwrap()),
+                    None,
+                )
+                .await;
+            assert_eq!(run.status, 200, "{}", run.body);
+            let dispatched = stream.settled().await;
+            assert!(dispatched.iter().any(|event| matches!(&event.kind,
+                EventKind::AssistantFinal { text, .. } if text == "Exact recurring briefing")));
+        }
+        let replayed = harness
+            .human_request(
+                "POST",
+                &format!("/v1/tickets/{ticket_id}/resolve"),
+                Some(json!({"value":true})),
+            )
+            .await;
+        assert_eq!(replayed.status, 409, "{}", replayed.body);
+        harness.kill().await;
+    }
 }

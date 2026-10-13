@@ -1,6 +1,5 @@
-//! B-2 ②: browser activity the agent did not ask for (a popup, a download, a tab the page
-//! closed) reaches the running agent as a steer message at its next model request. Real daemon,
-//! real Python sidecar with the scripted model, real Chromium, loopback pages only.
+//! Browser activity is untrusted internal data: popup, download, and closure notices queue
+//! behind the owner's running turn. Real daemon, Python sidecar, Chromium, and loopback pages.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -74,8 +73,8 @@ async fn popup_download_and_closed_tab_reach_the_running_agent_as_steer() {
         {"parts":[{"type":"tool_call","name":"browser_open_tab","args":{"url":format!("{origin}/")},"id":"open"}]},
         repl("await page.getByRole('button', { name: 'Open popup' }).click()", "popup"),
         repl("await page.getByRole('button', { name: 'Close popup' }).click(); await page.getByRole('link', { name: 'Get report' }).click()", "close-and-download"),
-        {"parts":[{"type":"wait_steer","timeout_ms":5000},{"type":"tool_call","name":"browser_tabs","args":{},"id":"tabs"}]},
-        {"parts":[{"type":"wait_steer","timeout_ms":3000},{"type":"text","text":FINAL}]},
+        {"parts":[{"type":"text","text":FINAL}]},
+        {"parts":[{"type":"text","text":"Notices received"}]},
     ]});
     let Some(mut harness) = Harness::prepare(env!("CARGO_BIN_EXE_e2e-opensided"), &script) else {
         server.abort();
@@ -114,10 +113,12 @@ async fn popup_download_and_closed_tab_reach_the_running_agent_as_steer() {
             EventKind::MessageQueued {
                 text,
                 author_kind,
+                mode,
                 from_agent,
                 ..
             } if text.starts_with("[browser event]") => {
                 assert_eq!(*author_kind, openside_proto::MessageAuthorKind::Internal);
+                assert_eq!(*mode, openside_proto::QueueMode::Queue);
                 assert_eq!(*from_agent, None);
                 Some(text.clone())
             }
@@ -142,8 +143,7 @@ async fn popup_download_and_closed_tab_reach_the_running_agent_as_steer() {
         "{steered:?}"
     );
 
-    // The model input itself: the sidecar conversation holds each notice as a user message
-    // injected before the scripted final answer was requested.
+    // Internal notices cannot steer the owner's in-flight model request.
     let conversation = harness.snapshot(&session)["messages"].to_string();
     let answered = conversation
         .find(FINAL)
@@ -152,11 +152,9 @@ async fn popup_download_and_closed_tab_reach_the_running_agent_as_steer() {
         let at = conversation
             .find(needle)
             .unwrap_or_else(|| panic!("{needle:?} never reached the model: {conversation}"));
-        assert!(
-            at < answered,
-            "{needle:?} arrived after the final model request"
-        );
+        assert!(at > answered, "{needle:?} interrupted the owner's turn");
     }
+    assert!(conversation.contains("data_only"));
 
     harness.kill().await;
     server.abort();

@@ -62,7 +62,7 @@ async fn every_route_and_surface_fits_all_supported_widths() {
         ui.cdp
             .viewport(width, if width <= 390 { 844 } else { 900 }, "light")
             .await;
-        ui.goto(&conversation, "document.querySelectorAll('.oc-card[data-ticket][data-status=pending]').length === 5 && !!document.querySelector('.bubble.assistant') && !!document.querySelector('.task')").await;
+        ui.goto(&conversation, "document.querySelectorAll('.oc-card[data-ticket][data-status=pending]').length === 5 && !!document.querySelector('.bubble.assistant') && !!document.querySelector('.task-browser')").await;
         ui.cdp.eval("document.querySelectorAll('.oc-card[data-ticket] .oc-pill').forEach(b => b.click()); true").await;
         check(
             &mut ui,
@@ -85,14 +85,11 @@ async fn every_route_and_surface_fits_all_supported_widths() {
             )
             .await;
         }
-        ui.cdp.eval("document.querySelector('.task').open = true; document.querySelector('.task').scrollIntoView({block:'center'}); true").await;
-        check(
-            &mut ui,
-            &format!("{width}px expanded Tasks panel"),
-            &mut failures,
-        )
-        .await;
-        ui.cdp.eval("document.querySelectorAll('.activity:not(.task), .tool-details').forEach(el => el.open = true); true").await;
+        ui.cdp
+            .eval("document.querySelector('.task-browser').scrollIntoView({block:'center'}); true")
+            .await;
+        check(&mut ui, &format!("{width}px Task unit"), &mut failures).await;
+        ui.cdp.eval("document.querySelectorAll('.activity, .tool-details').forEach(el => el.open = true); true").await;
         check(
             &mut ui,
             &format!("{width}px expanded tool activity"),

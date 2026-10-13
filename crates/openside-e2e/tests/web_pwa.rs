@@ -17,6 +17,10 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod ui_support;
+
+use ui_support::{send, silent};
+
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -261,10 +265,10 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
                 return;
             }
         };
-    let reply = |text: &str| json!({"parts":[{"type":"text","text":text}]});
-    let Some(mut harness) =
-        Harness::prepare(DAEMON, &json!({"responses":[reply("Got it, thanks.")]}))
-    else {
+    let Some(mut harness) = Harness::prepare(
+        DAEMON,
+        &json!({"responses":[send("Got it, thanks."),silent(),silent()]}),
+    ) else {
         eprintln!("SKIP: hermetic daemon prerequisites are missing");
         return;
     };

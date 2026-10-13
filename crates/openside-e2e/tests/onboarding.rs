@@ -346,6 +346,14 @@ fn seed_browsers(root: &Path) {
 
 /// Back to a daemon nobody has set up: the guide pending, no skill, nothing imported.
 async fn reset(harness: &Harness) {
+    let remote = harness
+        .request(
+            "PUT",
+            "/v1/remote/cloudflare",
+            Some(json!({"enabled":false,"tunnel":"quick","hostname":null,"token_file":null})),
+        )
+        .await;
+    assert_eq!(remote.status, 200, "{}", remote.body);
     // Locked first: the unlocked vault lives in daemon memory, the file alone decides "set up".
     let _ = harness.request("POST", "/v1/vault/lock", None).await;
     for path in [
@@ -488,14 +496,55 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
     assert!(skill.is_file(), "{} was not written", skill.display());
     ui.snap("5-agents-installed").await;
 
-    // Phone: no transport is on in this daemon, so the step sends the person to Remote access
-    // instead of showing a command.
+    // With no reachable transport, ConnectPhone offers setup instead of issuing a dead QR.
     ui.press("Continue", None).await;
     ui.on_step("Pair your phone").await;
-    ui.wait("remote access link", "!!__ob.find('Set up remote access')")
+    ui.wait("connection setup", "!!__ob.find('Turn on Tailscale')")
         .await;
+    assert_eq!(
+        ui.eval("document.querySelectorAll('.onb .pair [role=img]').length")
+            .await,
+        0
+    );
     let pair = ui.text_of(".onb").await;
     assert!(!pair.contains("openside pair"), "{pair}");
+    // A private stand-in announces a reachable URL; no real tunnel or host Tailscale is touched.
+    let enabled = harness
+        .request(
+            "PUT",
+            "/v1/remote/cloudflare",
+            Some(json!({"enabled":true,"tunnel":"quick","hostname":null,"token_file":null})),
+        )
+        .await;
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+    ui.wait(
+        "automatically issued pairing QR",
+        "!!document.querySelector('.onb .pair[data-state=waiting] [role=img]') && !!document.querySelector('.pair-link code')",
+    )
+    .await;
+    assert_eq!(
+        ui.eval("document.querySelector('.pair-options-toggle').getAttribute('aria-expanded')")
+            .await,
+        "false"
+    );
+    let link = ui.text_of(".pair-link code").await;
+    assert!(
+        link.starts_with("https://onboarding.trycloudflare.com/pair#"),
+        "{link}"
+    );
+    let code = link.split_once('#').unwrap().1;
+    let exchanged = ui
+        .eval(&format!(
+            "(async () => {{ const r = await fetch('/v1/pairing/exchange', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{code:{}}})}}); return r.status; }})()",
+            json!(code)
+        ))
+        .await;
+    assert_eq!(exchanged, 201);
+    ui.wait(
+        "phone connected",
+        "document.querySelector('.remote-result')?.textContent.includes('Connected as')",
+    )
+    .await;
     ui.snap("6-pair").await;
 
     // The assistant keeps the name the daemon gave it.
@@ -515,10 +564,7 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
     for expected in ["Browser skill for Claude Code", "Brought over: 3 profiles"] {
         assert!(recap.contains(expected), "{expected} not in {recap}");
     }
-    assert!(
-        recap.contains("Skipped"),
-        "models and phone were skipped: {recap}"
-    );
+    assert!(recap.contains("Skipped"), "models were skipped: {recap}");
     ui.snap("8-done").await;
     assert_eq!(onboarding_state(harness).await, "pending");
     ui.press("Open openside", None).await;
@@ -563,12 +609,21 @@ async fn first_run_guide_is_walked_through_public_endpoints() {
     seed_browsers(&root);
     // The agent's configuration directory exists, so it counts as installed.
     std::fs::create_dir_all(root.join("home/.claude")).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let cloudflared = root.join("cloudflared-fixture");
+    std::fs::write(
+        &cloudflared,
+        "#!/bin/sh\necho 'INF | https://onboarding.trycloudflare.com |' >&2\nexec sleep 3600\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&cloudflared, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Pinned: `auto` would reach the developer's real keyring; skills stay inside the root.
     harness.append_config(&format!(
-        "[ui]\ndir = {}\n[vault]\nunlock = \"passphrase\"\n[skills]\ndir = {}\n[browser]\nexecutable = {}\n",
+        "[ui]\ndir = {}\n[vault]\nunlock = \"passphrase\"\n[skills]\ndir = {}\n[browser]\nexecutable = {}\n[remote.cloudflare]\nbin = {}\n",
         json!(dist),
         json!(root.join("skill-library")),
-        json!(executable)
+        json!(executable),
+        json!(cloudflared)
     ));
     harness.launch().await;
 

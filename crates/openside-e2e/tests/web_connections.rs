@@ -359,7 +359,20 @@ async fn web_page_requests_stay_answered_across_page_loads_with_a_live_tab_and_p
         };
         wait(&ui, &tab, &format!("round {round} {route}"), &format!("document.readyState === 'complete' && {loaded} && !document.body.innerText.includes('Loading conversations')")).await;
         if route.starts_with(&format!("/sessions/{login}")) {
-            // The sign-in conversation streams its agent tab and shows the code request.
+            // Pending cards start collapsed unless the route explicitly opens this ticket.
+            wait(
+                &ui,
+                &tab,
+                &format!("round {round} pending code card"),
+                &format!("!!document.querySelector('.oc-card[data-ticket=\"{ticket}\"][data-status=pending]')"),
+            )
+            .await;
+            ui.evaluate(
+                &tab,
+                &format!("document.querySelector('.oc-card[data-ticket=\"{ticket}\"] button.oc-pill')?.click(); true"),
+            )
+            .await
+            .unwrap();
             wait(
                 &ui,
                 &tab,

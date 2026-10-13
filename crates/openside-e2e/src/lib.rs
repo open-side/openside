@@ -292,11 +292,25 @@ impl Harness {
 
     /// Send JSON HTTP over the administrator-only Unix endpoint.
     pub async fn request(&self, method: &str, path: &str, body: Option<Value>) -> Response {
+        self.request_as(method, path, body, None).await
+    }
+
+    /// Mark Unix requests with reduced client authority to exercise non-owner queue lanes.
+    pub async fn request_as(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        client_kind: Option<&str>,
+    ) -> Response {
         let method = reqwest::Method::from_bytes(method.as_bytes())
             .unwrap_or_else(|e| panic!("method: {e}"));
         let mut request = self
             .client
             .request(method, format!("http://localhost{path}"));
+        if let Some(client_kind) = client_kind {
+            request = request.header("x-openside-client", client_kind);
+        }
         if let Some(body) = body {
             request = request.json(&body);
         }

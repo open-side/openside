@@ -107,7 +107,7 @@ async fn finish_turn(stream: &mut SseReader, expected: &str) -> Vec<Event> {
     let mut replied = false;
     loop {
         let event = stream.next().await;
-        if let EventKind::AssistantFinal { text } = &event.kind {
+        if let EventKind::AssistantFinal { text, .. } = &event.kind {
             assert_eq!(text, expected, "{events:?}");
             replied = true;
         }

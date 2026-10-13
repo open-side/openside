@@ -571,7 +571,7 @@ async fn settle(harness: &Harness, session: &str, final_text: &str) -> Vec<opens
         loop {
             let events = stream.settled().await;
             if events.iter().any(|event| {
-                matches!(&event.kind, openside_proto::EventKind::AssistantFinal { text } if text == final_text)
+                matches!(&event.kind, openside_proto::EventKind::AssistantFinal { text, .. } if text == final_text)
             }) {
                 return events;
             }

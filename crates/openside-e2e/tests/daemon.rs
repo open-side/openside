@@ -33,10 +33,11 @@ async fn create(harness: &Harness, mode: &str) -> String {
 }
 async fn submit(harness: &Harness, id: &str, mid: &str, mode: &str) {
     let response = harness
-        .request(
+        .request_as(
             "POST",
             &format!("/v1/sessions/{id}/messages"),
             Some(json!({"message_id":mid,"text":mid,"mode":mode})),
+            (mode == "queue").then_some("mcp"),
         )
         .await;
     assert_eq!(response.status, 202, "{}", response.body);
@@ -44,7 +45,7 @@ async fn submit(harness: &Harness, id: &str, mid: &str, mode: &str) {
 fn assert_final(events: &[Event], expected: &str) {
     assert!(
         events.iter().any(
-            |event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == expected)
+            |event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == expected)
         ),
         "missing final reply: {events:?}"
     );
@@ -302,7 +303,11 @@ async fn sidecar_sigkill_restores_snapshot_preserves_queue_and_completes_each_id
             ("checkpoint", vec![MessageOutcome::Completed]),
             ("interrupted", vec![MessageOutcome::Failed]),
             ("second", vec![MessageOutcome::Completed]),
-            ("third", vec![MessageOutcome::Completed])
+            ("third", vec![MessageOutcome::Completed]),
+            (
+                "interrupted-report-interrupted",
+                vec![MessageOutcome::Completed]
+            ),
         ])
     );
     assert_eq!(
@@ -311,7 +316,8 @@ async fn sidecar_sigkill_restores_snapshot_preserves_queue_and_completes_each_id
             ("checkpoint", 1),
             ("interrupted", 1),
             ("second", 1),
-            ("third", 1)
+            ("third", 1),
+            ("interrupted-report-interrupted", 1),
         ])
     );
     assert!(events.iter().any(
@@ -330,17 +336,17 @@ async fn sidecar_sigkill_restores_snapshot_preserves_queue_and_completes_each_id
     let finals: Vec<_> = events
         .iter()
         .filter_map(|event| match &event.kind {
-            EventKind::AssistantFinal { text } => Some(text.as_str()),
+            EventKind::AssistantFinal { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
     assert_eq!(
         finals,
-        ["checkpoint reply", "second reply", "third reply"],
+        ["checkpoint reply", "second reply"],
         "saved script cursor must survive crash; interrupted request must not replay"
     );
     let restored = harness.snapshot(&id);
-    assert_eq!(restored["script_cursor"], 3);
+    assert_eq!(restored["script_cursor"], 2);
     let history = restored["messages"].to_string();
     assert!(
         history.contains("checkpoint reply"),
@@ -348,7 +354,7 @@ async fn sidecar_sigkill_restores_snapshot_preserves_queue_and_completes_each_id
     );
     assert!(history.contains("second") && history.contains("third"));
     assert!(
-        !history.contains("interrupted"),
+        !history.contains("\"interrupted\""),
         "crashed uncommitted turn leaked into resume_state"
     );
     assert!(harness

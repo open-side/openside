@@ -338,25 +338,25 @@ async fn pwa_pairs_lists_streams_and_takes_over_through_the_encrypted_relay() {
     page.eval("Array.from(document.querySelectorAll('.takeover button')).find(b => b.textContent.trim() === 'Done').click()").await;
     page.wait("same run resumed over SSE", "document.body.innerText.includes('Relay stream completed.') && document.querySelector('main.session')?.dataset.status === 'idle'").await;
     page.wait("completed takeover receipt and dismissed screen", "document.querySelector('.takeover') === null && !!document.querySelector('.oc-card[data-kind=takeover][data-status=done]')").await;
-    page.wait("visual preview via blob", "!!document.querySelector('figure.visual iframe[src^=\"blob:\"]')").await;
-    assert_eq!(page.eval("document.querySelector('figure.visual iframe').getAttribute('sandbox')").await, "");
-    assert_eq!(page.eval("document.querySelector('figure.visual iframe').contentDocument === null").await, true);
+    // A visual is an inert image built in the page: no frame, no script, no network.
+    page.wait("visual image", "(() => { const img = document.querySelector('figure.visual img.visual-image'); return !!img && img.complete && img.naturalWidth > 0; })()").await;
+    assert_eq!(page.eval("document.querySelectorAll('figure.visual iframe').length").await, 0);
+    assert_eq!(page.eval("(() => { const src = decodeURIComponent(document.querySelector('figure.visual img').src); return src.startsWith('data:image/svg+xml') && !src.includes('<script') && !src.includes('<meta'); })()").await, true);
     page.wait("files pill", "!!document.querySelector('.files-pill')").await;
     page.eval("document.querySelector('.files-pill').click()").await;
     page.wait("artifact list", "Array.from(document.querySelectorAll('.files-open')).some(b => b.textContent.includes('report.html'))").await;
     page.eval("Array.from(document.querySelectorAll('.files-open')).find(b => b.textContent.includes('report.html')).click()").await;
     page.wait("artifact preview via blob", "!!document.querySelector('.artifact-preview iframe[src^=\"blob:\"]')").await;
     assert_eq!(page.eval("document.querySelector('.artifact-preview iframe').getAttribute('sandbox')").await, "");
-    // Waiting for both frame loads makes the network/script assertions exercise rendering, not just URL creation.
+    // Waiting for the frame load makes the network/script assertions exercise rendering, not just URL creation.
     page.eval("window.__previewLoaded = 0; document.querySelectorAll('iframe.sandbox-frame').forEach(f => f.addEventListener('load', () => window.__previewLoaded++)); true").await;
     page.eval("document.querySelectorAll('iframe.sandbox-frame').forEach(f => f.src = f.src); true").await;
-    page.wait("sandbox frame loads", "window.__previewLoaded >= 2").await;
+    page.wait("sandbox frame load", "window.__previewLoaded >= 1").await;
     assert_eq!(page.frame_color(".artifact-preview iframe").await, "rgb(47, 111, 237)", "artifact preview styles must survive the relay");
     assert_eq!(page.preview_pixel(".artifact-preview iframe").await, json!([47, 111, 237]), "artifact preview must render, not merely load a blob URL");
     page.eval("document.querySelector('.tray-sheet button[aria-label=\"Close\"]').click()").await;
     page.wait("files sheet dismissed", "document.querySelector('.tray-sheet') === null").await;
-    assert_eq!(page.frame_color("figure.visual iframe").await, "rgb(47, 111, 237)", "inline preview styles must survive the relay");
-    assert_eq!(page.preview_pixel("figure.visual iframe").await, json!([47, 111, 237]), "visual preview must render, not merely load a blob URL");
+    assert_eq!(page.preview_pixel("figure.visual img.visual-image").await, json!([47, 111, 237]), "visual must render its inline styles through the relay");
     assert_eq!(page.eval("!document.body.dataset.compromised && !!localStorage.getItem('openside.token')").await, true);
     assert_eq!(probes.load(Ordering::SeqCst), 0, "preview escaped its CSP/sandbox");
     }).catch_unwind().await;
@@ -382,6 +382,13 @@ async fn cloudflared_quick_url_restart_backoff_and_shutdown_are_supervised() {
     let mut harness =
         Harness::prepare(DAEMON, &json!({"responses":[]})).expect("scripted sidecar environment");
     let root = harness.root().display().to_string();
+    let inherited = harness.root().join("home/.cloudflared");
+    std::fs::create_dir_all(&inherited).unwrap();
+    std::fs::write(
+        inherited.join("config.yml"),
+        "ingress:\n  - service: http_status:404\n",
+    )
+    .unwrap();
     let bin = fake_binary(
         &harness,
         &format!(
@@ -428,9 +435,19 @@ async fn cloudflared_quick_url_restart_backoff_and_shutdown_are_supervised() {
         .unwrap()
         .starts_with("https://f8-quick.trycloudflare.com/pair#"));
     let args = std::fs::read_to_string(harness.root().join("cloudflare-args")).unwrap();
-    assert!(args
-        .lines()
-        .all(|line| line.starts_with("tunnel --no-autoupdate --url http://127.0.0.1:")));
+    for line in args.lines() {
+        let arguments: Vec<_> = line.split_whitespace().collect();
+        assert_eq!(&arguments[..3], &["tunnel", "--no-autoupdate", "--config"]);
+        let config = std::path::Path::new(arguments[3]);
+        assert!(config.starts_with(harness.root().join("state")));
+        assert_eq!(std::fs::read_to_string(config).unwrap(), "{}\n");
+        assert_eq!(arguments[4], "--url");
+        assert!(arguments[5].starts_with("http://127.0.0.1:"));
+    }
+    assert_eq!(
+        std::fs::read_to_string(inherited.join("config.yml")).unwrap(),
+        "ingress:\n  - service: http_status:404\n"
+    );
     let pid: i32 = std::fs::read_to_string(harness.root().join("cloudflare-pid"))
         .unwrap()
         .trim()

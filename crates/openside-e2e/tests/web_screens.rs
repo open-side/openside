@@ -26,6 +26,10 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod ui_support;
+
+use ui_support::send;
+
 use std::{path::PathBuf, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
@@ -368,7 +372,7 @@ async fn until_final(stream: &mut SseReader, final_text: &str) -> Vec<Event> {
     loop {
         let event = stream.next().await;
         let done = matches!(event.kind, EventKind::SessionSettled {})
-            && events.iter().any(|e: &Event| matches!(&e.kind, EventKind::AssistantFinal { text } if text == final_text));
+            && events.iter().any(|e: &Event| matches!(&e.kind, EventKind::AssistantFinal { text, .. } if text == final_text));
         events.push(event);
         if done {
             return events;
@@ -676,7 +680,7 @@ async fn seed_team(harness: &Harness) -> (String, String) {
             ("Studio Pods", 95, "Wireless charging"),
         ]), "present-products"),
         tool("team_propose_hire", proposal("Iris", "Inbox triage", "Sort the inbox and flag what needs you", "inbox-triage"), "propose-inbox"),
-        text("Iris is ready to start."),
+        send("Iris is ready to start."),
     ]}));
     let pending = |kind: &'static str, key: Option<&'static str>| {
         let home = home.clone();

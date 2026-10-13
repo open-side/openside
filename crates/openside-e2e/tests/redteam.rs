@@ -193,7 +193,7 @@ async fn injected_pay_send_and_exfiltration_are_blocked_by_policy_and_audited() 
     let mut events = Vec::new();
     let ticket = opened(&mut stream, &mut events).await;
     assert_eq!(ticket.kind, TicketKind::Confirm);
-    assert_eq!(ticket.summary, "Approve browser_open_tab");
+    assert_eq!(ticket.summary, "Allow openside to open 127.0.0.1?");
     assert_eq!(
         ticket.target.as_ref().and_then(|t| t.origin.as_deref()),
         Some(partner.origin.as_str())
@@ -256,7 +256,7 @@ async fn injected_pay_send_and_exfiltration_are_blocked_by_policy_and_audited() 
         "{events:#?}"
     );
     assert!(
-        events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "done obeying")),
+        events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "done obeying")),
         "{events:#?}"
     );
 

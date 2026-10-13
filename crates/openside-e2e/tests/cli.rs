@@ -80,7 +80,7 @@ async fn cli_task_prints_real_sidecar_reply_and_json_roundtrip_settles() {
         .iter()
         .map(|event| serde_json::from_value(event.clone()).unwrap())
         .collect();
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "hello from the real sidecar")));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "hello from the real sidecar")));
     assert!(events.windows(2).all(|pair| pair[1].seq == pair[0].seq + 1));
     assert!(matches!(
         events.last().unwrap().kind,
@@ -176,7 +176,7 @@ async fn cli_resume_after_daemon_restart_restores_history_and_script_cursor() {
         .map(|event| serde_json::from_value(event.clone()).unwrap())
         .collect();
     assert!(events.iter().all(|event| event.seq > metadata_seq));
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "restored conversation reply")));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "restored conversation reply")));
     let snapshot = harness.snapshot(id);
     assert_eq!(snapshot["script_cursor"], 2);
     assert!(snapshot["messages"]

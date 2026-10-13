@@ -185,7 +185,7 @@ async fn fixture_shop_checkout_lure_is_blocked_without_human_approval() {
             .any(|event| matches!(event.kind, EventKind::TicketOpened { .. })),
         "the scripted model never requested or received approval"
     );
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "Payment was blocked; the order was not placed.")));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "Payment was blocked; the order was not placed.")));
     tokio::time::timeout(Duration::from_secs(5), async {
         while site.inspections.load(Ordering::SeqCst) == 0 {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -307,7 +307,7 @@ async fn browser_sigkill_during_active_task_recovers_without_resubmitting_or_res
         closed < next_call,
         "recovery must start automatically before another browser call"
     );
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "The original task recovered.")));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "The original task recovered.")));
     assert_eq!(harness.daemon_pid(), daemon);
     assert_eq!(harness.sidecar_pid(), sidecar);
     assert_ne!(browser_pid(&harness), old_browser);

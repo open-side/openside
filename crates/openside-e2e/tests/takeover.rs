@@ -326,7 +326,7 @@ async fn hs6_takeover_stream_drives_tab_while_agent_is_locked_out_and_same_call_
         }
     }
     let events = resumed(&mut stream, &ticket).await;
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "continued after takeover")));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "continued after takeover")));
     // The SAME call got the post-takeover page, and the agent wrote to the tab again.
     let result = tool_return(&harness, &session, "captcha");
     let content = result["content"].to_string();
@@ -381,7 +381,7 @@ async fn hs4_device_approval_condition_resumes_same_call_without_a_human() {
         "resolved before the page condition could hold"
     );
     assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &ticket.id && resolution["status"] == "done")));
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "approved without me")));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "approved without me")));
     let result = tool_return(&harness, &session, "device");
     assert!(result["content"].to_string().contains("done"), "{result}");
     let state = harness

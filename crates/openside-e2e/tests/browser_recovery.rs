@@ -205,7 +205,7 @@ async fn force_killed_browser_recovers_and_the_session_keeps_browsing() {
     assert!(read.to_string().contains("Second page"), "{read}");
     assert!(events.iter().any(|event| matches!(
         &event.kind,
-        EventKind::AssistantFinal { text } if text == "recovered"
+        EventKind::AssistantFinal { text, .. } if text == "recovered"
     )));
     assert_eq!(
         browser_pid(&harness),

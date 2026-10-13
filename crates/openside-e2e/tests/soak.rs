@@ -107,7 +107,7 @@ async fn soak() {
         send(&h, &session, "first").await;
         let first = stream.settled().await;
         assert!(first.iter().any(
-            |e| matches!(&e.kind, EventKind::AssistantFinal { text } if text == "soak completed")
+            |e| matches!(&e.kind, EventKind::AssistantFinal { text, .. } if text == "soak completed")
         ));
         assert!(
             !first.iter().any(|e| matches!(
@@ -152,7 +152,7 @@ async fn soak() {
         expected_browser = Some(recovered_browser);
         send(&h, &session, "second").await;
         let second = stream.settled().await;
-        assert!(second.iter().any(|e| matches!(&e.kind, EventKind::AssistantFinal { text } if text == "soak completed")), "{second:?}");
+        assert!(second.iter().any(|e| matches!(&e.kind, EventKind::AssistantFinal { text, .. } if text == "soak completed")), "{second:?}");
         assert!(
             !second.iter().any(|e| matches!(
                 &e.kind,

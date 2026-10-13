@@ -88,9 +88,9 @@ fn started(events: &[Event]) -> (String, String, Vec<String>) {
         .expect("subagent.started")
 }
 fn final_text(events: &[Event], expected: &str) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == expected))
+    events.iter().any(
+        |event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == expected),
+    )
 }
 fn ended(events: &[Event], id: &str) -> Option<SubagentStatus> {
     events.iter().find_map(|event| match &event.kind {
@@ -184,7 +184,7 @@ async fn approve_and_finish(harness: &Harness, id: &str, subagent: &str, ticket:
     assert_eq!(resolved.status, 200, "{}", resolved.body);
     let events = until(
         &mut stream,
-        |kind| matches!(kind, EventKind::AssistantFinal { text } if text == "parent done"),
+        |kind| matches!(kind, EventKind::AssistantFinal { text, .. } if text == "parent done"),
     )
     .await;
     assert_eq!(ended(&events, subagent), Some(SubagentStatus::Completed));
@@ -265,7 +265,7 @@ async fn cancel_waiting_child_rejects_its_ticket_and_returns_to_parent() {
     assert_eq!(cancelled.body["status"], "cancelled");
     let events = until(
         &mut stream,
-        |kind| matches!(kind, EventKind::AssistantFinal { text } if text == "parent done"),
+        |kind| matches!(kind, EventKind::AssistantFinal { text, .. } if text == "parent done"),
     )
     .await;
     assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketRejected { ticket_id, reason, .. } if *ticket_id == ticket.id && reason == "subagent_cancelled")));
@@ -388,7 +388,7 @@ async fn child_model_is_session_default_or_configured_fallback_and_sse_can_opt_o
     submit(&harness, &id, "delegate").await;
     let events = until(
         &mut stream,
-        |kind| matches!(kind, EventKind::AssistantFinal { text } if text == "parent done"),
+        |kind| matches!(kind, EventKind::AssistantFinal { text, .. } if text == "parent done"),
     )
     .await;
     let (subagent, model, _) = started(&events);
@@ -402,7 +402,7 @@ async fn child_model_is_session_default_or_configured_fallback_and_sse_can_opt_o
     let mut quiet = harness.events_query(&id, 0, "subagents=false").await;
     let replay = until(
         &mut quiet,
-        |kind| matches!(kind, EventKind::AssistantFinal { text } if text == "parent done"),
+        |kind| matches!(kind, EventKind::AssistantFinal { text, .. } if text == "parent done"),
     )
     .await;
     assert!(replay.iter().all(|event| !matches!(

@@ -3,6 +3,8 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod ui_support;
+
 use openside_e2e::Harness;
 use openside_proto::EventKind;
 use serde_json::{json, Value};
@@ -111,7 +113,7 @@ async fn cards_present_scripted_roundtrip() {
     let finals: Vec<_> = events
         .iter()
         .filter_map(|event| match &event.kind {
-            EventKind::AssistantFinal { text } => Some(text.as_str()),
+            EventKind::AssistantFinal { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -1340,20 +1342,17 @@ async fn cards_otp_enrollment_and_fill_once_keep_keys_and_codes_private() {
 }
 
 #[tokio::test]
-async fn cards_team_proposal_receipt_retire_and_explicit_hire_undo() {
+async fn cards_team_proposal_and_autonomous_hire_receipts_offer_retire() {
     use openside_proto::{ActionTarget, TeamCardCommand};
     for explicit in [false, true] {
         let draft = json!({"name":"Mina","persona":{"role":"Price researcher","responsibilities":["Compare local fixture prices"]},"proposal_key":"local-prices"});
         let call = if explicit {
-            tool(
-                "team_hire",
-                "hire",
-                json!({"draft":draft,"request_message_id":"person-hire"}),
-            )
+            tool("team_hire", "hire", json!({"draft":draft}))
         } else {
             tool("team_propose_hire", "hire", json!({"draft":draft}))
         };
-        let mut harness = prepared(&json!({"responses":[call,{"parts":[{"type":"text","text":"The teammate is ready."}]}]})).await;
+        let mut harness =
+            prepared(&json!({"responses":[call,ui_support::send("The teammate is ready.")]})).await;
         let token = admin_token(&harness).await;
         let chief = harness.request("GET", "/v1/agents/chief", None).await;
         let home = chief.body["home_session_id"].as_str().unwrap();
@@ -1405,7 +1404,7 @@ async fn cards_team_proposal_receipt_retire_and_explicit_hire_undo() {
             ActionTarget::TeamCommand { command:c, .. } if *c == command)
             })
         };
-        assert_eq!(has(TeamCardCommand::UndoHire), explicit);
+        assert!(!has(TeamCardCommand::UndoHire));
         assert!(has(TeamCardCommand::Retire));
         let receipt = format!(
             "document.querySelector('.oc-card[data-card-id=\"{}\"]')",
@@ -1427,22 +1426,13 @@ async fn cards_team_proposal_receipt_retire_and_explicit_hire_undo() {
             );
         } else {
             assert_eq!(ui.eval("document.querySelectorAll('.oc-card[data-kind=hire][data-status=pending]').length").await, 0);
-            ui.eval(&format!("Array.from({receipt}.querySelectorAll('button')).find(b=>b.textContent.trim()==='Undo hire').click(); true")).await;
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
-            loop {
-                let current = harness
+            assert_eq!(
+                harness
                     .request("GET", &format!("/v1/agents/{agent}"), None)
-                    .await;
-                if current.body["status"] == "retired" {
-                    break;
-                }
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "Undo did not retire: {}",
-                    current.body
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
+                    .await
+                    .body["status"],
+                "active"
+            );
         }
         ui.reload(home).await;
         ui.wait(&format!("!!{receipt}")).await;

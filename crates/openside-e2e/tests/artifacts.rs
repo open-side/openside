@@ -41,7 +41,7 @@ fn finals(events: &[Event]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match &event.kind {
-            EventKind::AssistantFinal { text } => Some(text.clone()),
+            EventKind::AssistantFinal { text, .. } => Some(text.clone()),
             _ => None,
         })
         .collect()

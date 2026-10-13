@@ -3,6 +3,10 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod ui_support;
+
+use ui_support::send;
+
 use openside_e2e::Harness;
 use openside_proto::{ActionTarget, CardKind, EventKind, TeamCardCommand, TicketKind};
 use serde_json::{json, Value};
@@ -109,7 +113,7 @@ async fn memory(harness: &Harness, owner: Option<&str>, content: &str) -> Value 
 }
 
 #[tokio::test]
-async fn explicit_scripted_hire_has_handoff_undo_and_reverts_recorded_ownership() {
+async fn autonomous_recurring_hire_sends_one_notice_and_retains_lifecycle_controls() {
     let Some(mut harness) = Harness::start(DAEMON, &json!({"responses":[]})).await else {
         return;
     };
@@ -123,15 +127,15 @@ async fn explicit_scripted_hire_has_handoff_undo_and_reverts_recorded_ownership(
     hire["routine_ids"] = json!([routine_id]);
     hire["memory_ids"] = json!([memory_id]);
     harness.replace_script(&json!({"responses":[
-        tool("team_hire", json!({"draft":hire,"request_message_id":"hire-person"}), "hire-call"),
-        text("Mina will track prices.")
+        tool("team_hire", json!({"draft":hire}), "hire-call"),
+        tool("send_message", json!({"text":"I brought in Mina to handle weekly market notes."}), "hire-notice")
     ]}));
     let mut stream = harness.events(home, 0).await;
     post(
         &harness,
         &format!("/v1/sessions/{home}/messages"),
         json!({
-            "message_id":"hire-person","text":"Hire Mina to track prices.","mode":"now"
+            "message_id":"recurring-request","text":"Keep weekly market notes and track prices for me.","mode":"now"
         }),
         202,
     )
@@ -140,22 +144,28 @@ async fn explicit_scripted_hire_has_handoff_undo_and_reverts_recorded_ownership(
     assert!(events.iter().any(|event| matches!(&event.kind,
         EventKind::ToolEnded { tool_call_id, is_error: false, .. } if tool_call_id == "hire-call"
     )), "{events:?}");
+    assert_eq!(events.iter().filter(|event| matches!(&event.kind,
+        EventKind::AssistantFinal { text, .. } if text == "I brought in Mina to handle weekly market notes."
+    )).count(), 1);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(&event.kind, EventKind::TicketOpened { .. })));
     let (agent_id, card) = events
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::TeamHired {
                 agent_id,
                 ticket_id: None,
-                request_message_id: Some(mid),
+                request_message_id: None,
                 card: Some(card),
                 ..
-            } if mid.as_str() == "hire-person" => Some((agent_id.clone(), card)),
+            } => Some((agent_id.clone(), card)),
             _ => None,
         })
-        .expect("person-requested hire event with a common card");
+        .expect("autonomous hire event with a common card");
     assert_eq!(card.kind, CardKind::Handoff);
     assert!(card.actions.iter().any(|action| matches!(&action.target,
-        ActionTarget::TeamCommand { agent_id: id, command: TeamCardCommand::UndoHire } if id == &agent_id
+        ActionTarget::TeamCommand { agent_id: id, command: TeamCardCommand::Retire } if id == &agent_id
     )));
     assert!(card.actions.iter().any(|action| matches!(&action.target,
         ActionTarget::OpenThread { agent_id: id, .. } if id == &agent_id
@@ -326,7 +336,7 @@ async fn cli_proposals_lists_suppression_and_allows_the_topic_again() {
         tool("team_propose_hire", json!({"draft":{
             "name":"Mina","persona":{"role":"Price researcher","responsibilities":["Track prices"]},"proposal_key":"price-watch"
         }}), "proposal-call"),
-        text("I will not suggest that topic again.")
+        send("I will not suggest that topic again.")
     ]});
     let Some(mut harness) = Harness::start(DAEMON, &script).await else {
         return;
@@ -365,9 +375,13 @@ async fn cli_proposals_lists_suppression_and_allows_the_topic_again() {
         proposals[0],
         get(&harness, "/v1/team/proposals/suppressed").await
     );
-    assert_eq!(proposals[0][0]["key"], "price-watch");
+    assert_eq!(proposals[0][0]["key"], "price researcher");
     assert_eq!(proposals[0][0]["label"], "Price researcher");
-    let cleared = cli(&harness, &["team", "proposals", "allow", "price-watch"]).await;
+    let cleared = cli(
+        &harness,
+        &["team", "proposals", "allow", "price researcher"],
+    )
+    .await;
     assert_eq!(
         cleared.len(),
         1,
@@ -379,7 +393,7 @@ async fn cli_proposals_lists_suppression_and_allows_the_topic_again() {
 
 #[tokio::test]
 async fn run_and_chat_default_to_chief_but_explicit_session_is_preserved() {
-    let script = json!({"responses":[text("first reply"),text("second reply")]});
+    let script = json!({"responses":[send("first reply"),send("second reply")]});
     let Some(mut harness) = Harness::start(DAEMON, &script).await else {
         return;
     };
@@ -413,6 +427,7 @@ async fn run_and_chat_default_to_chief_but_explicit_session_is_preserved() {
     )
     .await;
     let legacy_id = legacy["id"].as_str().unwrap();
+    harness.replace_script(&json!({"responses":[text("third reply")]}));
     assert_eq!(
         cli(
             &harness,
