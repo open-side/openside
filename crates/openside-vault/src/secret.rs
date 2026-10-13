@@ -39,10 +39,12 @@ impl fmt::Display for Secret {
 /// This is not a general data-loss prevention system: unknown transformations,
 /// partial secrets, images and adversarial multi-layer encodings need host-side
 /// restrictions. Keep this object alive until all derived output has been scrubbed.
-/// Every non-empty secret is matched as a substring whatever its length; callers that must
-/// keep protocol identifiers intact exempt them by schema location, never by value shape.
+/// [`Self::new`] matches every non-empty explicit secret as a substring whatever its length;
+/// callers preserve protocol identifiers by schema location, never by value shape.
+/// [`Self::for_cookie`] instead filters short preferences and matches credential tokens.
 pub struct Redactor {
     patterns: Vec<Zeroizing<String>>,
+    token_boundaries: bool,
 }
 
 impl fmt::Debug for Redactor {
@@ -100,7 +102,22 @@ impl Redactor {
         patterns.sort_unstable_by_key(|pattern| std::cmp::Reverse(pattern.len()));
         patterns.dedup();
         patterns.retain(|pattern| !pattern.is_empty());
-        Self { patterns }
+        Self {
+            patterns,
+            token_boundaries: false,
+        }
+    }
+
+    /// Cookie preferences and boolean flags are public state, not credentials. Longer
+    /// cookie values are masked only as complete tokens, unlike explicit Vault secrets.
+    pub fn for_cookie(value: &str) -> Option<Self> {
+        if value.len() < 12 {
+            return None;
+        }
+        let secret = Secret::new(value.to_owned());
+        let mut filter = Self::new([&secret]);
+        filter.token_boundaries = true;
+        Some(filter)
     }
 
     /// End of the longest pattern matching at `at`.
@@ -108,7 +125,14 @@ impl Redactor {
         self.patterns
             .iter()
             .filter(|pattern| input[at..].starts_with(pattern.as_str()))
-            .map(|pattern| at + pattern.len())
+            .filter_map(|pattern| {
+                let end = at + pattern.len();
+                let token = |byte: u8| byte.is_ascii_alphanumeric() || b"_-.+/%".contains(&byte);
+                (!self.token_boundaries
+                    || (at == 0 || !token(input.as_bytes()[at - 1]))
+                        && (end == input.len() || !token(input.as_bytes()[end])))
+                .then_some(end)
+            })
             .max()
     }
 
@@ -147,6 +171,9 @@ impl Redactor {
     /// within one filter.
     pub fn covered_by(&self, installed: &[Redactor]) -> bool {
         installed.iter().any(|other| {
+            if !self.token_boundaries && other.token_boundaries {
+                return false;
+            }
             self.patterns
                 .iter()
                 .all(|pattern| other.patterns.contains(pattern))
@@ -421,6 +448,32 @@ impl TotpSeed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cookie_filters_ignore_preferences_and_match_complete_credentials() {
+        for value in ["no", "1", "true", "light", "Asia/Seoul"] {
+            assert!(Redactor::for_cookie(value).is_none());
+        }
+        let value = "session-cookie-canary-58f29d04a1";
+        let cookie = Redactor::for_cookie(value).unwrap();
+        assert_eq!(
+            cookie.redact(&format!("session={value};")),
+            "session=[REDACTED];"
+        );
+        assert_eq!(
+            cookie.redact(&format!("prefix{value}suffix")),
+            format!("prefix{value}suffix")
+        );
+        let secret = Secret::new(value.into());
+        let vault = Redactor::new([&secret]);
+        assert_eq!(
+            vault.redact(&format!("prefix{value}suffix")),
+            "prefix[REDACTED]suffix"
+        );
+        assert!(!vault.covered_by(&[cookie]));
+        let cookie = Redactor::for_cookie(value).unwrap();
+        assert!(cookie.covered_by(&[vault]));
+    }
 
     const SEEDS: [&str; 3] = [
         "12345678901234567890",

@@ -95,7 +95,7 @@ impl DaemonTool for Read {
         "read"
     }
     fn spec(&self) -> openside_core::ToolSpec {
-        spec::<ReadArgs>(self.name(), "Read UTF-8 file lines or directory entries. offset is zero-based; limit defaults to 200. Use offset/limit to fetch additional output.", ApprovalTier::Read, false)
+        spec::<ReadArgs>(self.name(), "Read UTF-8 file lines or directory entries (zero-based offset, default limit 200). Tasks can read private output:<id> refs using UTF-8 byte offsets and limit 1..4096 (default 4096); follow next_offset.", ApprovalTier::Read, false)
     }
     fn visible(&self, _: &ToolEnv) -> bool {
         true
@@ -107,6 +107,17 @@ impl DaemonTool for Read {
     ) -> BoxFuture<'a, Result<Vec<Action>, ToolError>> {
         Box::pin(async move {
             let args: ReadArgs = parse(args)?;
+            if args.path.starts_with("output:") {
+                if !crate::tool_output::valid_ref(&args.path) {
+                    return Err(ToolError("Invalid output reference".into()));
+                }
+                return Ok(Vec::new());
+            }
+            if crate::profiles::current(&ctx.shared) == openside_config::AgentProfile::Ultrabrowse {
+                return Err(ToolError(
+                    "This profile permits read only for Task output references".into(),
+                ));
+            }
             Ok(action(
                 Capability::FsRead,
                 canonical(&args.path, ctx, false)?,
@@ -121,6 +132,28 @@ impl DaemonTool for Read {
             let Ok(args) = parse::<ReadArgs>(&args) else {
                 return failure();
             };
+            if args.path.starts_with("output:") {
+                return match crate::tool_output::read(
+                    ctx,
+                    &args.path,
+                    args.offset.unwrap_or(0),
+                    args.limit.unwrap_or(4096),
+                )
+                .await
+                {
+                    Ok(for_model) => ToolExec::Done {
+                        for_model,
+                        for_app: Some(json!({"status":"read_private_output"})),
+                    },
+                    Err(reason) => ToolExec::Denied {
+                        reason: reason.into(),
+                        hint: Some(
+                            "Use a Task output reference from this session and a valid byte range"
+                                .into(),
+                        ),
+                    },
+                };
+            }
             let Ok(path) = ctx.target(Capability::FsRead) else {
                 return failure();
             };

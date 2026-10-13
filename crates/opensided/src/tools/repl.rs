@@ -45,8 +45,9 @@ async fn protect_cookie_output(
 ) -> Result<(), ToolError> {
     browser
         .visit_tab_cookie_values(ctx.session.as_str(), tab, |value| {
-            let secret = openside_vault::Secret::new(value.to_owned());
-            let redactor = openside_vault::Redactor::new([&secret]);
+            let Some(redactor) = openside_vault::Redactor::for_cookie(value) else {
+                return;
+            };
             let mut installed = ctx.shared.registry.redactors.write();
             if !redactor.covered_by(&installed) {
                 installed.push(redactor);
@@ -66,15 +67,12 @@ const APPROVALS_MARKER: &str = "\"approvals\": ";
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ReplArgs {
-    /// JavaScript using Playwright's `page`, `expect`, and `console`. Top-level `await` works;
-    /// the last expression statement is returned. `page.snapshot()` returns the
-    /// browser_snapshot text, and `page.locator('aria-ref=eN')` targets its refs.
+    /// Playwright page/expect/console; top-level await; returns last expression.
+    /// page.snapshot() gives browser_snapshot text; page.locator('aria-ref=eN') targets refs.
     code: String,
-    /// Agent tab to drive. Optional when the session owns exactly one tab (or none: a blank
-    /// tab is opened and its id returned).
+    /// Omit for the only owned tab; if none, opens blank and returns its id.
     tab_id: Option<String>,
-    /// Operations to request human approval for, copied verbatim from an `approval_required`
-    /// hint. Each approved sensitive entry permits one matching operation in this call.
+    /// Copy approval_required hint verbatim; each sensitive approval permits one operation.
     #[serde(default)]
     approvals: Vec<Approval>,
 }
@@ -354,7 +352,7 @@ impl DaemonTool for BrowserRepl {
     fn spec(&self) -> openside_core::ToolSpec {
         spec::<ReplArgs>(
             NAME,
-            "Run Playwright-syntax JavaScript (page.goto, page.getByRole(...).click(), locator.fill, expect(...).toHaveText, ...) in a session-owned tab and return {return_value, console, error?, tab_id}. Page script is allowed once the page's origin passes policy: page.evaluate/evaluateHandle, page.$eval/$$eval, locator.evaluate/evaluateAll, page.addInitScript (removed when the call ends) and raw page.cdp(method, params); what page script does inside the page is not checked step by step. Frames (frameLocator), page.mouse/keyboard, dialogs, popups, downloads and setInputFiles (absolute paths inside the workspace or session attachments) work; network routes (page.route) and page.request throw NotSupported. Each call starts a fresh JavaScript context. Operations whose target looks sensitive (the same keyword heuristic as browser_act, e.g. pay, purchase, checkout, delete) need human approval: the call stops before that operation with approval_required and a hint carrying an `approvals` value; call again with that value added to request approval. Once approved, the whole snippet reruns from the start and each approved entry permits one operation.",
+            "Run Playwright JavaScript in a session-owned tab; returns {return_value, console, error?, tab_id}. After origin policy approval, page.evaluate/evaluateHandle, $eval/$$eval, locator.evaluate/evaluateAll, page.addInitScript (call-scoped) and page.cdp(method, params) run without per-step checks inside page script. Supports frameLocator, mouse/keyboard, dialogs, popups, downloads and setInputFiles (absolute workspace/session-attachment paths); page.route and page.request throw NotSupported. Each call has a fresh JS context. Sensitive targets use browser_act's keyword heuristic (pay/purchase/checkout/delete): execution stops before the operation with approval_required. Resubmit the hint's exact approvals to request consent; approval reruns the whole snippet, allowing one operation per entry.",
             ApprovalTier::Write,
             true,
         )
@@ -475,13 +473,22 @@ impl BrowserRepl {
             upload_roots,
             downloads,
         });
+        let limits = if ctx.subagent.is_some() {
+            Limits {
+                console_bytes: crate::tool_output::QUOTA,
+                return_bytes: crate::tool_output::QUOTA,
+                ..Limits::default()
+            }
+        } else {
+            Limits::default()
+        };
         let output = openside_repl::run_cancellable(
             Arc::clone(&browser),
             ctx.session.as_str().to_owned(),
             tab.clone(),
             parsed.code,
             guard.clone(),
-            Limits::default(),
+            limits,
             ctx.cancellation.cancelled(),
         )
         .await;
@@ -725,7 +732,7 @@ mod guard_tests {
             ));
             for outside in [
                 "/etc/passwd",
-                "/work/spacex/a",
+                "/work/spaces/a",
                 "/work/space/../../etc/passwd",
                 "relative.txt",
             ] {

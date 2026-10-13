@@ -198,7 +198,14 @@ async fn execute(args: Value, ctx: &ToolEnv) -> ToolExec {
     let Some(stderr) = process.child.stderr.take() else {
         return failed();
     };
-    let operation = async { tokio::join!(process.child.wait(), capture(stdout), capture(stderr)) };
+    let task_output = ctx.subagent.is_some();
+    let operation = async {
+        tokio::join!(
+            process.child.wait(),
+            capture(stdout, task_output),
+            capture(stderr, task_output)
+        )
+    };
     let result = tokio::select! {
         biased;
         () = ctx.cancellation.cancelled() => None,
@@ -237,6 +244,11 @@ async fn execute(args: Value, ctx: &ToolEnv) -> ToolExec {
         Err(_) => ToolExec::Failed(
             "Shell command timed out; reduce its scope or increase timeout_ms".into(),
         ),
+        Ok((_, Err(CaptureError::Quota), _)) | Ok((_, _, Err(CaptureError::Quota))) => {
+            ToolExec::Failed(
+                "Task shell output exceeds the 64 MiB limit; narrow the command".into(),
+            )
+        }
         _ => failed(),
     }
 }
@@ -249,18 +261,34 @@ async fn execute(_: Value, _: &ToolEnv) -> ToolExec {
     }
 }
 
-async fn capture(mut pipe: impl AsyncRead + Unpin) -> std::io::Result<String> {
+enum CaptureError {
+    Io,
+    Quota,
+}
+
+async fn capture(
+    mut pipe: impl AsyncRead + Unpin,
+    task_output: bool,
+) -> Result<String, CaptureError> {
     let mut output = Vec::new();
     let mut buffer = [0_u8; 8192];
     let mut truncated = false;
+    let limit = if task_output {
+        crate::tool_output::QUOTA
+    } else {
+        32 * 1024
+    };
     loop {
-        let size = pipe.read(&mut buffer).await?;
+        let size = pipe.read(&mut buffer).await.map_err(|_| CaptureError::Io)?;
         if size == 0 {
             break;
         }
-        let keep = size.min((32 * 1024_usize).saturating_sub(output.len()));
+        let keep = size.min(limit.saturating_sub(output.len()));
         output.extend_from_slice(&buffer[..keep]);
         truncated |= keep < size;
+    }
+    if truncated && task_output {
+        return Err(CaptureError::Quota);
     }
     let mut output = String::from_utf8_lossy(&output).into_owned();
     if truncated {
