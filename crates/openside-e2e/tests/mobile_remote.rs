@@ -144,7 +144,16 @@ impl Cdp {
             &format!("!!({selector}) && !({selector}).disabled"),
         )
         .await;
-        let position = self.eval(&format!("(() => {{ const e = {selector}; e.scrollIntoView({{block:'center',behavior:'instant'}}); const r = e.getBoundingClientRect(); return {{x:r.left+r.width/2,y:r.top+r.height/2}}; }})()")).await;
+        assert!(
+            self.tap(selector).await,
+            "click target vanished: {selector}"
+        );
+    }
+    async fn tap(&mut self, selector: &str) -> bool {
+        let position = self.eval(&format!("(() => {{ const e = {selector}; if (!e || e.disabled) return null; e.scrollIntoView({{block:'center',behavior:'instant'}}); const r = e.getBoundingClientRect(); return {{x:r.left+r.width/2,y:r.top+r.height/2}}; }})()")).await;
+        if position.is_null() {
+            return false;
+        }
         let point = json!({"x":position["x"],"y":position["y"]});
         self.call(
             "Input.dispatchTouchEvent",
@@ -156,6 +165,30 @@ impl Cdp {
             json!({"type":"touchEnd","touchPoints":[]}),
         )
         .await;
+        true
+    }
+    /// CDP touch input can silently drop while the compositor settles on a loaded host; the
+    /// hit test succeeds yet no event reaches the page. Re-click after a grace window while
+    /// `until` stays false. Only for targets a duplicate tap cannot hurt — never toggles or
+    /// submits.
+    async fn click_until(&mut self, selector: &str, until: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if self.eval(until).await == true {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "clicks on {selector} never produced {until}"
+            );
+            if self.tap(selector).await {
+                // The last tap may have landed; only re-tap once the grace window passed
+                // without the effect, and a gone target counts as landed.
+                tokio::time::sleep(Duration::from_millis(750)).await;
+            } else {
+                tokio::time::sleep(Duration::from_millis(75)).await;
+            }
+        }
     }
     async fn fill(&mut self, selector: &str, text: &str) {
         self.eval(&format!("(() => {{const e = document.querySelector({}); Object.getOwnPropertyDescriptor(e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(e, {}); e.dispatchEvent(new Event('input', {{bubbles:true}})); return true;}})()", json!(selector), json!(text))).await;
@@ -412,7 +445,10 @@ async fn phone(
             if install["native"] == true {
                 eprintln!("MOBILE_REMOTE {} {profile} NOT_RUN iOS_install_hint: Blink offered its native install prompt despite the iPhone UA", transport.name());
             }
-            page.click("document.querySelector('.install-banner button[aria-label=Dismiss]')").await;
+            page.click_until(
+                "document.querySelector('.install-banner button[aria-label=Dismiss]')",
+                "!document.querySelector('.install-banner')",
+            ).await;
         }
         let token = page.eval("localStorage.getItem('openside.token')").await.as_str().unwrap().to_owned();
         let devices = harness.request("GET", "/v1/devices", None).await;
@@ -432,11 +468,17 @@ async fn phone(
         let session = chief.body["home_session_id"].as_str().unwrap().to_owned();
         page.wait("team menu toggle", "!!document.querySelector('button[aria-label=\"Open menu\"]')").await;
         page.click("document.querySelector('button[aria-label=\"Open menu\"]')").await;
-        page.click("document.querySelector('.ui-drawer a[href=\"/history\"]')").await;
+        page.click_until(
+            "document.querySelector('.ui-drawer a[href=\"/history\"]')",
+            "location.pathname === '/history'",
+        ).await;
         page.wait("existing conversation history", "!!document.querySelector('.history-list .session-title') && document.body.innerText.includes('Existing conversation')").await;
         page.capture(&out.join(format!("{profile}-conversations.png"))).await;
         page.click("document.querySelector('button[aria-label=\"Open menu\"]')").await;
-        page.click("document.querySelector('.ui-drawer [data-agent=\"chief\"] .person-link')").await;
+        page.click_until(
+            "document.querySelector('.ui-drawer [data-agent=\"chief\"] .person-link')",
+            "location.pathname === '/agents/chief'",
+        ).await;
         page.wait("chief thread closes the phone drawer", "location.pathname === '/agents/chief' && document.querySelector('.ui-drawer') === null && !!document.querySelector('main.session .composer textarea')").await;
         page.capture(&out.join(format!("{profile}-chief-thread.png"))).await;
         let message = format!("Show the remote {profile} phone browser and request my approval.");
@@ -490,7 +532,10 @@ async fn phone(
             // A large initial SSE batch can flush; the human pause also exercises the silence watchdog.
             page.require_event_poll().await;
         }
-        page.click(APPROVE).await;
+        page.click_until(
+            APPROVE,
+            "!document.querySelector('.oc-card[data-kind=confirmation][data-status=pending]')",
+        ).await;
         page.wait("same chief task resumed on phone", &format!("document.body.innerText.includes({}) && document.querySelector('main.session')?.dataset.status === 'idle'", json!(format!("Phone {profile} approval resumed the same task.")))).await;
         assert_eq!(page.eval("performance.timeOrigin").await, loads, "SSE must update without reload");
         page.eval("document.dispatchEvent(new Event('visibilitychange')); true").await;

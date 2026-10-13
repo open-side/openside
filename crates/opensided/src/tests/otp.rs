@@ -174,6 +174,10 @@ pub(super) fn otp_config(root: &Path, entries: Vec<Entry>) -> Option<Resolved> {
     config.loaded.config.vault.path = Some(path);
     config.loaded.config.vault.passphrase_cmd =
         Some(vec!["cat".into(), pass_file.to_string_lossy().into_owned()]);
+    // The shared browser fixture shortens approvals to two seconds for tests that wait on
+    // expiry. Authenticator flows span daemon restarts — far longer under load — so restore
+    // the product lifetime; expiry is not what these tests exercise.
+    config.loaded.config.tickets.confirm_ttl_secs = 600;
     Some(config)
 }
 
@@ -1498,8 +1502,10 @@ async fn reject_ticket(daemon: &Daemon, id: &TicketId) -> Value {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    json_body(response).await
+    let status = response.status();
+    let body = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body
 }
 
 /// An approval that saved the factor and then failed to commit its ticket leaves its intent
