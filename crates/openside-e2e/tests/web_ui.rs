@@ -579,11 +579,18 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
 
     // The chief renders background work as a TaskUnit, not the delegated-child sheet.
     let task_output = harness.root().join("task-outside.txt");
+    // The daemon reports a background Task twice — once when it waits on the person,
+    // once when it ends — and each report is a queued message that gives the front
+    // agent a model turn. Whether both reports land in one batched turn or two turns
+    // depends on queue timing, so the script answers the first report turn with the
+    // reply and lets a second report turn stay silent; an unscripted report turn
+    // exhausts the script into a retryable model_error card.
     harness.replace_script(&json!({
         "responses": [
             tool("create_task", json!({"goal":"Write the chief report"}), "chief-task"),
             tool("stay_silent", json!({}), "chief-wait"),
             tool("send_message", json!({"text":"Chief report saved"}), "chief-reply"),
+            tool("stay_silent", json!({}), "chief-second-report"),
         ],
         "subagents": {
             "chief-task": [

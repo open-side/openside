@@ -610,6 +610,12 @@ async fn first_run_guide_is_walked_through_public_endpoints() {
     // The agent's configuration directory exists, so it counts as installed.
     std::fs::create_dir_all(root.join("home/.claude")).unwrap();
     use std::os::unix::fs::PermissionsExt;
+    // The Phone step's suggestion reads `tailscale.installed`, which the daemon resolves
+    // on its own PATH. A fixture in the private bin directory (ahead of PATH) says
+    // installed-but-not-serving, whatever the runner has or lacks.
+    let tailscale = root.join("bin/tailscale");
+    std::fs::write(&tailscale, "#!/bin/sh\necho '{}'\n").unwrap();
+    std::fs::set_permissions(&tailscale, std::fs::Permissions::from_mode(0o755)).unwrap();
     let cloudflared = root.join("cloudflared-fixture");
     std::fs::write(
         &cloudflared,

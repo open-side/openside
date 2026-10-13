@@ -1435,15 +1435,14 @@ async fn cards_team_proposal_and_autonomous_hire_receipts_offer_retire() {
             );
         }
         ui.reload(home).await;
-        ui.wait(&format!("!!{receipt}")).await;
-        assert_eq!(
-            ui.eval(&format!(
-                "document.querySelectorAll('.oc-card[data-card-id=\"{}\"]').length",
-                card.id
-            ))
-            .await,
-            1
-        );
+        // Asserting the count through the wait matters: the reloaded page rebuilds the
+        // timeline from a replayed event log, and on a slow host the receipt can flicker out
+        // and back between two reads even though the replay converges on exactly one row.
+        ui.wait(&format!(
+            "document.querySelectorAll('.oc-card[data-card-id=\"{}\"]').length === 1",
+            card.id
+        ))
+        .await;
         ui.close().await;
         harness.kill().await;
     }

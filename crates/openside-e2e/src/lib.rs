@@ -1,9 +1,12 @@
 //! Hermetic real-process acceptance harness for the Python sidecar.
 //!
 //! Each daemon and CLI receives private HOME/XDG directories and an empty
-//! environment except PATH and explicit test settings. Scripted FunctionModel
-//! responses require no credentials. Missing repository Python environments skip
-//! with a diagnostic; an installed but broken sidecar fails normally.
+//! environment except PATH and explicit test settings. The private `bin/`
+//! directory leads PATH so tests can shadow host tools (a fake `tailscale`)
+//! instead of depending on what the runner happens to have installed.
+//! Scripted FunctionModel responses require no credentials. Missing repository
+//! Python environments skip with a diagnostic; an installed but broken sidecar
+//! fails normally.
 //! Cleanup tracks descendants across separate daemon, sidecar and browser process
 //! groups, reaps them, and checks that no owned child remains. On Linux the test process is
 //! a child subreaper, so it also reaps the orphans it adopts while the test runs.
@@ -94,6 +97,7 @@ impl Harness {
             "workspace",
             "stderr",
             "python-hooks",
+            "bin",
         ] {
             std::fs::create_dir_all(directory.path().join(name))
                 .unwrap_or_else(|e| panic!("private directory: {e}"));
@@ -213,9 +217,16 @@ impl Harness {
             .env("OPENSIDE_TEST_STDERR", self.root().join("stderr"))
             .env("PYTHONPATH", self.root().join("python-hooks"))
             .kill_on_drop(true);
-        if let Some(path) = std::env::var_os("PATH") {
-            command.env("PATH", path);
-        }
+        // The private bin directory first: a fixture executable there (e.g. a fake
+        // `tailscale`) decides what the daemon can find, not the runner's host.
+        let mut path = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .collect::<Vec<_>>();
+        path.insert(0, self.root().join("bin"));
+        command.env(
+            "PATH",
+            std::env::join_paths(path)
+                .unwrap_or_else(|e| panic!("test PATH entries are joinable: {e}")),
+        );
         if std::env::var_os("OPENSIDE_TEST_DISABLE_PREWARM").is_some() {
             command.env("OPENSIDE_TEST_DISABLE_PREWARM", "1");
         }

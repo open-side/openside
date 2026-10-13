@@ -168,9 +168,12 @@ impl Server {
             .route(
                 "/many",
                 get(|| async {
+                    // Build the 210k nodes with one parser pass, not 210k appendChild calls:
+                    // the latter can outlast the action budget on a loaded machine, which
+                    // would make goto time out before the node-budget checks under test run.
                     Html(
                         r#"<!doctype html><title>Many</title><body>
-<script>for (let i = 0; i < 210000; i++) document.body.appendChild(document.createElement('i'))</script></body>"#,
+<script>document.body.insertAdjacentHTML('beforeend', '<i></i>'.repeat(210000))</script></body>"#,
                     )
                 }),
             )

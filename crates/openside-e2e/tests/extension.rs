@@ -115,6 +115,30 @@ impl Cdp {
             self.call(Some(session), "Input.dispatchMouseEvent", json!({"type":kind,"x":position["x"],"y":position["y"],"button":"left","clickCount":1})).await;
         }
     }
+    /// CDP input can silently drop when it lands while the page's compositor is still settling
+    /// (right after a viewport metrics change on a loaded or single-CPU host): the hit test
+    /// sees the element yet no event reaches the page. Click, then re-click only when the
+    /// expected page effect stayed false past a grace window, so a drop is retried and a
+    /// landed click never fires twice before its effect is observable.
+    async fn click_until(&mut self, session: &str, selector: &str, until: &str) {
+        const GRACE: Duration = Duration::from_millis(750);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let mut next_click = tokio::time::Instant::now();
+        loop {
+            if tokio::time::Instant::now() >= next_click {
+                self.click(session, selector).await;
+                next_click = tokio::time::Instant::now() + GRACE;
+            }
+            if self.evaluate_when_ready(session, until).await == Some(json!(true)) {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let visible = self.evaluate(session, "document.body.innerText").await;
+                panic!("clicks on {selector} did not produce {until}; visible text: {visible}");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
     async fn page(&mut self, url: &str) -> String {
         let target = self
             .call(None, "Target.createTarget", json!({"url":url}))
@@ -170,7 +194,6 @@ async fn debug_endpoint(profile: &Path) -> String {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
-
 #[tokio::test]
 async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_reply() {
     let executable = match openside_config::discover_browser(&openside_config::Config::default()) {
@@ -360,20 +383,20 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
         json!({}),
     )
     .await;
-    cdp.click(&options, "#agent-tabs").await;
-    cdp.wait_for(
+    cdp.click_until(
         &options,
+        "#agent-tabs",
         "document.querySelector('#agent-tabs').textContent === 'Disable Agent Tabs'",
     )
     .await;
     let grouping = format!(
-        "chrome.debugger.getTargets().then(async targets => {{ const target = targets.find(t => t.id === {}); if (!target || target.tabId === undefined) return false; const tab = await chrome.tabs.get(target.tabId); if (tab.groupId < 0) return false; return (await chrome.tabGroups.get(tab.groupId)).title === 'Agent Tabs'; }})",
+"chrome.debugger.getTargets().then(async targets => {{ const target = targets.find(t => t.id === {}); if (!target || target.tabId === undefined) return false; const tab = await chrome.tabs.get(target.tabId); if (tab.groupId < 0) return false; try {{ return (await chrome.tabGroups.get(tab.groupId)).title === 'Agent Tabs'; }} catch {{ return false; }} }})",
         json!(owned_target)
     );
     cdp.wait_for(&worker_session, &grouping).await;
-    cdp.click(&options, "#agent-tabs").await;
-    cdp.wait_for(
+    cdp.click_until(
         &options,
+        "#agent-tabs",
         "document.querySelector('#agent-tabs').textContent === 'Enable Agent Tabs'",
     )
     .await;
@@ -382,9 +405,9 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
         json!(owned_target)
     );
     cdp.wait_for(&worker_session, &ungrouped).await;
-    cdp.click(&options, "#agent-tabs").await;
-    cdp.wait_for(
+    cdp.click_until(
         &options,
+        "#agent-tabs",
         "document.querySelector('#agent-tabs').textContent === 'Disable Agent Tabs'",
     )
     .await;
@@ -419,7 +442,9 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         cdp.evaluate(&page, &format!("(() => {{ const range = document.createRange(); range.selectNodeContents(document.querySelector({})); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); return selection.toString(); }})()", json!(selector))).await;
-        cdp.click(&page, "#openside-handle-host").await;
+        cdp.evaluate(&page, "window.__trusted = 0; document.querySelector('#openside-handle-host').addEventListener('click', e => { if (e.isTrusted) window.__trusted++; }); true").await;
+        cdp.click_until(&page, "#openside-handle-host", "window.__trusted > 0")
+            .await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         loop {
             if harness.request("GET", "/v1/sessions", None).await.body["sessions"]
