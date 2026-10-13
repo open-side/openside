@@ -3057,9 +3057,13 @@ One candidate and the credential source that would serve a new sidecar.
 | `accounts` | [ModelAccount](#modelaccount)[] | yes | Credential-free candidates, including blocked/unavailable choices. |
 | `available` | boolean | yes | Local credential readiness under source priority and broker fail-close. |
 | `id` | string | yes | Explicit provider:model selector; image-only models are not chat defaults. |
+| `in_catalog` | boolean | no | False for an explicitly configured id outside the current curated generations. Default: `false`. |
 | `label` | string | yes | Model-name portion, never an account label or private identity. |
 | `reason` | string | yes | Credential-value-free readiness or refusal explanation. |
+| `recommended_for` | [ModelRole](#modelrole) \| null | no | Curated family recommendation, not a routing restriction. |
 | `source` | string \| null | no | First usable source, or null when unavailable. |
+| `strengths` | string | no | Short curated guidance; unknown configured models have no capability claim. Default: `""`. |
+| `tier` | [ModelTier](#modeltier) | no | Task-routing guidance, independent of credential readiness. Default: `"reasoning"`. |
 
 Unknown fields are rejected.
 
@@ -3210,7 +3214,7 @@ Authentication material and the identity HMAC are deliberately absent from this 
 | `created_at` | string (date-time) | yes | UTC time the row was first created. |
 | `expires_at` | string (date-time) \| null (date-time) | no | Latest live fingerprint expiry, or null for session cookies. |
 | `favicon` | string \| null | no | Bounded PNG data URL; no external URL is fetched by the client. |
-| `grants` | [ConnectionGrant](#connectiongrant)[] | yes | Explicit overrides; unspecified teammates ask. |
+| `grants` | [ConnectionGrant](#connectiongrant)[] | yes | Per-agent authorization, independent of authentication status; unspecified teammates ask. |
 | `home_url` | string \| null | no | Same-site HTTP(S) URL without query, fragment or credentials. |
 | `id` | string | yes | Opaque c_-prefixed identifier. |
 | `identity` | string \| null | no | Write-time-masked label; never a raw email or account key. |
@@ -3219,7 +3223,7 @@ Authentication material and the identity HMAC are deliberately absent from this 
 | `profile` | [ConnectionProfile](#connectionprofile) | yes | Cookie jar ownership, independent of the calling device. |
 | `site` | string | yes | Registrable domain under the public and private suffix lists. |
 | `source` | [ConnectionSource](#connectionsource) | yes | Strongest recorded sign-in source. |
-| `status` | [ConnectionStatus](#connectionstatus) | yes | Current confidence and liveness. |
+| `status` | [ConnectionStatus](#connectionstatus) | yes | Authentication evidence: candidate means a discovered sign-in, not verified authentication; active means checked sign-in. Agent access is separate. |
 | `used_at` | string (date-time) \| null (date-time) | no | Most recent successful agent use, if any. |
 | `used_by` | string \| null | no | Stable agent ID associated with used_at. |
 | `vault_item_id` | string \| null | no | Optional saved login link; not the login's contents. |
@@ -3367,7 +3371,7 @@ Admin listing separates weak candidates from ordinary cards.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `browser_available` | boolean | yes | Whether a managed browser is configured and available. |
-| `candidates` | [Connection](#connection)[] | yes | Weak detections for the collapsed disclosure. |
+| `candidates` | [Connection](#connection)[] | yes | Discovered sign-ins suggested by cookies/history, not verified connections or agent authorization. |
 | `connections` | [Connection](#connection)[] | yes | Non-candidate rows in stable site/ID order. |
 
 ### ConnectionListQuery
@@ -3431,7 +3435,7 @@ Confidence and liveness; only an observed sign-in or probe establishes active st
 
 | Value | Description |
 |---|---|
-| `"candidate"` | Cookie/history heuristic, separated from confirmed connections. |
+| `"candidate"` | Discovered sign-in suggested by cookies/history; authentication is not verified. |
 | `"unverified"` | Imported cookies that have not been checked. |
 | `"active"` | Observed authenticated state. |
 | `"expired"` | Every fingerprint key is absent or expired. |
@@ -3559,15 +3563,15 @@ Register a browser push subscription for the calling device.
 
 ### CreateRoutineRequest
 
-Routine creation request.
+Schedule and dispatch configuration.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `action` | [RoutineAction](#routineaction) | yes | Action performed on each run. |
-| `catch_up` | boolean \| null | no | Run once for the latest occurrence missed while the daemon was down; defaults to false. |
-| `enabled` | boolean \| null | no | Start enabled; defaults to true. |
-| `name` | string | yes | Human-readable name; must not be blank. |
-| `schedule` | [RoutineSchedule](#routineschedule) | yes | Firing schedule. |
+| `action` | [RoutineAction](#routineaction) | yes | Runs on each occurrence. |
+| `catch_up` | boolean \| null | no | Replay latest missed occurrence after downtime; default false. |
+| `enabled` | boolean \| null | no | Default true. |
+| `name` | string | yes | Nonblank display name. |
+| `schedule` | [RoutineSchedule](#routineschedule) | yes | Determines next occurrence. |
 
 Unknown fields are rejected.
 
@@ -3732,6 +3736,15 @@ Outcome of one doctor check.
 | `"warn"` | Works, but something is missing or degraded. |
 | `"fail"` | Broken: the feature does not work. |
 
+### DocumentDisplay
+
+How a delivered document opens in the conversation.
+
+| Value | Description |
+|---|---|
+| `"inline"` | A brief table or summary displayed in the message. |
+| `"panel"` | A long report opened alongside the conversation. |
+
 ### DropReason
 
 Why a message was dropped (never silent).
@@ -3776,7 +3789,7 @@ Variants:
 - `kind=turn.started`: Agent turn began.
 - `kind=turn.ended`: Agent turn ended.
 - `kind=assistant.delta`: Incremental assistant output. Fields: `text`: string.
-- `kind=assistant.final`: Complete assistant response. Fields: `text`: string.
+- `kind=assistant.final`: Complete assistant response. Fields: `attachments`: [MessageDocument](#messagedocument)[] (optional), `text`: string.
 - `kind=thinking.delta`: Incremental model thinking output. Fields: `text`: string.
 - `kind=usage`: Token usage for a model request. Fields: `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
 - `kind=tool.started`: Tool call began. Fields: `args`: any, `name`: string, `tool_call_id`: string.
@@ -3807,7 +3820,7 @@ Variants:
 - any What an agent is doing in a browser tab, derived by the daemon from the tool call and the page itself (labels come from the page, never from the model).
 - `kind=connection.saved`: A completed sign-in saved value-free connection metadata. Fields: `connection_id`: string, `identity`: string \| null (optional), `site`: string.
 - `kind=connection.used`: A granted agent use; no request values enter the event. Fields: `connection_id`: string, `method`: string \| null (optional), `mode`: [ConnectionUseMode](#connectionusemode), `site`: string.
-- `kind=team.hired`: A completed hire, correlated to its human authorization. Fields: `agent_id`: string, `card`: [Card](#card) \| null (optional), `name`: string, `request_message_id`: [MessageId](#messageid) \| null (optional), `ticket_id`: string \| null (optional).
+- `kind=team.hired`: A completed autonomous hire or a legacy human-authorized hire. Fields: `agent_id`: string, `card`: [Card](#card) \| null (optional), `name`: string, `request_message_id`: [MessageId](#messageid) \| null (optional), `ticket_id`: string \| null (optional).
 - `kind=team.handoff`: A durable work packet shared between the sender and recipient homes. Fields: `card`: [Card](#card) \| null (optional), `dedupe_key`: string, `from_agent`: string, `goal`: string, `handoff_id`: string, `handoff_kind`: [HandoffKind](#handoffkind), `to_agent`: string.
 - `kind=team.handoff_ended`: A settled handoff whose report is delivered through the durable outbox. Fields: `card`: [Card](#card) \| null (optional), `handoff_id`: string, `status`: [HandoffStatus](#handoffstatus), `summary`: string \| null (optional).
 - `kind=team.question`: A teammate requests a decision from the chief, not another teammate. Fields: `card`: [Card](#card) \| null (optional), `from_agent`: string, `options`: string[], `question_id`: string, `text`: string.
@@ -3830,7 +3843,7 @@ Public event payloads with stable `kind` identifiers, dotted except for `usage`.
 - `kind=turn.started`: Agent turn began.
 - `kind=turn.ended`: Agent turn ended.
 - `kind=assistant.delta`: Incremental assistant output. Fields: `text`: string.
-- `kind=assistant.final`: Complete assistant response. Fields: `text`: string.
+- `kind=assistant.final`: Complete assistant response. Fields: `attachments`: [MessageDocument](#messagedocument)[] (optional), `text`: string.
 - `kind=thinking.delta`: Incremental model thinking output. Fields: `text`: string.
 - `kind=usage`: Token usage for a model request. Fields: `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
 - `kind=tool.started`: Tool call began. Fields: `args`: any, `name`: string, `tool_call_id`: string.
@@ -3861,7 +3874,7 @@ Public event payloads with stable `kind` identifiers, dotted except for `usage`.
 - any What an agent is doing in a browser tab, derived by the daemon from the tool call and the page itself (labels come from the page, never from the model).
 - `kind=connection.saved`: A completed sign-in saved value-free connection metadata. Fields: `connection_id`: string, `identity`: string \| null (optional), `site`: string.
 - `kind=connection.used`: A granted agent use; no request values enter the event. Fields: `connection_id`: string, `method`: string \| null (optional), `mode`: [ConnectionUseMode](#connectionusemode), `site`: string.
-- `kind=team.hired`: A completed hire, correlated to its human authorization. Fields: `agent_id`: string, `card`: [Card](#card) \| null (optional), `name`: string, `request_message_id`: [MessageId](#messageid) \| null (optional), `ticket_id`: string \| null (optional).
+- `kind=team.hired`: A completed autonomous hire or a legacy human-authorized hire. Fields: `agent_id`: string, `card`: [Card](#card) \| null (optional), `name`: string, `request_message_id`: [MessageId](#messageid) \| null (optional), `ticket_id`: string \| null (optional).
 - `kind=team.handoff`: A durable work packet shared between the sender and recipient homes. Fields: `card`: [Card](#card) \| null (optional), `dedupe_key`: string, `from_agent`: string, `goal`: string, `handoff_id`: string, `handoff_kind`: [HandoffKind](#handoffkind), `to_agent`: string.
 - `kind=team.handoff_ended`: A settled handoff whose report is delivered through the durable outbox. Fields: `card`: [Card](#card) \| null (optional), `handoff_id`: string, `status`: [HandoffStatus](#handoffstatus), `summary`: string \| null (optional).
 - `kind=team.question`: A teammate requests a decision from the chief, not another teammate. Fields: `card`: [Card](#card) \| null (optional), `from_agent`: string, `options`: string[], `question_id`: string, `text`: string.
@@ -4739,13 +4752,26 @@ A message with durable lifecycle status.
 
 ### MessageAuthorKind
 
-Assigned by the daemon from authenticated ingress; historical messages fail closed.
+Daemon-authenticated source of a conversational message.
 
 | Value | Description |
 |---|---|
-| `"person"` | Authenticated person ingress; eligible for immediate-hire provenance checks. |
-| `"agent_client"` | A paired agent client, never equivalent to person approval. |
-| `"internal"` | Schedules, team messages, and historical messages with unknown provenance. |
+| `"person"` | Authenticated owner ingress. |
+| `"agent_client"` | A paired automation client. |
+| `"channel"` | A relayed channel thread, not owner steering. |
+| `"internal"` | Schedules, team reports and historical unknown sources. |
+
+### MessageDocument
+
+An admitted Markdown artifact; clients fetch its body from the artifact route.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `bytes` | integer (uint64) | yes | UTF-8 content size. |
+| `content_type` | string | yes | MIME type of the document. |
+| `display` | [DocumentDisplay](#documentdisplay) | yes | Placement requested by the assistant. |
+| `path` | string | yes | Session-relative artifact path. |
+| `title` | string | yes | Human-readable document title. |
 
 ### MessageId
 
@@ -4821,6 +4847,7 @@ Local credential readiness, never a guarantee of upstream model entitlement.
 | `cached_for_ms` | integer (uint32) | yes | Maximum metadata cache lifetime; managed writes invalidate it immediately. |
 | `default_model` | string \| null | no | Current default for new sessions and unoverridden Team homes on their next idle turn. |
 | `fallback_models` | string[] | yes | Running model fallback chain, independent of credential-source order. |
+| `fast_model` | string \| null | no | Fast chief front-agent model; null uses the reasoning model. |
 | `providers` | [ModelProvider](#modelprovider)[] | yes | Provider groups sorted by identifier, with deduplicated model ids. |
 | `truncated` | boolean | yes | An input or output metadata limit omitted entries. |
 
@@ -4838,6 +4865,15 @@ Chat/tool-capable candidates for one Pydantic AI provider namespace.
 
 Unknown fields are rejected.
 
+### ModelRole
+
+Curated role hint; any available model may serve either role.
+
+| Value | Description |
+|---|---|
+| `"fast"` | Low-latency chief replies and Task dispatch. |
+| `"reasoning"` | Task execution and ordinary session work. |
+
 ### ModelSelection
 
 Result of a dedicated model-selection write, not raw config PUT semantics.
@@ -4847,9 +4883,20 @@ Result of a dedicated model-selection write, not raw config PUT semantics.
 | `default_model` | string | yes | The newly running default, after successful private-file persistence. |
 | `effective` | string | yes | new_sessions_and_home_next_turn: ordinary sessions retain stored models; homes reopen idle. |
 | `fallback_models` | string[] | yes | The newly running ordered fallback chain. |
+| `fast_model` | string \| null | no | Persisted fast model; null uses the reasoning model. |
 | `restart_required` | boolean | yes | Always false: dedicated selection applies without restarting the daemon. |
 
 Unknown fields are rejected.
+
+### ModelTier
+
+Curated task-routing tier, not an entitlement or performance guarantee.
+
+| Value | Description |
+|---|---|
+| `"fast"` | Quick lookups and simple work. |
+| `"reasoning"` | General multi-step work; also the neutral tier for uncataloged configured ids. |
+| `"frontier"` | The family's highest-capability models for hard work. |
 
 ### Money
 
@@ -5525,6 +5572,7 @@ How long a memory is kept after its last write.
 | `"permanent"` | Never purged automatically. |
 | `"days_90"` | Purged 90 days after the last write. |
 | `"days_30"` | Purged 30 days after the last write. |
+| `"hours_24"` | Short-lived context, purged 24 hours after the last write. |
 
 ### RetireAgentRequest
 
@@ -5568,11 +5616,11 @@ A scheduled routine.
 
 ### RoutineAction
 
-What a routine does when it fires.
+Dispatch destination and payload.
 
-- `type=new_session`: Create a fresh session and submit the prompt as its first message. Fields: `mode`: [PolicyMode](#policymode) \| null (optional), `model`: string \| null (optional), `prompt`: string, `workspace`: string \| null (optional).
-- `type=agent`: Deliver to the active owner's permanent home thread. Fields: `agent_id`: string, `prompt`: string.
-- `type=heartbeat`: Inject a follow-up (queue lane) message into an existing session. Fields: `prompt`: string, `session_id`: [SessionId](#sessionid).
+- `type=new_session`: First message in a fresh session. Fields: `mode`: [PolicyMode](#policymode) \| null (optional), `model`: string \| null (optional), `prompt`: string, `workspace`: string \| null (optional).
+- `type=agent`: Active owner's permanent home thread. Fields: `agent_id`: string, `prompt`: string.
+- `type=heartbeat`: Queue a follow-up in an existing session. Fields: `prompt`: string, `session_id`: [SessionId](#sessionid).
 
 ### RoutineDraft
 
@@ -5607,10 +5655,10 @@ Why a routine is not firing although the user did not disable it.
 
 ### RoutineSchedule
 
-When a routine fires.
+Wall-clock or elapsed-time trigger.
 
-- `type=cron`: POSIX five-field cron expression (minute hour day-of-month month day-of-week). Fields: `expr`: string, `timezone`: string \| null (optional).
-- `type=interval`: Fixed period anchored at the moment the routine was created or last rescheduled. Fields: `secs`: integer (uint64).
+- `type=cron`: POSIX minute/hour/day/month/weekday. Fields: `expr`: string, `timezone`: string \| null (optional).
+- `type=interval`: Anchored at creation or last reschedule. Fields: `secs`: integer (uint64).
 
 ### RoutineSuggestionList
 
@@ -5671,7 +5719,7 @@ Session metadata and pending queue, in delivery order.
 | `incognito` | boolean | no | Private session fixed at creation: its browsing is never written to memory. Default: `false`. |
 | `last_seq` | integer (uint64) | yes | Latest durable sequence, or zero before creation. |
 | `mode` | [PolicyMode](#policymode) | yes | Permission ceiling selected when the session was created. |
-| `model` | string | yes | Provider-qualified model. |
+| `model` | string | yes | Provider-qualified model selected when the session was created, not its effective current model. |
 | `pinned` | boolean | no | Listed before unpinned sessions. Default: `false`. |
 | `queue` | [Message](#message)[] | yes | Steering first, then follow-up messages. |
 | `status` | [SessionStatus](#sessionstatus) | yes | Rebuilt from turn and session events. |
@@ -5889,7 +5937,7 @@ One child agent started by the parent session's `delegate` tool.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `background` | boolean | no | A background Task started by the front agent (`task_start`). |
+| `background` | boolean | no | A background Task started by the front agent (`create_task`). |
 | `ended_at` | string (date-time) \| null (date-time) | no | When the child reached a terminal state. |
 | `id` | string | yes | Daemon-assigned subagent identifier, also used as `ticket.origin.subagent_id`. |
 | `last_progress` | any | no | Latest `subagent.progress` payload. |
@@ -6578,6 +6626,7 @@ Persist available catalog ids for new sessions and the next idle turn of Team ho
 |---|---|---|---|
 | `default_model` | string | yes | Available provider-qualified catalog id; must not be a fallback duplicate. |
 | `fallback_models` | string[] | yes | At most 16 distinct available catalog ids in fallback order. |
+| `fast_model` | string \| null | no | Fast chief front-agent model; null uses the reasoning model. Default: `null`. |
 
 Unknown fields are rejected.
 

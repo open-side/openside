@@ -105,3 +105,67 @@ uv run pytest tests/providers tests/test_credential_rpc.py tests/test_protocol.p
 ```
 
 결정론적 테스트는 임시 `HOME`, `XDG`, CLI 홈 디렉터리를 두고 프로바이더 자격 증명을 비운 상태에서 가짜 데몬과 가짜 HTTP 전송 계층만 사용한다. 429 Retry-After 로테이션, 401 무효화, 턴 간 어피니티 유지, 64회 시도 상한, 타입화된 자원 소진, 단방향 취소, 부분 스트림 재전송 금지, 카나리 토큰 마스킹, 느린 수신자 환경의 대용량(>64 KiB) JSONL 프레임 처리를 테스트한다. 실제 프로바이더 호출 및 브로커 토큰 스모크 테스트는 더 이상 사이드카 진단 경로에 포함되지 않는다.
+
+## Task escalation and history compaction
+
+Worker instructions use known context, authorized connections/APIs, exposed web
+search, authorized browser access, then a human question. An absent connector can
+be skipped; a broken connector, expired authentication, or denial cannot be
+bypassed through a browser or another execution tool. Browser structure precedes
+pixels. Security challenges stay human-only. This policy adds no tools and is not
+installed on the front agent.
+
+History compaction uses the current session model, not a separate routing policy.
+The default history budget is 64,000 estimated tokens. Text and structural
+metadata use UTF-8 bytes divided by three (rounded up), counting the current
+instructions once rather than their replay copies in earlier requests. Each image
+or binary media part reserves 1,600 tokens instead of counting its encoded payload.
+Set `compaction_max_tokens` in the
+session/model agent configuration to override it. `compaction_max_messages` is an
+optional legacy trigger; short conversations are not compacted merely for
+reaching 100 messages. The normal tail is 20 messages (`compaction_keep_messages`);
+when that tail exceeds the size budget, the last two messages remain verbatim,
+extended backward as necessary to preserve tool-call/result pairs. The first user
+goal also remains verbatim. A currently indispensable oversized tail is retained,
+not silently truncated; the daemon's Task spill path owns large-result storage.
+
+After a settled turn, idle compaction waits 250 ms and skips known queued work,
+pending approvals, and active children. Incoming work cancels only the speculative
+summary, never a host tool. A history fingerprint, history identity, prompt epoch,
+and generation compare-and-set discard stale summaries. Committed compaction
+invalidates browser snapshot bases and persists a new continuation snapshot;
+opaque spill artifacts retain their independent daemon retention policy. The
+prompt epoch stays fixed. Failed idle summaries leave the original history intact.
+
+## Prompt epochs and cache diagnostics
+
+Each parent and Task agent assembles a prompt epoch before creating its Agent.
+The epoch stores canonical name-sorted daemon tool definitions and separate base
+system, persona, skill-index, policy, and memory-profile sections in the opaque
+daemon snapshot. Resume reuses these exact bytes, even after deployment changes;
+removed tools still face daemon-side authorization at execution time. New sessions
+create new epochs. Explicit `PromptEpoch.assemble(..., transition=True)` is the
+reset boundary; ordinary turns, deployment, and history compaction do not reset it.
+Legacy snapshots without an epoch establish one on their next open.
+
+Live roster and selected memory context belong at the latest model-message
+boundary, never in the frozen instructions. Changed stable sections produce only
+a data-only pending-change notice until the next epoch. Ephemeral context is
+request-local rather than repeatedly copied into durable conversation history.
+
+Every parent/Task model request logs `prompt_sections`: section SHA-256 hashes,
+Unicode character lengths, an opaque epoch ID, and change causes. First-message
+hashes detect history-prefix replacement; provider/model identities are hashed.
+Credential acquisition logs `prompt_request_identity`, including hashed account
+identity and a distinct account-boundary cause for rotation. These stderr records
+contain no prompt text, raw account IDs, or credentials. Hashes are diagnostics,
+not encryption or a guarantee that low-entropy content cannot be guessed.
+
+Provider-created Anthropic and OpenAI models default to Pydantic AI `cache=True`.
+The installed adapter maps this to Anthropic stable system/tool cache controls
+and conversation caching; supported OpenAI models receive explicit instruction
+breakpoints, while other OpenAI models retain provider-side implicit caching.
+Explicit per-request/provider settings take precedence. Mock-transport tests
+inspect the actual serialized provider requests and usage parsing. They do not
+establish live hit rates: minimum prompt sizes, account/model boundaries, provider
+support, and retention still determine real cache reuse. No paid prefetch occurs.

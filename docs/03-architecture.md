@@ -116,3 +116,7 @@ CEF 기반 자체 셸은 채택하지 않는다: 확장 생태계(비밀번호 �
 
 ## 8. 데이터 디렉터리
 기본은 XDG 데이터 디렉터리 아래 `openside/`(0700, `daemon.data_dir`/`OPENSIDE_DATA_DIR` 로 변경): `events.db`(세션 이벤트·티켓·`agent_state`), `devices.db`, `audit.jsonl`, `vault-audit.jsonl`, `browser-profile/`, `browser-state.json`, `daemon.lock`, `opensided.port`(loopback TCP 포트), `policy.json`(`PUT /v1/policy` 로 저장한 정책, 0600), `routines.db`, `memory.db`, `memory/`, `skills/`, `channels/`, `artifacts/`(긴 툴 출력), `secret-fill-intents/`. SQLite 의 `-wal`/`-shm` 파일은 각 DB 에 딸린다. 소켓은 런타임 디렉터리(`opensided.sock`, 사이드카별 비공개 디렉터리). 설정은 XDG 설정 디렉터리의 `openside/config.toml`. 키·환경변수 전체는 [CONFIGURATION.md](CONFIGURATION.md).
+
+`agents.db` stores the team registry, handoffs, transfer progress, and metadata-only audit, with SQLite `-wal`/`-shm` companions. Artifact directories are created on demand: observation screenshots remain model-only; `browser_screenshot output=true` creates a delivered PNG under `artifacts/`.
+
+Connection metadata lives in `connections.db`; `connections-audit.jsonl` records metadata-only usage, and `connections.key` holds the private identity HMAC key. The complete storage manifest, including on-demand paths and atomic replacements, is [specs/data-layout.md](specs/data-layout.md).

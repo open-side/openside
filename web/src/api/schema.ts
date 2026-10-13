@@ -8541,12 +8541,29 @@ export interface components {
             available: boolean;
             /** @description Explicit provider:model selector; image-only models are not chat defaults. */
             id: string;
+            /**
+             * @description False for an explicitly configured id outside the current curated generations.
+             * @default false
+             */
+            in_catalog: boolean;
             /** @description Model-name portion, never an account label or private identity. */
             label: string;
             /** @description Credential-value-free readiness or refusal explanation. */
             reason: string;
+            /** @description Curated family recommendation, not a routing restriction. */
+            recommended_for?: components["schemas"]["ModelRole"] | null;
             /** @description First usable source, or null when unavailable. */
             source?: string | null;
+            /**
+             * @description Short curated guidance; unknown configured models have no capability claim.
+             * @default
+             */
+            strengths: string;
+            /**
+             * @description Task-routing guidance, independent of credential readiness.
+             * @default reasoning
+             */
+            tier: components["schemas"]["ModelTier"];
         };
         /** @description Metadata-only account response; credential fields are intentionally absent. */
         ChannelAccount: {
@@ -8736,7 +8753,7 @@ export interface components {
             expires_at?: string | null;
             /** @description Bounded PNG data URL; no external URL is fetched by the client. */
             favicon?: string | null;
-            /** @description Explicit overrides; unspecified teammates ask. */
+            /** @description Per-agent authorization, independent of authentication status; unspecified teammates ask. */
             grants: components["schemas"]["ConnectionGrant"][];
             /** @description Same-site HTTP(S) URL without query, fragment or credentials. */
             home_url?: string | null;
@@ -8754,7 +8771,7 @@ export interface components {
             site: string;
             /** @description Strongest recorded sign-in source. */
             source: components["schemas"]["ConnectionSource"];
-            /** @description Current confidence and liveness. */
+            /** @description Authentication evidence: candidate means a discovered sign-in, not verified authentication; active means checked sign-in. Agent access is separate. */
             status: components["schemas"]["ConnectionStatus"];
             /**
              * Format: date-time
@@ -8881,7 +8898,7 @@ export interface components {
         ConnectionList: {
             /** @description Whether a managed browser is configured and available. */
             browser_available: boolean;
-            /** @description Weak detections for the collapsed disclosure. */
+            /** @description Discovered sign-ins suggested by cookies/history, not verified connections or agent authorization. */
             candidates: components["schemas"]["Connection"][];
             /** @description Non-candidate rows in stable site/ID order. */
             connections: components["schemas"]["Connection"][];
@@ -9045,18 +9062,18 @@ export interface components {
         };
         /**
          * CreateRoutineRequest
-         * @description Routine creation request.
+         * @description Schedule and dispatch configuration.
          */
         CreateRoutineRequest: {
-            /** @description Action performed on each run. */
+            /** @description Runs on each occurrence. */
             action: components["schemas"]["RoutineAction"];
-            /** @description Run once for the latest occurrence missed while the daemon was down; defaults to false. */
+            /** @description Replay latest missed occurrence after downtime; default false. */
             catch_up?: boolean | null;
-            /** @description Start enabled; defaults to true. */
+            /** @description Default true. */
             enabled?: boolean | null;
-            /** @description Human-readable name; must not be blank. */
+            /** @description Nonblank display name. */
             name: string;
-            /** @description Firing schedule. */
+            /** @description Determines next occurrence. */
             schedule: components["schemas"]["RoutineSchedule"];
         };
         /**
@@ -9242,6 +9259,8 @@ export interface components {
         };
         /** @description Outcome of one doctor check. */
         DoctorStatus: "ok" | "warn" | "fail";
+        /** @description How a delivered document opens in the conversation. */
+        DocumentDisplay: "inline" | "panel";
         /** @description Why a message was dropped (never silent). */
         DropReason: "removed" | "session_reset";
         /**
@@ -9344,6 +9363,8 @@ export interface components {
             /** @description Text fragment, appended in sequence order. */
             text: string;
         } | {
+            /** @description Admitted Markdown artifacts; bodies are fetched separately. */
+            attachments?: components["schemas"]["MessageDocument"][];
             /** @constant */
             kind: "assistant.final";
             /** @description Full final text. */
@@ -9450,7 +9471,7 @@ export interface components {
             tool_call_id: string;
         } | {
             /**
-             * @description A Task started by the front agent's `task_start`: it runs in the background and
+             * @description A Task started by the front agent's `create_task`: it runs in the background and
              *     reports its result into the conversation instead of blocking the parent call.
              */
             background?: boolean;
@@ -9623,9 +9644,9 @@ export interface components {
             kind: "team.hired";
             /** @description Display name at the time of hiring. */
             name: string;
-            /** @description Authoritative person message permitting immediate hiring. */
+            /** @description Legacy explicit person-requested hire authorization, absent for autonomous hires. */
             request_message_id?: components["schemas"]["MessageId"] | null;
-            /** @description Approving ticket, absent for an immediate person-requested hire. */
+            /** @description Legacy approving ticket; absent for an autonomous hire. */
             ticket_id?: string | null;
         } | {
             /** @description Common card projection, absent in historical records. */
@@ -9785,6 +9806,8 @@ export interface components {
             /** @description Text fragment, appended in sequence order. */
             text: string;
         } | {
+            /** @description Admitted Markdown artifacts; bodies are fetched separately. */
+            attachments?: components["schemas"]["MessageDocument"][];
             /** @constant */
             kind: "assistant.final";
             /** @description Full final text. */
@@ -9891,7 +9914,7 @@ export interface components {
             tool_call_id: string;
         } | {
             /**
-             * @description A Task started by the front agent's `task_start`: it runs in the background and
+             * @description A Task started by the front agent's `create_task`: it runs in the background and
              *     reports its result into the conversation instead of blocking the parent call.
              */
             background?: boolean;
@@ -10064,9 +10087,9 @@ export interface components {
             kind: "team.hired";
             /** @description Display name at the time of hiring. */
             name: string;
-            /** @description Authoritative person message permitting immediate hiring. */
+            /** @description Legacy explicit person-requested hire authorization, absent for autonomous hires. */
             request_message_id?: components["schemas"]["MessageId"] | null;
-            /** @description Approving ticket, absent for an immediate person-requested hire. */
+            /** @description Legacy approving ticket; absent for an autonomous hire. */
             ticket_id?: string | null;
         } | {
             /** @description Common card projection, absent in historical records. */
@@ -11075,8 +11098,24 @@ export interface components {
             /** @description Latest text, including edits made before delivery. */
             text: string;
         };
-        /** @description Assigned by the daemon from authenticated ingress; historical messages fail closed. */
-        MessageAuthorKind: "person" | "agent_client" | "internal";
+        /** @description Daemon-authenticated source of a conversational message. */
+        MessageAuthorKind: "person" | "agent_client" | "channel" | "internal";
+        /** @description An admitted Markdown artifact; clients fetch its body from the artifact route. */
+        MessageDocument: {
+            /**
+             * Format: uint64
+             * @description UTF-8 content size.
+             */
+            bytes: number;
+            /** @description MIME type of the document. */
+            content_type: string;
+            /** @description Placement requested by the assistant. */
+            display: components["schemas"]["DocumentDisplay"];
+            /** @description Session-relative artifact path. */
+            path: string;
+            /** @description Human-readable document title. */
+            title: string;
+        };
         /**
          * @description Identifies one user message. Assigned by the client or daemon and used for
          *     idempotent delivery.
@@ -11164,6 +11203,8 @@ export interface components {
             default_model?: string | null;
             /** @description Running model fallback chain, independent of credential-source order. */
             fallback_models: string[];
+            /** @description Fast chief front-agent model; null uses the reasoning model. */
+            fast_model?: string | null;
             /** @description Provider groups sorted by identifier, with deduplicated model ids. */
             providers: components["schemas"]["ModelProvider"][];
             /** @description An input or output metadata limit omitted entries. */
@@ -11181,6 +11222,8 @@ export interface components {
             /** @description SDK provider namespace, not an upstream account identifier. */
             provider: string;
         };
+        /** @description Curated role hint; any available model may serve either role. */
+        ModelRole: "fast" | "reasoning";
         /**
          * ModelSelection
          * @description Result of a dedicated model-selection write, not raw config PUT semantics.
@@ -11192,9 +11235,13 @@ export interface components {
             effective: string;
             /** @description The newly running ordered fallback chain. */
             fallback_models: string[];
+            /** @description Persisted fast model; null uses the reasoning model. */
+            fast_model?: string | null;
             /** @description Always false: dedicated selection applies without restarting the daemon. */
             restart_required: boolean;
         };
+        /** @description Curated task-routing tier, not an entitlement or performance guarantee. */
+        ModelTier: "fast" | "reasoning" | "frontier";
         /** @description Canonical Money wire contract; presentation never grants authority. */
         Money: {
             /** @description Upper-case ISO currency code. */
@@ -11896,7 +11943,7 @@ export interface components {
         /** @description How the daemon restarts itself. */
         RestartMethod: "re_exec";
         /** @description How long a memory is kept after its last write. */
-        Retention: "permanent" | "days_90" | "days_30";
+        Retention: "permanent" | "days_90" | "days_30" | "hours_24";
         /**
          * RetireAgentRequest
          * @description Retirement keeps history and records ownership movement for resumable recovery.
@@ -11963,29 +12010,29 @@ export interface components {
             /** @description Firing schedule. */
             schedule: components["schemas"]["RoutineSchedule"];
         };
-        /** @description What a routine does when it fires. */
+        /** @description Dispatch destination and payload. */
         RoutineAction: {
-            /** @description Permission mode override, or the daemon default when omitted. */
+            /** @description Omitted: daemon default. */
             mode?: components["schemas"]["PolicyMode"] | null;
-            /** @description Model override, or the configured default when omitted. */
+            /** @description Omitted: configured model. */
             model?: string | null;
-            /** @description Prompt submitted to the new session. */
+            /** @description Initial user message. */
             prompt: string;
             /** @constant */
             type: "new_session";
-            /** @description Absolute workspace path, canonicalized by the daemon when the run starts. */
+            /** @description Absolute path; canonicalized at dispatch. */
             workspace?: string | null;
         } | {
-            /** @description Registry identity resolved at dispatch, never a fallback session. */
+            /** @description Resolved at dispatch; never falls back to a session. */
             agent_id: string;
-            /** @description Prompt queued only while the owner remains active. */
+            /** @description Queued only while owner is active. */
             prompt: string;
             /** @constant */
             type: "agent";
         } | {
-            /** @description Message text. */
+            /** @description Queued user message. */
             prompt: string;
-            /** @description Session that receives the message. */
+            /** @description Existing destination. */
             session_id: components["schemas"]["SessionId"];
             /** @constant */
             type: "heartbeat";
@@ -12029,9 +12076,9 @@ export interface components {
          * @description Why a routine is not firing although the user did not disable it.
          */
         RoutinePauseReason: "target_missing" | "agent_retired";
-        /** @description When a routine fires. */
+        /** @description Wall-clock or elapsed-time trigger. */
         RoutineSchedule: {
-            /** @description Cron expression; `@hourly`/`@daily`-style aliases are accepted. */
+            /** @description Accepts @hourly/@daily aliases. */
             expr: string;
             /** @description IANA time zone name; UTC when omitted. */
             timezone?: string | null;
@@ -12040,7 +12087,7 @@ export interface components {
         } | {
             /**
              * Format: uint64
-             * @description Seconds between runs; at least one.
+             * @description Seconds; >=1.
              */
             secs: number;
             /** @constant */
@@ -12133,7 +12180,7 @@ export interface components {
             last_seq: number;
             /** @description Permission ceiling selected when the session was created. */
             mode: components["schemas"]["PolicyMode"];
-            /** @description Provider-qualified model. */
+            /** @description Provider-qualified model selected when the session was created, not its effective current model. */
             model: string;
             /**
              * @description Listed before unpinned sessions.
@@ -12365,7 +12412,7 @@ export interface components {
         };
         /** @description One child agent started by the parent session's `delegate` tool. */
         Subagent: {
-            /** @description A background Task started by the front agent (`task_start`). */
+            /** @description A background Task started by the front agent (`create_task`). */
             background?: boolean;
             /**
              * Format: date-time
@@ -13339,6 +13386,11 @@ export interface components {
             default_model: string;
             /** @description At most 16 distinct available catalog ids in fallback order. */
             fallback_models: string[];
+            /**
+             * @description Fast chief front-agent model; null uses the reasoning model.
+             * @default null
+             */
+            fast_model: string | null;
         };
         /**
          * UpdateNetworkPolicyRequest

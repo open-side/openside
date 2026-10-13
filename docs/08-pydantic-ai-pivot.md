@@ -52,7 +52,7 @@ Rust credential owner ← explicit provider pool (omp-broker · vault · env · 
 | harness capability | 평가 후 채택(S-9) | §E. 5개를 툴 0개 노출 조건으로 연결 |
 | 테스트 | fake broker + fake provider, `pytest -m live` | 가상 broker 와 `MockTransport`, `FunctionModel`, `OPENSIDE_AGENT_SCRIPT`(스크립트 모델, 프로토콜 §9)로 hermetic 하게 돌린다. live 는 `@pytest.mark.live` 로 분리하고 `OPENSIDE_LIVE_MODEL` 을 지정할 때만 실행한다. 이번 goal 의 live 호출은 4회(Claude 1회): Codex `pytest -m live` 통과, Claude `pytest -m live` 통과(429 없음), 데몬+사이드카 `ask_user` 왕복 |
 
-compaction 임계값(`compaction_max_messages` 기본 100, `compaction_keep_messages` 기본 20)과 `tool_retries` 는 `open.config.agent` 로 바꿀 수 있지만, 데몬은 현재 `config.agent` 에 빈 객체를 보내므로(`crates/openside-agent-sidecar/src/connection.rs`) 기본값이 쓰인다.
+The daemon forwards `[agent]` runtime options through `open.config.agent`: `compaction_max_tokens` defaults to 64,000 estimated history tokens (serialized UTF-8 bytes/3), `compaction_max_messages` is an optional legacy trigger, and `compaction_keep_messages` defaults to 20. Oversized tails retain at least two recent messages and complete tool-call/result pairs. `tool_retries` is also forwarded. See `agent/README.md` for idle cancellation and epoch compare-and-set semantics.
 
 ## D. 알려진 위험
 - Claude 구독 셰이핑은 Anthropic 이 바꾸면 깨진다(위 429). 완화: 셰이핑 모듈 격리, `*_too_old` 자동 적응, API 키 경로(`env`/`command`) 병행, `openside doctor` 점검. 실제 서비스에 대한 지속적 호환은 `unverified`.
@@ -69,7 +69,7 @@ compaction 임계값(`compaction_max_messages` 기본 100, `compaction_keep_mess
 |---|---|---|---|---|
 | subagents | later | 공용 프록시는 동작하지만 자식 deferred/approval 결과가 문자열로 변환됨 | explicit proxy binding; deprecated inherit_tools 금지; 자식 conversation/티켓 소유권과 부모 suspend adapter, 승인된 delegate 도구 필요 | 미연결 — harness capability 로는 연결하지 않고 사이드카 자체 어댑터(ADR-020)로 대체. 자식 deferred 가 부모로 올라오지 않기 때문 |
 | skills | later | instruction 로딩은 동작하나 discovery와 load_capability의 도구 소유권 조정 필요 | directories와 include/exclude; 신뢰된 read-only/daemon workspace; PyYAML; 번들 자동 실행 금지 | 미연결 |
-| compaction | adopt | 도구 없는 history 훅 동작, 세션 모델로 요약 가능 | model=None; threshold/window 설정; summarization_capabilities와 streaming 설정; 압축 후 Conversation 저장 | 연결: `SummarizingCompaction(model=None, max_messages=100, keep_messages=20)` (임계값 키 `compaction_max_messages`/`compaction_keep_messages`, 데몬은 기본값 사용) |
+| compaction | adopt | Tool-free history hook; uses session model | Size budget; safe tail; snapshot after commit | `ReportingCompaction`: `compaction_max_tokens=64000`, optional `compaction_max_messages`, `compaction_keep_messages=20`; idle scheduling with stale-result cancellation |
 | memory | later | 기본은 프로세스 메모리이고 내장 도구가 store에 직접 씀 | daemon-backed MemoryStore/도구 schema; session/agent namespace; injection_errors='raise'; 비밀 저장 금지 | 미연결 |
 | ask_user | later | stdin 없는 deferred 재개 동작, 기본 도구 이름·schema는 데몬과 다름 | daemon 경로에 AskUserRequest/ask_user_result 재사용; answerer=None; DeferredToolRequests output; secret_input에 사용 금지 | 미연결 — 데몬 `ask_user` 툴(`info` 티켓)로 대체 |
 | step_persistence | later | 저장 이중화 및 Conversation metadata 누락 | daemon-backed StepStore, Rust 기준 저장소; session conversation_id와 fresh run_id; ConversationTypeAdapter 대체 금지 | 미연결 — 대화 스냅샷은 사이드카 `openside-agent-state/1` 을 데몬이 보관 |

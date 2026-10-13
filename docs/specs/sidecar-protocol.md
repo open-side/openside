@@ -30,7 +30,7 @@
 ## 4. 데몬 → 사이드카
 | type | 필드 | 의미 |
 | --- | --- | --- |
-| `open` | `session`, `model{id, fallback[]}`, `system_prompt_parts[]`, `tools[ToolSpec]`, `resume_state?`, `config{credentials, agent}` | 세션 열기. `agent` = `{tool_retries, compaction_max_messages, compaction_keep_messages, profile, orchestration, front_tools?, front_model?}`(설정 `[agent]`, §11). `profile` 이 `"ultrabrowse"` 면 사이드카가 높은 추론 설정, 계획 전 브라우저 호출 거절, 최종 답변 인용 검사(재시도 후 `[citation needed]` 표시)를 더하고, 최종 답변 후보 텍스트는 `assistant.delta` 로 보내지 않는다([`ultrabrowse.md`](ultrabrowse.md) §4). 도구·프롬프트 축소는 데몬이 이미 해서 보낸다([`profiles.md`](profiles.md)). 연결당 정확히 1회, `hello` 직후 |
+| `open` | `session`, `model{id, fallback[]}`, `system_prompt_parts[]`, `tools[ToolSpec]`, `resume_state?`, `config{credentials, agent}` | Opens exactly one session per connection, immediately after `hello`. `agent` = `{tool_retries, compaction_max_tokens, compaction_max_messages?, compaction_keep_messages, profile, orchestration, front_tools?, front_model?}` (`[agent]`, §11). The optional message threshold may be null. `ultrabrowse` adds high reasoning, planning-before-browser checks, final citation validation, and no candidate final-text deltas ([`ultrabrowse.md`](ultrabrowse.md) §4). The daemon supplies the reduced tool/prompt profile ([`profiles.md`](profiles.md)). |
 | ↳ 스킬 | — | `system_prompt_parts` 에 `<available_skills>` 목록이 있고 `tools` 에 `skill` 이 있으면, 사용자 메시지의 `/이름`(목록에 있는 이름)마다 사이드카가 모델 요청 전에 `tool_call` 로 `skill` 을 호출해 결과를 대화 기록에 넣는다(`tool_call_id` 는 `skill-mention-…`). 거절·오류면 건너뛴다. [`skills.md`](skills.md) |
 | `user_message` | `message_id`, `text`, `mode: "queue"\|"steer"\|"now"` | 유휴면 새 런 시작. 실행 중이면 `steer`/`now` 는 다음 모델 요청 직전에 주입, `queue` 는 현재 런의 작업이 끝난 뒤 처리 |
 | `abort` | — | 현재 런 취소. 유휴면 무시 |
@@ -138,8 +138,9 @@ chief는 조율을 총괄한다. 반복 작업에는 teammate를 배정하고, �
 스크립트 수준의 선택적 `title` 문자열은 스크립트 전용 별도 제목 모델을 지정하며, 기본값은 `Discuss the request`다. 제목 생성은 `responses` 항목을 소모하지 않고 실제 프로바이더를 호출하지도 않으며, 1회 실행 여부는 `title_attempted`를 통해 복원된다.
 
 - `echo`: 가장 최근에 입력된 사용자 프롬프트를 그대로 출력한다.
-- `{{result:call.field.path}}`: 최상위 문자열 인자 안에서 도구 호출 반환 객체의 필드 경로 또는 숫자 배열 인덱스를 따라가 값을 치환한다.
-- `script.subagents`: `task_start` 및 `delegate` 호출 ID를 하위 에이전트 응답 목록과 매핑하며, 하위 작업마다 독립적인 커서와 steer 이벤트를 관리한다.
+- `{{result:call.field.path}}`: substitutes a returned tool field or numeric array index inside string arguments, recursively through nested objects and arrays.
+- `script.subagents`: `create_task` 및 `delegate` 호출 ID를 하위 에이전트 응답 목록과 매핑하며, 하위 작업마다 독립적인 커서와 steer 이벤트를 관리한다.
+- Scripted front fixtures use explicit `send_message` or `stay_silent` output tool calls. `{{user_text}}` and `{{media_digest}}` in tool arguments supply the latest user text or media digest without enabling plain-text front output; worker `echo` and `media_digest` response parts remain unchanged.
 
 ## 10. 서브에이전트
 - 부모 모델이 데몬 툴 `delegate{task, model?, tools?, context?: "fresh"|"fork"}` 를 호출하면 데몬이 허용 여부를 판단한다. 모델은 세션 모델, `models.default`, `models.fallback` 중 하나여야 하며(아니면 `model_not_allowed` 로 거부), 툴은 세션에 노출된 툴 중 `delegate` 를 뺀 범위 안에서만 줄 수 있다. 허용되면 데몬이 `subagent_id` 를 정하고 `subagent.started` 를 기록한 뒤 `{subagent_id, model, tools, context}` 를 돌려준다.
@@ -162,22 +163,34 @@ chief는 조율을 총괄한다. 반복 작업에는 teammate를 배정하고, �
 - 사용자가 보내는 모든 메시지는 Front 에이전트가 처리한다.
 
 ### 도구 권한 및 실행 제약
-- Front 에이전트에게 주어지는 도구는 다음과 같다:
-  - Task 제어 도구: `task_start(goal, optional tools)`, `task_steer(task_id, message)`, `task_cancel(task_id)`, `task_status()`
-  - 브라우저 및 보조 도구: `browser_tabs`, `browser_snapshot`, `browser_screenshot`, `browser_import_lookup`, `memory_search`, `skill`
-- Front 에이전트가 브라우저나 시스템을 직접 변경하려 시도하면 데몬이 `front_agent_cannot_act` 오류를 내며 거부한다.
-- `task_*` 도구는 하위 작업(child task)에 부여하지 않으며, `delegate` 도구는 프론트 모드에서 감춘다.
-- `task_start`는 세션 모델을 기반으로 백그라운드 ADR020 하위 에이전트를 띄우고, 즉시 `task_id`와 running 상태를 반환한다. 작업이 시작될 때 `subagent.started`(background: true) 이벤트를, 작업이 끝나면 `subagent.ended` 이벤트로 최종 출력을 기록한다.
+- The front tool surface is `send_message(text, attachments?)`, `create_task(goal, model?, tools?)`, `cancel_task(task_id)`, `get_tasks()`, `steer_task(task_id, message)`, `get_models()`, and the existing `team_*` delegation tools. There are no legacy aliases.
+- The daemon denies all other front calls with `front_agent_cannot_act`, including browser reads, memory reads and `present`. Tasks do the work and raise person-facing Cards.
+- The front ends each turn through one output tool: `send_message{text, attachments?}` publishes one complete `assistant.final{text, attachments?}` through daemon validation, or `stay_silent{}` ends without a bubble. Plain-text output is disabled; front narration, deltas and thinking never become chat events. Work-management tools remain ordinary calls before the terminal output. At most one message is supported per turn; a rejected output is retried without claiming delivery. Messages contain only a useful answer, a question needing the person, or a result; routing, model selection and task bookkeeping stay silent. Long answers use up to two Markdown Output attachments `{artifact, display:"inline"|"panel", title?}`: inline for brief tables/summaries, panel for long reports. The event carries only `{path,title,display,bytes,content_type}` metadata; clients fetch admitted bytes through the session artifact route.
+- Front-only tools are not delegated to children. `create_task` returns immediately with a `task_id`; lifecycle remains `subagent.started` (`background: true`), `subagent.lifecycle` and `subagent.ended`.
+- Tasks use `write_document{title,markdown}` to produce a Markdown Output artifact without a workspace. Its result contains `artifact`, `title`, `bytes`, and `content_type`; `get_tasks` includes each Task's document paths in `artifacts`. Documents share the chief session's artifact store.
+- Child tool activity is recorded as `subagent.progress{subagent_id, progress:{kind:"tool.started"|"tool.ended", ...tool_event_fields, status_text}}`, not parent-level tool rows. `status_text` is a short past-tense line; browser completions include only the hostname from the daemon's typed result URL, never its path, query, fragment or input arguments. Task detail and History render these steps; the chief thread renders only a compact Task status. Person-facing Cards retain their top-level events and schema-based privacy filtering; Cards are not copied into the untyped progress payload.
+- Admission routing fields (`subagent_id`, `model`, `tools`, `context`) are daemon-issued protocol data, not redactable content. Unknown lifecycle identities produce a diagnostic and reconcile against the sidecar's explicit `known_subagents` live inventory; IDs are never guessed. Restored children with redaction markers in routing fields fail with `corrupt_child_identity` and cannot resume pending actions.
+- Failed lifecycle reports carry optional `error_code` and `diagnostic`. The sidecar asks the daemon's internal `__redact_diagnostic` RPC to sanitize exception detail before retaining it in child state. The daemon redacts again before logging and storing the primary code in `reason` and diagnostic in `output`; subsequent recovery cannot overwrite a terminal primary failure.
+- Session status remains running while foreground work or any child remains active. Foreground settlement alone does not imply an idle session; the final child transition clears activity coherently.
 
 ### 대기열 처리 및 제어(Steer) 동작
 - 데몬은 백그라운드 작업이 실행되는 동안 `session.settled` 이벤트 전달을 보류한다. 다만 Front 에이전트가 유휴 상태(idle settled)가 되면 대기열에 쌓인 사용자 메시지를 바로 다음 작업으로 넘겨 처리한다. 즉, 하위 작업 티켓이 Front 대기열을 가로막지 않는다.
-- `task_steer`는 이미 돌고 있는 블로킹 도구를 강제로 끊지 않고, 다음 모델 요청 직전에 전달된다.
-- 호스트의 `task_steer` 응답이 `pending` 상태인 것은 요청이 초기 진입 단계에서 수용(admission)되었을 뿐 아직 대상에 전달이 완료되지 않았음을 의미한다. 사이드카는 지시 사항을 정상적으로 수락했을 때만 `steered`를 반환하며, 작업 완료 처리가 우선하면 `task_finished` 거부를 반환한다.
-- 하위 작업이 끝나면 영속 메시지 ID로 중복을 방지한 `task-report-<task_id>` steer 메시지를 대기열에 넣는다. 작업 종료 후 리포트 추가 사이에 크래시가 발생하더라도 기동 시 복구 작업을 거친다.
+- `steer_task`는 이미 돌고 있는 블로킹 도구를 강제로 끊지 않고, 다음 모델 요청 직전에 전달된다.
+- 호스트의 `steer_task` 응답이 `pending` 상태인 것은 요청이 초기 진입 단계에서 수용(admission)되었을 뿐 아직 대상에 전달이 완료되지 않았음을 의미한다. 사이드카는 지시 사항을 정상적으로 수락했을 때만 `steered`를 반환하며, 작업 완료 처리가 우선하면 `task_finished` 거부를 반환한다.
+- Task completion reports use durable `task-report-<task_id>` message IDs on the queue lane. Startup repairs a crash between Task completion and report creation.
+- Sidecar `settled` signals front idleness, including after a background Task finishes or resumes from a ticket. The daemon uses it to dispatch queued reports, but publishes `session.settled` only when no Task is running and the durable message queue is empty.
+- Resolving the last pending ticket for a deferred agent call projects the session as `running` immediately, before the resumed runtime emits `turn.started`. Resume clients must not mistake the ticket-resolution boundary for a settled answer. Standalone API tickets with no agent continuation remain idle.
+- Completed, failed and waiting-for-person transitions automatically wake the front without another person message. Waiting notifications use `task-report-<task_id>-waiting-<ticket_id>` so each pending request is delivered once, including across restart. Reports contain the Task id, title, state and at most 1,024 characters of result or needs-you reason; full Task output remains in its event record. The front decides silently whether a useful answer or question needs `send_message`.
 - Task 완료 인도의 정확히 한 번(exactly-once) 보장 대상은 영속화된 'Task-finished' 메시지 행(`task-report-<task_id>`)과 이벤트 로그에 보존되는 작업 출력(`subagent.ended.output`)이다. Front가 생성하는 텍스트 요약은 최선 노력(best-effort)으로 동작한다. 리포트 주입(`MessageInjected`) 후 `assistant.final` 전에 사이드카가 종료되더라도 해당 리포트는 실패 또는 중단(`failed`/`interrupted`)으로 안전하게 마킹되어 재실행되지 않으며, 영속화된 행과 작업 출력은 그대로 유지된다.
+- Authenticated person provenance selects the steer lane regardless of the client's requested mode. Agent clients, channels, routines and internal reports cannot promote themselves; they wait behind the current owner turn. Steering is injected before the next model request and never cancels an in-flight generation or host mutation.
+- Steering is automatic from ordinary person messages: the front chooses `steer_task` for corrections or clear additions to live work, `create_task` for a new request, `cancel_task` for a stop request, and `send_message` for chat. There is no person-facing steering mode. “Actually make it weekly” updates the running research Task; “also check Naver” starts a new Task unless it clearly extends the existing work.
+- Idle non-owner bursts wait in the daemon's durable queue for a fixed 100 ms window (not extended by new arrivals). Each dispatch takes at most 32 messages and 1 MiB of message text. The sidecar coalesces delivery for another fixed 100 ms, retaining individual acceptance and completion events; an owner arrival bypasses both waits and leaves reports queued behind that owner turn.
+- Restart re-delivers only messages never injected into the runtime. Injected messages without terminal results are marked failed with `reason:"interrupted"`, never silently replayed. One internal interruption report covers the interrupted batch and tells the chief to reconcile uncertain effects before retrying. Its durable ID uses the first interrupted message ID in lexical order; it is queued before terminal results, and an already-pending recovery report is reused if recovery itself restarts.
+- `user_message.author_kind` carries `person`, `agent_client`, `channel` or `internal`; omitted fields default to `person` for the sidecar wire only. The daemon always supplies the authenticated value. Non-person messages become a separate provenance metadata content part followed by the original text and attachments, and that structured content survives snapshots. A forged non-person `mode:"steer"` is still queued by the sidecar.
 
 ### 브라우저 탭 격리 및 상태 표현
-- 한 세션 안의 Front 에이전트와 모든 Task는 동일한 브라우저 작업공간을 함께 사용한다. 작업 탭 소유권 원장(owner ledger)을 두어 다른 활성 Task가 점유 중인 탭을 조작하려 하면 `tab_owned_by_task` 오류로 거부한다(읽기 접근은 허용). Front 에이전트는 읽기 전용으로만 탭을 조회한다.
+- Tasks share the session browser workspace. Another live Task's tab cannot be acted on (`tab_owned_by_task`); Task read-only observations do not claim ownership. The front cannot read or act on tabs and must delegate browser work.
+- Ended Tasks close their unreferenced agent-owned tabs. Pending person steps and Cards retain their referenced tabs; person-owned tabs are never closed. Failed closes retain the Task's ledger reservation for later cleanup, and only successful browser closure emits a closed event.
 - 웜 리스(warm lease)는 `browser_repl`을 포함해 실제 Task가 탭을 처음 점유하는 시점에 브라우저 게이트(browser gate) 아래에서 원자적으로 회수된다. `Open`은 아직 점유되지 않은 웜 탭만 가져오며, 점유된 탭은 TTL 정리 대상에 포함되어 닫히는 일이 없다. 비동기 `browser.state` 조사는 Task별 세대(generation)와 소유권 및 종료 상태 재확인을 통해 격리되므로, 이전 조사가 이미 완료되었거나 더 새로운 작업 상태를 되돌릴 수 없다.
 - `browser.state` 스키마는 `task_id?`, `tab_id`, `url`, `host`, `title`, `phase`, `action?`, `page_kind`, `facts`, `thumbnail?` 필드로 이뤄진다.
 - 요소 라벨은 모델 추론값이 아니라 접근성(AX) 트리에서 직접 가져오며, 입력 필드 값은 일절 넣지 않고 레지스트리 마스킹 규칙을 적용한다.

@@ -77,6 +77,46 @@ does not purge the append-only event history or opaque checkpoint row. No new ca
 background pruning task, or retention policy is introduced. Deliberate deliveries and
 untouched legacy PNG files follow normal session artifact deletion rules.
 
+## Private Task output
+
+After registered-secret redaction, Task tool results larger than 32 KiB of serialized JSON
+are stored under the session's private `.tool-output` directory. Shell Tasks retain full
+stdout/stderr within a 64 MiB capture ceiling instead of discarding everything after 32 KiB.
+The worker receives a UTF-8-safe preview of at most 1024 bytes, an opaque `output:<id>`
+reference, serialized byte count, and range-read guidance. Screenshot binary parts remain
+on the existing image/artifact path; only their textual metadata is eligible.
+
+`read(path="output:<id>", offset=0, limit=4096)` retrieves UTF-8 text using zero-based byte
+offsets. Limits are 1–4096 bytes; `next_offset` skips no bytes and should be used for the
+next page. Invalid offsets, non-character boundaries, zero/oversize limits, unknown refs,
+and cross-session reads fail explicitly. The authenticated session and live Task identity,
+not a model-supplied session or filesystem path, authorize retrieval. Tasks receive the
+existing daemon `read` schema even when their requested subset omits it, but that implicit
+grant covers output refs only. The Ultrabrowse profile likewise exposes only output-ref
+reads, not arbitrary file access. No Python-local tool or Harness retrieval tool is added.
+
+Files are created 0600 in a 0700 directory using descriptor-relative no-follow I/O.
+Total stored output is limited to 64 MiB per session; quota exhaustion and storage failures
+return explicit errors rather than claiming a truncated preview is complete. Existing refs
+are never evicted to admit new results. Refs survive daemon restart and history compaction,
+and are removed with the session artifact directory on deletion (startup retries failed
+cleanup). They are excluded from public artifact paths, listings, previews, attachments,
+and transcripts. Spill previews and range bodies go only to the worker; persisted Task
+progress contains status/size, never the body. The chief receives only the worker's compact
+report, not its tool history.
+
+Per-tool security limits still apply before spill: connection responses retain their
+64 KiB redacted-response cap, browser snapshot capture/paging semantics are unchanged, and
+REPL operation/heap bounds remain enforced. Spill preserves the result available at the
+host boundary; it does not bypass those source limits. Redaction covers registered secret
+material, not arbitrary secrets embedded in readable content.
+
+Acceptance lives in `opensided::tests::tool_output` (limits, UTF-8 ranges, secret redaction,
+session isolation, quota, private permissions, restart, compaction and deletion) and
+`crates/openside-e2e/tests/tool_output.rs`. The latter drives a real isolated daemon and
+Python sidecar with a scripted Task: shell output → private ref → ranged read → checked
+range → compact chief report, and asserts the durable chief thread contains no body.
+
 ## Card media and site icons
 
 Card image sources are materialized in the daemon, never fetched by the web or extension.
@@ -95,10 +135,10 @@ alternative text instead of falling back to a remote URL.
 
 Site icons reuse `Browser::favicon` and `Browser::validated_favicon` for login, page Choice,
 phone approval, browser state and Cards. Owned browser tabs may provide same-origin icons
-from private sites, but daemon HTTP never receives a private-address exception. Browser
-extraction omits credentials and redirects, streams at most 64 KiB, and returns a decoded,
-validated PNG no larger than 32 pixels per side / 8 KiB. If unavailable, the only daemon
-fallback is the exact HTTPS origin's `/favicon.ico`, under the same egress and Fetch policy.
+only from cached CDP resources. Extraction performs no page evaluation or outbound request,
+accepts at most 64 KiB of raster source bytes, and returns a decoded, validated PNG no larger
+than 32 pixels per side / 8 KiB. Missing cached icons stay absent; clients show the host
+initial or a globe rather than fetching an icon.
 
 The favicon cache is memory-only, session-partitioned, LRU, and bounded to 256 entries /
 2 MiB (each decoded icon is also at most 8 KiB). Successful entries live for 24 hours;
@@ -130,8 +170,8 @@ path into URL segments does not match the daemon's artifact endpoint.
   private/mapped/transition addresses, redirect limits, MIME/signature and size/pixel bounds.
 - Favicon fixtures: `favicons::tests` and `tests::favicons` exercise decoded PNG validation,
   LRU/TTL bounds, concurrent positive/negative fetch coalescing, private cache isolation and Read-scoped
-  cache-only route behavior. The browser's `tests/favicon.rs` smoke checks credential
-  omission, isolated-world extraction and tab ownership using a temporary headless browser.
+  cache-only route behavior. The browser's `tests/favicon.rs` smoke checks cache-only
+  extraction, absence of page evaluation and tab ownership using a temporary headless browser.
 - Native Unix artifact fixtures retain write/edit/listing/transcript assertions everywhere.
   Their composite shell step must succeed on Linux and assert the credential-safe sandbox
   refusal elsewhere. Credential exclusions exercise the real collector directly against
@@ -142,3 +182,28 @@ path into URL segments does not match the daemon's artifact endpoint.
   `openside-e2e/tests/artifacts.rs::a_browser_screenshot_reaches_the_model_as_an_image` captures
   three observations, verifies zero outputs and no artifact copies, then requests one explicit
   screenshot and verifies exactly one listed downloadable output and model image delivery.
+
+## Assistant document attachments
+
+`send_message{text,attachments?:[{artifact,display:"inline"|"panel",title?}]}` accepts
+at most two Markdown Output artifacts from the current session, including its Tasks.
+Each document must be UTF-8, `text/markdown` or a `.md` path, and at most 256 KiB.
+Admission reuses `present` secret screening (secret-shaped text, payment-card numbers,
+Vault values and cookie redactors) for both body and title. Titles must be nonempty,
+at most 160 characters, and contain no control characters.
+Denials identify the zero-based `attachment[index]` and include a next-step hint.
+
+Task-side `write_document{title,markdown}` writes
+`documents/tasks/<task-id>/<tool-call-id>.md`, emits `artifact.saved`, and returns
+`{artifact,title,bytes,content_type}`. It needs no workspace file permissions.
+`get_tasks().tasks[].artifacts` preserves these paths independently of the Task's
+free-text summary.
+
+An admitted attachment is copied to immutable
+`documents/delivered/<sha256>.md` before publication, so later changes to its source
+cannot change the bytes the person reads. `assistant.final.attachments` contains
+`{path,title,display,bytes,content_type}` only; old events default to an empty list.
+The existing authenticated `GET /v1/sessions/{id}/artifacts/{path}` route serves
+the body using the chief session ID and the entire percent-encoded artifact path.
+No body is embedded in the message event. The attachment is indexed as Output and
+is deleted with the session.

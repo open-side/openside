@@ -1691,6 +1691,45 @@
           ],
           "default": null,
           "title": "Output"
+        },
+        "known_subagents": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Known Subagents"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        },
+        "diagnostic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Diagnostic"
         }
       },
       "required": [
@@ -2187,6 +2226,17 @@
             "now"
           ],
           "title": "Mode",
+          "type": "string"
+        },
+        "author_kind": {
+          "default": "person",
+          "enum": [
+            "person",
+            "agent_client",
+            "channel",
+            "internal"
+          ],
+          "title": "Author Kind",
           "type": "string"
         },
         "parts": {

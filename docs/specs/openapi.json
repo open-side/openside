@@ -2144,6 +2144,11 @@
             "description": "Explicit provider:model selector; image-only models are not chat defaults.",
             "type": "string"
           },
+          "in_catalog": {
+            "default": false,
+            "description": "False for an explicitly configured id outside the current curated generations.",
+            "type": "boolean"
+          },
           "label": {
             "description": "Model-name portion, never an account label or private identity.",
             "type": "string"
@@ -2152,12 +2157,33 @@
             "description": "Credential-value-free readiness or refusal explanation.",
             "type": "string"
           },
+          "recommended_for": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelRole"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Curated family recommendation, not a routing restriction."
+          },
           "source": {
             "description": "First usable source, or null when unavailable.",
             "type": [
               "string",
               "null"
             ]
+          },
+          "strengths": {
+            "default": "",
+            "description": "Short curated guidance; unknown configured models have no capability claim.",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/ModelTier",
+            "default": "reasoning",
+            "description": "Task-routing guidance, independent of credential readiness."
           }
         },
         "required": [
@@ -2613,7 +2639,7 @@
             ]
           },
           "grants": {
-            "description": "Explicit overrides; unspecified teammates ask.",
+            "description": "Per-agent authorization, independent of authentication status; unspecified teammates ask.",
             "items": {
               "$ref": "#/components/schemas/ConnectionGrant"
             },
@@ -2662,7 +2688,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/ConnectionStatus",
-            "description": "Current confidence and liveness."
+            "description": "Authentication evidence: candidate means a discovered sign-in, not verified authentication; active means checked sign-in. Agent access is separate."
           },
           "used_at": {
             "description": "Most recent successful agent use, if any.",
@@ -3072,7 +3098,7 @@
             "type": "boolean"
           },
           "candidates": {
-            "description": "Weak detections for the collapsed disclosure.",
+            "description": "Discovered sign-ins suggested by cookies/history, not verified connections or agent authorization.",
             "items": {
               "$ref": "#/components/schemas/Connection"
             },
@@ -3217,7 +3243,7 @@
         "oneOf": [
           {
             "const": "candidate",
-            "description": "Cookie/history heuristic, separated from confirmed connections.",
+            "description": "Discovered sign-in suggested by cookies/history; authentication is not verified.",
             "type": "string"
           },
           {
@@ -3514,33 +3540,33 @@
       },
       "CreateRoutineRequest": {
         "additionalProperties": false,
-        "description": "Routine creation request.",
+        "description": "Schedule and dispatch configuration.",
         "properties": {
           "action": {
             "$ref": "#/components/schemas/RoutineAction",
-            "description": "Action performed on each run."
+            "description": "Runs on each occurrence."
           },
           "catch_up": {
-            "description": "Run once for the latest occurrence missed while the daemon was down; defaults to false.",
+            "description": "Replay latest missed occurrence after downtime; default false.",
             "type": [
               "boolean",
               "null"
             ]
           },
           "enabled": {
-            "description": "Start enabled; defaults to true.",
+            "description": "Default true.",
             "type": [
               "boolean",
               "null"
             ]
           },
           "name": {
-            "description": "Human-readable name; must not be blank.",
+            "description": "Nonblank display name.",
             "type": "string"
           },
           "schedule": {
             "$ref": "#/components/schemas/RoutineSchedule",
-            "description": "Firing schedule."
+            "description": "Determines next occurrence."
           }
         },
         "required": [
@@ -4000,6 +4026,21 @@
           }
         ]
       },
+      "DocumentDisplay": {
+        "description": "How a delivered document opens in the conversation.",
+        "oneOf": [
+          {
+            "const": "inline",
+            "description": "A brief table or summary displayed in the message.",
+            "type": "string"
+          },
+          {
+            "const": "panel",
+            "description": "A long report opened alongside the conversation.",
+            "type": "string"
+          }
+        ]
+      },
       "DropReason": {
         "description": "Why a message was dropped (never silent).",
         "oneOf": [
@@ -4265,6 +4306,13 @@
           {
             "description": "Complete assistant response.",
             "properties": {
+              "attachments": {
+                "description": "Admitted Markdown artifacts; bodies are fetched separately.",
+                "items": {
+                  "$ref": "#/components/schemas/MessageDocument"
+                },
+                "type": "array"
+              },
               "kind": {
                 "const": "assistant.final",
                 "type": "string"
@@ -4598,7 +4646,7 @@
             "description": "The parent's `delegate` call was admitted and a child agent started.",
             "properties": {
               "background": {
-                "description": "A Task started by the front agent's `task_start`: it runs in the background and\nreports its result into the conversation instead of blocking the parent call.",
+                "description": "A Task started by the front agent's `create_task`: it runs in the background and\nreports its result into the conversation instead of blocking the parent call.",
                 "type": "boolean"
               },
               "kind": {
@@ -5100,7 +5148,7 @@
             "type": "object"
           },
           {
-            "description": "A completed hire, correlated to its human authorization.",
+            "description": "A completed autonomous hire or a legacy human-authorized hire.",
             "properties": {
               "agent_id": {
                 "description": "Stable registry identity, independent of later renames.",
@@ -5134,10 +5182,10 @@
                     "type": "null"
                   }
                 ],
-                "description": "Authoritative person message permitting immediate hiring."
+                "description": "Legacy explicit person-requested hire authorization, absent for autonomous hires."
               },
               "ticket_id": {
-                "description": "Approving ticket, absent for an immediate person-requested hire.",
+                "description": "Legacy approving ticket; absent for an autonomous hire.",
                 "type": [
                   "string",
                   "null"
@@ -5704,6 +5752,13 @@
           {
             "description": "Complete assistant response.",
             "properties": {
+              "attachments": {
+                "description": "Admitted Markdown artifacts; bodies are fetched separately.",
+                "items": {
+                  "$ref": "#/components/schemas/MessageDocument"
+                },
+                "type": "array"
+              },
               "kind": {
                 "const": "assistant.final",
                 "type": "string"
@@ -6037,7 +6092,7 @@
             "description": "The parent's `delegate` call was admitted and a child agent started.",
             "properties": {
               "background": {
-                "description": "A Task started by the front agent's `task_start`: it runs in the background and\nreports its result into the conversation instead of blocking the parent call.",
+                "description": "A Task started by the front agent's `create_task`: it runs in the background and\nreports its result into the conversation instead of blocking the parent call.",
                 "type": "boolean"
               },
               "kind": {
@@ -6539,7 +6594,7 @@
             "type": "object"
           },
           {
-            "description": "A completed hire, correlated to its human authorization.",
+            "description": "A completed autonomous hire or a legacy human-authorized hire.",
             "properties": {
               "agent_id": {
                 "description": "Stable registry identity, independent of later renames.",
@@ -6573,10 +6628,10 @@
                     "type": "null"
                   }
                 ],
-                "description": "Authoritative person message permitting immediate hiring."
+                "description": "Legacy explicit person-requested hire authorization, absent for autonomous hires."
               },
               "ticket_id": {
-                "description": "Approving ticket, absent for an immediate person-requested hire.",
+                "description": "Legacy approving ticket; absent for an autonomous hire.",
                 "type": [
                   "string",
                   "null"
@@ -9517,24 +9572,64 @@
         "type": "object"
       },
       "MessageAuthorKind": {
-        "description": "Assigned by the daemon from authenticated ingress; historical messages fail closed.",
+        "description": "Daemon-authenticated source of a conversational message.",
         "oneOf": [
           {
             "const": "person",
-            "description": "Authenticated person ingress; eligible for immediate-hire provenance checks.",
+            "description": "Authenticated owner ingress.",
             "type": "string"
           },
           {
             "const": "agent_client",
-            "description": "A paired agent client, never equivalent to person approval.",
+            "description": "A paired automation client.",
+            "type": "string"
+          },
+          {
+            "const": "channel",
+            "description": "A relayed channel thread, not owner steering.",
             "type": "string"
           },
           {
             "const": "internal",
-            "description": "Schedules, team messages, and historical messages with unknown provenance.",
+            "description": "Schedules, team reports and historical unknown sources.",
             "type": "string"
           }
         ]
+      },
+      "MessageDocument": {
+        "description": "An admitted Markdown artifact; clients fetch its body from the artifact route.",
+        "properties": {
+          "bytes": {
+            "description": "UTF-8 content size.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "content_type": {
+            "description": "MIME type of the document.",
+            "type": "string"
+          },
+          "display": {
+            "$ref": "#/components/schemas/DocumentDisplay",
+            "description": "Placement requested by the assistant."
+          },
+          "path": {
+            "description": "Session-relative artifact path.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Human-readable document title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "title",
+          "display",
+          "bytes",
+          "content_type"
+        ],
+        "type": "object"
       },
       "MessageId": {
         "description": "Identifies one user message. Assigned by the client or daemon and used for\nidempotent delivery.",
@@ -9733,6 +9828,13 @@
             },
             "type": "array"
           },
+          "fast_model": {
+            "description": "Fast chief front-agent model; null uses the reasoning model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "providers": {
             "description": "Provider groups sorted by identifier, with deduplicated model ids.",
             "items": {
@@ -9782,6 +9884,21 @@
         "title": "ModelProvider",
         "type": "object"
       },
+      "ModelRole": {
+        "description": "Curated role hint; any available model may serve either role.",
+        "oneOf": [
+          {
+            "const": "fast",
+            "description": "Low-latency chief replies and Task dispatch.",
+            "type": "string"
+          },
+          {
+            "const": "reasoning",
+            "description": "Task execution and ordinary session work.",
+            "type": "string"
+          }
+        ]
+      },
       "ModelSelection": {
         "additionalProperties": false,
         "description": "Result of a dedicated model-selection write, not raw config PUT semantics.",
@@ -9801,6 +9918,13 @@
             },
             "type": "array"
           },
+          "fast_model": {
+            "description": "Persisted fast model; null uses the reasoning model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "restart_required": {
             "description": "Always false: dedicated selection applies without restarting the daemon.",
             "type": "boolean"
@@ -9814,6 +9938,26 @@
         ],
         "title": "ModelSelection",
         "type": "object"
+      },
+      "ModelTier": {
+        "description": "Curated task-routing tier, not an entitlement or performance guarantee.",
+        "oneOf": [
+          {
+            "const": "fast",
+            "description": "Quick lookups and simple work.",
+            "type": "string"
+          },
+          {
+            "const": "reasoning",
+            "description": "General multi-step work; also the neutral tier for uncataloged configured ids.",
+            "type": "string"
+          },
+          {
+            "const": "frontier",
+            "description": "The family's highest-capability models for hard work.",
+            "type": "string"
+          }
+        ]
       },
       "Money": {
         "additionalProperties": false,
@@ -11593,6 +11737,11 @@
             "const": "days_30",
             "description": "Purged 30 days after the last write.",
             "type": "string"
+          },
+          {
+            "const": "hours_24",
+            "description": "Short-lived context, purged 24 hours after the last write.",
+            "type": "string"
           }
         ]
       },
@@ -11711,10 +11860,10 @@
         "type": "object"
       },
       "RoutineAction": {
-        "description": "What a routine does when it fires.",
+        "description": "Dispatch destination and payload.",
         "oneOf": [
           {
-            "description": "Create a fresh session and submit the prompt as its first message.",
+            "description": "First message in a fresh session.",
             "properties": {
               "mode": {
                 "anyOf": [
@@ -11725,17 +11874,17 @@
                     "type": "null"
                   }
                 ],
-                "description": "Permission mode override, or the daemon default when omitted."
+                "description": "Omitted: daemon default."
               },
               "model": {
-                "description": "Model override, or the configured default when omitted.",
+                "description": "Omitted: configured model.",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "prompt": {
-                "description": "Prompt submitted to the new session.",
+                "description": "Initial user message.",
                 "type": "string"
               },
               "type": {
@@ -11743,7 +11892,7 @@
                 "type": "string"
               },
               "workspace": {
-                "description": "Absolute workspace path, canonicalized by the daemon when the run starts.",
+                "description": "Absolute path; canonicalized at dispatch.",
                 "type": [
                   "string",
                   "null"
@@ -11757,14 +11906,14 @@
             "type": "object"
           },
           {
-            "description": "Deliver to the active owner's permanent home thread.",
+            "description": "Active owner's permanent home thread.",
             "properties": {
               "agent_id": {
-                "description": "Registry identity resolved at dispatch, never a fallback session.",
+                "description": "Resolved at dispatch; never falls back to a session.",
                 "type": "string"
               },
               "prompt": {
-                "description": "Prompt queued only while the owner remains active.",
+                "description": "Queued only while owner is active.",
                 "type": "string"
               },
               "type": {
@@ -11780,15 +11929,15 @@
             "type": "object"
           },
           {
-            "description": "Inject a follow-up (queue lane) message into an existing session.",
+            "description": "Queue a follow-up in an existing session.",
             "properties": {
               "prompt": {
-                "description": "Message text.",
+                "description": "Queued user message.",
                 "type": "string"
               },
               "session_id": {
                 "$ref": "#/components/schemas/SessionId",
-                "description": "Session that receives the message."
+                "description": "Existing destination."
               },
               "type": {
                 "const": "heartbeat",
@@ -11888,13 +12037,13 @@
         "title": "RoutinePauseReason"
       },
       "RoutineSchedule": {
-        "description": "When a routine fires.",
+        "description": "Wall-clock or elapsed-time trigger.",
         "oneOf": [
           {
-            "description": "POSIX five-field cron expression (minute hour day-of-month month day-of-week).",
+            "description": "POSIX minute/hour/day/month/weekday.",
             "properties": {
               "expr": {
-                "description": "Cron expression; `@hourly`/`@daily`-style aliases are accepted.",
+                "description": "Accepts @hourly/@daily aliases.",
                 "type": "string"
               },
               "timezone": {
@@ -11916,10 +12065,10 @@
             "type": "object"
           },
           {
-            "description": "Fixed period anchored at the moment the routine was created or last rescheduled.",
+            "description": "Anchored at creation or last reschedule.",
             "properties": {
               "secs": {
-                "description": "Seconds between runs; at least one.",
+                "description": "Seconds; >=1.",
                 "format": "uint64",
                 "minimum": 0,
                 "type": "integer"
@@ -12128,7 +12277,7 @@
             "description": "Permission ceiling selected when the session was created."
           },
           "model": {
-            "description": "Provider-qualified model.",
+            "description": "Provider-qualified model selected when the session was created, not its effective current model.",
             "type": "string"
           },
           "pinned": {
@@ -12672,7 +12821,7 @@
         "description": "One child agent started by the parent session's `delegate` tool.",
         "properties": {
           "background": {
-            "description": "A background Task started by the front agent (`task_start`).",
+            "description": "A background Task started by the front agent (`create_task`).",
             "type": "boolean"
           },
           "ended_at": {
@@ -15150,6 +15299,14 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "fast_model": {
+            "default": null,
+            "description": "Fast chief front-agent model; null uses the reasoning model.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

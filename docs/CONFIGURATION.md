@@ -35,11 +35,11 @@ openside 설정은 TOML 파일 하나다. 아래 표는 2026-10-11 에 `cargo ru
 5. 알 수 없는 최상위 섹션이나 키는 오류로 처리한다. `credentials`는 플러그인 메타데이터 호환성을 유지하며, 데몬의 자격 증명 소유자만 해석하고 Debug 형식으로 절대 출력하지 않는다.
 6. 오류 메시지는 파일과 키 경로만 알려 주고 입력값은 보여 주지 않는다.
 
-값 검증: argv 키(`agent.command`, `vault.passphrase_cmd`)는 비어 있지 않은 실행 파일과 NUL 없는 인자여야 한다. 경로 키는 빈 문자열일 수 없다. `agent.startup_timeout_ms` 는 0 보다 커야 한다. `agent.compaction_keep_messages` 는 `agent.compaction_max_messages` 보다 작아야 한다. `models.default`, `models.fallback` 항목은 빈 문자열일 수 없다. 티켓 TTL 은 1 이상이다.
+Validation: argv keys (`agent.command`, `vault.passphrase_cmd`) require a non-empty executable and NUL-free arguments. Paths cannot be empty. `agent.startup_timeout_ms` and `agent.compaction_max_tokens` must be positive. `agent.compaction_keep_messages` must be at least two and below `agent.compaction_max_messages` when that optional trigger is configured. `models.default` and `models.fallback` entries cannot be blank. Ticket TTLs must be at least one.
 
 `GET`/`PUT /v1/settings/config`(admin)는 파일과 동일한 유효성 검사 및 원자적 0600 저장으로 JSON 설정을 읽고 쓴다. `credentials`는 파일 전용으로 유지되어 응답에서 제외되고, PUT 시 거부되며, 디스크의 기존 내용이 보존된다. `restart_required`는 저장된 설정과 실행 중인 설정을 비교하며, 여기에는 실시간 원격, models, channels, sync, 외부 에이전트 폴더 오버레이가 포함된다. 전용 엔드포인트는 해당 오버레이를 즉시 반영하며, 설정 파일 직접 편집은 재시작 시 적용된다.
 
-로컬 권한(local authority)은 비공개 Unix 소켓이나 소켓에서 발급한 person/admin 토큰 및 로컬 시크릿을 갖춘 검증된 루프백 런처를 뜻한다. 로컬 권한은 파일 전용이 아닌 모든 키를 편집할 수 있다. 원격 person/admin 토큰은 `tickets.*`, `models.default/fallback/front`, `memory.default_retention/history`, `agent.startup_timeout_ms/tool_retries/compaction_max_messages/compaction_keep_messages/orchestration`, `service.inhibit_sleep`만 편집할 수 있으며, 허용되지 않은 변경은 `local_access_required`를 반환하고 감사에 기록된다. TCP 에이전트 클라이언트는 설정을 쓸 수 없다(`forbidden`). `POST /v1/daemon/restart`는 로컬 권한이 필요하며, 정상 종료(graceful shutdown) 후 동일한 PID로 re-exec한다. 만료되는 비공개 일회용 요청 바인딩 핸드오프는 이 제어된 exec 동안에만 런처 시크릿을 보존하며, 일반적인 부팅 시에는 보존하지 않는다.
+Local authority means a private Unix socket, or a verified loopback launcher with a person/admin token and local secret. Local authority may edit every non-file-only key. Remote person/admin tokens may edit only `tickets.*`, `models.default/fallback/front`, `memory.default_retention/history`, `agent.startup_timeout_ms/tool_retries/compaction_max_messages/compaction_max_tokens/compaction_keep_messages/orchestration`, and `service.inhibit_sleep`. Other changes return audited `local_access_required`; TCP agent clients cannot write settings (`forbidden`). `POST /v1/daemon/restart` requires local authority and gracefully re-execs with the same PID. An expiring private one-time request-bound handoff preserves the launcher secret only during this controlled exec, not ordinary boot.
 
 ## 키
 
@@ -84,18 +84,33 @@ openside 설정은 TOML 파일 하나다. 아래 표는 2026-10-11 에 `cargo ru
 | `dir` | path | — | `OPENSIDE_AGENT_DIR` | 사이드카 Python 프로젝트 디렉터리 |
 | `startup_timeout_ms` | u64 | `30000` | — | 사이드카 ready 응답 대기 시간 |
 | `tool_retries` | u32 | `3` | — | 툴 거부·실패 뒤 모델 재시도 횟수(사이드카 `open.config.agent`) |
-| `compaction_max_messages` | u32 | `100` | — | 대화가 이 길이를 넘으면 요약 압축 |
-| `compaction_keep_messages` | u32 | `20` | — | 압축 때 그대로 두는 최근 메시지 수, `compaction_max_messages` 보다 작아야 함 |
+| `compaction_max_messages` | optional u32 | unset | — | Optional legacy message-count trigger; omit to use the size budget only |
+| `compaction_max_tokens` | u32 | `64000` | — | Estimated history budget: serialized UTF-8 bytes / 3, rounded up; positive |
+| `compaction_keep_messages` | u32 | `20` | — | Normal verbatim tail; at least 2 and below optional message trigger; oversized tails keep at least 2 with complete tool pairs |
 | `profile` | string | `"full"` | — | 도구·시스템 프롬프트 프로필: `full`, `browser-agent`, `ultrabrowse`([profiles.md](specs/profiles.md)). 사이드카 `open.config.agent.profile` 로도 전달 |
 
 `command` 가 없을 때(`crates/openside-config/src/discovery.rs`): `dir` 미지정이면 실행 파일 기준 `../share/openside/agent`, `../../agent` 중 `pyproject.toml` 이 있는 곳을 쓴다. uv 가 PATH 에 있고 `dir` 이 정해지면 `uv run --project <dir> python -m openside_agent`, 아니면 `python3 -m openside_agent` 다.
+
+### `[team]`
+
+| 키 | 타입 | 기본값 | env | 설명 |
+|---|---|---|---|---|
+| `max_running` | integer | `3` | — | 동시에 실행할 수 있는 팀원 홈 대화의 최대 개수(기본값: 3). 초과한 핸드오프 요청은 안전하게 대기열에 보관하며, 양수만 지정할 수 있다. |
+| `max_active_teammates` | integer | `5` | — | chief를 제외하고 활성화할 수 있는 팀원의 최대 인원수(기본값: 5). 새로 채용하거나 복원할 때 한도를 검사하며, 0으로 설정하면 신규 채용과 복원을 모두 차단한다. |
 
 ### `[models]`
 
 | 키 | 타입 | 기본값 | env | 설명 |
 |---|---|---|---|---|
-| `default` | string | — | `OPENSIDE_MODEL` | 기본 모델(`provider:model`). 내장 기본값은 없으며, 세션에 모델을 주지 않으면 `model_not_configured` |
+| `default` | string | — | `OPENSIDE_MODEL` | 일반 세션과 별도 모델을 지정하지 않은 팀원이 사용하는 기본 추론 모델(`provider:model`)입니다. Chief가 Task를 생성할 때 모델을 직접 지정하지 않은 경우에도 이 모델로 동작합니다. |
+| `front` | string | — | — | 대표 프런트 에이전트(chief front agent)에 쓸 빠른 모델입니다. 따로 지정하지 않으면 추론 모델을 그대로 씁니다. Settings에서 한 번 설정하며, 진행 중인 요청을 마친 뒤 유휴 상태가 되었다가 시작하는 다음 턴부터 반영됩니다. |
 | `fallback` | string[] | `[]` | — | 순서 있는 대체 모델 목록 |
+
+두 역할 모두 설정하지 않은 상태에서 데몬이 시작되거나 자격 증명·계정·풀이 변경되면, 사용 가능한 추천 추론 모델 가운데 첫 번째 모델과 동일한 제공자의 추천 빠른 모델을 자동으로 선택합니다. 같은 제공자에서 찾지 못하면 다른 제공자의 모델로 대체합니다. 사용자가 직접 지정한 설정은 절대 임의로 덮어쓰지 않으며, 사용할 수 있는 추천 추론 모델이 없으면 `model_not_configured` 상태를 유지합니다.
+
+front와 추론(reasoning) 역할은 대화나 메시지 단위가 아니라 Settings에서 한 번만 지정합니다. Chief는 `get_models`를 호출해 사용자에게 모델 이름이나 선택 내역을 따로 알리지 않고 내부적으로 조용히 연결된 가용 모델을 골라 `create_task.model`에 지정할 수 있습니다. 이때 제공자(provider) 및 Agent 계정 풀의 제약을 엄격히 따르며, 인식할 수 없는 모델이나 사용량이 소진·비활성화되어 풀에서 이용할 수 없는 모델은 요청이 거부됩니다. 계정에서 지원하는 것으로 보고되더라도 큐레이션된 최신 세대에 속하지 않는 모델은 목록에 노출되지 않습니다. 다만 설정 파일에 명시적으로 등록한 모델 식별자는 목록에 계속 남아 `Not in current catalog`로 표시되며, 해당 계정의 자격 증명과 풀 상태를 기준으로 실제 이용이 가능할 때만 선택할 수 있습니다.
+
+front 요청은 사고(thinking) 과정을 최소화하고 `max_tokens=1024`로 제한하여 처리하며, Task에 할당된 모델 설정에는 영향을 주지 않습니다. Settings의 Models 화면과 `openside models` 명령에서는 각 모델의 잔여 사용량과 초기화 시각을 함께 보여주며, 확인되지 않은 값은 알 수 없음 상태로 유지됩니다.
 
 ### `[credentials]`
 
@@ -118,7 +133,7 @@ openside 설정은 TOML 파일 하나다. 아래 표는 2026-10-11 에 `cargo ru
 | `omp_broker.sse` | bool | `false` | — | 스냅샷 SSE 스트림 사용 |
 | `anthropic.claude_code_version` | semver string | `2.1.280` | `OPENSIDE_CLAUDE_CODE_VERSION`(우선) | Anthropic 요청 형태에 쓰는 버전. semver 가 아니면 기본값 |
 
-선택적 브로커 후보는 `http://127.0.0.1:8765`와 `~/.omp/auth-broker.token`으로 유지되며, 필수가 아니다. 자격 증명 URL 및 토큰 확인은 Python broker.py 상수가 아니라 데몬이 전적으로 담당한다. 브로커 시크릿 스냅샷은 명시적 프로바이더 풀 신뢰 경계 안에서 데몬만이 가져온다.
+선택적 브로커 후보는 omp 기본 로컬 브로커 주소와 omp 기본 토큰 파일로 유지되며, 필수가 아니다. 자격 증명 URL 및 토큰 확인은 Python broker.py 상수가 아니라 데몬이 전적으로 담당한다. 브로커 시크릿 스냅샷은 명시적 프로바이더 풀 신뢰 경계 안에서 데몬만이 가져온다.
 
 `env` 기본 변수 이름: `anthropic` → `ANTHROPIC_API_KEY`; `openai`, `openai-chat`, `openai-responses` → `OPENAI_API_KEY`; `openrouter` → `OPENROUTER_API_KEY`; `google` → `GOOGLE_API_KEY`, `GEMINI_API_KEY`; `github-copilot` → `GITHUB_COPILOT_API_KEY`, `GITHUB_COPILOT_API_TOKEN`, `COPILOT_GITHUB_TOKEN`; 그 밖은 `<PROVIDER>_API_KEY`(대문자, `-` → `_`).
 

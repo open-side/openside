@@ -15,10 +15,13 @@
   "connection_open",
   "connections_list",
   "present",
+  "propose_routine",
+  "read",
   "request_choice",
   "request_form",
   "request_human_step",
   "request_login",
   "request_otp",
-  "wait_for_approval"
+  "wait_for_approval",
+  "write_document"
 ]

@@ -23,6 +23,8 @@ Agent-client JSON responses (ticket list/get, transition responses, and event po
 
 The daemon rejects unknown properties, forged authority, interactive/team blocks, duplicate identities, malformed typed values and table widths, excessive sizes, and secret material. Raw tool arguments are capped at 64 KiB before parsing or diagnostic recording. The diagnostic argument projection contains only an allowlisted kind and numeric counts. Secret detection uses the existing memory secret scanner and known-value redactors; errors identify a rule rather than echoing the offending value.
 
+Secret rejections name the offending JSON field/index path and distinguish known-value matches from secret-shaped content without echoing values. Cookie-derived output filters ignore values shorter than 12 bytes and match complete tokens, preventing preference flags such as `no` from rejecting `interaction: none` or ordinary public text. This policy applies to both tool-output redaction and card admission. Explicit Vault secrets retain substring matching at every nonempty length; API-key/JWT detection remains independent of cookie registration.
+
 Requests are bounded to 16 blocks, 8 actions, 30 list items, 12 table columns, 100 table rows, 600 cells, one primary action, one trailing notice, eight image sources, and 24 KiB of string data. Links reject credentials and secret query material; fragments are removed. All strings are plain text, not executable HTML or Markdown templates.
 
 ## Media and favicons

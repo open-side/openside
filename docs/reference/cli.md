@@ -109,7 +109,7 @@ Usage: openside models [OPTIONS] [COMMAND]
 
 #### `openside models set`
 
-Set default/fallback selection; Team homes update on their next turn
+Set reasoning/fast models and fallbacks; Team homes update on their next turn
 
 ```text
 Usage: openside models set [OPTIONS] <MODEL>
@@ -119,6 +119,7 @@ Usage: openside models set [OPTIONS] <MODEL>
 |---|---|
 | `<MODEL>` |  |
 | `--fallback <FALLBACKS>` |  |
+| `--fast <FAST>` | Fast front-agent model, or none to use the reasoning model |
 
 #### `openside models pool`
 
@@ -682,7 +683,7 @@ Usage: openside memory add [OPTIONS] <CONTENT>
 |---|---|
 | `<CONTENT>` |  |
 | `--tag <TAG>` |  |
-| `--retention <RETENTION>` | One of `permanent`, `days_90`, `days_30`. |
+| `--retention <RETENTION>` | One of `permanent`, `days_90`, `days_30`, `hours_24`. |
 
 #### `openside memory show`
 
@@ -710,7 +711,7 @@ Usage: openside memory edit [OPTIONS] <ID>
 | `--content <TEXT>` |  |
 | `--tag <TAG>` |  |
 | `--clear-tags` | Remove every tag |
-| `--retention <RETENTION>` | One of `permanent`, `days_90`, `days_30`. |
+| `--retention <RETENTION>` | One of `permanent`, `days_90`, `days_30`, `hours_24`. |
 
 #### `openside memory rm`
 
@@ -1445,6 +1446,40 @@ request_choice: let a person pick among the page's options
 
 ```text
 Usage: openside browser choice [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser form`
+
+request_form: let a person complete a page form
+
+```text
+Usage: openside browser form [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser present`
+
+present: deliver a structured result card to the person
+
+```text
+Usage: openside browser present [OPTIONS] <SESSION> [ARG]...
 ```
 
 | Argument | Description |

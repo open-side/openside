@@ -14,6 +14,36 @@ pub const MAX_ATTACHMENTS: usize = 4;
 /// sidecar line (4 MiB), so the base64 form must stay well below that.
 pub const MAX_ATTACHMENT_BYTES: usize = 2 * 1024 * 1024;
 
+/// Maximum Markdown documents attached to one assistant message.
+pub const MAX_MESSAGE_DOCUMENTS: usize = 2;
+/// Maximum UTF-8 bytes in one attached Markdown document.
+pub const MAX_DOCUMENT_BYTES: usize = 256 * 1024;
+
+/// How a delivered document opens in the conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentDisplay {
+    /// A brief table or summary displayed in the message.
+    Inline,
+    /// A long report opened alongside the conversation.
+    Panel,
+}
+
+/// An admitted Markdown artifact; clients fetch its body from the artifact route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MessageDocument {
+    /// Session-relative artifact path.
+    pub path: String,
+    /// Human-readable document title.
+    pub title: String,
+    /// Placement requested by the assistant.
+    pub display: DocumentDisplay,
+    /// UTF-8 content size.
+    pub bytes: u64,
+    /// MIME type of the document.
+    pub content_type: String,
+}
+
 /// One uploaded attachment; the daemon sniffs the type from the bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
