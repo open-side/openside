@@ -25,6 +25,7 @@ const USER: &str = "jane@mail.test";
 const PASSWORD: &str = "correct-horse-7781";
 const OTHER_USER: &str = "bob@mail.test";
 const OTHER_PASSWORD: &str = "bob-pass-5521";
+const CONNECTION_CANARY: &str = "connection-cookie-value-canary-72913";
 /// A 1×1 PNG served as the site's icon.
 const ICON: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
@@ -100,9 +101,14 @@ async fn site() -> (String, Received, tokio::task::JoinHandle<()>) {
                     let pw = form.get("pw").cloned().unwrap_or_default();
                     match (id.as_str(), pw.as_str()) {
                         (USER, PASSWORD) | (OTHER_USER, OTHER_PASSWORD) => {
-                            Redirect::to("/home").into_response()
+                            (
+                                [("set-cookie", format!("session={CONNECTION_CANARY}; HttpOnly; Secure; Path=/; Max-Age=3600"))],
+                                Redirect::to("/home"),
+                            ).into_response()
                         }
                         ("otp-user", _) => Redirect::to("/otp").into_response(),
+                        ("push-user", _) => Html("<!doctype html><title>Approve</title><h1>Check your phone</h1><p>Approve the sign-in on your phone</p>").into_response(),
+                        ("again-user", _) => Redirect::to("/naver").into_response(),
                         ("choice-user", _) => Redirect::to("/choose").into_response(),
                         ("captcha-user", _) => Html(naver_page(None, "", true)).into_response(),
                         _ => Html(naver_page(
@@ -117,6 +123,12 @@ async fn site() -> (String, Received, tokio::task::JoinHandle<()>) {
         )
         .route("/home", get(|| async { Html(HOME) }))
         .route("/otp", get(|| async { Html(OTP) }))
+        .route("/otp-complete", get(|| async {
+            (
+                [("set-cookie", format!("session={CONNECTION_CANARY}; HttpOnly; Secure; Path=/; Max-Age=3600"))],
+                Redirect::to("/home"),
+            )
+        }))
         .route("/choose", get(|| async { Html(CHOOSE) }))
         .route("/trust", get(|| async { Html(TRUST) }))
         .route("/google", get(|| async { Html(GOOGLE) }))
@@ -233,6 +245,78 @@ fn focus_free(log: &[(String, Value)]) {
     }
 }
 
+#[tokio::test]
+async fn imported_address_suggestions_follow_email_and_phone_fields_without_filling_them() {
+    let root = tempfile::tempdir().unwrap();
+    let Some((daemon, _runtime)) = daemon_with(root.path(), Vec::new()).await else {
+        return;
+    };
+    let profile = openside_import::DiscoveredProfile {
+        id: "chrome:Default".into(),
+        kind: openside_import::BrowserKind::Chrome,
+        brand: "chrome".into(),
+        name: "Personal".into(),
+        email: None,
+        avatar: None,
+        dir: root.path().join("unused-source"),
+        available: openside_import::Available::default(),
+        warnings: Vec::new(),
+    };
+    let mut imported = openside_import::ProfileRead::default();
+    imported.data.autofill.push(serde_json::from_value(json!({"fields":{"email":"imported@example.test","phone_number":"+15551234567","street_address":"1 Test Avenue"}})).unwrap());
+    imported.reports.insert(
+        openside_import::DataKind::Autofill,
+        openside_import::CategoryReport {
+            read: 1,
+            imported: 1,
+            ..Default::default()
+        },
+    );
+    let layout =
+        openside_import::ProfileLayout::new(&daemon.shared.config.data_dir, "default").unwrap();
+    openside_import::write_profile(&layout, &profile, &imported).unwrap();
+    let (origin, _received, fixture) = site().await;
+    let session = create_session(&daemon, "imported-address-login", PolicyMode::Full, None).await;
+    let tab = open_tab(
+        &daemon,
+        &session,
+        &format!("{origin}/naver"),
+        "imported-address-open",
+    )
+    .await;
+    let browser = live(&daemon).await;
+    for (kind, expected) in [("email", "imported@example.test"), ("tel", "+15551234567")] {
+        browser.evaluate(&tab, &format!("(()=>{{const input=document.querySelector('#id');input.type={};input.setAttribute('autocomplete','username');return true}})()", json!(kind))).await.unwrap();
+        let id = deferred(
+            request_login(&daemon, &session, &tab, &format!("imported-address-{kind}")).await,
+        )
+        .await;
+        let opened = ticket(&daemon, &id).await;
+        assert_eq!(opened["login"]["fields"][0]["autocomplete"], kind);
+        assert_eq!(
+            opened["login"]["fields"][0]["suggestions"],
+            json!([expected])
+        );
+        assert!(opened["login"]["fields"][1].get("suggestions").is_none());
+        assert_eq!(
+            browser
+                .evaluate(&tab, "document.querySelector('#id').value")
+                .await
+                .unwrap(),
+            ""
+        );
+        assert_eq!(
+            browser
+                .evaluate(&tab, "document.querySelector('#pw').value")
+                .await
+                .unwrap(),
+            ""
+        );
+    }
+    daemon.shutdown().await;
+    fixture.abort();
+}
+
 /// (a) the card mirrors the page; (h) saving needs both scopes; (i) no focus is taken.
 #[tokio::test]
 async fn a_login_card_mirrors_the_page_and_fills_it_once_without_any_value_escaping() {
@@ -253,10 +337,16 @@ async fn a_login_card_mirrors_the_page_and_fills_it_once_without_any_value_escap
     let login = &opened["login"];
     assert_eq!(login["origin"], json!(origin));
     assert_eq!(login["site_name"], "NAVER");
-    assert_eq!(
-        login["icon"],
-        json!(format!("data:image/png;base64,{ICON}"))
-    );
+    let icon =
+        openside_browser::Browser::validated_favicon(login["icon"].as_str().unwrap()).unwrap();
+    assert!(icon.len() <= 8192);
+    let actual = image::load_from_memory(&icon).unwrap().into_rgba8();
+    let source = base64::engine::general_purpose::STANDARD
+        .decode(ICON)
+        .unwrap();
+    let expected = image::load_from_memory(&source).unwrap().into_rgba8();
+    assert_eq!(actual.dimensions(), (1, 1));
+    assert_eq!(actual.as_raw(), expected.as_raw());
     assert_eq!(login["submit_label"], "로그인");
     assert_eq!(login["can_save"], true);
     assert!(login.get("accounts").is_none());
@@ -348,7 +438,11 @@ async fn a_login_card_mirrors_the_page_and_fills_it_once_without_any_value_escap
     for canary in [USER, PASSWORD] {
         assert_nowhere(&daemon, &runtime, &session, canary).await;
     }
-    focus_free(&browser.take_protocol_log());
+    let protocol = browser.take_protocol_log();
+    let recorded = serde_json::to_string(&protocol).unwrap();
+    assert!(!recorded.contains(USER));
+    assert!(!recorded.contains(PASSWORD));
+    focus_free(&protocol);
     browser.record_protocol(false);
     daemon.shutdown().await;
     fixture.abort();
@@ -685,6 +779,688 @@ async fn choices_show_the_pages_own_labels_and_click_the_pick() {
 
     focus_free(&browser.take_protocol_log());
     browser.record_protocol(false);
+    daemon.shutdown().await;
+    fixture.abort();
+}
+
+#[tokio::test]
+async fn request_form_fills_oopif_payment_without_submission_or_value_leaks() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, runtime) = daemon_with(root.path(), Vec::new())
+        .await
+        .expect("Chromium required");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let provider = format!("http://localhost:{port}");
+    let app = Router::new()
+        .route("/", get(move || async move {
+            Html(format!("<!doctype html><title>Checkout</title><iframe src='http://localhost:{port}/payment'></iframe>"))
+        }))
+        .route("/payment", get(|| async {
+            Html("<!doctype html><form onsubmit=\"document.documentElement.dataset.submitted='yes';return false\"><label>Number<input autocomplete='cc-number' required></label><label>Expiry<input autocomplete='cc-exp' required></label><label>CVC<input autocomplete='cc-csc' required></label><label>Name<input autocomplete='cc-name' required></label><button>Pay</button></form><script>document.addEventListener('click',()=>document.documentElement.dataset.clicked='yes')</script>")
+        }));
+    let fixture = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let session = create_session(&daemon, "form-card", PolicyMode::Full, None).await;
+    let tab = open_tab(&daemon, &session, &origin, "form-open").await;
+    let id = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_form",
+            json!({"tab_id":tab,"purpose":"payment"}),
+            "form-ask",
+        )
+        .await,
+    )
+    .await;
+    let opened = ticket(&daemon, &id).await;
+    assert_eq!(opened["kind"], "secret_input");
+    let fields = opened["form"]["fields"].as_array().unwrap();
+    assert_eq!(fields.len(), 4);
+    assert!(fields
+        .iter()
+        .all(|field| field["target_origin"] == provider && field["secret"] == true));
+    let canary = "FORM_PERSON_CANARY_274e";
+    let values =
+        json!({"field_0":"4242424242424242","field_1":"12/39","field_2":"937","field_3":canary});
+    let bad = resolve_value(&daemon, &id, json!({"values":{"field_0":canary}})).await;
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    assert!(daemon
+        .shared
+        .registry
+        .redactors
+        .read()
+        .iter()
+        .any(|redactor| !redactor.redact(canary).contains(canary)));
+    let response = resolve_value(&daemon, &id, json!({"values":values})).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let resolved = json_body(response).await;
+    assert_eq!(
+        resolved["resolution"],
+        json!({"status":"filled","field_count":4,"next":"review_page"})
+    );
+    let browser = live(&daemon).await;
+    let frames = browser.frames(session.as_str(), &tab).await.unwrap();
+    let child = frames
+        .iter()
+        .find(|frame| frame.origin == provider)
+        .unwrap();
+    assert!(child.host.is_some());
+    let world = browser
+        .frame_command(
+            session.as_str(),
+            &tab,
+            &child.id,
+            "Page.createIsolatedWorld",
+            json!({"frameId":child.id,"worldName":"fixture-assert"}),
+        )
+        .await
+        .unwrap();
+    let state = browser.frame_command(session.as_str(), &tab, &child.id, "Runtime.evaluate",
+        json!({"expression":"[document.querySelector('[autocomplete=cc-name]').value,document.documentElement.dataset.clicked||null,document.documentElement.dataset.submitted||null]","contextId":world["executionContextId"],"returnByValue":true})).await.unwrap();
+    assert_eq!(state["result"]["value"], json!([canary, null, null]));
+    assert_nowhere(&daemon, &runtime, &session, canary).await;
+    assert_nowhere(&daemon, &runtime, &session, "4242424242424242").await;
+    assert_eq!(
+        resolve_value(&daemon, &id, json!({"values":values}))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    daemon.shutdown().await;
+    fixture.abort();
+}
+
+#[tokio::test]
+async fn request_form_nonsecret_navigation_and_durable_intent_refuse_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, runtime) = daemon_with(root.path(), Vec::new())
+        .await
+        .expect("Chromium required");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let fixture = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/", get(|| async {
+            Html("<!doctype html><title>Address</title><form><label>Note<textarea required maxlength='80'></textarea></label><label><input type='checkbox'>Remember</label><button>Send</button></form>")
+        }))).await.unwrap();
+    });
+    let session = create_session(&daemon, "general-form", PolicyMode::Full, None).await;
+    let tab = open_tab(&daemon, &session, &origin, "general-open").await;
+    let id = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_form",
+            json!({"tab_id":tab,"purpose":"form"}),
+            "general-ask",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(ticket(&daemon, &id).await["kind"], "info");
+    let canary = "FORM_NOTE_CANARY_d961";
+    let values = json!({"field_0":canary,"field_1":true});
+    let response = resolve_value(&daemon, &id, json!({"values":values})).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_nowhere(&daemon, &runtime, &session, canary).await;
+    let second = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_form",
+            json!({"tab_id":tab,"purpose":"form"}),
+            "general-again",
+        )
+        .await,
+    )
+    .await;
+    daemon
+        .shared
+        .registry
+        .browser
+        .record_fill_intent(&daemon.shared, &second, None)
+        .await
+        .unwrap();
+    let response = resolve_value(&daemon, &second, json!({"values":values})).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(response).await["code"], "form_fill_indeterminate");
+    let third = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_form",
+            json!({"tab_id":tab,"purpose":"form"}),
+            "general-nav",
+        )
+        .await,
+    )
+    .await;
+    let browser = live(&daemon).await;
+    browser
+        .page_command(
+            session.as_str(),
+            &tab,
+            "Page.navigate",
+            json!({"url":format!("{origin}/?new_document")}),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if browser
+                .evaluate(
+                    &tab,
+                    "location.search==='?new_document'&&document.readyState==='complete'",
+                )
+                .await
+                .unwrap_or(Value::Null)
+                == true
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let response = resolve_value(&daemon, &third, json!({"values":values})).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_nowhere(&daemon, &runtime, &session, canary).await;
+    browser
+        .evaluate(
+            &tab,
+            "document.body.innerHTML='<input autocomplete=\"one-time-code\" maxlength=\"4096\">'",
+        )
+        .await
+        .unwrap();
+    let otp = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_form",
+            json!({"tab_id":tab,"purpose":"form"}),
+            "form-otp-cap",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ticket(&daemon, &otp).await["form"]["fields"][0]["max_length"],
+        64
+    );
+    browser
+        .evaluate(&tab, "document.body.innerHTML='<input>'.repeat(17)")
+        .await
+        .unwrap();
+    let crowded = bounded(
+        &daemon,
+        &session,
+        "request_form",
+        json!({"tab_id":tab,"purpose":"form"}),
+        "form-too-many",
+    )
+    .await;
+    assert!(
+        matches!(crowded, ToolOutcome::Denied { reason, .. } if reason=="too_many_form_fields")
+    );
+    daemon.shutdown().await;
+    fixture.abort();
+}
+
+#[tokio::test]
+async fn connections_observed_login_paths_keep_cookie_values_private() {
+    let root = tempfile::tempdir().unwrap();
+    let Some((daemon, runtime)) = daemon_with(root.path(), Vec::new()).await else {
+        return;
+    };
+    let (origin, _, fixture) = site().await;
+    let session = create_session(&daemon, "connection-login", PolicyMode::Full, None).await;
+    let tab = open_tab(
+        &daemon,
+        &session,
+        &format!("{origin}/naver"),
+        "connection-open",
+    )
+    .await;
+    let browser = live(&daemon).await;
+    browser.record_protocol(true);
+
+    let failed = deferred(request_login(&daemon, &session, &tab, "connection-failed").await).await;
+    assert_eq!(
+        resolve_value(&daemon, &failed, json!({"values":{"f0":USER,"f1":"wrong"}}))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert!(daemon.shared.connections.list().unwrap().is_empty());
+
+    let success =
+        deferred(request_login(&daemon, &session, &tab, "connection-success").await).await;
+    assert_eq!(
+        resolve_value(
+            &daemon,
+            &success,
+            json!({"values":{"f0":USER,"f1":PASSWORD}})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let rows = daemon.shared.connections.list().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, openside_proto::ConnectionStatus::Active);
+    assert_eq!(rows[0].source, openside_proto::ConnectionSource::Login);
+    let db =
+        rusqlite::Connection::open(daemon.shared.config.data_dir.join("connections.db")).unwrap();
+    let fingerprint: String = db
+        .query_row("SELECT fingerprint FROM connections", [], |row| row.get(0))
+        .unwrap();
+    let keys: Value = serde_json::from_str(&fingerprint).unwrap();
+    assert_eq!(keys.as_array().unwrap().len(), 1);
+    assert_eq!(keys[0]["name"], "session");
+    assert_eq!(keys[0]["path"], "/");
+    daemon
+        .shared
+        .connections
+        .remove(&rows[0], false, false)
+        .unwrap();
+
+    browser
+        .evaluate(
+            &tab,
+            &format!("location.href={}", json!(format!("{origin}/naver"))),
+        )
+        .await
+        .unwrap();
+    wait_title(&daemon, &tab, "NAVER").await;
+    let takeover = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_human_step",
+            json!({"kind":"takeover","summary":"Finish signing in","tab_id":tab}),
+            "connection-takeover",
+        )
+        .await,
+    )
+    .await;
+    browser.evaluate(&tab, &format!("(()=>{{document.querySelector('#id').value={};document.querySelector('#pw').value={};document.querySelector('form').submit();}})()", json!(USER), json!(PASSWORD))).await.unwrap();
+    wait_title(&daemon, &tab, "Signed in").await;
+    let response = api::router(daemon.shared.clone(), true)
+        .oneshot(request(
+            "POST",
+            &format!("/v1/tickets/{takeover}/done"),
+            json!({}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows = daemon.shared.connections.list().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source, openside_proto::ConnectionSource::Takeover);
+    daemon
+        .shared
+        .connections
+        .remove(&rows[0], false, false)
+        .unwrap();
+
+    browser
+        .evaluate(
+            &tab,
+            &format!("location.href={}", json!(format!("{origin}/otp"))),
+        )
+        .await
+        .unwrap();
+    wait_title(&daemon, &tab, "Verify").await;
+    let field = reference(&daemon, &session, &tab, "인증번호", "connection-code-ref").await;
+    let otp = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_otp",
+            json!({"tab_id":tab,"field_ref":field,"channel":"sms"}),
+            "connection-otp",
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        resolve_value(&daemon, &otp, json!("123456")).await.status(),
+        StatusCode::OK
+    );
+    assert!(daemon.shared.connections.list().unwrap().is_empty());
+    browser
+        .evaluate(
+            &tab,
+            &format!("location.href={}", json!(format!("{origin}/otp-complete"))),
+        )
+        .await
+        .unwrap();
+    wait_title(&daemon, &tab, "Signed in").await;
+    let _ = bounded(
+        &daemon,
+        &session,
+        "browser_snapshot",
+        json!({"tab_id":tab}),
+        "connection-observe",
+    )
+    .await;
+    for _ in 0..100 {
+        if !daemon.shared.connections.list().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let rows = daemon.shared.connections.list().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source, openside_proto::ConnectionSource::Otp);
+    assert!(
+        !serde_json::to_string(&daemon.shared.db.events(&session, 0).await.unwrap())
+            .unwrap()
+            .contains(CONNECTION_CANARY)
+    );
+    assert!(!agent_saw(&runtime).contains(CONNECTION_CANARY));
+    assert!(!serde_json::to_string(&browser.take_protocol_log())
+        .unwrap()
+        .contains(CONNECTION_CANARY));
+    browser.record_protocol(false);
+    for name in [
+        "connections.db",
+        "connections.db-wal",
+        "connections-audit.jsonl",
+    ] {
+        if let Ok(bytes) = std::fs::read(daemon.shared.config.data_dir.join(name)) {
+            assert!(
+                !bytes
+                    .windows(CONNECTION_CANARY.len())
+                    .any(|window| window == CONNECTION_CANARY.as_bytes()),
+                "{name} contains cookie value"
+            );
+        }
+    }
+    daemon.shutdown().await;
+    fixture.abort();
+}
+
+#[tokio::test]
+async fn request_form_partial_oopif_fill_cancel_and_expiry_never_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = otp_config(root.path(), Vec::new()).expect("Chromium required");
+    config.loaded.config.tickets.secret_input_ttl_secs = 5;
+    let runtime = TestRuntime::default();
+    let daemon = Daemon::open_runtime(config, runtime.clone()).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = Router::new()
+        .route("/", get(move || async move {
+            Html(format!("<!doctype html><title>Checkout</title><iframe src='http://localhost:{port}/payment'></iframe>"))
+        }))
+        .route("/payment", get(|| async {
+            Html("<!doctype html><input autocomplete='cc-name' required><input autocomplete='cc-csc' required><script>window.writes=0;document.querySelector('input').addEventListener('input',()=>{window.writes++;document.querySelector('[autocomplete=cc-csc]')?.remove()})</script>")
+        }));
+    let fixture = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let session = create_session(&daemon, "partial-form", PolicyMode::Full, None).await;
+    let tab = open_tab(
+        &daemon,
+        &session,
+        &format!("http://127.0.0.1:{port}"),
+        "partial-open",
+    )
+    .await;
+    let id = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_form",
+            json!({"tab_id":tab,"purpose":"payment"}),
+            "partial-ask",
+        )
+        .await,
+    )
+    .await;
+    let canary = "PARTIAL_FORM_CANARY_a811";
+    let answer = json!({"values":{"field_0":canary,"field_1":"937"}});
+    let response = resolve_value(&daemon, &id, answer.clone()).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(response).await["code"], "form_fill_indeterminate");
+    let browser = live(&daemon).await;
+    let frames = browser.frames(session.as_str(), &tab).await.unwrap();
+    let child = frames.iter().find(|frame| frame.host.is_some()).unwrap();
+    let state = browser.frame_command(session.as_str(), &tab, &child.id, "Runtime.evaluate",
+        json!({"expression":"[document.querySelector('input').value,window.writes,document.querySelector('[autocomplete=cc-csc]')===null]","returnByValue":true})).await.unwrap();
+    assert_eq!(state["result"]["value"], json!([canary, 1, true]));
+    browser.frame_command(session.as_str(), &tab, &child.id, "Runtime.evaluate",
+        json!({"expression":"document.body.insertAdjacentHTML('beforeend','<input autocomplete=\"cc-csc\" required>')"})).await.unwrap();
+    let response = resolve_value(&daemon, &id, answer.clone()).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(response).await["code"], "form_fill_indeterminate");
+    let state = browser
+        .frame_command(
+            session.as_str(),
+            &tab,
+            &child.id,
+            "Runtime.evaluate",
+            json!({"expression":"window.writes","returnByValue":true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state["result"]["value"], 1);
+    browser
+        .frame_command(
+            session.as_str(),
+            &tab,
+            &child.id,
+            "Runtime.evaluate",
+            json!({"expression":"document.querySelector('input').value='';window.writes=0"}),
+        )
+        .await
+        .unwrap();
+
+    let cancelled = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_form",
+            json!({"tab_id":tab,"purpose":"payment"}),
+            "cancel-form",
+        )
+        .await,
+    )
+    .await;
+    let rejected = api::router(daemon.shared.clone(), true)
+        .oneshot(request(
+            "POST",
+            &format!("/v1/tickets/{cancelled}/reject"),
+            json!({}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::OK);
+    assert_eq!(
+        resolve_value(&daemon, &cancelled, answer.clone())
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(ticket(&daemon, &cancelled).await["status"], "rejected");
+
+    let expired = deferred(
+        bounded(
+            &daemon,
+            &session,
+            "request_form",
+            json!({"tab_id":tab,"purpose":"payment"}),
+            "expire-form",
+        )
+        .await,
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(5100)).await;
+    crate::tickets::expire(&daemon.shared).await.unwrap();
+    assert_eq!(ticket(&daemon, &expired).await["status"], "expired");
+    assert_eq!(
+        resolve_value(&daemon, &expired, answer).await.status(),
+        StatusCode::CONFLICT
+    );
+    let state = browser.frame_command(session.as_str(), &tab, &child.id, "Runtime.evaluate",
+        json!({"expression":"[document.querySelector('input').value,window.writes,document.querySelector('[autocomplete=cc-csc]').value]","returnByValue":true})).await.unwrap();
+    assert_eq!(state["result"]["value"], json!(["", 0, ""]));
+    assert_nowhere(&daemon, &runtime, &session, canary).await;
+    daemon.shutdown().await;
+    fixture.abort();
+}
+
+#[tokio::test]
+async fn connections_relogin_returns_human_ticket_for_each_saved_login_continuation() {
+    for (username, expected) in [
+        ("otp-user", "secret_input"),
+        ("push-user", "device_approval"),
+        ("again-user", "login"),
+        ("captcha-user", "takeover"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (origin, received, fixture) = site().await;
+        let Some((daemon, _)) = daemon_with(
+            root.path(),
+            vec![saved(&origin, "relogin-account", username, PASSWORD)],
+        )
+        .await
+        else {
+            fixture.abort();
+            return;
+        };
+        let session = create_session(
+            &daemon,
+            &format!("relogin-{username}"),
+            PolicyMode::Full,
+            None,
+        )
+        .await;
+        let home = format!("{origin}/naver");
+        let row = daemon
+            .shared
+            .connections
+            .record(crate::connections::Record {
+                site: "localhost",
+                keys: &[],
+                source: openside_proto::ConnectionSource::Vault,
+                status: openside_proto::ConnectionStatus::NeedsLogin,
+                identity: None,
+                identity_source: openside_proto::ConnectionIdentitySource::None,
+                home: Some(&home),
+                session: Some(&session),
+                agent: "chief",
+                vault_item: Some("relogin-account"),
+                account_space: None,
+            })
+            .unwrap();
+        let response = api::router(daemon.shared.clone(), true)
+            .oneshot(request(
+                "POST",
+                &format!("/v1/connections/{}/relogin", row.id),
+                json!({"session_id":session}),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{username}");
+        let result = json_body(response).await;
+        assert_eq!(result["status"], "needs_you", "{result}");
+        let id = TicketId::new(result["ticket"]["ticket_id"].as_str().unwrap().to_owned());
+        let pending = ticket(&daemon, &id).await;
+        assert_eq!(pending["kind"], expected, "{pending}");
+        assert_eq!(pending["status"], "pending");
+        assert_eq!(
+            received.take().len(),
+            1,
+            "continuation must not silently repeat saved login"
+        );
+        daemon.shutdown().await;
+        fixture.abort();
+    }
+}
+
+#[tokio::test]
+async fn request_form_refuses_frame_navigation_between_enumeration_and_locate() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, _) = daemon_with(root.path(), Vec::new())
+        .await
+        .expect("Chromium required");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = Router::new()
+        .route(
+            "/",
+            get(|| async { Html("<!doctype html><iframe src='/fields'></iframe>") }),
+        )
+        .route(
+            "/fields",
+            get(|| async { Html("<!doctype html><input autocomplete='cc-number'>") }),
+        );
+    let fixture = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let session = create_session(&daemon, "frame-origin-race", PolicyMode::Full, None).await;
+    let tab = open_tab(
+        &daemon,
+        &session,
+        &format!("http://127.0.0.1:{port}/"),
+        "race-open",
+    )
+    .await;
+    let browser = live(&daemon).await;
+    let frames = browser.frames(session.as_str(), &tab).await.unwrap();
+    let before = frames
+        .into_iter()
+        .find(|frame| frame.parent.is_some())
+        .unwrap();
+    for destination in [
+        format!("http://127.0.0.1:{port}/fields?new_loader"),
+        format!("http://localhost:{port}/fields"),
+    ] {
+        browser
+            .evaluate(
+                &tab,
+                &format!(
+                    "document.querySelector('iframe').src={}",
+                    json!(destination)
+                ),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let frames = browser.frames(session.as_str(), &tab).await.unwrap();
+                if frames.iter().any(|frame| {
+                    frame.parent.is_some()
+                        && frame.url == destination
+                        && frame.loader != before.loader
+                }) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let result =
+            crate::tools::forms::locate_fields(&browser, session.as_str(), &tab, &before).await;
+        assert!(matches!(result, Err(error) if error.0=="target_changed"));
+    }
+    let outcome = bounded(
+        &daemon,
+        &session,
+        "request_form",
+        json!({"tab_id":tab,"purpose":"payment"}),
+        "fresh-origin",
+    )
+    .await;
+    let id = deferred(outcome).await;
+    assert_eq!(
+        ticket(&daemon, &id).await["form"]["fields"][0]["target_origin"],
+        format!("http://localhost:{port}")
+    );
     daemon.shutdown().await;
     fixture.abort();
 }

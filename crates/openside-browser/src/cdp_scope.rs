@@ -320,6 +320,7 @@ mod tests {
                 navigation_policy: std::sync::RwLock::new(None),
                 screencasts: Default::default(),
                 page: Default::default(),
+                profile_writes: Default::default(),
             }),
             process: Process {
                 child: parking_lot::Mutex::new(None),
@@ -328,13 +329,95 @@ mod tests {
                 temporary_profile: None,
                 stderr: None,
                 detached: true,
-                running: false,
+                running: false.into(),
             },
             ws_url: url,
             event_task: tokio::spawn(std::future::pending()),
             gateway: None,
             gateway_dir: None,
             isolated: true,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn destroyed_remote_object_cleanup_preserves_only_successful_operation_replies() {
+        use futures_util::{SinkExt, StreamExt};
+        for (operation_ok, code, message, cleanup_ok) in [
+            (true, -32000, "Cannot find context with specified id", true),
+            (true, -32000, "Could not find object with given id", true),
+            (true, -32000, "unexpected release failure", false),
+            (true, -32602, "Cannot find context with specified id", false),
+            (false, -32000, "Cannot find context with specified id", true),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("ws://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+                for method in [
+                    "DOM.resolveNode",
+                    "Runtime.callFunctionOn",
+                    "Runtime.releaseObject",
+                ] {
+                    let text = socket.next().await.unwrap().unwrap().into_text().unwrap();
+                    let request: Value = serde_json::from_str(&text).unwrap();
+                    assert_eq!(request["method"], method);
+                    let reply = match method {
+                        "DOM.resolveNode" => {
+                            json!({"id":request["id"],"result":{"object":{"objectId":"object"}}})
+                        }
+                        "Runtime.callFunctionOn" if operation_ok => {
+                            json!({"id":request["id"],"result":{"result":{"value":"filled"}}})
+                        }
+                        "Runtime.callFunctionOn" => {
+                            json!({"id":request["id"],"error":{"code":-32000,"message":"injected operation failure"}})
+                        }
+                        _ => json!({"id":request["id"],"error":{"code":code,"message":message}}),
+                    };
+                    socket
+                        .send(tokio_tungstenite::tungstenite::Message::Text(
+                            reply.to_string().into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            });
+            let (cdp, _events) = crate::cdp::Cdp::connect(&url, std::time::Duration::from_secs(2))
+                .await
+                .unwrap();
+            let profile = tempfile::tempdir().unwrap();
+            let browser = fixture(cdp, url, profile.path());
+            let result = browser
+                .call_on_node_in(
+                    "page",
+                    1,
+                    Some(1),
+                    "function() { return 'filled'; }",
+                    json!([]),
+                )
+                .await;
+            if operation_ok && cleanup_ok {
+                assert_eq!(result.unwrap(), "filled");
+            } else {
+                let BrowserError::Cdp {
+                    code: actual_code,
+                    message: actual_message,
+                } = result.unwrap_err()
+                else {
+                    panic!("unexpected operation failure");
+                };
+                assert_eq!(actual_code, if operation_ok { code } else { -32000 });
+                assert_eq!(
+                    actual_message,
+                    if operation_ok {
+                        message
+                    } else {
+                        "injected operation failure"
+                    }
+                );
+            }
+            server.await.unwrap();
         }
     }
 

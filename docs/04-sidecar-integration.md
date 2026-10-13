@@ -60,7 +60,7 @@ model tool call
 
 ## 7. 상태 스냅샷
 - 사이드카는 런 종료(completed/aborted/failed/deferred)마다 `state_snapshot{format:"openside-agent-state/1", data}` 를 보낸다(D3). 데몬은 내용을 해석하지 않고 세션별 최신 1개만 `agent_state` 에 보관한다.
-- `data` 에는 대화 히스토리, 미해결 보류 호출, steer 버퍼, 계정 핀(§9), 스크립트 커서가 들어간다(`agent/src/openside_agent/runtime/state.py`). 토큰·계정 식별자는 없다.
+- `data`는 대화 기록, 해결되지 않은 보류 호출, steer 버퍼, 스크립트 커서를 담는다(`agent/src/openside_agent/runtime/state.py`). 자격 증명 어피니티는 데몬에만 남으며 사이드카가 직렬화하지 않는다. 이전 스냅샷에 `pins`가 남아 있더라도 해당 레거시 키를 무시하고 정상 디코딩한다.
 - 재기동 시 `open.resume_state` 로 돌려준다. 런 도중 크래시는 그 런의 부분 히스토리를 잃는다.
 
 ## 8. 크래시·재시작 복구
@@ -74,34 +74,17 @@ model tool call
 
 브라우저 유지 정책(항상 유지/항상 종료)은 사용자 결정 대기다. systemd 로 돌릴 때는 `KillMode=process` 를 권장한다.
 
-## 9. 자격증명과 계정 규칙 (A-8, PP-18)
-### 9.1 소스와 순서
-- 모델 ID 는 설정값 `provider:model` 이다(D5, `models.default` 미설정이면 세션 생성이 `model_not_configured`).
-- `build_model` 이 `credentials.order.<provider>` 순서로 소스를 시도한다. 기본 순서(`agent/src/openside_agent/providers/config.py`): `anthropic` = `omp-broker` → `env` → `command`, `openai-codex` = `omp-broker` → `codex-cli`, 그 외 = `env` → `command`. `builtin` 은 순서에 명시했을 때만 쓴다.
-- 소스별 설정 키와 기본값은 [CONFIGURATION.md](CONFIGURATION.md)와 [agent/README.md](../agent/README.md)를 본다. 이 문서는 규칙만 다룬다.
+## 9. Request credential ownership (A-8, PP-18)
 
-### 9.2 fail-closed (P-1)
-1. openside 는 제공자 로그인 UI·자격증명 저장소를 만들지 않는다. 계정 추가·OAuth 갱신은 소스 쪽(예: omp auth broker)이 한다.
-2. 토큰·스냅샷·자격증명 행은 로그/API/UI/에러 메시지/stderr 에 절대 출력하지 않는다. 오류 문장은 정제된 이유만 담는다(`AuthUnavailable.reasons`).
-3. broker 소스가 선택됐는데(토큰이 있음) broker 에 닿지 못하거나 해당 제공자 계정이 전부 차단이면 `AuthUnavailable` 이다. `env`/`command` 로 강등하지 않는다. broker 스냅샷에 그 제공자가 아예 없을 때만 빌드 시점에 다음 소스로 넘어간다.
-4. `AuthUnavailable` 은 `FallbackModel` 폴백 조건이 아니다. 실행 중 broker 가 끊겨도 런 도중 로컬 소스로 바뀌지 않는다.
-5. broker 토큰이 없으면 broker 소스는 조용히 비활성(다음 소스)이다. 이는 "broker 를 설정하지 않음"이지 강등이 아니다.
+데몬은 실제 프로바이더 풀, 소스 신뢰, 계정 리비전, 웜 세션 어피니티, 쿼터 예약, 범위 제한 블록, `refresh`의 유일한 소유자다. Python의 각 모델 요청 시도는 `credential_request`를 통해 새로운 비공개 리스를 발급받는다. 소스 설정, 브로커 스냅샷, CLI 홈 디렉터리, 리프레시 토큰은 진단 정보를 포함해 Python 쪽으로 일절 전달되지 않는다. 자세한 내용은 [`models-accounts.md`](specs/models-accounts.md) 및 [`sidecar-protocol.md` §6.1](specs/sidecar-protocol.md)을 참고한다.
 
-### 9.3 broker 소스의 계정 선택과 핀
-구현: `agent/src/openside_agent/providers/selector.py`, `pins.py`, `models.py`.
-1. 후보: 스냅샷의 OAuth 자격증명 중 제공자가 일치하고, broker `blocks` 가 만료되지 않았고, 이 세션이 로컬로 차단하지 않은 것. 후보가 없으면 `AuthUnavailable("no unblocked OAuth account")`.
-2. 세션 핀 유지: `CredentialPins` 는 세션·제공자별로 `credential_id` 와 마지막 요청 시각을 기록하고, 핀이 후보에 남아 있으면 그 계정을 계속 쓴다(prompt cache 보호). Anthropic 핀은 마지막 요청 후 1시간(3600초)이 지나면 해제한다.
-3. 핀이 없거나 무효면 새로 고른다: `GET /v1/usage` 로 계정별 잔여 비율의 최솟값이 가장 큰 계정 → 만료가 늦은 계정 → 작은 id. 사용량 응답은 참고용이며 실패해도 스냅샷이 기준이다.
-4. 429 또는 `rate_limit` 응답: `retry-after`(1~86400초, 기본 60) 동안 그 계정을 로컬 차단하고 핀을 해제한 뒤 `POST /v1/credential/:id/block` 을 보낸다. 스냅샷을 강제로 다시 읽어 다른 계정으로 같은 요청을 재시도하고, 이미 시도한 계정만 남으면 `AuthUnavailable("all attempted accounts rate limited")`.
-5. 토큰 갱신은 broker 만 한다. 만료 30초 이내면 스냅샷을 강제로 다시 읽고, 그래도 만료 임박이면 fail-closed. 401 이면 스냅샷을 다시 읽어 다른 자격증명으로 1회만 재시도하고, 같은 자격증명이거나 만료 임박이면 fail-closed. Codex 는 `openai_client=` 주입으로 provider 의 자체 OAuth refresh 경로를 끈다(S-16, [spikes/S-16-provider-refresh.md](spikes/S-16-provider-refresh.md)).
-6. 핀은 스냅샷(`openside-agent-state/1`)에 같이 저장돼 사이드카 재기동 후에도 같은 계정을 쓴다. 직렬화 형식은 `{session:{provider:{credential_id, last_request_at}}}` 뿐이며 토큰·계정 ID·이메일은 넣지 않는다(`CredentialPins.from_json` 이 다른 키를 거부).
-7. 계정 풀·우선순위·reserve 같은 정책은 broker 소유다. openside 는 계정을 추가·삭제·비활성화하지 않고, `block` 외의 쓰기를 하지 않는다. 풀은 라우팅 정책이지 인가 경계가 아니다. 진짜 격리가 필요하면 broker 를 따로 둔다.
-8. broker 접속 정보는 머신 로컬 설정으로 둔다: URL 은 `OPENSIDE_BROKER_URL` 또는 `credentials.omp_broker.url`, 토큰은 `OPENSIDE_BROKER_TOKEN`(값) 또는 `credentials.omp_broker.token_file`(경로). 동기화되는 설정 파일에 토큰 값을 쓰지 않는다. 같은 키는 [CONFIGURATION.md](CONFIGURATION.md) 참고.
+`providers/credential_rpc.py`는 타입이 지정된 비공개 응답을 멀티플렉싱한다. `providers/request_model.py`는 논리적 요청 1회당 0부터 시작하는 시도 횟수를 최대 64회로 제한하며, 허용된 갱신/로테이션을 진행하기 전에 데몬이 처리 결과를 커밋하고 보낸 확인(ack)을 대기한다. `providers/request_auth.py`는 선택된 프로바이더 오리진으로 보낼 때만 리스된 자격 증명을 주입한다. SDK 클라이언트는 플레이스홀더 키만 보관하고 자체 자격 증명 재시도를 비활성화한다. Codex의 `openai_client=` 주입은 로컬 자격 증명 파일 로드와 OAuth 갱신을 차단한다.
 
-### 9.4 진단과 검증 상태
-- `openside doctor [--json]` 는 사이드카 `doctor --json` 으로 소스별 `provider`, `source`, `available`, `reason`, `next_step` 을 보고한다. broker 는 읽기 전용 GET 만 하고 모델 요청을 보내지 않는다. `command` 는 실행하지 않고 실행 가능 여부만 본다(`unverified`).
-- 결정론 테스트는 가짜 broker 와 `MockTransport` 만 쓴다(`agent/tests/providers`). 실제 broker 로는 Codex·Claude 한 줄 응답과 `ask_user` 보류→해결→재개 왕복을 확인했다([spikes/S-14-broker-provider.md](spikes/S-14-broker-provider.md)). 실제 broker 에서의 429 계정 이동, 다계정 핀 동작은 `unverified`.
-- Anthropic 구독 셰이핑(`providers/anthropic.py`)은 제공자 정책이 바뀌면 깨질 수 있다(R-13).
+결과(outcome) 종류는 `success`, `auth`, `rate_limit`, `quota`, `policy`, `transient`, `cancelled`다. 프로바이더가 알린 재시도/초기화 시각을 알 수 없으면 null 상태를 유지한다. 데몬이 `complete`, `refresh`, `rotate`, `stop` 중 하나를 결정하며, 사이드카 쪽에 별도 선택 로직은 없다. 이미 스트림을 전달하기 시작한 응답 스트림은 절대 다시 전송하지 않는다. 취소(cancellation) 요청에 한해서는 늦게 도착하는 확인을 기다리지 않고 즉시 리포트를 보낼 수 있어, 셧다운 디스패치 데드락을 방지한다.
+
+기본 원칙은 닫힌 채로 실패한다(fail-closed). 목록에 없는 자격 증명 소스로의 다운그레이드는 금지된다. G-2 규칙에 따른 혼합 소스 사용은 사람이 명시한 실제 프로바이더 풀 내부에서만 허용되며, Agent 제약 사항도 그대로 유지된다. 프로바이더 간 변경은 명시적으로 구성된 폴백 모델이 있어야만 동작하며, `AuthUnavailable` 상태는 모델 폴백 대상에서 제외된다. 소진이나 거부가 발생하면 고정된 타입의 사유와 확인 가능한 신뢰할 만한 재시도 시각을 보존한다. 토큰, 업스트림 식별자, 원시 응답, 프로바이더 예외 본문은 오류, 리포트, 스냅샷, 공개 진단 어디에도 드러나지 않는다.
+
+`models --json`은 자격 증명이 포함되지 않은 선별된 SDK 인덱스만 제공하며, 계정과 모델의 가용 상태 집계는 Rust가 담당한다. Python의 `accounts`와 `doctor`는 데몬이 정제해 전달한 메타데이터만 소비하며, 메타데이터가 없으면 설치/설정 전용 진단 도구가 임의로 로그인 준비 완료 상태를 판정할 수 없다. 결정론적 테스트는 모의 데몬/HTTP만 사용한다. 과거 스파이크 문서에 기록된 기존 라이브 호출 관측 결과는 새 계정 풀 경로를 검증하지 않는다.
 
 ## 10. 남은 것
 - 서브에이전트(ADR-020): harness `SubAgents` 대신 사이드카 자체 어댑터(`runtime/subagents.py`)가 데몬 툴 `delegate` 결과로 서브에이전트를 돌린다. 서브에이전트의 승인·질문은 부모 세션 티켓(`origin.subagent_id`)으로 열리고, 부모 `delegate` 호출은 서브에이전트가 끝날 때까지 보류된다. 취소·steer·복구 규칙은 [`specs/sidecar-protocol.md` §10](specs/sidecar-protocol.md#10-서브에이전트).

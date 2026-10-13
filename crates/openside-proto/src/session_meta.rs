@@ -4,11 +4,8 @@ use serde::{Deserialize, Serialize};
 /// Longest accepted session title, in characters.
 pub const MAX_SESSION_TITLE_CHARS: usize = 200;
 
-/// Title of a session created without one, until its first message names it.
+/// Title of a session created without one, until the model proposes a conversation title.
 pub const DEFAULT_SESSION_TITLE: &str = "New session";
-
-/// Longest title derived from a first message, in characters (including the ellipsis).
-const DERIVED_TITLE_CHARS: usize = 80;
 
 /// Single-line display form of a title: control and bidirectional-override characters act as
 /// whitespace, whitespace runs collapse and the ends are trimmed. `None` when nothing printable
@@ -36,14 +33,26 @@ pub fn normalize_title(raw: &str) -> Option<String> {
     (!title.is_empty()).then_some(title)
 }
 
-/// Title for a conversation that has none yet: the message's first non-blank line, shortened.
-pub fn title_from_message(text: &str) -> Option<String> {
-    let title = text.lines().find_map(normalize_title)?;
-    if title.chars().count() <= DERIVED_TITLE_CHARS {
-        return Some(title);
+/// Model titles are short labels, not copied links or provider prose.
+pub fn normalize_model_title(raw: &str) -> Option<String> {
+    let title = normalize_title(raw)?;
+    let words = title.split_whitespace();
+    let word_count = words.clone().count();
+    if title.chars().count() > MAX_SESSION_TITLE_CHARS
+        || word_count > 6
+        || (word_count == 1 && title.contains(['.', '/', '?']))
+        || words.clone().any(|word| {
+            word.contains("://")
+                || word
+                    .get(..4)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("www."))
+        })
+        || title.starts_with("data:")
+        || title.starts_with("mailto:")
+    {
+        return None;
     }
-    let cut: String = title.chars().take(DERIVED_TITLE_CHARS - 1).collect();
-    Some(format!("{}…", cut.trim_end()))
+    Some(title)
 }
 
 /// Partial session metadata update; omitted fields keep their current value.
@@ -89,14 +98,22 @@ mod tests {
     }
 
     #[test]
-    fn derived_title_is_the_first_nonblank_line_shortened() {
+    fn model_titles_are_short_labels_never_urls() {
         assert_eq!(
-            title_from_message("\n\n  Plan the trip  \nmore").as_deref(),
-            Some("Plan the trip")
+            normalize_model_title(" Compare  Acme plans ").as_deref(),
+            Some("Compare Acme plans")
         );
-        assert_eq!(title_from_message("  \n "), None);
-        let long = "word ".repeat(40);
-        let title = title_from_message(&long).unwrap_or_default();
-        assert!(title.chars().count() <= DERIVED_TITLE_CHARS && title.ends_with('…'));
+        for invalid in [
+            "https://shop.example/order?token=secret",
+            "shop.example/plans",
+            "shop.example",
+            "Read https://shop.example",
+            "www.shop.example",
+            "WWW.shop.example",
+            "data:text/plain,hello",
+            "one two three four five six seven",
+        ] {
+            assert_eq!(normalize_model_title(invalid), None, "{invalid}");
+        }
     }
 }

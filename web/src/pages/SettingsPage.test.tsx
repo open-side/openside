@@ -54,7 +54,7 @@ function daemon({ healthy = true }: { healthy?: boolean } = {}) {
 
 function setup(options?: { healthy?: boolean }) {
   const fake = daemon(options);
-  const handlers = { onWorkspace: vi.fn(), onGuide: vi.fn(), onSignOut: vi.fn() };
+  const handlers = { onModels: vi.fn(), onChannels: vi.fn(), onRemote: vi.fn(), onWorkspace: vi.fn(), onGuide: vi.fn(), onSignOut: vi.fn() };
   render(
     <ClientContext.Provider value={fake.client}>
       <SettingsPage {...handlers} />
@@ -81,6 +81,27 @@ describe("SettingsPage", () => {
     expect(onWorkspace).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(onSignOut).toHaveBeenCalledOnce();
+  });
+
+  it("opens Models & accounts", async () => {
+    const user = userEvent.setup();
+    const { onModels } = setup();
+    await user.click(screen.getByRole("button", { name: /Models & accounts/ }));
+    expect(onModels).toHaveBeenCalledOnce();
+  });
+
+  it("opens Channels", async () => {
+    const user = userEvent.setup();
+    const { onChannels } = setup();
+    await user.click(screen.getByRole("button", { name: /Channels/ }));
+    expect(onChannels).toHaveBeenCalledOnce();
+  });
+
+  it("opens Remote access", async () => {
+    const user = userEvent.setup();
+    const { onRemote } = setup();
+    await user.click(screen.getByRole("button", { name: /Remote access/ }));
+    expect(onRemote).toHaveBeenCalledOnce();
   });
 
   it("reopens the setup guide", async () => {

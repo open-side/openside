@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { ownedChromeTabs, clearAgentTabs } from "../src/agent-tabs";
+import { ownedChromeTabs, clearAgentTabs, groupAgentTabs } from "../src/agent-tabs";
 afterEach(() => vi.unstubAllGlobals());
 describe("Agent Tabs identity", () => {
   it("groups only exact owned CDP targets, never user tabs with an identical URL", () => {
@@ -19,5 +19,31 @@ describe("Agent Tabs identity", () => {
     expect(ungroup).toHaveBeenCalledExactlyOnceWith([7, 8]);
     expect(query.mock.calls.map(([value]) => value.groupId)).toEqual([11, 12]);
     expect(remove).toHaveBeenCalledWith("agentGroups");
+  });
+});
+describe("Agent Tabs group", () => {
+  const ledger = { tabs: [{ tab_id: "owned", url: "https://a.example.test", title: "A", opened_by: "agent" as const, owner_session_id: "session" }] };
+  function stub(stored: Record<string, number>, alive: boolean) {
+    const group = vi.fn(async () => 31);
+    const update = vi.fn(async () => undefined);
+    vi.stubGlobal("chrome", {
+      debugger: { getTargets: vi.fn(async () => [{ id: "owned", tabId: 7, type: "page", title: "A", url: "https://a.example.test", attached: true }]) },
+      tabs: { query: vi.fn(async ({ groupId }: { groupId?: number }) => groupId === undefined ? [{ id: 7, windowId: 1, incognito: false }] : [{ id: 7 }]), group, ungroup: vi.fn(async () => undefined) },
+      tabGroups: { get: vi.fn(async () => alive ? { id: 31 } : Promise.reject(new Error("gone"))), update },
+      storage: { session: { get: vi.fn(async () => ({ agentGroups: stored })), set: vi.fn(async () => undefined) } },
+    });
+    return { group, update };
+  }
+  it("names and colours a new group once", async () => {
+    const { group, update } = stub({}, false);
+    await groupAgentTabs(ledger);
+    expect(group).toHaveBeenCalledWith({ tabIds: [7], createProperties: { windowId: 1 } });
+    expect(update).toHaveBeenCalledExactlyOnceWith(31, { title: "Agent Tabs", color: "grey" });
+  });
+  it("leaves a rename, recolour or collapse alone when the group already exists", async () => {
+    const { group, update } = stub({ 1: 31 }, true);
+    await groupAgentTabs(ledger);
+    expect(group).toHaveBeenCalledWith({ tabIds: [7], groupId: 31 });
+    expect(update).not.toHaveBeenCalled();
   });
 });

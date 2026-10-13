@@ -14,10 +14,16 @@ use crate::{Error, Result};
 /// Replayed durable session state, including terminal message and ticket records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionState {
+    /// Immutable creation tag; home identity is owned by the separate agent registry.
+    pub agent_id: Option<String>,
     /// Stable session identifier.
     pub id: SessionId,
     /// Conversation title supplied by the creation event.
     pub title: String,
+    /// A supplied title or a metadata rename prevents model replacement, even mid-request.
+    pub title_locked: bool,
+    /// Only the first valid model proposal can name a conversation.
+    pub title_proposed: bool,
     /// Provider-qualified model supplied by the creation event.
     pub model: String,
     /// Permission ceiling supplied by the creation event.
@@ -26,6 +32,10 @@ pub struct SessionState {
     pub workspace: Option<String>,
     /// User-task lifecycle state, independent of individual model requests.
     pub status: SessionStatus,
+    /// Latest short activity outside a human-waiting state.
+    pub activity: String,
+    /// Background work can still be browsing after the front agent has replied.
+    pub active_subagents: BTreeSet<String>,
     /// Latest applied per-session sequence.
     pub last_seq: u64,
     /// Queue with pending order, edited text, and terminal idempotency history.
@@ -36,6 +46,8 @@ pub struct SessionState {
     pub completions: BTreeMap<MessageId, MessageOutcome>,
     /// All ticket records; filter `Pending` when exposing outstanding human actions.
     pub tickets: BTreeMap<TicketId, Ticket>,
+    /// Durable presentations keyed by daemon-assigned identity for replay idempotency.
+    pub cards: BTreeMap<String, openside_proto::Card>,
     /// Agent-client identities recorded durably before their work reaches the runtime.
     pub driver_ids: BTreeSet<String>,
     /// Set by `session.deleted`; the log is retained but the session is hidden and frozen.
@@ -50,8 +62,14 @@ pub struct SessionState {
     pub browser_space: BrowserSpace,
     /// Original text of the first queued message, used for list search.
     pub first_message: Option<String>,
+    /// Bounded latest message preview, rebuilt during replay instead of rescanning each list.
+    pub last_message_preview: String,
     /// Stored attachments per message, delivered to the runtime with the message.
     pub attachments: BTreeMap<MessageId, Vec<Attachment>>,
+    /// Immutable daemon authority, retained after delivery for authorization and replay.
+    pub message_authors: BTreeMap<MessageId, openside_proto::MessageAuthorKind>,
+    /// Only actual team deliveries have a sender; delivery never erases this provenance.
+    pub message_senders: BTreeMap<MessageId, String>,
     /// Timestamp of the latest event other than a metadata update; orders the session list.
     pub last_activity: DateTime<Utc>,
 }
@@ -60,11 +78,21 @@ impl SessionState {
     /// Public projection with the pending queue and derived human-waiting status.
     pub fn session(&self) -> Session {
         Session {
+            agent_id: self.agent_id.clone(),
             id: self.id.clone(),
             title: self.title.clone(),
             model: self.model.clone(),
             mode: self.mode,
             workspace: self.workspace.clone(),
+            activity: if self
+                .tickets
+                .values()
+                .any(|ticket| ticket.status == TicketStatus::Pending)
+            {
+                "Waiting for you".into()
+            } else {
+                self.activity.clone()
+            },
             status: if self.status == SessionStatus::Idle
                 && self
                     .tickets
@@ -84,6 +112,8 @@ impl SessionState {
                         text: self.queue.text(id)?.to_owned(),
                         status: self.queue.status(id)?.clone(),
                         id: id.clone(),
+                        author_kind: self.message_authors.get(id).copied().unwrap_or_default(),
+                        from_agent: self.message_senders.get(id).cloned(),
                     })
                 })
                 .collect(),
@@ -96,6 +126,7 @@ impl SessionState {
 
     pub(crate) fn created(event: &Event) -> Result<Self> {
         let EventKind::SessionCreated {
+            agent_id,
             title,
             model,
             mode,
@@ -112,17 +143,23 @@ impl SessionState {
             return Err(Error::InvalidEvent("first sequence must be one".into()));
         }
         Ok(Self {
+            agent_id: agent_id.clone(),
             id: event.session_id.clone(),
             title: title.clone(),
+            title_locked: title != openside_proto::DEFAULT_SESSION_TITLE,
+            title_proposed: false,
             model: model.clone(),
             mode: *mode,
             workspace: workspace.clone(),
             status: SessionStatus::Idle,
+            activity: String::new(),
+            active_subagents: BTreeSet::new(),
             last_seq: 1,
             queue: MessageQueue::new(),
             injected: BTreeSet::new(),
             completions: BTreeMap::new(),
             tickets: BTreeMap::new(),
+            cards: BTreeMap::new(),
             driver_ids: BTreeSet::new(),
             deleted: false,
             pinned: false,
@@ -130,7 +167,10 @@ impl SessionState {
             incognito: *incognito,
             browser_space: *browser_space,
             first_message: None,
+            last_message_preview: String::new(),
             attachments: BTreeMap::new(),
+            message_authors: BTreeMap::new(),
+            message_senders: BTreeMap::new(),
             last_activity: event.ts,
         })
     }
@@ -197,7 +237,7 @@ impl SessionState {
             }
             EventKind::TicketResolved { ticket_id, .. }
             | EventKind::TicketRejected { ticket_id, .. }
-            | EventKind::TicketExpired { ticket_id }
+            | EventKind::TicketExpired { ticket_id, .. }
                 if !self
                     .tickets
                     .get(ticket_id)
@@ -219,20 +259,36 @@ impl SessionState {
             ));
         }
         self.validate(&event.kind)?;
+        if let EventKind::MessageQueued { text, .. } | EventKind::AssistantFinal { text } =
+            &event.kind
+        {
+            self.last_message_preview = text.chars().take(160).collect();
+        }
         match &event.kind {
             EventKind::MessageQueued {
                 message_id,
                 text,
                 mode,
                 attachments,
+                author_kind,
+                from_agent,
             } => {
                 if self.queue.submit(message_id.clone(), text.clone(), *mode)
                     != SubmitOutcome::Accepted
                 {
                     return Err(Error::InvalidEvent("duplicate submission".into()));
                 }
+                self.message_authors
+                    .insert(message_id.clone(), *author_kind);
+                if let Some(sender) = from_agent {
+                    self.message_senders
+                        .insert(message_id.clone(), sender.clone());
+                }
                 if self.first_message.is_none() {
                     self.first_message = Some(text.clone());
+                }
+                if self.status != SessionStatus::Running {
+                    self.activity = "Working".into();
                 }
                 if !attachments.is_empty() {
                     self.attachments
@@ -269,6 +325,7 @@ impl SessionState {
                 }
                 self.injected.insert(message_id.clone());
                 self.status = SessionStatus::Running;
+                self.activity = "Working".into();
             }
             EventKind::MessageCompleted {
                 message_id,
@@ -276,6 +333,15 @@ impl SessionState {
                 ..
             } => {
                 self.completions.insert(message_id.clone(), *outcome);
+                if *outcome != MessageOutcome::Completed || self.active_subagents.is_empty() {
+                    self.activity = match outcome {
+                        MessageOutcome::Completed => "Done",
+                        MessageOutcome::Aborted => "Stopped",
+                        MessageOutcome::Failed => "Couldn't finish",
+                        MessageOutcome::Deferred => "Waiting for you",
+                    }
+                    .into();
+                }
                 if self.status != SessionStatus::Stopped {
                     self.status = if self.injected.len() > self.completions.len() {
                         SessionStatus::Running
@@ -287,11 +353,52 @@ impl SessionState {
             EventKind::SessionDriverRecorded { device_id } => {
                 self.driver_ids.insert(device_id.clone());
             }
+            EventKind::CardPresented { card, .. } => {
+                self.cards
+                    .entry(card.id.clone())
+                    .or_insert_with(|| card.clone());
+            }
+            EventKind::TeamHired {
+                card: Some(card), ..
+            }
+            | EventKind::TeamHandoff {
+                card: Some(card), ..
+            }
+            | EventKind::TeamHandoffEnded {
+                card: Some(card), ..
+            }
+            | EventKind::TeamQuestion {
+                card: Some(card), ..
+            }
+            | EventKind::TeamAnswered {
+                card: Some(card), ..
+            }
+            | EventKind::TeamTransferred {
+                card: Some(card), ..
+            }
+            | EventKind::TeamRetired {
+                card: Some(card), ..
+            }
+            | EventKind::TeamRestored {
+                card: Some(card), ..
+            } => {
+                self.cards.insert(card.id.clone(), card.clone());
+            }
+            EventKind::ToolEnded {
+                card: Some(card), ..
+            } => {
+                if let Some(id) = &card.ticket_id {
+                    if let Some(ticket) = self.tickets.get_mut(id) {
+                        ticket.card = Some(card.clone());
+                    }
+                }
+            }
             EventKind::TicketOpened { ticket } => {
                 self.tickets
                     .insert(ticket.id.clone(), ticket.as_ref().clone());
             }
             EventKind::TicketResolved {
+                card,
                 ticket_id,
                 resolution,
             } => {
@@ -301,38 +408,86 @@ impl SessionState {
                     .ok_or_else(|| Error::InvalidEvent("unknown ticket".into()))?;
                 ticket.status = TicketStatus::Resolved;
                 ticket.resolution = Some(resolution.clone());
+                ticket.card = card.clone();
             }
-            EventKind::TicketRejected { ticket_id, reason } => {
+            EventKind::TicketRejected {
+                ticket_id,
+                reason,
+                card,
+            } => {
                 let ticket = self
                     .tickets
                     .get_mut(ticket_id)
                     .ok_or_else(|| Error::InvalidEvent("unknown ticket".into()))?;
                 ticket.status = TicketStatus::Rejected;
+                ticket.card = card.clone();
                 ticket.resolution = Some(serde_json::json!({
                     "status": "rejected",
                     "reason": reason,
                 }));
             }
-            EventKind::TicketExpired { ticket_id } => {
+            EventKind::TicketExpired { ticket_id, card } => {
                 let ticket = self
                     .tickets
                     .get_mut(ticket_id)
                     .ok_or_else(|| Error::InvalidEvent("unknown ticket".into()))?;
                 ticket.status = TicketStatus::Expired;
+                ticket.card = card.clone();
             }
-            EventKind::TurnStarted { .. } => self.status = SessionStatus::Running,
+            EventKind::TurnStarted { .. } => {
+                self.status = SessionStatus::Running;
+                self.activity = "Working".into();
+            }
             // A model request can end before its tools and the user task finish.
             EventKind::TurnEnded { .. } => {}
-            EventKind::SessionSettled { .. } => self.status = SessionStatus::Idle,
-            EventKind::SessionStopped { .. } => self.status = SessionStatus::Stopped,
+            EventKind::SessionSettled { .. } => {
+                self.status = SessionStatus::Idle;
+                if self.activity != "Couldn't finish" && self.activity != "Stopped" {
+                    self.activity = "Done".into();
+                }
+            }
+            EventKind::SessionStopped { .. } => {
+                self.status = SessionStatus::Stopped;
+                self.activity = "Stopped".into();
+            }
+            EventKind::SubagentStarted { subagent_id, .. } => {
+                self.active_subagents.insert(subagent_id.clone());
+                self.activity = "Working".into();
+            }
+            EventKind::SubagentEnded { subagent_id, .. } => {
+                self.active_subagents.remove(subagent_id);
+            }
+            EventKind::BrowserState(state)
+                if self.status == SessionStatus::Running || !self.active_subagents.is_empty() =>
+            {
+                self.activity = match state.phase {
+                    openside_proto::BrowserPhase::WaitingHuman => "Waiting for you".into(),
+                    openside_proto::BrowserPhase::Error => "Couldn't finish".into(),
+                    _ if !state.host.is_empty() => format!("Browsing {}", state.host),
+                    _ => "Browsing".into(),
+                };
+            }
+            EventKind::SessionTitleProposed { title } => {
+                if !self.title_locked && !self.title_proposed {
+                    if let Some(title) = openside_proto::normalize_model_title(title) {
+                        self.title = title;
+                        self.title_proposed = true;
+                    }
+                }
+            }
             EventKind::SessionDeleted { .. } => self.deleted = true,
             EventKind::SessionUpdated {
+                mode,
                 title,
                 pinned,
                 archived,
             } => {
+                if let Some(mode) = mode {
+                    self.mode = *mode;
+                }
                 if let Some(title) = title {
                     self.title.clone_from(title);
+                    self.title_locked = true;
                 }
                 if let Some(pinned) = pinned {
                     self.pinned = *pinned;
@@ -343,7 +498,34 @@ impl SessionState {
             }
             _ => {}
         }
-        if !matches!(event.kind, EventKind::SessionUpdated { .. }) {
+        if matches!(
+            event.kind,
+            EventKind::TicketResolved { .. }
+                | EventKind::TicketRejected { .. }
+                | EventKind::TicketExpired { .. }
+        ) {
+            // API-origin tickets have no agent continuation to produce a later settled event.
+            let continuing = self.status == SessionStatus::Running
+                || !self.active_subagents.is_empty()
+                || self
+                    .completions
+                    .values()
+                    .any(|outcome| *outcome == MessageOutcome::Deferred);
+            self.activity = if self.status == SessionStatus::Stopped {
+                "Stopped"
+            } else if continuing {
+                "Working"
+            } else if self.activity == "Couldn't finish" {
+                "Couldn't finish"
+            } else {
+                "Done"
+            }
+            .into();
+        }
+        if !matches!(
+            event.kind,
+            EventKind::SessionUpdated { .. } | EventKind::SessionTitleProposed { .. }
+        ) {
             self.last_activity = event.ts;
         }
         self.last_seq = event.seq;

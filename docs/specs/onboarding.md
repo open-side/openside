@@ -4,12 +4,13 @@
 
 처음 방문한 사용자에게 에이전트 연결, 브라우저 데이터 가져오기, Vault 설정, 휴대폰 페어링까지의 초기 설정을 안내하는 웹 UI다. 모든 단계는 데몬의 공개 API 엔드포인트만 사용해 동작하며, 데몬이 안내 완료 여부를 기억한다.
 
-## 1. 흐름
-- 경로는 `/welcome`이다. 단계는 `?step=welcome|agents|import|vault|pair|done` 쿼리 파라미터로 유지되므로 브라우저 뒤로 가기나 새로고침을 해도 현재 자리를 잃지 않는다.
-- 안내가 열려 있는 동안 좌측 대화 목록은 숨겨지고, 모바일과 데스크톱 모두 공통 진한 글래스(strong-glass) 스타일의 집중형 전체 화면 카드로 표시된다.
-- 전체 단계는 Welcome (개요) → Agents → Browser data → Vault → Phone → Done 순으로 진행된다.
-- Welcome과 Done을 제외한 모든 단계는 `Skip this step` 버튼으로 건너뛸 수 있다. 해당 단계에서 실제 설정 작업을 마치면 버튼 레이블이 `Continue`로 바뀐다. `Back`을 누르면 이전 단계로 돌아가며, 상단의 `Skip setup`을 누르면 모든 과정을 한 번에 건너뛴다.
-- 마지막 Done 단계에서는 완료한 작업(스킬이 설치된 에이전트, 가져온 프로필, Vault 설정, 페어링된 휴대폰)을 정리해 보여주고, 건너뛴 항목은 `Skipped`로 표시한다. `Open openside`를 누르면 초기 설정이 끝나고 메인 화면으로 진입한다.
+## 1. 진행 절차
+- 경로는 `/welcome`이며, 각 단계는 `?step=import|models|agents|pair|done` 쿼리로 관리하므로 뒤로 가거나 새로고침해도 현재 위치를 유지한다. 별도의 시작(환영) 화면이나 독립된 Vault 설정 단계는 두지 않는다.
+- 진행 순서는 브라우저(이 컴퓨터에 이미 설치된 브라우저 데이터 가져오기) → Models → Agents → Phone → Done 순이다. 로그인되어 있는 웹사이트를 확보해야 에이전트를 곧바로 유용하게 쓸 수 있으므로 가져오기를 가장 먼저 배치한다.
+- 첫 단계의 하단 버튼은 보조 형태의 `Skip for now`이며, 가져오기가 끝나면 `Continue`로 바뀐다. 이후 모든 단계는 `Skip this step`(실제 설정을 진행한 뒤에는 `Continue`)을 제공하고, `Back`을 누르면 이전 단계로 돌아가며, 상단 헤더의 `Skip setup`을 누르면 온보딩 안내 전체를 종료한다.
+- 화면 어디에서도 사람에게 명령어를 직접 실행하라고 요구하지 않는다. 모든 절차는 GUI에서 완결되며, 터미널 대응 명령은 눈에 띄지 않는 "Or from a terminal" 안내 힌트(`web/src/pages/CliHint.tsx`)로만 표시될 수 있다.
+- Vault 설정이나 잠금 해제는 비밀번호를 가져올 때 가져오기 단계 안에서 인라인(`VaultGate`)으로 처리하며, 비밀번호 없이 가져올 수도 있다.
+- Done 단계에서는 Browser 데이터, Models, Agents, Phone 설정 결과를 요약해서 보여주며, 건너뛴 항목에는 `Skipped`가 표시된다.
 
 ## 2. 열리는 조건과 상태
 - 안내는 데몬의 온보딩 상태가 `pending`일 때 `/`에 처음 접근하면 자동으로 한 번 열린다. 단, 현재 기기의 토큰에 `admin` 스코프가 없는 것이 확실한 경우에는 자동으로 열리지 않는다(토큰을 직접 붙여넣는 등 스코프를 미리 알 수 없는 상태라면 그대로 진입해 데몬에 확인한다).
@@ -31,36 +32,28 @@
 - `POST /v1/external-agents/{id}/browser-skill` (`admin` 스코프, 바디 `{force?: bool}`)은 내장 번들인 `openside-browser` 스킬을 설치하고 201 `{agent, skill, path, files}`를 반환한다. 이미 설치되어 있고 `force`가 false이면 기존 파일을 보존한 채 409 `exists`를 낸다. 목록에 없는 식별자는 404 `unknown_agent`, 디렉터리를 알 수 없으면 400 `skills_dir_unknown`으로 거절한다.
 - 감지되지 않은 에이전트는 `Not found` 문구와 함께 `Install anyway` 버튼을 제공해 수동 설치를 지원한다. 안내가 열려 있는 도중 사용자가 터미널에서 직접 스킬을 설치한 경우에도 오류 없이 설치 완료 상태로 갱신된다.
 - 스킬 설치 내역은 `audit.jsonl`에 기록된다(`tool`: `external_agent`, `decision`: `skill_installed`, 기기 id 및 에이전트 id 포함).
+- `PUT /v1/external-agents/{id}`는 커스텀 스킬 폴더를 추가하고, `DELETE`는 매핑을 해제하되 이미 설치된 파일은 그대로 둔다. 두 엔드포인트 모두 로컬 권한이 필요하며 `[skills.agents]`에 설정을 저장하고 즉시 반영된다. ID는 소문자, 숫자, 하이픈만 사용할 수 있고 기본 프리셋을 대체할 수 없다. 경로는 절대 경로이거나 `~/`로 시작해야 하며 부모 디렉터리 탐색(`..`)을 포함할 수 없고, HOME이나 XDG config/data 루트 내부로 확인되어야 한다. 설치 시 심볼릭 링크 이탈을 포함해 커스텀 대상을 다시 검증한다. 목록 조회 결과에는 `custom` 항목이 포함된다.
 
-## 4. 가져오기
-- `GET /v1/import/profiles` (`admin` 스코프)는 표준 경로에 있는 브라우저 프로필을 다시 탐색한다.
-  - Linux: Chrome은 `$XDG_CONFIG_HOME` 또는 `~/.config` 아래 `google-chrome`, Chromium은 `~/.config/chromium` 및 snap 경로, Firefox는 `~/.mozilla/firefox` 및 snap·flatpak 경로.
-  - macOS: 운영체제 표준 라이브러리 디렉터리.
-  - Windows: 아직 자동 탐색을 지원하지 않는다.
-- Chrome 프로필 이름은 `Local State`에서, Firefox는 `profiles.ini`에서 파싱하며, 심볼릭 링크 디렉터리는 보안상 건너뛴다.
-- 각 항목 필드: `id`(`<브라우저>:<디렉터리명>`, 예: `chrome:Default`), `browser`, `name`, `available`(`history`, `bookmarks`, `cookies` 불리언 맵).
-- `cookies_writable`은 시스템에서 Chromium 호환 실행 파일이 발견되어 쿠키를 쓸 수 있을 때만 true가 된다.
-- `POST /v1/import` (`admin` 스코프)는 `{profile, what?, dry_run}`을 입력받는다.
-  - `profile`은 탐색 목록에서 반환된 id만 지정할 수 있으며 절대 경로는 전달할 수 없다. 임의 경로를 통한 파일 탐색이나 읽기를 방지하기 위함이며, 등록되지 않은 id는 400 `unknown_profile`로 거절한다.
-  - 가져오기 대상은 항상 openside의 기본 프로필(`<data>/browser-profile`)로 고정된다.
-  - `what`을 생략하면 프로필이 가진 모든 범주를 가져오고 없는 파일은 건너뛴다. 범주를 명시했을 때 해당 파일이 없으면 오류가 발생하며, 빈 배열을 넘기면 400 `invalid_value`가 된다.
-  - 응답은 CLI와 동일한 보고서 형식이다. 범주별 `read`, `imported`, `skipped`, `rejected`(호스트와 이름만 포함)와 소스 파일이 없을 때의 고정 `note` 문구로 구성되며, 쿠키 값이나 실제 파일 경로는 응답에 절대 노출되지 않는다.
-  - `dry_run: true`는 파일 읽기와 복호화까지만 수행하고 디스크에 아무것도 쓰지 않으며 브라우저 프로필도 생성하지 않는다.
-- UI에서는 동일한 대상(프로필 및 범주 선택)에 대해 `Preview`를 먼저 실행해야만 `Import` 버튼이 활성화된다. 프로필이나 범주를 바꾸면 기존 미리보기 결과는 즉시 무효화된다.
-- 발생 가능한 오류: 422 `source_unreadable`·`source_locked`·`source_corrupt`·`source_unsupported`·`keyring_password_required`, 409 `profile_in_use`(에이전트 브라우저가 해당 프로필로 실행 중임)·`import_in_progress`, 503 `browser_unavailable`, 500 `import_failed`(상세 원인은 데몬 로그에만 기록).
-- 키링 암호화(v11) 쿠키는 웹 API를 통해 가져올 수 없다. 네트워크 요청으로 키링 암호 확인 명령을 받아 실행하는 것은 원격 코드 실행(RCE) 위험을 초래하기 때문이다. 안내 화면은 이 제약을 사용자에게 명확히 안내하고 `Leave cookies out` 옵션을 제공한다. 키링 암호화 쿠키를 가져오려면 CLI의 `openside import --keyring-password-cmd`를 사용해야 한다.
-- 가져오기 작업은 한 번에 하나만 실행된다. 네트워크 연결이 끊겨도 백그라운드에서 끝까지 실행되므로 쿠키가 불완전하게 반영되는 문제가 없다.
-- 모든 미리보기와 가져오기는 감사 로그 `audit.jsonl`에 기록된다(`tool`: `import`, `decision`: `previewed` 또는 `imported`, 기기 id, 소스 id, 범주별 개수 포함. 쿠키 값은 제외).
+## 4. 브라우저 데이터 가져오기
 
-## 5. Vault와 휴대폰 연결
-- **Vault 단계**: `GET /v1/vault`로 상태를 읽어 `Not set up` / `Locked` / `Ready` / `Unavailable` 중 하나를 표시한다. `/vault` 링크를 누르면 안내 화면 위에 기존 Vault 설정 대화상자가 모달로 열리고, 닫으면 다시 이 단계로 복귀한다. 대화상자가 닫히는 이벤트를 직접 감지할 수 없으므로 화면은 2.5초마다 상태를 주기적으로 다시 확인한다. Vault가 잠겨 있거나 해제된 상태 모두 설정이 완료된 것으로 취급한다.
-- **휴대폰 단계**: `POST /v1/pairing` 엔드포인트는 로컬 소켓 전용이므로 웹 브라우저에서는 페어링 코드를 직접 발급할 수 없다. 따라서 화면에 `openside pair --name "My phone"` 명령과 복사 버튼을 표시하고, `GET /v1/devices`를 3초마다 폴링한다. 이 단계가 열린 시점의 기기 목록에 없던 새 기기가 감지되면 연결된 휴대폰으로 판별하여 화면과 마지막 요약에 기기 이름을 표시한다. 또한 휴대폰과 컴퓨터가 동일한 로컬 네트워크에 있거나 Tailscale 같은 사설 네트워크로 연결되어 있어야 한다는 점을 함께 안내한다.
+- 가져오기는 온보딩에서 사람이 직접 진행하는 첫 번째 실질적 단계다. 현재 컴퓨터에 설치된 Chromium 계열 브라우저, Firefox 파생 브라우저, macOS의 Safari에서 모든 프로필을 탐지하며, 기본적으로 9개 범주를 모두 미리보기에 표시한다. 프로필 이름, 이메일, 로컬 아바타 ID는 Local State나 profiles.ini에서 읽어온다.
+- `GET /v1/import/profiles`는 안전한 프로필 메타데이터와 종류별 지원 여부를 반환한다. `POST /v1/import/preview`는 `{profiles?, what?}` 요청을 받아 실제 데이터를 쓰지 않고 프로필별 항목 수, 경고, Vault 필요 플래그, 복원 가능한 탭 목록을 반환한다.
+- `POST /v1/import`는 동일한 선택 항목(생략 시 탐지된 모든 프로필의 전체 데이터를 의미함)을 전달받아 202 `ImportJob`을 반환한다. `GET /v1/import/jobs/{id}`로 진행 상황과 요약을 폴링할 수 있으며, `/events`는 지속성 있는 재생 가능한 `import_progress` SSE를 제공한다.
+- 가져오기 관련 모든 라우트는 단순 관리자 토큰만이 아니라 로컬 사람 권한을 반드시 요구한다. 데스크톱 런처가 소켓 부트스트랩 시 생성한 부팅별 시크릿과 로컬 출처가 검증된 사람/관리자 토큰을 재사용한다. 원격/릴레이 호출에는 403 `local_access_required`를 반환하며, 원본 경로 지정이나 셸 명령어 전달은 일절 허용하지 않는다.
+- 저장된 비밀번호를 가져오려면 기존 Vault를 먼저 설정하거나 잠금 해제해야 한다(409 `vault_setup_required` / `vault_locked`). `POST /v1/import/passwords` 경로의 GUI 비밀번호 CSV 가져오기는 Safari나 암호 앱의 내보내기 파일 및 보호된 원본 형식을 지원하며, CSV 파일 자체는 절대 저장하지 않는다.
+- 쿠키는 에이전트의 기본 브라우저 프로필로 들어가고, 비밀번호는 암호화된 Vault로만 들어가며, 비밀이 아닌 데이터 범주는 원본 브라우저 프로필 범위의 스냅샷으로 저장된다. 다시 가져와도 멱등성이 유지된다. 탭은 브라우저를 자동 실행하지 않고 복원 링크 형태로 보존되며, 확장 프로그램도 자동 설치되지 않고 이름과 스토어 링크 목록으로 보존된다.
+- 키링이 잠겨 있거나, Firefox 기본 비밀번호로 보호되어 있거나, 지원하지 않는 암호화 방식이거나, 읽을 수 없는 범주가 있으면 GUI 문구로 종류별 경고를 띄우고 다른 범주는 그대로 가져온다. Safari 접근 권한이 없으면 시스템 설정의 전체 디스크 접근 권한을 명시적으로 요청한다. UI에서 CLI 작업은 일절 요구하지 않는다.
+- 클라이언트 연결이 끊겨도 이미 접수된 작업은 취소되지 않는다. 데몬당 한 번에 하나의 쓰기 작업만 실행하며, 진행 상황과 최종 요약은 비공개로 안전하게 유지된다. 파일 경로, 플랫폼별 제약 사항, 픽스처는 [import.md](import.md)를 참고한다.
+
+## 5. Vault 및 휴대전화
+- **Vault**: 데몬의 백엔드를 사용해 가져오기 단계 내에서 인라인으로 설정하거나 잠금을 해제한다(OS 키링은 버튼 한 번, 암호 구문은 암호 입력과 확인 절차). Vault를 사용할 수 없으면 Vault 화면으로 연결되는 링크를 제공하고 비밀번호는 가져오기 대상에서 제외한다. 별도의 vault 설정 단계는 두지 않는다.
+- **Phone**: Remote access의 QR 흐름(`ConnectPhone`)을 재사용하며, `GET /v1/devices`를 통해 새 기기 연결을 감지한다. 데스크톱 컴퓨터 외의 브라우저에서 접속한 경우에는 페어링을 컴퓨터에서 진행해야 한다는 안내만 표시하며 명령어를 노출하지 않는다. 관리자 스코프가 없는 기기에는 "Ask for access"를 표시한다(8절 참고).
 
 ## 6. 권한과 보안 결정
-- **가져오기와 스킬 설치에 TCP 통신 및 `admin` 스코프 허용(근거)**: 웹 UI는 로컬 루프백 TCP와 베어러 토큰을 통해 데몬과 통신하므로, 이를 로컬 유닉스 소켓 전용으로 제한하면 첫 실행 안내 전체가 동작할 수 없다. 또한 `admin` 스코프는 이미 Vault, 루틴, 시스템 설정 등 핵심 기능을 관리할 권한을 포함한다. 보안 위험을 막기 위해 스킬 내용은 데몬에 고정 번들된 파일만 쓰고 대상 디렉터리도 사전 설정이나 환경 변수에서만 가져오며, 등록된 에이전트 id만 허용한다. 가져오기 역시 자동 탐색된 프로필 id만 전달받고 키링 명령 수신은 원천 차단하며, 두 작업 모두 민감한 데이터 값 없이 감사 로그를 남긴다.
+- **브라우저 데이터 가져오기 권한**: 브라우저 데이터에는 인증 세션과 저장된 비밀번호가 포함된다. 가져오기 작업에는 기존 로컬 사람 권한 검증 체계(소켓 연결 또는 출처가 검증된 로컬 사람/관리자 토큰과 현재 실행 시크릿)가 필요하며, 원격 관리자 토큰 단독으로는 권한이 부족하다. 임의의 원본 경로/명령어나 비밀 정보가 담긴 출력은 일절 허용하지 않는다. 에이전트 스킬 설치는 별도로 검토된 관리자 스코프와 번들 콘텐츠 제한을 그대로 유지한다.
 - **에이전트 엔드포인트 경로로 `/v1/external-agents` 사용(근거)**: 추후 openside 자체 에이전트 기능이 추가될 때 엔드포인트 이름이 충돌하지 않도록 외부 에이전트 경로를 분리했다.
 - **온보딩 완료 상태를 데몬에서 보관(근거)**: 브라우저 로컬 스토리지 대신 데몬 파일시스템에 상태를 보관함으로써, 여러 기기에서 접속하더라도 데몬당 한 번만 초기 안내가 실행되도록 보장한다.
-- **CLI 기능과의 1:1 대응 유지(근거)**: 첫 실행 안내의 모든 기능은 CLI 명령어(`openside skills install`, `openside import`, `openside pair`)로도 동일하게 수행할 수 있으며 웹 전용 기능을 따로 두지 않는다.
+- **CLI 동등성 및 GUI 우선 원칙**: 온보딩 가이드의 모든 작업은 CLI에서도 동일하게 지원하지만(`openside skills install`, `openside import`, `openside pair`), 웹 UI는 특정 작업의 수행 방법으로 명령어를 전면에 내세우지 않으며 보조 힌트로만 보여준다.
 
 ## 7. 테스트
 - `web/src/onboarding/OnboardingPage.test.tsx`: 온보딩 각 단계별 UI 렌더링, 사용자 인터랙션, 상태 전이 검증(vitest).
@@ -69,3 +62,9 @@
 - `crates/opensided/src/tests/onboarding.rs` 는 위 상태 검증 외에 에이전트 감지, 스킬 설치(409 충돌과 `force`), 가져오기 API 의 스코프 검증과 id 기반 프로필 제약도 다룬다.
 - `crates/openside-import/src/tests.rs`: 플랫폼별 브라우저 표준 프로필 경로 자동 탐색 로직 검증.
 - `crates/openside-e2e/tests/onboarding.rs`: 임시 데몬과 모의 Chrome·Firefox 프로필 환경에서 헤드리스 Chromium을 이용해 전 단계를 완주하는 E2E 검증(390x844 모바일 및 1440x900 데스크톱 해상도, 라이트·다크 테마, 단계 건너뛰기 및 재진입 흐름 포함).
+
+## 8. 권한 요청
+- 페어링된 사람의 기기에서 특정 화면에 필요한 스코프가 없을 때(기존의 "관리자 스코프 필요" 막다른 화면 대신) **Ask for access**를 띄운다. 이 버튼을 누르면 `POST /v1/devices/me/access-requests {scopes}`를 호출하고(read 스코프, `person_device` 전용, 기기당 대기 중인 요청은 1개로 제한되며 메모리상에서 10분간 유효), 스코프가 부여될 때까지 `GET /v1/devices/me`를 폴링한다.
+- openside가 실행 중인 컴퓨터의 웹 UI는 `GET /v1/access-requests`를 폴링하여(관리자 권한) **Allow**와 **Decline** 버튼이 있는 플로팅 카드를 표시한다. `POST /v1/access-requests/{id}/approve`는 로컬 권한(부팅별 로컬 시크릿, 페어링과 동일한 검증 조건)을 추가로 요구하므로 원격 관리자는 승인할 수 없으며, `.../deny`는 관리자 권한만 있으면 된다. 요청을 승인하면 기기에 해당 스코프가 병합되며, 요청·승인·거절 이력은 감사 로그로 남는다(`access_requested`, `access_granted`, `access_declined`).
+- 에이전트 클라이언트는 접근 권한을 요청할 수 없다(403 `person_approval_required`).
+- Tests: `crates/opensided/src/tests/access_requests.rs`, `web/src/pages/ScopeNotice.test.tsx`, `web/src/access/AccessRequestDock.test.tsx`.

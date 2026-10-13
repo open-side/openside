@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,6 +27,8 @@ enum ResourceKind {
     Objects,
     Target,
     Attach,
+    // Canceling the caller does not cancel an issued profile mutation.
+    ProfileWrite,
 }
 enum Cleanup {
     Init(String),
@@ -141,6 +143,7 @@ fn resource_reply(
             }
             (!ids.is_empty()).then_some(Cleanup::Objects(ids))
         }
+        ResourceKind::ProfileWrite => None,
     };
     if cleanup.is_none() {
         registrations.remove(&id);
@@ -250,6 +253,9 @@ pub(crate) struct Cdp {
     contexts: Contexts,
     resources: ResourceRegistrations,
     init_fence: InitFence,
+    closing: AtomicBool,
+    shutdown_complete: AtomicBool,
+    shutdown_crash_recorded: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -394,6 +400,9 @@ impl Cdp {
                 contexts,
                 resources,
                 init_fence,
+                closing: AtomicBool::new(false),
+                shutdown_complete: AtomicBool::new(false),
+                shutdown_crash_recorded: AtomicBool::new(false),
             },
             receiver,
         ))
@@ -425,22 +434,109 @@ impl Cdp {
         self.init_fence.changed.notify_waiters();
     }
 
+    pub(crate) fn admit_profile_write(&self, writes: &AtomicUsize) -> bool {
+        // Raw CDP connections must share the same admission gate as graceful shutdown.
+        let _admission = lock(&self.pending);
+        if self.is_closing() {
+            return false;
+        }
+        writes.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
+    pub(crate) fn begin_shutdown(&self) -> bool {
+        let idle = {
+            let pending = lock(&self.pending);
+            self.closing.store(true, Ordering::Release);
+            pending.is_empty()
+        };
+        // Resource cleanup takes these locks in the opposite order.
+        idle && lock(&self.resources).is_empty()
+    }
+
+    pub(crate) fn is_closing(&self) -> bool {
+        self.closing.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn shutdown_complete(&self) -> bool {
+        self.shutdown_complete.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn complete_shutdown(&self) {
+        self.shutdown_complete.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn record_shutdown_crash(&self) -> bool {
+        !self.shutdown_crash_recorded.swap(true, Ordering::Relaxed)
+    }
+
+    pub(crate) fn pending_requests(&self) -> usize {
+        lock(&self.pending).len()
+    }
+
+    pub(crate) async fn call_shutdown(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, BrowserError> {
+        self.call_with_recording(None, method, params, false, true)
+            .await
+    }
+
     pub(crate) async fn call(
         &self,
         session: Option<&str>,
         method: &str,
         params: Value,
     ) -> Result<Value, BrowserError> {
+        self.call_with_recording(session, method, params, false, false)
+            .await
+    }
+
+    pub(crate) async fn call_sensitive(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, BrowserError> {
+        self.call_with_recording(session, method, params, true, false)
+            .await
+    }
+
+    async fn call_with_recording(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+        sensitive: bool,
+        during_shutdown: bool,
+    ) -> Result<Value, BrowserError> {
+        if self.is_closing() && !during_shutdown {
+            return Err(BrowserError::Disconnected);
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         if let Some(log) = lock(&self.recorder).as_mut() {
-            log.push((method.to_owned(), params.clone()));
+            log.push((
+                method.to_owned(),
+                if sensitive {
+                    json!({"redacted":true})
+                } else {
+                    params.clone()
+                },
+            ));
         }
         let mut request = json!({"id": id, "method": method, "params": params});
         if let Some(session) = session {
             request["sessionId"] = Value::String(session.to_owned());
         }
         let (sender, receiver) = oneshot::channel();
-        lock(&self.pending).insert(id, sender);
+        {
+            let mut pending = lock(&self.pending);
+            if self.is_closing() && !during_shutdown {
+                return Err(BrowserError::Disconnected);
+            }
+            pending.insert(id, sender);
+        }
         let kind = match method {
             "Page.addScriptToEvaluateOnNewDocument" => Some(ResourceKind::Init),
             "Runtime.evaluate"
@@ -452,6 +548,22 @@ impl Cdp {
             | "Debugger.evaluateOnCallFrame" => Some(ResourceKind::Objects),
             "Target.createTarget" => Some(ResourceKind::Target),
             "Target.attachToTarget" | "Target.attachToBrowserTarget" => Some(ResourceKind::Attach),
+            "Storage.setCookies"
+            | "Storage.clearCookies"
+            | "Storage.clearDataForOrigin"
+            | "Storage.clearDataForStorageKey"
+            | "Network.setCookie"
+            | "Network.setCookies"
+            | "Network.deleteCookies"
+            | "Network.clearBrowserCookies"
+            | "DOMStorage.setDOMStorageItem"
+            | "DOMStorage.removeDOMStorageItem"
+            | "DOMStorage.clear"
+            | "CacheStorage.deleteCache"
+            | "CacheStorage.deleteEntry"
+            | "IndexedDB.deleteDatabase"
+            | "IndexedDB.clearObjectStore"
+            | "IndexedDB.deleteObjectStoreEntries" => Some(ResourceKind::ProfileWrite),
             _ => None,
         };
         let has_resources = kind.is_some();
@@ -459,7 +571,11 @@ impl Cdp {
             lock(&self.resources).insert(
                 id,
                 ResourceRegistration {
-                    session: session.map(str::to_owned),
+                    session: if matches!(kind, ResourceKind::ProfileWrite) {
+                        None
+                    } else {
+                        session.map(str::to_owned)
+                    },
                     kind,
                     cleanup: None,
                     abandoned: false,
@@ -497,6 +613,10 @@ impl Cdp {
     /// Queue a command without awaiting its reply, for paths that cannot await (event
     /// handling, `Drop`). The reply is discarded; message order is preserved.
     pub(crate) fn send(&self, session: Option<&str>, method: &str, params: Value) {
+        let _admission = lock(&self.pending);
+        if self.is_closing() {
+            return;
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         if let Some(log) = lock(&self.recorder).as_mut() {
             log.push((method.to_owned(), params.clone()));
@@ -536,6 +656,62 @@ impl Drop for Cdp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn canceled_profile_write_remains_pending_until_its_reply() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (received, waiting) = oneshot::channel();
+        let (release, resume) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                panic!("expected profile write");
+            };
+            let request: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(request["method"], "Storage.setCookies");
+            received.send(()).unwrap();
+            resume.await.unwrap();
+            socket
+                .send(Message::Text(
+                    json!({"id":request["id"],"result":{}}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            socket.close(None).await.unwrap();
+        });
+        let (cdp, _events) = Cdp::connect(&url, Duration::from_secs(2)).await.unwrap();
+        {
+            let call = cdp.call(None, "Storage.setCookies", json!({"cookies":[]}));
+            tokio::pin!(call);
+            tokio::select! {
+                result = &mut call => panic!("unacknowledged write completed: {result:?}"),
+                received = waiting => received.unwrap(),
+            }
+        }
+        assert_eq!(cdp.pending_requests(), 0);
+        assert!(
+            !cdp.begin_shutdown(),
+            "canceled writes are not confirmed completed"
+        );
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let changed = cdp.init_fence.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if lock(&cdp.resources).is_empty() {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(cdp.begin_shutdown());
+        server.await.unwrap();
+    }
 
     #[tokio::test]
     async fn unconsumed_resource_replies_release_exact_resources_not_a_later_group() {

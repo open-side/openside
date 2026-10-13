@@ -13,6 +13,14 @@ export function formatDate(value: string | number): string {
   return DATE.format(new Date(value));
 }
 
+/** "12.3 MB"; binary units, one decimal from KB up. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ["day", 86_400_000],
   ["hour", 3_600_000],

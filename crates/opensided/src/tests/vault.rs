@@ -524,7 +524,7 @@ async fn full_access_has_no_tool_or_api_path_returning_vault_values() {
             vec![
                 json!({"path": vault_file}),
                 json!({"path": audit_file}),
-                json!({"path": "/proc/self/environ"}),
+                json!({"path": if cfg!(target_os = "linux") { "/proc/self/environ" } else { "/dev/fd/0" }}),
             ],
         ),
         (
@@ -541,7 +541,7 @@ async fn full_access_has_no_tool_or_api_path_returning_vault_values() {
             "bash",
             vec![
                 json!({"command": format!("cat '{vault_file}' '{audit_file}'; env")}),
-                json!({"command": "cat /proc/self/environ | tr '\\0' '\\n'"}),
+                json!({"command": if cfg!(target_os = "linux") { "cat /proc/self/environ | tr '\\0' '\\n'" } else { "env" }}),
                 // Everything the daemon stored, read as the agent could: a leak on disk would show here.
                 json!({"command": format!("find '{data_dir}' -type f -exec cat {{}} + | head -c 2000000")}),
             ],

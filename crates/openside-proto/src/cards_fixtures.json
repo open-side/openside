@@ -1,0 +1,1247 @@
+[
+  {
+    "id": "present:p1",
+    "kind": "product_list",
+    "site": {
+      "origin": "https://shop.example",
+      "name": "shop.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://shop.example"
+      }
+    },
+    "title": "Wireless earbuds",
+    "subtitle": "Three options",
+    "status": "done",
+    "blocks": [
+      {
+        "type": "list_items",
+        "id": "products",
+        "items": [
+          {
+            "id": "buds",
+            "name": "Everyday Buds",
+            "facts": [
+              "Noise cancellation",
+              "24-hour case"
+            ],
+            "image": {
+              "path": "cards/media/buds.webp"
+            },
+            "image_alt": "Black earbuds and case",
+            "price": {
+              "minor_units": 7900,
+              "currency": "USD"
+            },
+            "rating": {
+              "milli_value": 4400,
+              "milli_max": 5000,
+              "count": 231
+            },
+            "link": {
+              "url": "https://shop.example/products/buds",
+              "label": "View earbuds"
+            },
+            "quantity": null,
+            "site": null
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "compare",
+        "label": "Compare these",
+        "style": "secondary",
+        "target": {
+          "type": "follow_up",
+          "text": "Compare the earbuds you found."
+        }
+      }
+    ],
+    "interaction": "none",
+    "collapsed_summary": "1 earbud option"
+  },
+  {
+    "id": "present:t1",
+    "kind": "table",
+    "site": {
+      "origin": null,
+      "name": "Comparison",
+      "favicon_ref": null
+    },
+    "title": "Plan comparison",
+    "subtitle": null,
+    "status": "done",
+    "blocks": [
+      {
+        "type": "table",
+        "id": "plans",
+        "layout": "grid",
+        "columns": [
+          {
+            "id": "name",
+            "label": "Plan"
+          },
+          {
+            "id": "price",
+            "label": "Monthly price"
+          }
+        ],
+        "rows": [
+          [
+            {
+              "type": "text",
+              "text": "Basic"
+            },
+            {
+              "type": "money",
+              "money": {
+                "minor_units": 1200,
+                "currency": "USD"
+              }
+            }
+          ],
+          [
+            {
+              "type": "link",
+              "link": {
+                "url": "https://service.example/team",
+                "label": "Team"
+              }
+            },
+            {
+              "type": "money",
+              "money": {
+                "minor_units": 2400,
+                "currency": "USD"
+              }
+            }
+          ]
+        ]
+      }
+    ],
+    "actions": [],
+    "interaction": "none",
+    "collapsed_summary": "2 plans compared"
+  },
+  {
+    "id": "present:l1",
+    "kind": "place_list",
+    "site": {
+      "origin": "https://places.example",
+      "name": "places.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://places.example"
+      }
+    },
+    "title": "Lunch nearby",
+    "subtitle": "Within a 10-minute walk",
+    "status": "done",
+    "blocks": [
+      {
+        "type": "list_items",
+        "id": "places",
+        "items": [
+          {
+            "id": "ramen",
+            "name": "Station Ramen",
+            "facts": [
+              "8-minute walk",
+              "Open until 21:00"
+            ],
+            "image": {
+              "path": "cards/media/ramen.webp"
+            },
+            "image_alt": "Restaurant entrance",
+            "price": null,
+            "rating": {
+              "milli_value": 4600,
+              "milli_max": 5000,
+              "count": 89
+            },
+            "link": {
+              "url": "https://places.example/station-ramen",
+              "label": "View place"
+            },
+            "quantity": null,
+            "site": null
+          }
+        ]
+      }
+    ],
+    "actions": [],
+    "interaction": "none",
+    "collapsed_summary": "1 nearby place"
+  },
+  {
+    "id": "present:o1",
+    "kind": "order_summary",
+    "site": {
+      "origin": "https://shop.example",
+      "name": "shop.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://shop.example"
+      }
+    },
+    "title": "Order summary",
+    "subtitle": "Delivery to San Francisco",
+    "status": "done",
+    "blocks": [
+      {
+        "type": "list_items",
+        "id": "items",
+        "items": [
+          {
+            "id": "socks",
+            "name": "Crew socks · size M",
+            "facts": [],
+            "image": {
+              "path": "cards/media/socks.webp"
+            },
+            "image_alt": "Black socks",
+            "price": {
+              "minor_units": 1800,
+              "currency": "USD"
+            },
+            "rating": null,
+            "link": null,
+            "quantity": 1,
+            "site": null
+          }
+        ]
+      },
+      {
+        "type": "kv_rows",
+        "id": "ledger",
+        "rows": [
+          {
+            "label": "Shipping",
+            "value": {
+              "type": "money",
+              "money": {
+                "minor_units": 500,
+                "currency": "USD"
+              }
+            }
+          },
+          {
+            "label": "Estimated tax",
+            "value": {
+              "type": "money",
+              "money": {
+                "minor_units": 131,
+                "currency": "USD"
+              }
+            }
+          }
+        ],
+        "total": {
+          "label": "Total",
+          "value": {
+            "type": "money",
+            "money": {
+              "minor_units": 2431,
+              "currency": "USD"
+            }
+          }
+        }
+      },
+      {
+        "type": "notice",
+        "id": "not-placed",
+        "tone": "info",
+        "placement": "bubble",
+        "text": "The order has not been placed. Nothing has been charged."
+      }
+    ],
+    "actions": [],
+    "interaction": "none",
+    "collapsed_summary": "Order summary · USD 24.31"
+  },
+  {
+    "id": "ticket:pay1",
+    "kind": "payment",
+    "site": {
+      "origin": "https://shop.example",
+      "name": "shop.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://shop.example"
+      }
+    },
+    "title": "Place this order?",
+    "subtitle": "One-time payment",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "kv_rows",
+        "id": "charge",
+        "rows": [
+          {
+            "label": "Merchant",
+            "value": {
+              "type": "text",
+              "text": "shop.example"
+            }
+          }
+        ],
+        "total": {
+          "label": "Amount",
+          "value": {
+            "type": "money",
+            "money": {
+              "minor_units": 2431,
+              "currency": "USD"
+            }
+          }
+        }
+      },
+      {
+        "type": "notice",
+        "id": "effect",
+        "tone": "attention",
+        "placement": "inline",
+        "text": "Approving allows the agent to place this order for the amount shown."
+      }
+    ],
+    "actions": [
+      {
+        "id": "pay",
+        "label": "Approve payment",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "confirm",
+            "approved": true
+          }
+        }
+      },
+      {
+        "id": "decline",
+        "label": "Not now",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "confirm",
+            "approved": false
+          }
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "pay1",
+    "collapsed_summary": "Approve payment · USD 24.31"
+  },
+  {
+    "id": "ticket:login1",
+    "kind": "secure_login",
+    "site": {
+      "origin": "https://accounts.example",
+      "name": "accounts.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://accounts.example"
+      }
+    },
+    "title": "Log in",
+    "subtitle": "Your details go to this page, not the chat.",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "input_fields",
+        "id": "credentials",
+        "fields": [
+          {
+            "id": "user",
+            "label": "Email",
+            "kind": "email",
+            "secret": true,
+            "otp": false,
+            "card": null,
+            "required": true,
+            "autocomplete": "username",
+            "placeholder": null,
+            "validation": "email",
+            "max_length": 320,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://accounts.example"
+          },
+          {
+            "id": "pass",
+            "label": "Password",
+            "kind": "password",
+            "secret": true,
+            "otp": false,
+            "card": null,
+            "required": true,
+            "autocomplete": "current-password",
+            "placeholder": null,
+            "validation": "text",
+            "max_length": 4096,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://accounts.example"
+          }
+        ]
+      },
+      {
+        "type": "choice_options",
+        "id": "providers",
+        "label": "Other ways to sign in",
+        "layout": "providers",
+        "required": false,
+        "options": [
+          {
+            "id": "google",
+            "label": "Google",
+            "description": null,
+            "provider": "google",
+            "action": {
+              "id": "use-google",
+              "label": "Continue with Google",
+              "style": "secondary",
+              "target": {
+                "type": "ticket_resolve",
+                "answer": {
+                  "type": "login_alternative",
+                  "alternative_id": "provider-control-1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "login",
+        "label": "Log in",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "fields",
+            "block_ids": [
+              "credentials"
+            ],
+            "encoding": "login",
+            "save_field_id": null
+          }
+        }
+      },
+      {
+        "id": "cancel",
+        "label": "Cancel",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_reject"
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "login1",
+    "collapsed_summary": "Log in to accounts.example"
+  },
+  {
+    "id": "ticket:choice1",
+    "kind": "login_choice",
+    "site": {
+      "origin": "https://accounts.example",
+      "name": "accounts.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://accounts.example"
+      }
+    },
+    "title": "Choose an account",
+    "subtitle": null,
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "choice_options",
+        "id": "accounts",
+        "label": "Accounts on this page",
+        "layout": "stack",
+        "required": true,
+        "options": [
+          {
+            "id": "page-account-1",
+            "label": "j•••@example.test",
+            "description": "Personal account",
+            "provider": null,
+            "action": null
+          },
+          {
+            "id": "page-account-2",
+            "label": "m•••@example.test",
+            "description": "Work account",
+            "provider": null,
+            "action": null
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "choose",
+        "label": "Continue",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "selected_choice",
+            "block_id": "accounts",
+            "encoding": "page_option"
+          }
+        }
+      },
+      {
+        "id": "cancel",
+        "label": "Cancel",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_reject"
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "choice1",
+    "collapsed_summary": "Choose an account at accounts.example"
+  },
+  {
+    "id": "ticket:otp1",
+    "kind": "otp",
+    "site": {
+      "origin": "https://accounts.example",
+      "name": "accounts.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://accounts.example"
+      }
+    },
+    "title": "Verification code",
+    "subtitle": "Code from your authenticator app",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "input_fields",
+        "id": "code-fields",
+        "fields": [
+          {
+            "id": "code",
+            "label": "Code",
+            "kind": "text",
+            "secret": true,
+            "otp": true,
+            "card": null,
+            "required": true,
+            "autocomplete": "one-time-code",
+            "placeholder": null,
+            "validation": "otp",
+            "max_length": 64,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://accounts.example"
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "code",
+        "label": "Submit code",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "otp_code",
+            "field_id": "code"
+          }
+        }
+      },
+      {
+        "id": "cancel",
+        "label": "Cancel",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_reject"
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "otp1",
+    "collapsed_summary": "Code for accounts.example"
+  },
+  {
+    "id": "ticket:card1",
+    "kind": "payment_card",
+    "site": {
+      "origin": "https://shop.example",
+      "name": "shop.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://shop.example"
+      }
+    },
+    "title": "Add card details",
+    "subtitle": "Fills the checkout fields. It does not place the order.",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "input_fields",
+        "id": "card-fields",
+        "fields": [
+          {
+            "id": "name",
+            "label": "Name on card",
+            "kind": "text",
+            "secret": true,
+            "otp": false,
+            "card": "name",
+            "required": true,
+            "autocomplete": "cc-name",
+            "placeholder": null,
+            "validation": "text",
+            "max_length": 160,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://shop.example"
+          },
+          {
+            "id": "number",
+            "label": "Card number",
+            "kind": "tel",
+            "secret": true,
+            "otp": false,
+            "card": "number",
+            "required": true,
+            "autocomplete": "cc-number",
+            "placeholder": null,
+            "validation": "card_number",
+            "max_length": 19,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://pay.example"
+          },
+          {
+            "id": "expiry",
+            "label": "Expiry",
+            "kind": "text",
+            "secret": true,
+            "otp": false,
+            "card": "expiry",
+            "required": true,
+            "autocomplete": "cc-exp",
+            "placeholder": "MM/YY",
+            "validation": "card_expiry",
+            "max_length": 7,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://pay.example"
+          },
+          {
+            "id": "cvc",
+            "label": "CVC",
+            "kind": "password",
+            "secret": true,
+            "otp": false,
+            "card": "cvc",
+            "required": true,
+            "autocomplete": "cc-csc",
+            "placeholder": null,
+            "validation": "card_cvc",
+            "max_length": 4,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://pay.example"
+          },
+          {
+            "id": "postal",
+            "label": "Postal code",
+            "kind": "text",
+            "secret": true,
+            "otp": false,
+            "card": "postal_code",
+            "required": false,
+            "autocomplete": "postal-code",
+            "placeholder": null,
+            "validation": "postal_code",
+            "max_length": 32,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://shop.example"
+          }
+        ]
+      },
+      {
+        "type": "notice",
+        "id": "frame",
+        "tone": "info",
+        "placement": "inline",
+        "text": "Card number, expiry and CVC go to the verified payment frame at https://pay.example."
+      }
+    ],
+    "actions": [
+      {
+        "id": "fill",
+        "label": "Continue",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "fields",
+            "block_ids": [
+              "card-fields"
+            ],
+            "encoding": "form",
+            "save_field_id": null
+          }
+        }
+      },
+      {
+        "id": "cancel",
+        "label": "Cancel",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_reject"
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "card1",
+    "collapsed_summary": "Add card details"
+  },
+  {
+    "id": "ticket:confirm1",
+    "kind": "confirmation",
+    "site": {
+      "origin": "https://mail.example",
+      "name": "mail.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://mail.example"
+      }
+    },
+    "title": "Send this message?",
+    "subtitle": "To the recipient shown below",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "kv_rows",
+        "id": "effect",
+        "rows": [
+          {
+            "label": "Recipient",
+            "value": {
+              "type": "text",
+              "text": "Support team"
+            }
+          },
+          {
+            "label": "Subject",
+            "value": {
+              "type": "text",
+              "text": "Delivery question"
+            }
+          }
+        ],
+        "total": null
+      }
+    ],
+    "actions": [
+      {
+        "id": "approve",
+        "label": "Approve",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "confirm",
+            "approved": true
+          }
+        }
+      },
+      {
+        "id": "decline",
+        "label": "Decline",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "confirm",
+            "approved": false
+          }
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "confirm1",
+    "collapsed_summary": "Approve sending the message"
+  },
+  {
+    "id": "ticket:form1",
+    "kind": "form",
+    "site": {
+      "origin": "https://booking.example",
+      "name": "booking.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://booking.example"
+      }
+    },
+    "title": "Fill guest details",
+    "subtitle": "The booking is not submitted",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "input_fields",
+        "id": "guest",
+        "fields": [
+          {
+            "id": "party",
+            "label": "Party name",
+            "kind": "text",
+            "secret": false,
+            "otp": false,
+            "card": null,
+            "required": true,
+            "autocomplete": "off",
+            "placeholder": null,
+            "validation": "text",
+            "max_length": 160,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://booking.example"
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "fill",
+        "label": "Fill fields",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "fields",
+            "block_ids": [
+              "guest"
+            ],
+            "encoding": "form",
+            "save_field_id": null
+          }
+        }
+      },
+      {
+        "id": "skip",
+        "label": "Skip",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_reject"
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "form1",
+    "collapsed_summary": "Guest details for booking.example"
+  },
+  {
+    "id": "present:connect1",
+    "kind": "connect_account",
+    "site": {
+      "origin": "https://work.example",
+      "name": "work.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://work.example"
+      }
+    },
+    "title": "Connect work.example",
+    "subtitle": "A secure sign-in request appears when the site asks for your details.",
+    "status": "done",
+    "blocks": [
+      {
+        "type": "notice",
+        "id": "intent",
+        "tone": "info",
+        "placement": "inline",
+        "text": "The account is not connected yet. No credentials are requested in this card."
+      }
+    ],
+    "actions": [
+      {
+        "id": "connect",
+        "label": "Connect",
+        "style": "primary",
+        "target": {
+          "type": "follow_up",
+          "text": "Log in to work.example so you can help with my work."
+        }
+      }
+    ],
+    "interaction": "none",
+    "collapsed_summary": "Connect work.example"
+  },
+  {
+    "id": "activity:lookup1",
+    "kind": "activity",
+    "site": {
+      "origin": "https://shop.example",
+      "name": "shop.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://shop.example"
+      }
+    },
+    "title": "Looking for earbuds",
+    "subtitle": null,
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "notice",
+        "id": "working",
+        "tone": "working",
+        "placement": "inline",
+        "text": "Reading product options"
+      }
+    ],
+    "actions": [],
+    "interaction": "none",
+    "collapsed_summary": "Looking for earbuds on shop.example"
+  },
+  {
+    "id": "handoff:h1",
+    "kind": "handoff",
+    "site": {
+      "origin": null,
+      "name": "Team",
+      "favicon_ref": null
+    },
+    "title": "Handed to Mina",
+    "subtitle": "Weekly price checks",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "people",
+        "id": "participants",
+        "from": {
+          "agent_id": "chief",
+          "name": "Juno",
+          "initials": "J",
+          "color": null,
+          "role": null
+        },
+        "to": {
+          "agent_id": "mina",
+          "name": "Mina",
+          "initials": "M",
+          "color": null,
+          "role": "Weekly price checks"
+        }
+      },
+      {
+        "type": "kv_rows",
+        "id": "packet",
+        "rows": [
+          {
+            "label": "Goal",
+            "value": {
+              "type": "text",
+              "text": "Check the current Team plan price"
+            }
+          },
+          {
+            "label": "Acceptance",
+            "value": {
+              "type": "text",
+              "text": "Report price changes and source links"
+            }
+          }
+        ],
+        "total": null
+      },
+      {
+        "type": "notice",
+        "id": "owner",
+        "tone": "working",
+        "placement": "inline",
+        "text": "Mina is working on this."
+      }
+    ],
+    "actions": [
+      {
+        "id": "open",
+        "label": "Open Mina",
+        "style": "secondary",
+        "target": {
+          "type": "open_thread",
+          "agent_id": "mina",
+          "anchor": "handoff:h1"
+        }
+      }
+    ],
+    "interaction": "none",
+    "collapsed_summary": "Handed to Mina · price checks"
+  },
+  {
+    "id": "ticket:hire1",
+    "kind": "hire",
+    "site": {
+      "origin": null,
+      "name": "Team",
+      "favicon_ref": null
+    },
+    "title": "A teammate for price checks",
+    "subtitle": "You can change the name before hiring",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "people",
+        "id": "preview",
+        "from": null,
+        "to": {
+          "agent_id": null,
+          "name": "Mina",
+          "initials": "M",
+          "color": null,
+          "role": "Weekly price checks"
+        }
+      },
+      {
+        "type": "input_fields",
+        "id": "identity",
+        "fields": [
+          {
+            "id": "name",
+            "label": "Name",
+            "kind": "text",
+            "secret": false,
+            "otp": false,
+            "card": null,
+            "required": true,
+            "autocomplete": "off",
+            "placeholder": null,
+            "validation": "text",
+            "max_length": 24,
+            "initial": "Mina",
+            "suggestions": [],
+            "target_origin": null
+          }
+        ]
+      },
+      {
+        "type": "list_items",
+        "id": "responsibilities",
+        "items": [
+          {
+            "id": "weekly",
+            "name": "Weekly price checks",
+            "facts": [
+              "Every Monday at 09:00"
+            ],
+            "image": null,
+            "image_alt": null,
+            "price": null,
+            "rating": null,
+            "link": null,
+            "quantity": null,
+            "site": null
+          }
+        ]
+      },
+      {
+        "type": "kv_rows",
+        "id": "transfer",
+        "rows": [
+          {
+            "label": "Takes over",
+            "value": {
+              "type": "text",
+              "text": "1 routine · 3 memories · 1 skill"
+            }
+          },
+          {
+            "label": "Permission mode",
+            "value": {
+              "type": "text",
+              "text": "Ask before consequential actions"
+            }
+          }
+        ],
+        "total": null
+      }
+    ],
+    "actions": [
+      {
+        "id": "hire",
+        "label": "Hire Mina",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "hire",
+            "decision": "hire",
+            "edited_block_id": "identity"
+          }
+        }
+      },
+      {
+        "id": "later",
+        "label": "Not now",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "hire",
+            "decision": "not_now",
+            "edited_block_id": null
+          }
+        }
+      },
+      {
+        "id": "never",
+        "label": "Don't suggest this",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "hire",
+            "decision": "never",
+            "edited_block_id": null
+          }
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "hire1",
+    "collapsed_summary": "Hire a teammate for price checks"
+  },
+  {
+    "id": "ticket:secret1",
+    "kind": "secret_input",
+    "site": {
+      "origin": "https://service.example",
+      "name": "service.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://service.example"
+      }
+    },
+    "title": "Enter the secret",
+    "subtitle": "It goes directly to the verified page",
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "input_fields",
+        "id": "secret",
+        "fields": [
+          {
+            "id": "value",
+            "label": "Secret value",
+            "kind": "password",
+            "secret": true,
+            "otp": false,
+            "card": null,
+            "required": true,
+            "autocomplete": "off",
+            "placeholder": null,
+            "validation": "text",
+            "max_length": 4096,
+            "initial": null,
+            "suggestions": [],
+            "target_origin": "https://service.example"
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "id": "submit",
+        "label": "Submit",
+        "style": "primary",
+        "target": {
+          "type": "ticket_resolve",
+          "answer": {
+            "type": "fields",
+            "block_ids": [
+              "secret"
+            ],
+            "encoding": "scalar",
+            "save_field_id": null
+          }
+        }
+      },
+      {
+        "id": "cancel",
+        "label": "Cancel",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_reject"
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "secret1",
+    "collapsed_summary": "Secret for service.example"
+  },
+  {
+    "id": "ticket:take1",
+    "kind": "takeover",
+    "site": {
+      "origin": "https://service.example",
+      "name": "service.example",
+      "favicon_ref": {
+        "type": "origin",
+        "origin": "https://service.example"
+      }
+    },
+    "title": "Finish this step in the browser",
+    "subtitle": null,
+    "status": "pending",
+    "blocks": [
+      {
+        "type": "notice",
+        "id": "instruction",
+        "tone": "attention",
+        "placement": "inline",
+        "text": "The site needs an action only you can complete."
+      }
+    ],
+    "actions": [
+      {
+        "id": "open",
+        "label": "Open remote screen",
+        "style": "primary",
+        "target": {
+          "type": "takeover"
+        }
+      },
+      {
+        "id": "done",
+        "label": "Done",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_done"
+        }
+      },
+      {
+        "id": "cancel",
+        "label": "Cancel",
+        "style": "secondary",
+        "target": {
+          "type": "ticket_reject"
+        }
+      }
+    ],
+    "interaction": "ask",
+    "ticket_id": "take1",
+    "collapsed_summary": "Finish a step at service.example"
+  }
+]

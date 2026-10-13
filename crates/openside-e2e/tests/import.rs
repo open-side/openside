@@ -34,14 +34,60 @@ async fn page(State(seen): State<Seen>, headers: HeaderMap) -> Html<&'static str
     Html("<!doctype html><title>cookie page</title><p>ok</p>")
 }
 
+struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl Drop for Environment {
+    fn drop(&mut self) {
+        for (key, value) in &self.0 {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn isolated_keychain_browser(executable: &Path, directory: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = std::fs::canonicalize(executable).unwrap();
+    let quoted = executable.to_str().unwrap().replace('\'', "'\\''");
+    let wrapper = directory.join("fixture-chromium");
+    // The native cookie cipher still runs under an isolated HOME; this does not exercise
+    // the user's Keychain or prove access to a real browser's Safe Storage account.
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nexec '{quoted}' --use-mock-keychain \"$@\"\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    wrapper
+}
+
 /// Point HOME and every XDG directory at the temp root so nothing outside it is touched.
-fn isolate(root: &Path, data: &Path, browser: &Path) {
+fn isolate(root: &Path, data: &Path, browser: &Path) -> Environment {
+    let environment = Environment(
+        [
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR",
+            "OPENSIDE_DATA_DIR",
+            "OPENSIDE_BROWSER",
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect(),
+    );
     std::env::set_var("HOME", root);
     for (key, dir) in [
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "xdg-data"),
         ("XDG_STATE_HOME", "state"),
         ("XDG_CACHE_HOME", "cache"),
+        ("XDG_RUNTIME_DIR", "run"),
     ] {
         let path = root.join(dir);
         std::fs::create_dir_all(&path).unwrap();
@@ -62,12 +108,17 @@ fn isolate(root: &Path, data: &Path, browser: &Path) {
         ),
     )
     .unwrap();
+    environment
 }
 
 async fn import(args: &[&str]) -> (u8, String, String) {
     let mut argv = vec!["openside"];
     argv.extend_from_slice(args);
+    #[cfg(target_os = "macos")]
+    let password_command = format!("printf {}", openside_import::testing::MAC_V10_PASSWORD);
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    #[cfg(target_os = "macos")]
+    argv.extend_from_slice(&["--keyring-password-cmd", &password_command]);
     let code = openside_cli::run(argv, &mut stdout, &mut stderr).await;
     (
         code,
@@ -113,8 +164,10 @@ async fn imported_cookies_reach_only_their_own_openside_profile() {
         }
     };
     let root = tempfile::tempdir().unwrap();
+    #[cfg(target_os = "macos")]
+    let executable = isolated_keychain_browser(&executable, root.path());
     let data = root.path().join("data");
-    isolate(root.path(), &data, &executable);
+    let _environment = isolate(root.path(), &data, &executable);
 
     let seen: Seen = Arc::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -227,8 +280,10 @@ async fn importing_cookies_into_a_profile_in_use_is_refused() {
         }
     };
     let root = tempfile::tempdir().unwrap();
+    #[cfg(target_os = "macos")]
+    let executable = isolated_keychain_browser(&executable, root.path());
     let data = root.path().join("data");
-    isolate(root.path(), &data, &executable);
+    let _environment = isolate(root.path(), &data, &executable);
     let chrome_dir: PathBuf = root.path().join("chrome");
     ChromeProfile {
         cookies: vec![CookieSpec::new("127.0.0.1", "sid", "v")],

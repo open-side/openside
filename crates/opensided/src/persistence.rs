@@ -31,6 +31,9 @@ impl Database {
             devices.execute_batch("PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, hash BLOB NOT NULL UNIQUE, scopes TEXT NOT NULL); CREATE TABLE IF NOT EXISTS device_meta (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);")?;
             // Old databases did not record pairing source; absent rows remain person devices.
             devices.execute_batch("CREATE TABLE IF NOT EXISTS device_kind (id TEXT PRIMARY KEY, kind TEXT NOT NULL);")?;
+            // Legacy and QR-paired devices never inherit local credential-issuer authority.
+            devices.execute_batch("CREATE TABLE IF NOT EXISTS device_local (id TEXT PRIMARY KEY);")?;
+            devices.execute_batch("CREATE TABLE IF NOT EXISTS device_bootstrap (slot INTEGER PRIMARY KEY CHECK(slot=1), id TEXT NOT NULL UNIQUE);")?;
             Ok(Self(
                 Arc::new(Mutex::new(Inner { store, devices })),
                 #[cfg(test)]
@@ -57,6 +60,73 @@ impl Database {
         })
         .await
     }
+
+    /// The document fence needs only the immutable cached principal, never a replay or await.
+    pub(crate) fn connection_document_principal(&self, session: &SessionId) -> Result<String> {
+        let inner = self.0.lock().map_err(|_| "database lock poisoned")?;
+        let state = inner.store.session(session).ok_or("unknown session")?;
+        if state.incognito || state.browser_space != openside_proto::BrowserSpace::Shared {
+            return Err("connection_denied".into());
+        }
+        Ok(state.agent_id.as_deref().unwrap_or("chief").into())
+    }
+
+    /// A combined ticket covers every missing shared-jar row; no token is spent on a partial
+    /// admission. The DB mutex serializes this exact next-navigation claim with other calls.
+    pub(crate) fn claim_connection_document_grant(
+        &self,
+        session: &SessionId,
+        agent: &str,
+        tab: &str,
+        connections: &[String],
+    ) -> Result<bool> {
+        let mut inner = self.0.lock().map_err(|_| "database lock poisoned")?;
+        let state = inner.store.session(session).ok_or("unknown session")?;
+        if state.agent_id.as_deref().unwrap_or("chief") != agent {
+            return Ok(false);
+        }
+        let candidates: Vec<_> = state
+            .tickets
+            .values()
+            .filter_map(|ticket| {
+                if ticket.status != openside_proto::TicketStatus::Resolved
+                    || ticket.expires_at <= chrono::Utc::now()
+                    || !ticket.resolution.as_ref().is_some_and(|resolution| {
+                        resolution["approved"] == true && resolution["access"] == "once"
+                    })
+                {
+                    return None;
+                }
+                let tool = ticket.tool.as_ref()?;
+                if !crate::tools::connections::is_grant_ticket(ticket)
+                    || tool.args["navigation_tab_id"].as_str() != Some(tab)
+                    || tool.args["agent_id"].as_str() != Some(agent)
+                {
+                    return None;
+                }
+                let ids = tool.args["connection_ids"].as_array()?;
+                if !connections
+                    .iter()
+                    .all(|id| ids.iter().any(|covered| covered.as_str() == Some(id)))
+                {
+                    return None;
+                }
+                Some((
+                    ticket.id.clone(),
+                    crate::tools::connections::grant_binding(tool),
+                ))
+            })
+            .collect();
+        for (id, binding) in candidates {
+            if inner
+                .store
+                .claim_connection_grant(session, &id, None, &binding)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     pub(crate) async fn append(
         &self,
         id: &SessionId,
@@ -76,7 +146,15 @@ impl Database {
             return Err("injected resolution commit failure".into());
         }
         let id = id.clone();
-        let event = self.store(move |s| Ok(s.append(&id, run, kind)?)).await?;
+        let event = self
+            .store(move |s| {
+                let mut kind = kind;
+                if let Some(state) = s.session(&id) {
+                    crate::cards::enrich(&mut kind, state);
+                }
+                Ok(s.append(&id, run, kind)?)
+            })
+            .await?;
         #[cfg(test)]
         if let Some(pause) = pause {
             tokio::task::spawn_blocking(move || pause.block()).await?;
@@ -84,14 +162,38 @@ impl Database {
         Ok(event)
     }
     pub(crate) async fn events(&self, id: &SessionId, after: u64) -> Result<Vec<Event>> {
+        #[cfg(test)]
+        let pause = self.1.lock().remove(&format!("events:{id}"));
         let id = id.clone();
-        self.store(move |s| Ok(s.events_after(&id, after, 512)?))
-            .await
+        let page = self
+            .store(move |s| {
+                let mut page = s.events_after(&id, after, 512)?;
+                if let Some(state) = s.session(&id) {
+                    for event in &mut page {
+                        crate::cards::enrich_at(&mut event.kind, state, event.seq);
+                    }
+                }
+                Ok(page)
+            })
+            .await;
+        #[cfg(test)]
+        if let Some(pause) = pause {
+            tokio::task::spawn_blocking(move || pause.block()).await?;
+        }
+        page
     }
     #[cfg(test)]
     pub(crate) fn pause_after_resolution(&self, ticket_id: &str) -> CommitPauseHandle {
         let pause = Arc::new(CommitPause::default());
         self.1.lock().insert(ticket_id.to_owned(), pause.clone());
+        CommitPauseHandle(pause)
+    }
+    #[cfg(test)]
+    pub(crate) fn pause_after_events(&self, session_id: &str) -> CommitPauseHandle {
+        let pause = Arc::new(CommitPause::default());
+        self.1
+            .lock()
+            .insert(format!("events:{session_id}"), pause.clone());
         CommitPauseHandle(pause)
     }
     /// The next `TicketResolved` append for this ticket fails before anything is stored.
@@ -117,6 +219,47 @@ impl Database {
         scopes: Vec<CapabilityScope>,
         kind: DeviceKind,
     ) -> Result<(String, String)> {
+        self.pair_with_origin(name, scopes, kind, false, false)
+            .await
+    }
+    pub(crate) async fn pair_local(
+        &self,
+        name: String,
+        scopes: Vec<CapabilityScope>,
+        kind: DeviceKind,
+    ) -> Result<(String, String)> {
+        self.pair_with_origin(name, scopes, kind, true, false).await
+    }
+    pub(crate) async fn pair_bootstrap(
+        &self,
+        scopes: Vec<CapabilityScope>,
+    ) -> Result<(String, String)> {
+        self.pair_with_origin(
+            "openside-browser".into(),
+            scopes,
+            DeviceKind::PersonDevice,
+            true,
+            true,
+        )
+        .await
+    }
+    pub(crate) async fn bootstrap_device(&self) -> Result<Option<String>> {
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+            use rusqlite::OptionalExtension;
+            Ok(inner.lock().map_err(|_| "database lock poisoned")?.devices
+                .query_row("SELECT b.id FROM device_bootstrap b JOIN devices d ON d.id=b.id WHERE b.slot=1", [], |row| row.get(0))
+                .optional()?)
+        }).await?
+    }
+    async fn pair_with_origin(
+        &self,
+        name: String,
+        scopes: Vec<CapabilityScope>,
+        kind: DeviceKind,
+        local: bool,
+        bootstrap: bool,
+    ) -> Result<(String, String)> {
         let inner = self.0.clone();
         tokio::task::spawn_blocking(move || {
             let id = random_id();
@@ -124,6 +267,19 @@ impl Database {
             let hash = Sha256::digest(token.as_bytes());
             let mut inner = inner.lock().map_err(|_| "database lock poisoned")?;
             let transaction = inner.devices.transaction()?;
+            if bootstrap {
+                use rusqlite::OptionalExtension;
+                let previous: Option<String> = transaction.query_row(
+                    "SELECT id FROM device_bootstrap WHERE slot=1", [], |row| row.get(0),
+                ).optional()?;
+                if let Some(previous) = previous {
+                    transaction.execute("DELETE FROM devices WHERE id=?1", [&previous])?;
+                    transaction.execute("DELETE FROM device_meta WHERE id=?1", [&previous])?;
+                    transaction.execute("DELETE FROM device_kind WHERE id=?1", [&previous])?;
+                    transaction.execute("DELETE FROM device_local WHERE id=?1", [&previous])?;
+                }
+                transaction.execute("INSERT INTO device_bootstrap(slot,id) VALUES(1,?1) ON CONFLICT(slot) DO UPDATE SET id=excluded.id", [&id])?;
+            }
             transaction.execute(
                 "INSERT INTO devices(id, hash, scopes) VALUES (?1, ?2, ?3)",
                 params![id, hash.as_slice(), serde_json::to_string(&scopes)?],
@@ -136,6 +292,9 @@ impl Database {
                 "INSERT INTO device_kind(id, kind) VALUES (?1, ?2)",
                 params![id, serde_json::to_string(&kind)?],
             )?;
+            if local {
+                transaction.execute("INSERT INTO device_local(id) VALUES (?1)", [&id])?;
+            }
             transaction.commit()?;
             Ok((id, token))
         })
@@ -162,6 +321,22 @@ impl Database {
                 .optional()?;
             row.map(|(id, text, kind)| Ok((id, serde_json::from_str(&text)?, kind.map(|text| serde_json::from_str(&text)).transpose()?.unwrap_or_default())))
                 .transpose()
+        })
+        .await?
+    }
+    pub(crate) async fn device_is_local(&self, id: String) -> Result<bool> {
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || {
+            let count: i64 = inner
+                .lock()
+                .map_err(|_| "database lock poisoned")?
+                .devices
+                .query_row(
+                    "SELECT COUNT(*) FROM device_local l JOIN devices d ON d.id=l.id WHERE l.id=?1",
+                    [id],
+                    |row| row.get(0),
+                )?;
+            Ok(count > 0)
         })
         .await?
     }
@@ -212,6 +387,26 @@ impl Database {
         })
         .await?
     }
+    /// Replace the scopes of a live device; returns whether it existed.
+    pub(crate) async fn set_scopes(
+        &self,
+        id: String,
+        scopes: Vec<CapabilityScope>,
+    ) -> Result<bool> {
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || {
+            let changed = inner
+                .lock()
+                .map_err(|_| "database lock poisoned")?
+                .devices
+                .execute(
+                    "UPDATE devices SET scopes=?2 WHERE id=?1",
+                    params![id, serde_json::to_string(&scopes)?],
+                )?;
+            Ok(changed > 0)
+        })
+        .await?
+    }
     /// Delete a device token; returns whether it existed.
     pub(crate) async fn revoke(&self, id: String) -> Result<bool> {
         let inner = self.0.clone();
@@ -221,6 +416,8 @@ impl Database {
             let removed = transaction.execute("DELETE FROM devices WHERE id=?1", [&id])?;
             transaction.execute("DELETE FROM device_meta WHERE id=?1", [&id])?;
             transaction.execute("DELETE FROM device_kind WHERE id=?1", [&id])?;
+            transaction.execute("DELETE FROM device_local WHERE id=?1", [&id])?;
+            transaction.execute("DELETE FROM device_bootstrap WHERE id=?1", [&id])?;
             transaction.commit()?;
             Ok(removed > 0)
         })

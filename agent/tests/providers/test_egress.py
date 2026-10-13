@@ -128,6 +128,8 @@ async def test_provider_sdk_requests_are_refused_outside_the_list() -> None:
 async def test_built_provider_endpoint_is_admitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from .test_request_credentials import FakeCredentialDaemon
+
     allow = egress.install([])
     endpoint = httpx2.URL("https://provider.invalid/v1/chat/completions")
     with pytest.raises(egress.EgressRefused):
@@ -138,7 +140,7 @@ async def test_built_provider_endpoint_is_admitted(
         "openai:test-model",
         [],
         {"order": {"openai": ["env"]}},
-        session_id="egress",
+        credential_rpc=FakeCredentialDaemon(),
     )
     allow.check_url(endpoint)
     with pytest.raises(egress.EgressRefused):

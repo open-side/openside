@@ -139,6 +139,16 @@ async fn scan(s: &Shared, workspace: Option<&str>) -> Result<Scan, HttpError> {
         .map_err(|_| HttpError::internal())
 }
 
+pub(crate) async fn enabled_names(s: &Shared) -> Result<Vec<String>, HttpError> {
+    Ok(scan(s, None)
+        .await?
+        .entries
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .map(|entry| entry.skill.name().to_owned())
+        .collect())
+}
+
 #[derive(Deserialize)]
 pub(crate) struct ListQuery {
     q: Option<String>,
@@ -322,11 +332,22 @@ pub(crate) const INDEX_CLOSE: &str = "</available_skills>";
 
 /// System-prompt part listing the enabled skills of a session, or `None` when there are none.
 /// Disabled and invalid skills are never offered.
-pub(crate) async fn index_part(s: &Shared, workspace: Option<&str>) -> Option<String> {
+pub(crate) async fn index_part(
+    s: &Shared,
+    workspace: Option<&str>,
+    agent: Option<&openside_proto::Agent>,
+) -> Option<String> {
     let scan = scan(s, workspace).await.ok()?;
     let mut lines = Vec::new();
     let mut bytes = 0;
-    for entry in scan.entries.iter().filter(|entry| entry.enabled) {
+    for entry in scan.entries.iter().filter(|entry| {
+        entry.enabled
+            && agent
+                .and_then(|agent| agent.skills.as_ref())
+                .map_or(true, |skills| {
+                    skills.iter().any(|name| name == entry.skill.name())
+                })
+    }) {
         // The marker stays after `name:` so the sidecar's name scan is unaffected.
         let origin = match entry.source {
             Source::Project => "[project] ",
@@ -401,6 +422,26 @@ impl DaemonTool for SkillTool {
                 Ok(args) => args,
                 Err(error) => return ToolExec::Failed(error.0),
             };
+            let state = match ctx.shared.db.state(&ctx.session).await {
+                Ok(state) => state,
+                Err(_) => return ToolExec::Failed("Session state is unavailable".into()),
+            };
+            let agent = match crate::agents::for_session(&ctx.shared, &state) {
+                Ok(agent) => agent,
+                Err(_) => return ToolExec::Failed("Agent state is unavailable".into()),
+            };
+            if agent.as_ref().is_some_and(|agent| {
+                agent.status != openside_proto::AgentStatus::Active
+                    || agent
+                        .skills
+                        .as_ref()
+                        .is_some_and(|skills| !skills.contains(&args.name))
+            }) {
+                return ToolExec::Denied {
+                    reason: "skill_not_granted".into(),
+                    hint: None,
+                };
+            }
             let store = store(&ctx.shared);
             let workspace = ctx
                 .workspace

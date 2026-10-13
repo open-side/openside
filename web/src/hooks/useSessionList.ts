@@ -18,11 +18,11 @@ export interface SessionListState {
 }
 
 /**
- * The sidebar's conversation list. The daemon filters and orders (pinned first), so typing is
- * debounced; while the page is visible the list re-syncs every few seconds so titles and run
- * status from other devices show up without a reload.
+ * A conversation list. The daemon filters and orders (pinned first), so typing is debounced;
+ * while the page is visible the list re-syncs every few seconds so titles and run status from
+ * other devices show up without a reload. `agent: "none"` keeps conversations from before the team.
  */
-export function useSessionList(client: Client): SessionListState {
+export function useSessionList(client: Client, agent?: string): SessionListState {
   const [query, setQuery] = useState("");
   const [archived, setArchived] = useState(false);
   const [sessions, setSessions] = useState<Session[] | null>(null);
@@ -33,7 +33,7 @@ export function useSessionList(client: Client): SessionListState {
   const load = useCallback(async () => {
     const mine = ++generation.current;
     try {
-      const list = await client.listSessions({ q: query, archived });
+      const list = await client.listSessions({ q: query, archived, agent });
       if (mine !== generation.current) return;
       setSessions(list.sessions);
       setError(null);
@@ -43,7 +43,7 @@ export function useSessionList(client: Client): SessionListState {
       setError(cause instanceof ApiError ? cause.message : "Request failed");
       setOffline(cause instanceof ApiError && cause.status === 0);
     }
-  }, [client, query, archived]);
+  }, [client, query, archived, agent]);
 
   useEffect(() => {
     // Not a DOM ref: bumping the counter drops a response for the previous filter.

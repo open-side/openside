@@ -21,13 +21,12 @@
   --text: #171717;
   --muted: #666666;
   --border: #e9e9e9;
-  --hover: #ededed;
+  --hover: color-mix(in srgb, var(--text) 8%, transparent);
   --control-border: #dcdcdc;
   --danger: #b42318;
-  --toast-danger: #ff9b91;
-  --glass: rgb(255 255 255 / 0.72);
+  --glass: rgb(255 255 255 / 0.6);
   --glass-border: rgb(0 0 0 / 0.08);
-  --shadow-glass: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px rgb(0 0 0 / 0.06);
+  --shadow-glass: 0 8px 40px rgb(29 29 31 / 0.12);
   --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.06);
   --primary: #2f6fed;
   --primary-foreground: #ffffff;
@@ -37,6 +36,16 @@
   --fast: 140ms;
   --normal: 220ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
+  /* Mirrors the radius scale in web/src/styles.css. */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-pill: 9999px;
+  --radius-row: var(--radius-lg);
+  --radius-card: var(--radius-2xl);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -46,13 +55,13 @@
     --text: #f3f3f3;
     --muted: #999999;
     --border: #343434;
-    --hover: #303030;
+    --hover: color-mix(in srgb, var(--text) 8%, transparent);
     --control-border: #414141;
     --danger: #ff9b91;
     /* Navy-tinted so frosted chrome belongs to the deep gradient backdrop. */
-    --glass: rgb(34 40 66 / 0.62);
+    --glass: rgb(24 28 46 / 0.7);
     --glass-border: rgb(255 255 255 / 0.12);
-    --shadow-glass: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 16px rgb(0 0 0 / 0.4);
+    --shadow-glass: 0 8px 40px rgb(0 0 0 / 0.32);
     --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4);
   }
 }
@@ -61,7 +70,7 @@
 :root {
   --backdrop:
     radial-gradient(120% 60% at 50% 110%, rgb(255 214 196 / 0.9), transparent 70%),
-    linear-gradient(180deg, #e3eaf6 0%, #dcdcf3 48%, #efe0e6 82%, #f6e2d6 100%);
+    linear-gradient(180deg, #bdd2ea 0%, #ccd6f0 44%, #e6dcec 80%, #f6e2d6 100%);
   --glass-strong-bg: rgb(28 34 58 / 0.86);
   --glass-strong-fg: #f5f6fb;
   --glass-strong-muted: rgb(245 246 251 / 0.66);
@@ -76,7 +85,14 @@
   --status-pill-bg: rgb(255 255 255 / 0.18);
   --status-pill-border: rgb(23 26 36 / 0.14);
   --radius-glass: 24px;
-  --blur-glass: blur(24px) saturate(1.5);
+  --blur-glass: blur(50px) saturate(1.6);
+  /* Floating surfaces: mirrors the --float-* tokens and .glass-float in web (styles.css, ui/ui.css). */
+  --float-bg: color-mix(in srgb, var(--glass) 70%, var(--canvas));
+  --float-bg-solid: color-mix(in srgb, var(--canvas) 96%, var(--text));
+  --float-border: var(--glass-border);
+  --float-shadow: var(--shadow-popup);
+  --float-blur: blur(24px) saturate(1.6);
+  --radius-float: 24px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -91,9 +107,36 @@
     --status-pill-border: rgb(255 255 255 / 0.16);
   }
 }
+/* Every extension page sits on the gradient, where #666/#999 fall below 4.5:1 near its warm end
+   (dark #999 measured 2.7:1 on frosted cards). These keep secondary text AA on cards and bare backdrop;
+   strong glass sets its own --muted. */
+body.panel, body.options { --muted: #5a5e6e; }
+@media (prefers-color-scheme: dark) {
+  body.panel, body.options { --muted: #c3c7d6; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root:root {
+    --glass: color-mix(in srgb, var(--canvas) 96%, var(--text));
+    --glass-strong-bg: rgb(28 34 58);
+    --blur-glass: none;
+    --float-blur: none;
+    --float-bg: var(--float-bg-solid);
+  }
+}
+.glass-float {
+  --float-hover: color-mix(in srgb, var(--text) 8%, transparent);
+  border: 1px solid var(--float-border);
+  background: var(--float-bg);
+  color: var(--text);
+  box-shadow: var(--float-shadow);
+  -webkit-backdrop-filter: var(--float-blur);
+  backdrop-filter: var(--float-blur);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-float { background: var(--float-bg-solid); }
+}
 /* Inside strong glass the page tokens point at light-on-navy values (as in web), so Markdown, buttons and inputs stay readable. */
 .bubble.assistant,
-.ticket:not(.ticket-auth),
 .composer {
   color-scheme: dark;
   --text: var(--glass-strong-fg);
@@ -102,6 +145,8 @@
   --control-border: rgb(255 255 255 / 0.18);
   --hover: rgb(255 255 255 / 0.1);
   --canvas: rgb(255 255 255 / 0.06);
+  --glass-inset-bg: rgb(255 255 255 / 0.06);
+  --glass-inset-border: rgb(255 255 255 / 0.1);
   --surface: rgb(8 11 24 / 0.32);
   --bubble: rgb(255 255 255 / 0.12);
   --primary: var(--pill-primary-bg);
@@ -116,7 +161,7 @@
   backdrop-filter: var(--blur-glass);
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .bubble.assistant, .ticket:not(.ticket-auth), .composer { background: rgb(28 34 58 / 0.97); }
+  .bubble.assistant, .composer { background: rgb(28 34 58 / 0.97); }
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -133,7 +178,7 @@ body {
 h1, h2, p { margin: 0; }
 svg { flex: none; }
 kbd, code { font-family: var(--font-code); font-size: 0.875em; }
-kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: 6px; background: var(--glass); }
+kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); background: var(--glass); }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--primary) 28%, transparent); }
 .sr-only {
@@ -152,7 +197,7 @@ kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: 6p
   height: 40px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text);
   cursor: pointer;
@@ -175,8 +220,8 @@ kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: 6p
   min-height: 44px;
   padding: 0 18px;
   border: 1px solid var(--control-border);
-  border-radius: 14px;
-  background: var(--canvas);
+  border-radius: var(--radius-pill);
+  background: var(--glass-inset-bg);
   color: var(--text);
   font: inherit;
   font-size: 0.9375rem;
@@ -192,7 +237,7 @@ kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: 6p
 .button.primary { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
 .button.primary:hover:not(:disabled) { background: var(--primary-hover); }
 .button.danger { color: var(--danger); }
-.button.compact { min-height: 36px; padding: 0 14px; border-radius: 12px; font-size: 0.875rem; }
+.button.compact { min-height: 36px; padding: 0 14px; border-radius: var(--radius-pill); font-size: 0.875rem; }
 .button.ghost { border-color: transparent; background: transparent; }
 .icon-button.small { width: 32px; height: 32px; color: var(--muted); }
 .icon-button.small:hover:not(:disabled) { color: var(--text); }
@@ -205,8 +250,8 @@ input {
   min-height: 44px;
   padding: 10px 14px;
   border: 1px solid var(--control-border);
-  border-radius: 14px;
-  background: var(--canvas);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
   font-size: 1rem;
 }
 input::placeholder, textarea::placeholder { color: var(--muted); }
@@ -223,10 +268,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   gap: 10px;
   width: min(440px, calc(100vw - 32px));
   padding: 10px 8px 10px 16px;
-  border-radius: 18px;
-  background: var(--text);
-  color: var(--canvas);
-  box-shadow: var(--shadow-popup);
+  border-radius: var(--radius-float);
   font-size: 0.875rem;
   font-weight: 550;
   line-height: 1.4;
@@ -234,7 +276,8 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   animation: toast-in var(--normal) var(--ease);
 }
 .toast:has(#status:empty) { display: none; }
-.toast[data-tone="error"] .toast-icon { color: var(--toast-danger); }
+.toast .toast-icon { color: var(--muted); }
+.toast[data-tone="error"] .toast-icon { color: var(--danger); }
 .toast p { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .toast-close {
   display: grid;
@@ -244,13 +287,13 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
-  color: inherit;
-  opacity: 0.7;
+  color: var(--muted);
   cursor: pointer;
+  transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.toast-close:hover { opacity: 1; }
+.toast-close:hover { background: var(--float-hover); color: var(--text); }
 @keyframes toast-in { from { opacity: 0; translate: -50% -8px; } }
 
 /* Ask side panel */
@@ -273,7 +316,7 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   pointer-events: none;
 }
 .bar > * { pointer-events: auto; }
-.session-picker select,
+.session-picker .picker-button,
 .bar .icon-button,
 .connection {
   border: 1px solid var(--glass-border);
@@ -285,25 +328,67 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
 .session-picker { position: relative; display: flex; flex: 0 1 auto; align-items: center; min-width: 0; }
 /* Settings stays at the trailing edge even while the picker is hidden (not paired). */
 .bar #pair { margin-left: auto; }
-.session-picker select {
+.picker-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   max-width: 100%;
   height: 40px;
-  padding: 0 34px 0 16px;
-  border-radius: 999px;
+  padding: 0 12px 0 16px;
+  border-radius: var(--radius-pill);
   color: var(--text);
+  font: inherit;
   font-size: 0.9375rem;
   font-weight: 650;
   letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  appearance: none;
   cursor: pointer;
   transition: background-color var(--fast) var(--ease);
 }
-.session-picker select:hover { background: color-mix(in srgb, var(--glass) 70%, var(--hover)); }
-.session-picker select option { background: var(--canvas); color: var(--text); font-weight: 400; }
-.session-picker-chevron { position: absolute; right: 12px; color: var(--muted); pointer-events: none; }
+.picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-chevron { flex: none; color: var(--muted); transition: transform var(--fast) var(--ease); }
+.picker-button[aria-expanded="true"] .picker-chevron { transform: rotate(180deg); }
+.session-picker .picker-button:hover { background: color-mix(in srgb, var(--glass) 70%, var(--hover)); }
+.picker-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  min-width: 100%;
+  max-width: calc(100vw - 20px);
+  max-height: min(320px, 70vh);
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  border-radius: var(--radius-float);
+  list-style: none;
+}
+.picker-list[hidden] { display: none; }
+.picker-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: var(--radius-lg);
+  font-size: 0.9375rem;
+  cursor: pointer;
+}
+.picker-option > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-option svg { color: var(--muted); }
+.picker-option[data-active] { background: var(--float-hover); }
+.picker-option[aria-selected="true"] { font-weight: 650; }
+.picker-button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (forced-colors: active) {
+  .picker-option[data-active] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 .bar .icon-button:hover:not(:disabled) { background: color-mix(in srgb, var(--glass) 70%, var(--hover)); }
 /* Same quiet outlined pill as the web status line. */
 .connection {
@@ -314,13 +399,13 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   min-height: 32px;
   padding: 0 12px 0 10px;
   border-color: var(--status-pill-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--muted);
   font-size: 0.8125rem;
   font-weight: 550;
   white-space: nowrap;
 }
-.connection::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; animation: breathe 1.2s var(--ease) infinite; }
+.connection::before { content: ""; width: 6px; height: 6px; border-radius: var(--radius-pill); background: currentColor; animation: breathe 1.2s var(--ease) infinite; }
 .connection:empty { display: none; }
 
 /* Never scroll sideways: text wraps, labels truncate, and code blocks and tables scroll inside their own box. */
@@ -331,10 +416,20 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   overflow: hidden auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: var(--control-border) transparent;
+  scrollbar-color: transparent transparent;
   overflow-wrap: anywhere;
   -webkit-mask-image: linear-gradient(transparent 0 16px, #000 64px);
   mask-image: linear-gradient(transparent 0 16px, #000 64px);
+}
+.scroll:hover, .scroll[data-scrolling] { scrollbar-color: color-mix(in srgb, var(--text) 28%, transparent) transparent; }
+/* Chromium ignores ::-webkit-scrollbar once the standard pair is set, so reset it there to keep the track below the floating bar. Invisible until hover or a scroll (ui/scrollReveal). */
+@supports selector(::-webkit-scrollbar) {
+  .scroll { scrollbar-width: auto; scrollbar-color: auto; }
+  .scroll::-webkit-scrollbar { width: 10px; }
+  .scroll::-webkit-scrollbar-track { margin-top: 64px; background: transparent; }
+  .scroll::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: var(--radius-pill); background-color: transparent; background-clip: padding-box; transition: background-color var(--normal) var(--ease); }
+  .scroll:hover::-webkit-scrollbar-thumb, .scroll[data-scrolling]::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text) 28%, transparent); }
+  .scroll::-webkit-scrollbar-thumb:hover, .scroll::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, var(--text) 46%, transparent); }
 }
 .column { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-height: 100%; padding: 64px 14px 20px; align-content: start; }
 .timeline { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
@@ -349,7 +444,7 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   max-width: 85%;
   padding: 10px 16px;
   border: 1px solid var(--glass-border);
-  border-radius: 22px;
+  border-radius: var(--radius-2xl);
   background: var(--bubble-user-bg);
   color: var(--bubble-user-fg);
   -webkit-backdrop-filter: var(--blur-glass);
@@ -363,23 +458,45 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   min-width: 0;
   max-width: 100%;
   padding: 12px 16px;
-  border-radius: 22px;
+  border-radius: var(--radius-2xl);
   box-shadow: 0 1px 2px rgb(10 14 30 / 0.12), 0 8px 24px rgb(10 14 30 / 0.12);
   font-size: 0.9375rem;
   line-height: 1.6;
 }
-/* A reply still being written ends in a breathing dot; alone, it reads as "thinking". */
-.bubble.assistant.streaming::after {
-  content: "";
-  display: block;
-  width: 8px;
-  height: 8px;
-  margin-top: 6px;
-  border-radius: 999px;
-  background: var(--muted);
-  animation: breathe 1.2s var(--ease) infinite;
+/* Delivery notes under the latest message and the typing dots before the agent's first words: mirrors web/src/styles.css ".receipt" and ".typing". */
+.receipt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+  margin: -4px 4px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.2;
 }
-.bubble.assistant.streaming:empty::after { margin: 4px 2px; }
+.receipt-failed { flex-wrap: wrap; justify-content: flex-end; color: var(--danger); }
+.typing-row { justify-self: start; }
+.typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 36px;
+  margin: 0;
+  padding: 0 16px;
+  border: 1px solid var(--status-pill-border);
+  border-radius: var(--radius-pill);
+  background: var(--status-pill-bg);
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+}
+.typing-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: typing-bounce 1.2s ease-in-out infinite; }
+.typing-dot:nth-child(3) { animation-delay: 0.15s; }
+.typing-dot:nth-child(4) { animation-delay: 0.3s; }
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+@keyframes typing-pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 @keyframes breathe { 50% { opacity: 0.25; scale: 0.7; } }
 
 /* Markdown: mirrors web/src/styles.css ".markdown" so a reply reads the same in both. */
@@ -398,7 +515,7 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
 .bubble.assistant li > :is(ul, ol) { margin: 4px 0 0; }
 .bubble.assistant blockquote { padding: 2px 0 2px 14px; border-left: 3px solid var(--border); color: var(--muted); }
 .bubble.assistant hr { margin: 20px 0; border: 0; border-top: 1px solid var(--border); }
-.bubble.assistant :not(pre) > code { padding: 1px 6px; border-radius: 6px; background: var(--bubble); font-size: 0.875em; }
+.bubble.assistant :not(pre) > code { padding: 1px 6px; border-radius: var(--radius-sm); background: var(--bubble); font-size: 0.875em; }
 .bubble.assistant a { color: var(--link); text-underline-offset: 2px; }
 .md-image {
   display: inline-flex;
@@ -407,7 +524,7 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   max-width: 100%;
   padding: 2px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--muted);
   font-size: 0.875rem;
   text-decoration: none;
@@ -420,7 +537,7 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
 .bubble.assistant th { color: var(--muted); font-size: 0.8125rem; font-weight: 600; }
 .bubble.assistant :is(th, td)[align="right"] { text-align: right; }
 .bubble.assistant :is(th, td)[align="center"] { text-align: center; }
-.code-block { overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+.code-block { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
 .code-block-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 0 14px; color: var(--muted); font-size: 0.75rem; font-weight: 600; }
 .code-block pre { margin: 0; padding: 6px 14px 14px; overflow-x: auto; font-family: var(--font-code); font-size: 0.8125rem; line-height: 1.4; }
 .code-block pre code { font-size: inherit; }
@@ -446,7 +563,7 @@ body[data-paired="false"] :is(.empty-paired, .session-picker, .dock) { display: 
   width: 52px;
   height: 52px;
   border: 1px solid var(--glass-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--glass);
   box-shadow: var(--shadow-glass);
   color: var(--text);
@@ -456,28 +573,9 @@ body[data-paired="false"] :is(.empty-paired, .session-picker, .dock) { display: 
 .empty h2 { font-size: 1.125rem; font-weight: 650; letter-spacing: -0.01em; }
 .empty p { max-width: 30ch; color: color-mix(in srgb, var(--text) 68%, transparent); font-size: 0.9375rem; line-height: 1.55; }
 
-/* Cards follow web/src/components/TicketCard.tsx: strong glass (see the token block), white primary pill, ghost secondary actions. */
-.ticket {
-  display: grid;
-  gap: 10px;
-  padding: 16px 18px 18px;
-  border-radius: var(--radius-glass);
-  box-shadow: 0 1px 2px rgb(10 14 30 / 0.12), 0 8px 24px rgb(10 14 30 / 0.14);
-  font-size: 0.9375rem;
-}
-.ticket-head { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 0.9375rem; font-weight: 650; }
-.ticket-icon { color: var(--text); }
-.ticket-summary { display: block; font-size: 0.9375rem; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
-.ticket-note { color: var(--muted); font-size: 0.875rem; line-height: 1.45; overflow-wrap: anywhere; }
-.ticket-site { color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
-.ticket input { min-height: 44px; margin-top: 2px; border-color: rgb(255 255 255 / 0.14); border-radius: 14px; background: var(--glass-input-bg); font-size: 0.9375rem; }
-.ticket-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-.ticket .button.compact { min-height: 40px; padding: 0 18px; border-radius: 999px; }
-.ticket .button.primary { order: 1; }
-.ticket .button.ghost { color: var(--muted); }
-.ticket .button.ghost:hover:not(:disabled) { color: var(--text); }
-/* The shared code form draws six 44px cells; below ~380px they would overflow the card. */
-@media (max-width: 380px) { .ticket-otp .otp-digits { --cell: 36px; --gap: 6px; } }
+/* Cards are drawn by the shared renderer (web/src/cards, copied beside this file as cards.css). */
+.panel-card { min-width: 0; }
+.panel-card:has(.oc-card[data-open="false"]) { justify-self: start; max-width: 100%; }
 
 /* Anchored to the dock, so it sits right above the composer however tall the draft grows. */
 body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); animation-name: toast-rise; }
@@ -489,7 +587,7 @@ body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); ani
   display: grid;
   gap: 4px;
   padding: 6px;
-  border-radius: 28px;
+  border-radius: var(--radius-2xl);
   box-shadow: 0 2px 6px rgb(10 14 30 / 0.12), 0 12px 32px rgb(10 14 30 / 0.2);
   transition: border-color var(--fast) var(--ease);
 }
@@ -509,7 +607,7 @@ body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); ani
   overflow-y: auto;
   resize: none;
   outline: none;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 .composer .icon-button { color: var(--muted); }
 .composer .icon-button:hover:not(:disabled) { color: var(--text); }
@@ -524,7 +622,7 @@ body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); ani
   padding: 5px 12px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bubble);
   color: var(--text);
   font-size: 0.8125rem;
@@ -537,11 +635,10 @@ body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); ani
 /* Options page */
 
 body.options { overflow-y: auto; background: var(--backdrop); background-color: var(--canvas); }
-/* Compact on purpose: every action must sit inside a ~780x490 headless viewport without scrolling, because the e2e clicks at unscrolled coordinates. */
 .page { display: grid; gap: 12px; width: min(520px, 100%); margin: 0 auto; padding: 14px 20px 24px; overflow-wrap: anywhere; }
 .page-head { display: grid; gap: 2px; }
 .pairing-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.875rem; font-weight: 550; }
-.pairing-state::before { content: ""; flex: none; width: 8px; height: 8px; border: 1.5px solid currentColor; border-radius: 999px; }
+.pairing-state::before { content: ""; flex: none; width: 8px; height: 8px; border: 1.5px solid currentColor; border-radius: var(--radius-pill); }
 .pairing-state[data-paired="true"] { color: var(--text); }
 .pairing-state[data-paired="true"]::before { border-color: var(--primary); background: var(--primary); }
 .page-head h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.015em; }
@@ -564,12 +661,18 @@ body.options { overflow-y: auto; background: var(--backdrop); background-color: 
 .field > span { color: var(--muted); font-size: 0.8125rem; font-weight: 550; }
 .hint { color: var(--muted); font-size: 0.875rem; line-height: 1.5; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.import-sites { max-height: min(40vh, 24rem); overflow: hidden auto; overflow-wrap: anywhere; padding-left: 1.25rem; }
+.import-sites li + li { margin-top: 0.375rem; }
 /* Fixed at the top so it never covers the actions the user is about to press. */
 body.options .toast { top: 16px; }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+  *:not(.typing-dot), *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
   .icon-button:active:not(:disabled), .button:active:not(:disabled) { transform: none; }
   /* Infinite loops at 1ms would flicker; hold the indicator still instead. */
-  .connection::before, .bubble.assistant.streaming::after { animation: none !important; opacity: 0.6; }
+  .connection::before { animation: none !important; opacity: 0.6; }
+  /* The working signal stays as a slow fade with no movement. */
+  .typing-dot { animation: typing-pulse 1.8s ease-in-out infinite; }
+  .typing-dot:nth-child(3) { animation-delay: 0.3s; }
+  .typing-dot:nth-child(4) { animation-delay: 0.6s; }
 }

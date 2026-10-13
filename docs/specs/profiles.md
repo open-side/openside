@@ -8,8 +8,8 @@
 | 프로필 | 도구 | 시스템 프롬프트 |
 | --- | --- | --- |
 | `full` | 등록된 데몬 도구 전부(세션 모드·브라우저·Vault 가용성에 따라 기존 규칙대로 숨김) | `prompt::parts()` 3개 + 스킬 목록 |
-| `browser-agent` | `ask_user`, `bash`, `browser_pointer`, `browser_repl`, `browser_screenshot`, `edit`, `read`, `request_human_step`, `write` | 짧은 역할 문장 1개 + 안전 규칙 1개 |
-| `ultrabrowse` | `ask_user`, `browser_act`, `browser_close_tab`, `browser_navigate`, `browser_open_tab`, `browser_repl`, `browser_snapshot`, `browser_tabs`, `request_human_step` | 역할 문장 + 안전 규칙 + 계획·인용 규칙([ultrabrowse.md](ultrabrowse.md)). 사이드카가 높은 추론·계획 단계·인용 강제를 더한다 |
+| `browser-agent` | `ask_user`, `bash`, `browser_import_lookup`, `browser_pointer`, `browser_repl`, `browser_screenshot`, `edit`, `read`, `request_human_step`, `write` | 짧은 역할 문장 1개 + 안전 규칙 1개 |
+| `ultrabrowse` | `ask_user`, `browser_act`, `browser_close_tab`, `browser_import_lookup`, `browser_navigate`, `browser_open_tab`, `browser_repl`, `browser_snapshot`, `browser_tabs`, `request_human_step` | 역할 문장 + 안전 규칙 + 계획·인용 규칙([ultrabrowse.md](ultrabrowse.md)). 사이드카가 높은 추론·계획 단계·인용 강제를 더한다 |
 
 - 프로필은 노출 범위를 좁히기만 한다. 정책·승인·세션 모드 규칙은 그대로 적용되고, 읽기 전용 세션에서는 쓰기 도구가 여전히 빠진다.
 - 프로필에 없는 도구는 실행 단계(`tools::visible`)에서도 거부된다. 모델이 이름을 직접 불러도 실행되지 않는다.

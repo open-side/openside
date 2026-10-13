@@ -58,3 +58,27 @@ HTML, SVG, 텍스트 프리뷰는 릴레이 연결 시 터널을 통해 바이�
 - 같은 데몬의 다른 세션. `browse` 토큰은 세션이 아니라 데몬 전체에 대한 권한이다.
 - 사용자가 승인한 민감 행동의 결과.
 - LLM 제공자에게 보내는 대화 내용. 제공자 선택은 사용자 몫이다.
+
+## 공유 Card 경계
+
+모델이 전달한 `present` 데이터는 티켓 권한, Hire 액션, 보안 입력폼, 실행 가능한 HTML을 만들 수 없다. 지시문이나 마크업이 포함되어 있더라도 텍스트는 실행되지 않는 데이터로 취급된다. 진입 단계에서 미확인 블록, 위조된 티켓 참조, 아티팩트 경로로 위장한 원격 URL을 거부한다. 미디어 가져오기는 계속 데몬이 직접 관리하며 정책 검사와 정규화를 거친다. 이미지를 가져올 수 없거나 아이콘 캐시가 비어 있어도 원격 브라우저로 넘어가지 않고 텍스트나 이니셜을 대신 표시한다.
+
+보안 Card는 캡처된 실제 페이지와 새로 발급된 신뢰할 수 있는 티켓을 바탕으로 생성된다. 출처와 문서·프레임 검증, 만료 시간, 직렬화된 전환 게이트를 통해 페이지 이동과 여러 기기의 동시 접근을 방지한다. 결제 양식을 채우더라도 제출 권한까지 부여되지는 않는다. 이후 진행되는 Confirm 단계는 캡처된 실제 대상 작업에 독립적으로 바인딩되며, 승인 영수증 자체만으로는 작업의 성공을 증명하지 못한다.
+
+시크릿 카나리는 events.db, 대화 기록(transcript), 도구 인자, 감사 및 로그 파일, 사이드카 스냅샷, 정착된 웹 상태에 절대 남아 있어서는 안 된다. 카나리는 비공개 픽스처 페이지와 사람과 데몬 사이의 일시적인 입력 및 요청 본문에만 머물러야 하며, 영구 저장소에 기록되어서는 안 된다. 인계(handoff) 포인터는 탐색 정보와 상태만 담고 있으며 다른 스레드의 보안 입력폼을 복제하지 않는다.
+
+## Connections 위협 T1–T6
+
+인증 값은 Chromium 또는 Vault에만 보관한다. 모든 연결 관리 경로는 Admin 권한을 요구하며, 메타데이터 라벨만으로는 절대 접근 권한을 부여하지 않는다.
+
+| ID | 위협 | 완화 방안 | 회귀 검증 |
+|---|---|---|---|
+| T1 | 악성 페이지가 에이전트에게 다른 사이트의 로그인 정보를 사용하도록 지시함 | 페이지의 식별 레이블이나 chief의 권한이 아니라 호출 에이전트의 연결 승인 여부로 사용을 제한한다. teammate는 기본적으로 확인을 거친다. 사람 전용 Confirm 단계에서 teammate, 대상 사이트, 요청 출처를 식별하며 항상 해당 에이전트의 승인 내역만 영구 저장한다. 단순 탐색과 중요한 쓰기 작업의 승인은 별도 게이트로 분리해 유지한다. | `crates/opensided/src/tests/connection_tools.rs::connection_tools_grant_matrix_once_always_and_requesting_origin`; `crates/openside-e2e/tests/connections.rs::login_teammate_always_fetch_cli_parity_and_revoke_clear_browser_sign_in` |
+| T2 | 요청이나 리다이렉트로 인해 브라우저 인증 정보가 다른 오리진으로 전송됨 | 해당 연결의 정확한 프로필 및 계정 공간에 속한 전용 탭이 있어야 한다. 최상위 프레임 사이트는 연결과 일치해야 하고, 요청 대상은 탭의 정확한 출처와 일치해야 한다. 브라우저가 관리하는 자격 증명은 해당 출처 안에 머물며, 리다이렉트나 교차 출처 요청은 `connection_cross_site`와 함께 닫힌 채로 실패한다. | `crates/opensided/src/tests/connection_tools.rs::connection_tools_headless_fetch_approval_canaries_cross_site_and_body_cap` |
+| T3 | 응답 본문이나 재사용된 헤더를 통해 인증 자료가 유출됨 | 응답 텍스트는 신뢰할 수 없는 페이지 데이터로 취급해 스트림 크기를 64 KiB로 제한하고, 모델에 전달하기 전에 세션 마스킹 처리를 적용한다. 쿠키가 아닌 재사용 헤더는 용량이 제한된 데몬 전용 메모리 소거 캐시에 보관했다가 마스킹 처리가 등록된 후 브라우저로 직접 전달한다. 요청을 보내기 전에 탭을 오염(taint) 처리해 미리보기와 스크린샷 노출을 차단한다. 감사 기록에는 메서드와 경로만 남기며 쿼리 값, 본문, 헤더 값은 절대 저장하지 않는다. | `crates/opensided/src/tests/connection_tools.rs::connection_tools_headless_fetch_approval_canaries_cross_site_and_body_cap` |
+| T4 | 가짜 계정 라벨로 특권 연결을 가장함 | 쓰기 경계에서 원시 식별자를 마스킹하고 계정 HMAC은 외부에 공개하지 않는다. 프로브나 에이전트의 식별 텍스트는 설명을 위한 정보일 뿐 권한 부여 근거가 될 수 없다. 인가는 불투명한 연결 ID와 안정적인 호출 에이전트 ID에 바인딩된다. | `crates/opensided/src/tests/connections.rs::connections_migration_identity_and_canary_storage`; `crates/opensided/src/tests/connection_tools.rs::connection_tools_grant_matrix_once_always_and_requesting_origin` |
+| T5 | 진행 중인 작업과 로그아웃 시점이 경합하거나, 닫힌 탭의 사이트 데이터가 권한 철회 후에도 남음 | 브라우저와 연결의 변경 작업을 직렬화하고, 사이트 탭을 닫거나 빈 페이지로 만든 뒤 신뢰할 수 있는 호스트 CDP를 통해 사이트 쿠키와 알려진 모든 사이트 출처의 스토리지를 정리한다. 이후 메타데이터와 승인 내역을 삭제하고 감사 로그를 추가한다. 삭제 후 연결 도구를 호출하면 `connection_not_found`를 반환한다. 공유 프로필에서 로그아웃하면 해당 사이트의 모든 계정에 영향을 주며, 별도 공간은 프로세스를 종료하고 프로필 전체를 삭제한다. 삭제만 수행할 때는 공유 인증 상태는 유지하되 승인 권한만 제거한다. | `crates/opensided/src/tests/connections.rs::connections_revoke_clears_closed_cookie_less_subdomain_frame_storage`; `crates/openside-e2e/tests/connections.rs::login_teammate_always_fetch_cli_parity_and_revoke_clear_browser_sign_in` |
+| T6 | REPL의 Network.getCookies 호출로 인증 값이 노출됨 | 명시적인 프레임 URL을 포함하여 허용된 모든 출처에서 반환된 쿠키 값을 마스킹하며, 쿠키 이름과 플래그는 정상적으로 사용할 수 있도록 유지한다. 쿠키 저장소 변경과 광범위한 스토리지 조회 권한은 호스트에만 남겨 둔다. 도구, 이벤트, 로그에는 어떤 쿠키 값도 반환하지 않는다. | `crates/opensided/src/tests/repl.rs::connections_repl_cookie_values_are_redacted_in_results_events_and_logs` |
+
+이 경계가 인증된 사이트 콘텐츠의 민감도를 없애 주거나, 상호 신뢰하는 에이전트 간에 공유된 쿠키 저장소를 격리하거나, 동일한 OS 사용자로 실행 중인 다른 프로세스로부터 Chromium의 비공개 프로필을 보호하지는 않는다. 중대한 작업은 여전히 정책과 사람의 승인에 따라 통제된다.
+

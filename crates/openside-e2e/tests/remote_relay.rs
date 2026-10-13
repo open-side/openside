@@ -98,6 +98,11 @@ impl Page<'_> {
             "document.querySelector({}).scrollIntoView({{block:'center',behavior:'instant'}}); true",
             json!(selector)
         )).await;
+        // Two animation frames do not wait out the files sheet's opacity/transform transitions.
+        self.wait("preview surface animations settled", &format!(
+            "(() => {{ const frame = document.querySelector({}); if (!frame) return false; for (let el = frame; el; el = el.parentElement) {{ if (el.hasAttribute('data-starting-style') || el.getAnimations().some(a => a.playState === 'running' || a.pending)) return false; }} return true; }})()",
+            json!(selector)
+        )).await;
         self.eval("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))").await;
         let rect = self.eval(&format!(
             "(() => {{ const f = document.querySelector({}); const r = f.getBoundingClientRect(); const x = r.left + 30, y = r.top + 30; return {{x,y,visible:document.elementFromPoint(x,y) === f}}; }})()",
@@ -307,7 +312,9 @@ async fn pwa_pairs_lists_streams_and_takes_over_through_the_encrypted_relay() {
     let link = offer.body["url"].as_str().unwrap();
     assert!(link.starts_with(&format!("{relay_origin}/pair#c=")));
     browser.navigate("relay-pwa-acceptance", &page.tab, link).await.unwrap();
-    page.wait("paired session list", "!!document.querySelector('.shell') && document.body.innerText.includes('Relay acceptance')").await;
+    page.wait("paired chief shell", "!!document.querySelector('.shell') && !!document.querySelector('a[href=\"/history\"]')").await;
+    page.eval("document.querySelector('a[href=\"/history\"]').click(); true").await;
+    page.wait("paired session history", "!!document.querySelector('.history-list') && document.body.innerText.includes('Relay acceptance')").await;
     assert_eq!(page.eval("location.hash === '' && JSON.parse(localStorage.getItem('openside.transport')).kind === 'relay'").await, true);
     assert_eq!(harness.request("POST", "/v1/pairing/exchange", Some(json!({"code":offer.body["code"]}))).await.status, 404);
     page.eval(&format!("Array.from(document.querySelectorAll('a')).find(a => a.getAttribute('href') === {}).click()", json!(format!("/sessions/{session}")))).await;
@@ -321,29 +328,35 @@ async fn pwa_pairs_lists_streams_and_takes_over_through_the_encrypted_relay() {
     })()"#).await;
     page.wait("enabled send", "!!document.querySelector('.composer button[type=submit]:not(:disabled)')").await;
     page.eval("document.querySelector('.composer button[type=submit]').click()").await;
+    page.wait("takeover Card streamed", "!!document.querySelector('.oc-card[data-kind=takeover][data-status=pending] .oc-pill')").await;
+    page.eval("document.querySelector('.oc-card[data-kind=takeover][data-status=pending] .oc-pill').click(); true").await;
     page.wait("ticket over SSE", "Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Open remote screen')").await;
     page.eval("Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Open remote screen').click()").await;
     page.wait("relayed takeover screencast", "(() => { const img = document.querySelector('.takeover-screen img'); return !!img && img.complete && img.naturalWidth > 0; })()").await;
     assert_eq!(page.eval("document.querySelector('.takeover-screen').dataset.frameWidth").await, "1440");
+    assert_eq!(page.eval("!!document.querySelector('.takeover button[aria-label=\"Close\"]')").await, true);
     page.eval("Array.from(document.querySelectorAll('.takeover button')).find(b => b.textContent.trim() === 'Done').click()").await;
     page.wait("same run resumed over SSE", "document.body.innerText.includes('Relay stream completed.') && document.querySelector('main.session')?.dataset.status === 'idle'").await;
-    page.eval("document.querySelector('.takeover button[aria-label=\"Close\"]').click()").await;
-    page.wait("remote screen dismissed", "document.querySelector('.takeover') === null").await;
+    page.wait("completed takeover receipt and dismissed screen", "document.querySelector('.takeover') === null && !!document.querySelector('.oc-card[data-kind=takeover][data-status=done]')").await;
     page.wait("visual preview via blob", "!!document.querySelector('figure.visual iframe[src^=\"blob:\"]')").await;
     assert_eq!(page.eval("document.querySelector('figure.visual iframe').getAttribute('sandbox')").await, "");
     assert_eq!(page.eval("document.querySelector('figure.visual iframe').contentDocument === null").await, true);
-    page.wait("artifact list", "Array.from(document.querySelectorAll('.artifact-row')).some(b => b.textContent.includes('report.html'))").await;
-    page.eval("Array.from(document.querySelectorAll('.artifact-row')).find(b => b.textContent.includes('report.html')).click()").await;
+    page.wait("files pill", "!!document.querySelector('.files-pill')").await;
+    page.eval("document.querySelector('.files-pill').click()").await;
+    page.wait("artifact list", "Array.from(document.querySelectorAll('.files-open')).some(b => b.textContent.includes('report.html'))").await;
+    page.eval("Array.from(document.querySelectorAll('.files-open')).find(b => b.textContent.includes('report.html')).click()").await;
     page.wait("artifact preview via blob", "!!document.querySelector('.artifact-preview iframe[src^=\"blob:\"]')").await;
     assert_eq!(page.eval("document.querySelector('.artifact-preview iframe').getAttribute('sandbox')").await, "");
     // Waiting for both frame loads makes the network/script assertions exercise rendering, not just URL creation.
     page.eval("window.__previewLoaded = 0; document.querySelectorAll('iframe.sandbox-frame').forEach(f => f.addEventListener('load', () => window.__previewLoaded++)); true").await;
     page.eval("document.querySelectorAll('iframe.sandbox-frame').forEach(f => f.src = f.src); true").await;
     page.wait("sandbox frame loads", "window.__previewLoaded >= 2").await;
-    for selector in ["figure.visual iframe", ".artifact-preview iframe"] {
-        assert_eq!(page.frame_color(selector).await, "rgb(47, 111, 237)", "inline preview styles must survive the relay");
-        assert_eq!(page.preview_pixel(selector).await, json!([47, 111, 237]), "preview must render, not merely load a blob URL");
-    }
+    assert_eq!(page.frame_color(".artifact-preview iframe").await, "rgb(47, 111, 237)", "artifact preview styles must survive the relay");
+    assert_eq!(page.preview_pixel(".artifact-preview iframe").await, json!([47, 111, 237]), "artifact preview must render, not merely load a blob URL");
+    page.eval("document.querySelector('.tray-sheet button[aria-label=\"Close\"]').click()").await;
+    page.wait("files sheet dismissed", "document.querySelector('.tray-sheet') === null").await;
+    assert_eq!(page.frame_color("figure.visual iframe").await, "rgb(47, 111, 237)", "inline preview styles must survive the relay");
+    assert_eq!(page.preview_pixel("figure.visual iframe").await, json!([47, 111, 237]), "visual preview must render, not merely load a blob URL");
     assert_eq!(page.eval("!document.body.dataset.compromised && !!localStorage.getItem('openside.token')").await, true);
     assert_eq!(probes.load(Ordering::SeqCst), 0, "preview escaped its CSP/sandbox");
     }).catch_unwind().await;
@@ -469,7 +482,20 @@ async fn cloudflared_named_token_stays_out_of_argv_and_child_exits_on_shutdown()
         .trim()
         .parse()
         .unwrap();
+    #[cfg(target_os = "linux")]
     let argv = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap();
+    #[cfg(not(target_os = "linux"))]
+    let argv = {
+        let output = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "could not inspect the owned child process"
+        );
+        output.stdout
+    };
     assert!(!String::from_utf8_lossy(&argv).contains(token));
     assert!(!serde_json::to_string(&status).unwrap().contains(token));
     assert!(

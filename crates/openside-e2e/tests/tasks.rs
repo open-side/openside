@@ -227,6 +227,11 @@ async fn task_report_is_delivered_exactly_once_across_daemon_crash_and_restart()
     let all = replay.settled().await;
     let report = format!("task-report-{task}");
     assert_eq!(all.iter().filter(|e| matches!(&e.kind, EventKind::MessageQueued { message_id,.. } if message_id.as_str() == report)).count(),1);
+    assert!(all
+        .iter()
+        .any(|event| matches!(&event.kind, EventKind::MessageQueued {
+        message_id, author_kind: openside_proto::MessageAuthorKind::Internal, from_agent: None, ..
+    } if message_id.as_str() == report)));
     assert_eq!(all.iter().filter(|e| matches!(&e.kind, EventKind::AssistantFinal { text } if text.contains("[task report]") && text.contains("durable result"))).count(),1);
     let next = until(&mut replay, |k| final_is(k, "still here")).await;
     assert!(!next.iter().any(|e| matches!(&e.kind,EventKind::MessageQueued { message_id,.. } if message_id.as_str() == report)));
@@ -832,13 +837,14 @@ async fn waiting_task_keeps_its_repl_claimed_prewarm_tab_across_restart_and_stal
     say(&harness, &id, "start competitor").await;
     let mut seen = until(&mut stream, |kind| tool_started(kind, "sibling-wait")).await;
     assert!(seen.iter().any(
-        |event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, is_error: true, result }
+        |event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, is_error: true, result, .. }
         if tool_call_id == "steal-restored" && result.to_string().contains("tab_owned_by_task"))
     ));
     let opened = seen
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,
@@ -857,7 +863,7 @@ async fn waiting_task_keeps_its_repl_claimed_prewarm_tab_across_restart_and_stal
     assert_eq!(resumed.status, 200, "{}", resumed.body);
     seen.extend(until(&mut stream, |kind| matches!(kind, EventKind::ToolEnded { tool_call_id, .. } if tool_call_id == "resume-own")).await);
     assert!(seen.iter().any(
-        |event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, result, is_error: false }
+        |event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, result, is_error: false, .. }
         if tool_call_id == "resume-own" && result["tab_id"] == parked)
     ));
     release(&harness, "release-sibling");

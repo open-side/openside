@@ -11,6 +11,7 @@ afterEach(() => {
 describe("App", () => {
   it("drops a token the live event stream rejects and returns to token entry", async () => {
     localStorage.setItem("openside.token", "revoked-token");
+    sessionStorage.setItem("openside.local-secret", "old-boot-secret");
     window.history.pushState({}, "", "/sessions/s1");
     const requested: string[] = [];
     // Only the SSE stream rejects the token, so the reset must come from that path.
@@ -26,8 +27,9 @@ describe("App", () => {
     );
     render(<App />);
     expect(await screen.findByLabelText("Device token")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("The saved token was rejected");
+    expect(screen.getByRole("alert")).toHaveTextContent("Reopen openside-browser");
     expect(localStorage.getItem("openside.token")).toBeNull();
+    expect(sessionStorage.getItem("openside.local-secret")).toBeNull();
     expect(requested).toContain("/v1/sessions/s1/events");
   });
 });

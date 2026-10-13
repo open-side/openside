@@ -53,6 +53,70 @@ impl Drop for Server {
 }
 
 #[tokio::test]
+async fn static_navigation_retires_a_capture_with_unacknowledged_frames() {
+    let executable = match openside_config::discover_browser(&openside_config::Config::default()) {
+        Ok(executable) => executable,
+        Err(reason) => {
+            eprintln!("SKIP static screencast navigation test: {reason}");
+            return;
+        }
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let _server = Server(tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/", get(|| async {
+                    Html("<!doctype html><style>body{background:#e00000}</style><input autofocus>")
+                }))
+                .route("/blue", get(|| async {
+                    Html("<!doctype html><style>body{background:#0000e0}</style>")
+                })),
+        ).await.unwrap();
+    }));
+    let (browser, _) = Browser::launch(crate::BrowserConfig::new(executable))
+        .await
+        .unwrap();
+    let tab = browser
+        .create_agent_tab("static-cast", &origin)
+        .await
+        .unwrap()
+        .id;
+    let capture = browser
+        .screencast_scaled("static-cast", &tab, 40, (720, 450))
+        .await
+        .unwrap();
+    assert!(capture.document_is_current());
+    let old = tokio::time::timeout(Duration::from_secs(3), capture.next())
+        .await
+        .unwrap();
+    for _ in 0..5 {
+        browser.thumbnail("static-cast", &tab).await.unwrap();
+    }
+    assert_eq!(capture.slot.acknowledgements.load(Ordering::Relaxed), 0);
+    assert!((1..=3).contains(&capture.slot.received.load(Ordering::Relaxed)));
+    browser
+        .navigate("static-cast", &tab, &format!("{origin}/blue"))
+        .await
+        .unwrap();
+    assert!(!capture.document_is_current());
+    capture.stop();
+    let fresh = browser
+        .screencast_scaled("static-cast", &tab, 40, (720, 450))
+        .await
+        .unwrap();
+    assert!(fresh.document_is_current());
+    let blue = tokio::time::timeout(Duration::from_secs(3), fresh.next())
+        .await
+        .unwrap();
+    assert_ne!(blue.data, old.data);
+    assert_eq!(fresh.slot.acknowledgements.load(Ordering::Relaxed), 0);
+    fresh.stop();
+    browser.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn animated_chromium_preview_captures_only_when_one_paced_ack_releases_a_credit() {
     let executable = match openside_config::discover_browser(&openside_config::Config::default()) {
         Ok(executable) => executable,

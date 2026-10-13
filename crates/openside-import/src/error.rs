@@ -30,10 +30,32 @@ pub enum ImportError {
         /// Operating-system error.
         reason: String,
     },
-    /// SQLite reported the (copied) database as busy or locked.
+    /// A source file or its SQLite snapshot would exceed the import byte ceiling.
+    #[error("{what} at {path} exceeds the import size limit ({size} bytes; limit {limit})")]
+    SourceTooLarge {
+        /// Human name of the item.
+        what: &'static str,
+        /// Source file.
+        path: PathBuf,
+        /// Observed file or SQLite snapshot size.
+        size: u64,
+        /// Maximum permitted size in bytes.
+        limit: u64,
+    },
+    /// SQLite reported the source database as busy or locked.
     #[error("{what} database {path} is locked; close {browser} and import again")]
     Locked {
         /// Browser family the source was declared as.
+        browser: &'static str,
+        /// Human name of the item.
+        what: &'static str,
+        /// Source file.
+        path: PathBuf,
+    },
+    /// The operating system denied access because another process holds the source.
+    #[error("{what} source {path} is locked; close {browser} and retry")]
+    SourceLocked {
+        /// Browser family to close.
         browser: &'static str,
         /// Human name of the item.
         what: &'static str,
@@ -101,6 +123,42 @@ pub enum ImportError {
     /// `--keyring-password-cmd` could not produce a password.
     #[error("keyring password command failed: {0}")]
     KeyringCommand(String),
+    /// The OS keyring holds the browser's Safe Storage key but is locked or refused access.
+    #[error("the OS keyring is locked or denied access to the {browser} Safe Storage key; unlock it and try again")]
+    KeyringLocked {
+        /// Browser brand id.
+        browser: String,
+    },
+    /// No Safe Storage key could be fetched from the OS keyring (no service, no entry, or an
+    /// unsupported keyring such as KWallet's own API).
+    #[error("the {browser} Safe Storage key is not available from the OS keyring: {reason}")]
+    KeyringUnavailable {
+        /// Browser brand id.
+        browser: String,
+        /// Why, in words that carry no secret.
+        reason: &'static str,
+    },
+    /// A saved password uses an encryption scheme this platform cannot read (Windows `v20`
+    /// app-bound encryption, DPAPI-only blobs, ...).
+    #[error("a saved password for {origin} uses unsupported encryption `{version}`")]
+    UnsupportedPasswordEncryption {
+        /// Site the login belongs to.
+        origin: String,
+        /// The three-byte version prefix, printable ASCII only.
+        version: String,
+    },
+    /// The Safe Storage key does not decrypt a saved password: a wrong keyring password.
+    #[error("the keyring key does not decrypt the saved password for {origin}")]
+    WrongPasswordKey {
+        /// Site the login belongs to.
+        origin: String,
+    },
+    /// A saved password blob is damaged even though the key decrypted other entries.
+    #[error("the saved password for {origin} is corrupt: its encrypted value does not decrypt")]
+    CorruptPassword {
+        /// Site the login belongs to.
+        origin: String,
+    },
     /// Cookie import needs a Chromium-compatible executable to write the target profile.
     #[error(
         "importing cookies needs a Chromium-compatible browser to write the target profile: {0}"

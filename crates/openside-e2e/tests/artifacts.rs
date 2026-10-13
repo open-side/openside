@@ -189,12 +189,24 @@ async fn a_browser_screenshot_reaches_the_model_as_an_image() {
 
     // The screenshot call needs the tab id, so the next turn's script is written now and
     // the sidecar restarted to load it; its cursor continues after the first turn.
-    harness.replace_script(&json!({"responses":[
-        {"parts":[{"type":"tool_call","name":"browser_open_tab","args":{"url":format!("{origin}/")},"id":"open"}]},
-        {"parts":[{"type":"text","text":"opened"}]},
-        {"parts":[{"type":"tool_call","name":"browser_screenshot","args":{"tab_id":tab},"id":"shot"}]},
-        digest_reply(),
-    ]}));
+    const OBSERVATIONS: usize = 3;
+    let mut responses = vec![
+        json!({"parts":[{"type":"tool_call","name":"browser_open_tab","args":{"url":format!("{origin}/")},"id":"open"}]}),
+        json!({"parts":[{"type":"text","text":"opened"}]}),
+    ];
+    for n in 0..OBSERVATIONS {
+        responses.push(
+            json!({"parts":[{"type":"tool_call","name":"browser_screenshot",
+            "args":{"tab_id":tab},"id":format!("toolu_observe_{n}")}]}),
+        );
+    }
+    responses.push(digest_reply());
+    responses.push(
+        json!({"parts":[{"type":"tool_call","name":"browser_screenshot",
+        "args":{"tab_id":tab,"output":true},"id":"share"}]}),
+    );
+    responses.push(digest_reply());
+    harness.replace_script(&json!({"responses":responses}));
     harness.kill_sidecar();
     let mut stream = harness.events(&session, events.last().unwrap().seq).await;
     // The killed sidecar closes the session with an `interrupted` boundary first.
@@ -208,20 +220,81 @@ async fn a_browser_screenshot_reaches_the_model_as_an_image() {
         .await;
     assert_eq!(sent.status, 202, "{}", sent.body);
     let events = stream.settled().await;
-    let shot = std::fs::read(
-        harness
-            .data_dir
-            .join(format!("artifacts/{session}/shot.png")),
-    );
-    let saved = shot.unwrap_or_else(|e| panic!("screenshot not stored ({e}): {events:?}"));
-    // A viewport capture of this page is far below the model image cap, so it is not resized.
+    let reply = finals(&events);
+    assert_eq!(reply.len(), 1, "{events:?}");
+    assert_eq!(reply[0].matches("image/png:").count(), OBSERVATIONS);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(&event.kind, EventKind::ArtifactSaved { .. })));
+    let dir = harness.data_dir.join(format!("artifacts/{session}"));
+    for n in 0..OBSERVATIONS {
+        assert!(!dir.join(format!("toolu_observe_{n}.png")).exists());
+        assert!(events.iter().any(|event| matches!(&event.kind,
+            EventKind::ToolEnded { tool_call_id, result, is_error, .. }
+                if tool_call_id == &format!("toolu_observe_{n}")
+                    && !is_error && result["saved"] == false && result["purpose"] == "working")));
+    }
+    let list = harness
+        .request("GET", &format!("/v1/sessions/{session}/artifacts"), None)
+        .await;
+    assert_eq!(list.status, 200, "{}", list.body);
     assert_eq!(
-        finals(&events),
-        [format!("media image/png:{}", sha256(&saved))]
+        list.body["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|artifact| artifact["source"] != "transcript")
+            .count(),
+        0,
+        "{OBSERVATIONS} observations must yield zero outputs: {}",
+        list.body
     );
+
+    let mut stream = harness.events(&session, events.last().unwrap().seq).await;
+    let sent = harness
+        .request(
+            "POST",
+            &messages,
+            Some(json!({
+                "message_id":"share","text":"Please share a screenshot with me.","mode":"now"
+            })),
+        )
+        .await;
+    assert_eq!(sent.status, 202, "{}", sent.body);
+    let events = stream.settled().await;
+    let saved = std::fs::read(dir.join("screenshots/share.png"))
+        .unwrap_or_else(|e| panic!("explicit screenshot not stored ({e}): {events:?}"));
+    let reply = finals(&events);
+    assert_eq!(reply.len(), 1, "{events:?}");
+    assert_eq!(reply[0].matches("image/png:").count(), OBSERVATIONS + 1);
+    assert!(reply[0].contains(&format!("image/png:{}", sha256(&saved))));
     assert!(events.iter().any(|event| matches!(&event.kind,
         EventKind::ArtifactSaved { path, tool, tool_call_id, .. }
-            if path == "shot.png" && tool == "browser_screenshot" && tool_call_id == "shot")));
+            if path == "screenshots/share.png" && tool == "browser_screenshot" && tool_call_id == "share")));
+    let list = harness
+        .request("GET", &format!("/v1/sessions/{session}/artifacts"), None)
+        .await;
+    assert_eq!(list.status, 200, "{}", list.body);
+    let outputs: Vec<_> = list.body["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|artifact| artifact["source"] != "transcript")
+        .collect();
+    assert_eq!(
+        outputs.len(),
+        1,
+        "explicit screenshot must yield one output: {}",
+        list.body
+    );
+    assert_eq!(outputs[0]["path"], "screenshots/share.png");
+    assert_eq!(outputs[0]["purpose"], "output");
+    let (status, bytes) = harness
+        .get_bytes(&format!(
+            "/v1/sessions/{session}/artifacts/screenshots%2Fshare.png"
+        ))
+        .await;
+    assert_eq!((status, bytes), (200, saved));
     harness.kill().await;
     server.abort();
 }

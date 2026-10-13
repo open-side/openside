@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createClient, type Client } from "./client";
-import { openSessionStream } from "./sse";
+import { openSessionStream, pollSessionEvents } from "./sse";
 import { manageTarget, WORKSPACE_SECTIONS } from "../pages/manageRoutes";
 import {
   CALLS,
@@ -37,12 +37,46 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
   health: (c) => c.health(),
   accounts: (c) => c.accounts(),
   settings: (c) => c.settings(),
+  modelCatalog: (c) => c.modelCatalog(),
+  setModels: (c) => c.setModels({ default_model: "m", fallback_models: [] }),
+  listApiKeys: (c) => c.listApiKeys(),
+  addApiKey: (c) => c.addApiKey("p1", { label: "l", key: "k" }),
+  replaceApiKey: (c) => c.replaceApiKey("p1", "k1", { key: "k" }),
+  updateApiKey: (c) => c.updateApiKey("p1", "k1", { enabled: true }),
+  deleteApiKey: (c) => c.deleteApiKey("p1", "k1"),
+  listSubscriptions: (c) => c.listSubscriptions(),
+  addSubscriptionAccount: (c) => c.addSubscriptionAccount("s1", "l"),
+  subscriptionAccount: (c) => c.subscriptionAccount("s1", "a1"),
+  updateSubscriptionAccount: (c) => c.updateSubscriptionAccount("s1", "a1", { enabled: true }),
+  deleteSubscriptionAccount: (c) => c.deleteSubscriptionAccount("s1", "a1"),
+  listPools: (c) => c.listPools(),
+  setPool: (c) => c.setPool("p1", []),
+  setSessionAccount: (c) => c.setSessionAccount("s1", null),
   listSessions: (c) => c.listSessions({ q: "x", archived: true }),
-  createSession: (c) => c.createSession({}),
+  listAgents: (c) => c.listAgents(),
+  createAgent: (c) => c.createAgent({} as Parameters<Client["createAgent"]>[0]),
+  updateAgent: (c) => c.updateAgent("a1", { hidden: true }),
+  retireAgent: (c) => c.retireAgent("a1", { successor: "chief", pause_routines: false, revert_hire: false }),
+  restoreAgent: (c) => c.restoreAgent("a1"),
+  suppressedProposals: (c) => c.suppressedProposals(),
+  clearSuppressedProposal: (c) => c.clearSuppressedProposal("weekly prices"),
+  channelAccounts: (c) => c.channelAccounts(),
+  addChannelAccount: (c) =>
+    c.addChannelAccount("slack", {
+      id: "work",
+      label: "Work",
+      enabled: false,
+      agent_id: null,
+      options: { allowed_chats: [], allowed_users: [], allowed_workspaces: [], allowed_channels: [], allowed_guilds: [], api_base: null, listen: null, poll_timeout_secs: null, public_key: null },
+      credentials: { token: "t", signing_secret: "s" },
+    }),
+  updateChannelAccount: (c) => c.updateChannelAccount("slack", "work", { enabled: true }),
+  deleteChannelAccount: (c) => c.deleteChannelAccount("slack", "work"),
+  testChannelAccount: (c) => c.testChannelAccount("slack", "work"),
+  createSession: (c) => c.createSession({ agent_id: null }),
   updateSession: (c) => c.updateSession("s1", { title: "t" }),
   stopSession: (c) => c.stopSession("s1"),
   prewarmSession: (c) => c.prewarmSession("s1"),
-  prewarmBrowser: (c) => c.prewarmBrowser(),
   submitMessage: (c) => c.submitMessage("s1", { message_id: "m", text: "hi", mode: "queue" }),
   editQueued: (c) => c.editQueued("s1", "m1", "x"),
   deleteQueued: (c) => c.deleteQueued("s1", "m1"),
@@ -56,6 +90,7 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
   listArtifacts: (c) => c.listArtifacts("s1"),
   listVisuals: (c) => c.listVisuals("s1"),
   artifactBlob: (c) => c.artifactBlob("s1", "out/a.txt"),
+  faviconBlob: (c) => c.faviconBlob("https://shop.example"),
   takeover: (c) => c.takeover("t1"),
   browserPreview: (c) => c.browserPreview("s1"),
   browserThumbnail: (c) => c.browserThumbnail("s1", "thumb1"),
@@ -65,6 +100,7 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
     new Promise<void>((resolve) => {
       openSessionStream({ client: c, sessionId: "s1", onEvent: () => undefined, onError: () => resolve() });
     }),
+  pollSessionEvents: (c) => pollSessionEvents(c, "s1", 0, { wait: 1 }),
   sandboxPreview: (c) => c.sandboxPreview("/v1/sessions/s1/artifacts/a.html/preview?exp=1&sig=x"),
   listSkills: (c) => c.listSkills(),
   getSkill: (c) => c.getSkill("pdf"),
@@ -92,7 +128,13 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
   externalAgents: (c) => c.externalAgents(),
   installAgentSkill: (c) => c.installAgentSkill("claude", true),
   importProfiles: (c) => c.importProfiles(),
-  runImport: (c) => c.runImport({ profile: "chrome:Default", what: null, dry_run: true }),
+  runImport: (c) => c.runImport({ profiles: null, what: null }),
+  previewImport: (c) => c.previewImport({ profiles: ["chrome:Default"], what: null }),
+  importJob: (c) => c.importJob("job1"),
+  importPasswordsCsv: (c) => c.importPasswordsCsv("url,username,password\n"),
+  listImportDelivery: (c) => c.listImportDelivery(),
+  mintImportDeliveryTicket: (c) => c.mintImportDeliveryTicket("batch1", "device1"),
+  acknowledgeImportDelivery: (c) => c.acknowledgeImportDelivery("batch1"),
   vaultStatus: (c) => c.vaultStatus(),
   setupVault: (c) => c.setupVault("passphrase"),
   unlockVault: (c) => c.unlockVault(),
@@ -103,14 +145,55 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
   vaultItems: (c) => c.vaultItems(),
   updateVaultItem: (c) => c.updateVaultItem("site", "never"),
   vaultAudit: (c) => c.vaultAudit({ item: "site", session: "s1", since: "2026-01-01T00:00:00Z", limit: 10 }),
+  connections: (c) => c.connections({ agent: "chief", status: "active" }),
+  updateConnection: (c) => c.updateConnection("c1", { grants: [{ agent_id: "chief", access: "ask" }] }),
+  checkConnection: (c) => c.checkConnection("c1"),
+  reloginConnection: (c) => c.reloginConnection("c1"),
+  revokeConnection: (c) => c.revokeConnection("c1", { sign_out: true, delete_vault_item: false }),
+  createAccountSpace: (c) => c.createAccountSpace("example.com"),
+  dismissConnectionCandidate: (c) => c.dismissConnectionCandidate("c1"),
+  connectionAudit: (c) => c.connectionAudit({ connection: "c1", agent: "chief", action: "open", limit: 10 }),
   listDevices: (c) => c.listDevices(),
   revokeDevice: (c) => c.revokeDevice("d1"),
+  myDevice: (c) => c.myDevice(),
+  requestAccess: (c) => c.requestAccess(["admin"]),
+  accessRequests: (c) => c.accessRequests(),
+  approveAccessRequest: (c) => c.approveAccessRequest("r1"),
+  denyAccessRequest: (c) => c.denyAccessRequest("r1"),
   exchangePairing: (c) => c.exchangePairing("code"),
+  createPairing: (c) => c.createPairing({ name: "My phone", scopes: ["read"], kind: "person_device", via: null }),
+  remoteStatus: (c) => c.remoteStatus(),
+  setTailscale: (c) => c.setTailscale(true),
+  setCloudflare: (c) => c.setCloudflare({ enabled: true, tunnel: "quick", hostname: null, token_file: null }),
+  setRelay: (c) => c.setRelay({ enabled: true, url: "https://relay.example.com", token_file: null }),
   vapidKey: (c) => c.vapidKey(),
   listPushSubscriptions: (c) => c.listPushSubscriptions(),
   createPushSubscription: (c) => c.createPushSubscription({ endpoint: "https://push.test/x", keys: { p256dh: "p", auth: "a" } }),
   deletePushSubscription: (c) => c.deletePushSubscription("p1"),
   pushPresence: (c) => c.pushPresence("p1", true),
+  setExternalAgent: (c) => c.setExternalAgent("my-agent", "~/skills"),
+  deleteExternalAgent: (c) => c.deleteExternalAgent("my-agent"),
+  daemonStatus: (c) => c.daemonStatus(),
+  restartDaemon: (c) => c.restartDaemon(),
+  doctor: (c) => c.doctor(),
+  memoryModel: (c) => c.memoryModel(),
+  downloadMemoryModel: (c) => c.downloadMemoryModel(),
+  cancelMemoryModel: (c) => c.cancelMemoryModel(),
+  policy: (c) => c.policy(),
+  setPolicy: (c) => c.setPolicy({ default_mode: "guard", allow_origins: [], deny_origins: [], rules: [] }),
+  testPolicy: (c) => c.testPolicy({ target: "/tmp", capability: "fs_read" }),
+  validatePolicy: (c) => c.validatePolicy({ network_allow: [] }),
+  networkPolicy: (c) => c.networkPolicy(),
+  setNetworkPolicy: (c) => c.setNetworkPolicy([]),
+  syncStatus: (c) => c.syncStatus(),
+  setupSync: (c) => c.setupSync({}),
+  pairSync: (c) => c.pairSync({ pairing_code: "osync1-x" }),
+  unlockSync: (c) => c.unlockSync({}),
+  runSync: (c) => c.runSync(),
+  setSyncConfig: (c) => c.setSyncConfig({ settings: false, memory_tags: [] }),
+  pinnedTabs: (c) => c.pinnedTabs(),
+  pinTab: (c) => c.pinTab("https://example.com"),
+  unpinTab: (c) => c.unpinTab("t1"),
 };
 
 async function observed(call: CallName): Promise<string[]> {
@@ -172,7 +255,7 @@ describe("UI ↔ API map (PP-16, E-4, G-5)", () => {
         return readFileSync(file, "utf8");
       });
       for (const call of feature.calls) {
-        const needle = call === "openSessionStream" ? "openSessionStream(" : `.${call}(`;
+        const needle = call === "openSessionStream" || call === "pollSessionEvents" ? `${call}(` : `.${call}(`;
         expect(
           texts.some((text) => text.includes(needle)),
           `${feature.feature}: ${needle} in ${feature.sources.join(", ")}`,
@@ -183,8 +266,8 @@ describe("UI ↔ API map (PP-16, E-4, G-5)", () => {
 
   it("every app route has features and every feature screen is a route", () => {
     const app = readFileSync(new URL("App.tsx", SRC), "utf8");
-    // Settings, Workspace and its sections are dialog routes resolved by `manageTarget`.
-    const dialogRoutes = ["/settings", "/workspace", ...WORKSPACE_SECTIONS.map((section) => section.path)];
+    // Settings, Models & accounts, Workspace and its sections are dialog routes resolved by `manageTarget`.
+    const dialogRoutes = ["/settings", "/models", "/channels", "/workspace", "/remote", ...WORKSPACE_SECTIONS.map((section) => section.path)];
     expect(dialogRoutes.every((route) => manageTarget(route) !== null)).toBe(true);
     const routes = ["/", ...[...app.matchAll(/<Route path="([^"*]+)"/g)].map((match) => `/${match[1]}`), ...dialogRoutes];
     const screens = new Set(FEATURES.map((feature) => feature.screen));

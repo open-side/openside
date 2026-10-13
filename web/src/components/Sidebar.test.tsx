@@ -1,150 +1,138 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
-import type { Session } from "../api/types";
-import { ClientContext, useClient } from "../context";
-import { useSessionList } from "../hooks/useSessionList";
-import { fakeClient, json, type Call } from "../test/fakeDaemon";
-import { Sidebar } from "./Sidebar";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { AgentSummary } from "../api/types";
+import { isUnread, people, type AgentsState } from "../hooks/useAgents";
+import { seen } from "../state/seen";
+import { agentSummary } from "../test/agents";
+import { rowTime, Sidebar } from "./Sidebar";
 
-function session(id: string, title: string, extra: Partial<Session> = {}): Session {
-  return {
-    id,
-    title,
-    model: "provider:model",
-    mode: "guard",
-    status: "idle",
-    last_seq: 1,
-    queue: [],
-    pinned: false,
-    archived: false,
-    incognito: false,
-    browser_space: "shared",
-    ...extra,
-  };
+const roster = (): AgentSummary[] => [
+  agentSummary("mina", "Mina", { last_message_at: "2026-10-12T08:00:00Z" }),
+  agentSummary("theo", "Theo", { last_message_at: "2026-10-12T10:00:00Z" }),
+  agentSummary("chief", "Juno", { last_message_at: "2026-10-01T08:00:00Z" }),
+  agentSummary("ada", "Ada", { pinned: true, last_message_at: "2026-10-02T08:00:00Z" }),
+  agentSummary("old", "Old", { status: "retired" }),
+  agentSummary("quiet", "Quiet", { hidden: true }),
+];
+
+function team(agents: AgentSummary[] | null): AgentsState {
+  return { agents, error: null, offline: false, refresh: () => {} };
 }
 
-/** Minimal daemon double applying the same list rules as `GET /v1/sessions`. */
-function daemon() {
-  const sessions = [
-    session("a", "Groceries", { status: "waiting_human" }),
-    session("b", "Quarterly report", { status: "running" }),
-    session("c", "Old trip", { archived: true }),
-  ];
-  return fakeClient((call: Call) => {
-    const url = new URL(call.path, "http://daemon.test");
-    if (call.method === "PATCH") {
-      const target = sessions.find((s) => s.id === url.pathname.split("/").pop());
-      Object.assign(target!, call.body);
-      return json(200, target);
-    }
-    const q = url.searchParams.get("q")?.toLowerCase();
-    const archived = url.searchParams.get("archived") === "true";
-    const listed = sessions
-      .filter((s) => s.archived === archived && (!q || s.title.toLowerCase().includes(q)))
-      .sort((x, y) => Number(y.pinned) - Number(x.pinned));
-    return json(200, { sessions: listed });
-  });
-}
-
-function Harness() {
-  const list = useSessionList(useClient());
-  return <Sidebar list={list} />;
-}
-
-function setup(path = "/") {
-  const fake = daemon();
-  render(
-    <ClientContext.Provider value={fake.client}>
-      <MemoryRouter initialEntries={[path]}>
-        <Harness />
-      </MemoryRouter>
-    </ClientContext.Provider>,
+function setup(agents: AgentSummary[] | null, path = "/history") {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Sidebar team={team(agents)} />
+    </MemoryRouter>,
   );
-  return fake;
 }
 
-/** Row titles in display order across the Pinned and Conversations groups. */
-async function titles(): Promise<string[]> {
-  await screen.findAllByRole("list", { name: /Conversations/i });
-  return Array.from(document.querySelectorAll("[data-session] .session-title"), (title) => title.textContent ?? "");
-}
+const names = () => within(screen.getByRole("list", { name: "Team" })).getAllByRole("link").map((link) => link.querySelector(".person-name")?.textContent);
 
-function row(title: string): HTMLElement {
-  return screen.getByText(title).closest("li") as HTMLElement;
-}
+beforeEach(() => seen.reset());
 
-async function choose(user: ReturnType<typeof userEvent.setup>, title: string, item: string) {
-  await user.click(within(row(title)).getByRole("button", { name: `Options for ${title}` }));
-  await user.click(await screen.findByRole("menuitem", { name: item }));
-}
+describe("people order", () => {
+  it("puts the assistant first, then pinned teammates, then the latest conversation; retired and hidden stay out", () => {
+    const { chief, teammates, hidden } = people(roster());
+    expect(chief?.id).toBe("chief");
+    expect(teammates.map((agent) => agent.id)).toEqual(["ada", "theo", "mina"]);
+    expect(hidden.map((agent) => agent.id)).toEqual(["quiet"]);
+  });
 
-describe("Sidebar conversation list", () => {
-  it("lists active conversations with run status and searches through the API", async () => {
+  it("renders the same order and links each person to their thread", () => {
+    setup(roster());
+    expect(names()).toEqual(["Juno", "Ada", "Theo", "Mina"]);
+    expect(screen.getByRole("link", { name: /^Theo/ })).toHaveAttribute("href", "/agents/theo");
+    expect(screen.queryByText("Old")).toBeNull();
+  });
+
+  it("folds hidden teammates behind a disclosure", async () => {
     const user = userEvent.setup();
-    const { calls } = setup("/sessions/b");
-    expect(await titles()).toEqual(["Groceries", "Quarterly report"]);
-    expect(within(row("Groceries")).getByText("Needs you")).toBeInTheDocument();
-    expect(within(row("Quarterly report")).getByRole("img", { name: "Running" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Quarterly report/ })).toHaveAttribute("aria-current", "page");
-
-    await user.type(screen.getByRole("searchbox", { name: "Search conversations" }), "report");
-    await waitFor(() => expect(calls.at(-1)?.path).toBe("/v1/sessions?q=report"));
-    await waitFor(async () => expect(await titles()).toEqual(["Quarterly report"]));
-    expect(screen.getByRole("link", { name: /Quarterly report/ })).toHaveAttribute("href", "/sessions/b");
+    setup(roster());
+    expect(screen.queryByRole("link", { name: /^Quiet/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Hidden · 1" }));
+    expect(within(screen.getByRole("list", { name: "Hidden teammates" })).getByRole("link", { name: /^Quiet/ })).toBeInTheDocument();
   });
 
-  it("pins a conversation into the Pinned group and archives another", async () => {
-    const user = userEvent.setup();
-    const { calls } = setup();
-    expect(await titles()).toEqual(["Groceries", "Quarterly report"]);
-    await choose(user, "Quarterly report", "Pin conversation");
-    await waitFor(async () => expect(await titles()).toEqual(["Quarterly report", "Groceries"]));
-    expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/v1/sessions/b", body: { pinned: true } });
-    const pinned = screen.getByRole("list", { name: "Pinned conversations" });
-    expect(within(pinned).getByText("Quarterly report")).toBeInTheDocument();
-
-    await choose(user, "Groceries", "Archive");
-    await waitFor(async () => expect(await titles()).toEqual(["Quarterly report"]));
-
-    const toggle = screen.getByRole("button", { name: "Show archived" });
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    await waitFor(async () => expect(await titles()).toEqual(["Groceries", "Old trip"]));
-    expect(calls.at(-1)?.path).toBe("/v1/sessions?archived=true");
-    await choose(user, "Old trip", "Unarchive");
-    await waitFor(async () => expect(await titles()).toEqual(["Groceries"]));
+  it("offers History, Workspace and Settings, and no new chat", () => {
+    setup(roster());
+    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
+    expect(screen.getByRole("link", { name: "Workspace" })).toHaveAttribute("href", "/workspace");
+    expect(screen.queryByRole("link", { name: "New chat" })).toBeNull();
+    expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
-  it("renames a conversation from its menu", async () => {
-    const user = userEvent.setup();
-    const { calls } = setup();
-    await titles();
-    await choose(user, "Groceries", "Rename");
-    const dialog = await screen.findByRole("dialog", { name: "Rename conversation" });
-    const input = within(dialog).getByLabelText("Conversation name");
-    await user.clear(input);
-    await user.type(input, "Weekly groceries");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(async () => expect(await titles()).toEqual(["Weekly groceries", "Quarterly report"]));
-    expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/v1/sessions/a", body: { title: "Weekly groceries" } });
+  it("hints at teammates while the assistant is alone", () => {
+    setup([agentSummary("chief", "Juno")]);
+    expect(screen.getByText(/Juno can bring in a teammate/)).toBeInTheDocument();
+  });
+});
+
+describe("row state", () => {
+  it("shows live activity, working dots and Needs you", () => {
+    setup([
+      agentSummary("chief", "Juno", { needs_you: true, session_status: "waiting_human" }),
+      agentSummary("theo", "Theo", { session_status: "running", activity: "Checking prices", last_activity: "Old preview" }),
+      agentSummary("mina", "Mina", { last_activity: "Here is the weekly summary" }),
+    ]);
+    expect(screen.getByRole("link", { name: "Juno, Needs you" })).toBeInTheDocument();
+    const theo = screen.getByRole("link", { name: "Theo, Working" });
+    expect(within(theo).getByText("Checking prices")).toHaveClass("live");
+    expect(theo.querySelector(".avatar-working")).not.toBeNull();
+    expect(within(screen.getByRole("link", { name: /^Mina/ })).getByText("Here is the weekly summary")).toBeInTheDocument();
   });
 
-  it("links Workspace and Settings and a new chat", () => {
-    setup("/sessions/a");
-    const nav = screen.getByRole("navigation", { name: "Sections" });
-    expect(within(nav).getAllByRole("link").map((link) => link.textContent)).toEqual(["Workspace", "Settings"]);
-    expect(within(nav).getByRole("link", { name: "Workspace" })).toHaveAttribute("href", "/workspace");
-    expect(within(nav).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
-    expect(screen.getByRole("link", { name: "New chat" })).toHaveAttribute("href", "/");
+  it("falls back to the role when there is no message yet", () => {
+    setup([agentSummary("chief", "Juno"), agentSummary("mina", "Mina", { persona: { role: "Watches prices", voice: "", responsibilities: ["x"], boundaries: [] } })]);
+    expect(within(screen.getByRole("link", { name: /^Mina/ })).getByText("Watches prices")).toBeInTheDocument();
   });
 
-  // Rows truncate long titles (layout is asserted in Chromium by web_overflow.rs); the full
-  // title stays reachable on hover.
-  it("keeps every full title on its row", async () => {
-    setup();
-    const link = await screen.findByRole("link", { name: /Quarterly report/ });
-    expect(link.querySelector(".session-title")).toHaveAttribute("title", "Quarterly report");
+  it("stamps today with the time, this week with the weekday and older with the date", () => {
+    const now = new Date(2026, 9, 12, 15, 0);
+    expect(rowTime(new Date(2026, 9, 12, 9, 5).toISOString(), now)).toMatch(/9.*05/);
+    expect(rowTime(new Date(2026, 9, 9, 9, 5).toISOString(), now)).not.toMatch(/\d{1,2}:\d{2}/);
+    expect(rowTime(new Date(2026, 8, 1, 9, 5).toISOString(), now)).toMatch(/1/);
+    expect(rowTime(null, now)).toBe("");
+  });
+});
+
+describe("unread", () => {
+  it("treats everything as read on a fresh device, then flags newer events", () => {
+    seen.seed({ chief: 4, mina: 2 });
+    const mina = agentSummary("mina", "Mina", { last_seq: 2 });
+    expect(isUnread(mina, seen.cursors(), null)).toBe(false);
+    expect(isUnread({ ...mina, last_seq: 3 }, seen.cursors(), null)).toBe(true);
+    // The open thread is being read right now.
+    expect(isUnread({ ...mina, last_seq: 3 }, seen.cursors(), "mina")).toBe(false);
+    seen.mark("mina", 3);
+    expect(isUnread({ ...mina, last_seq: 3 }, seen.cursors(), null)).toBe(false);
+  });
+
+  it("never moves a cursor backwards", () => {
+    seen.seed({});
+    seen.mark("mina", 5);
+    seen.mark("mina", 2);
+    expect(seen.cursors().mina).toBe(5);
+  });
+
+  it("shows a teammate hired after the first roster as unread", () => {
+    seen.seed({ chief: 1 });
+    expect(isUnread(agentSummary("new", "New", { last_seq: 1 }), seen.cursors(), null)).toBe(true);
+  });
+
+  it("marks the row with a dot and updates when the thread is read", () => {
+    seen.seed({ chief: 1, mina: 1 });
+    setup([agentSummary("chief", "Juno"), agentSummary("mina", "Mina", { last_seq: 3 })]);
+    expect(screen.getByRole("link", { name: "Mina, Unread" }).querySelector(".unread-dot")).not.toBeNull();
+    act(() => seen.mark("mina", 3));
+    expect(screen.getByRole("link", { name: "Mina" }).querySelector(".unread-dot")).toBeNull();
+  });
+
+  it("does not flag the thread that is open", () => {
+    seen.seed({ chief: 1, mina: 1 });
+    setup([agentSummary("chief", "Juno"), agentSummary("mina", "Mina", { last_seq: 3 })], "/agents/mina");
+    expect(screen.getByRole("link", { name: "Mina" })).toHaveAttribute("aria-current", "page");
   });
 });

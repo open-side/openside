@@ -51,7 +51,39 @@ async def accounts() -> dict[str, Any]:
     )
 
 
+async def models_catalog() -> dict[str, Any]:
+    from openside_agent.providers.catalog import catalog_report
+
+    value: Any = json.loads(os.getenv("OPENSIDE_DOCTOR_CONFIG", "{}"))
+    config = cast(dict[str, Any], value) if isinstance(value, dict) else {}
+    models = config.get("models", {})
+    names = config.get("provider_names", [])
+    return await catalog_report(
+        cast(dict[str, Any], models) if isinstance(models, dict) else {},
+        cast(list[str], names) if isinstance(names, list) else [],
+    )
+
+
+def _protect_sidecar_process() -> None:
+    """Apply only in the session child, before accepting private credential messages."""
+    if os.name != "posix":
+        return
+    import resource
+
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if sys.platform == "linux":
+        import ctypes
+
+        # execve resets dumpability; reapply the parent's pre-exec guard here.
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+        prctl.argtypes = [ctypes.c_int, *([ctypes.c_ulong] * 4)]
+        prctl.restype = ctypes.c_int
+        if prctl(4, 0, 0, 0, 0) != 0:  # PR_SET_DUMPABLE
+            raise OSError("Sidecar crash protection unavailable")
+
+
 async def sidecar() -> None:
+    _protect_sidecar_process()
     # Diagnostics do not need the session runtime's startup work.
     from openside_agent.protocol import Hello, JsonLineConnection, Versions
     from openside_agent.runtime import Session
@@ -83,6 +115,8 @@ def main() -> int:
     diagnostics.add_argument("--json", action="store_true")
     account_diagnostics = commands.add_parser("accounts")
     account_diagnostics.add_argument("--json", action="store_true")
+    model_diagnostics = commands.add_parser("models")
+    model_diagnostics.add_argument("--json", action="store_true")
     args = parser.parse_args()
     if args.command == "doctor":
         report: dict[str, Any]
@@ -101,9 +135,11 @@ def main() -> int:
             }
         print(json.dumps(report, separators=(",", ":")))
         return 0
-    if args.command == "accounts":
+    if args.command in ("accounts", "models"):
         try:
-            report = asyncio.run(accounts())
+            report = asyncio.run(
+                accounts() if args.command == "accounts" else models_catalog()
+            )
         except Exception:
             print("Account diagnostics unavailable", file=sys.stderr)
             return 1

@@ -193,31 +193,56 @@ async fn hub(
     let endpoint = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let requested: Arc<Mutex<Vec<String>>> = Arc::default();
     let log = requested.clone();
-    let router = Router::new().route(
-        "/{owner}/{name}/resolve/{revision}/{file}",
-        get(
-            move |UrlPath((owner, name, revision, file)): UrlPath<(
-                String,
-                String,
-                String,
-                String,
-            )>| {
-                let (tokenizer, model, log) = (tokenizer.clone(), model.clone(), log.clone());
+    let published = {
+        use sha2::Digest as _;
+        let sha = |bytes: &[u8]| format!("{:x}", sha2::Sha256::digest(bytes));
+        json!({"siblings": [
+            {"rfilename": "tokenizer.json", "size": tokenizer.len(), "lfs": {"sha256": sha(&tokenizer)}},
+            {"rfilename": "model.safetensors", "size": model.len(), "lfs": {"sha256": sha(&model)}},
+        ]})
+        .to_string()
+    };
+    let router = Router::new()
+        .route(
+            "/api/models/{owner}/{name}/revision/{revision}",
+            get(move || {
+                let published = published.clone();
                 async move {
-                    log.lock().push(format!("{owner}/{name}@{revision}/{file}"));
-                    let bytes = match file.as_str() {
-                        "tokenizer.json" => tokenizer,
-                        "model.safetensors" => model,
-                        _ => return Response::builder().status(404).body(Body::empty()).unwrap(),
-                    };
                     Response::builder()
                         .status(200)
-                        .body(Body::from(bytes))
+                        .header("content-type", "application/json")
+                        .body(Body::from(published))
                         .unwrap()
                 }
-            },
-        ),
-    );
+            }),
+        )
+        .route(
+            "/{owner}/{name}/resolve/{revision}/{file}",
+            get(
+                move |UrlPath((owner, name, revision, file)): UrlPath<(
+                    String,
+                    String,
+                    String,
+                    String,
+                )>| {
+                    let (tokenizer, model, log) = (tokenizer.clone(), model.clone(), log.clone());
+                    async move {
+                        log.lock().push(format!("{owner}/{name}@{revision}/{file}"));
+                        let bytes = match file.as_str() {
+                            "tokenizer.json" => tokenizer,
+                            "model.safetensors" => model,
+                            _ => {
+                                return Response::builder().status(404).body(Body::empty()).unwrap()
+                            }
+                        };
+                        Response::builder()
+                            .status(200)
+                            .body(Body::from(bytes))
+                            .unwrap()
+                    }
+                },
+            ),
+        );
     let server = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
@@ -507,9 +532,9 @@ async fn model_fetch_enforces_https_on_redirects_and_swaps_whole_models() {
         ),
     )
     .unwrap();
-    *crate::memory::INTERRUPT_MIGRATION.lock().unwrap() = Some(legacy.clone());
+    *openside_model_fetch::INTERRUPT_MIGRATION.lock() = Some(legacy.clone());
     let (code, err) = fetch_with(&legacy_config, "acme/b", &hub_b).await;
-    *crate::memory::INTERRUPT_MIGRATION.lock().unwrap() = None;
+    *openside_model_fetch::INTERRUPT_MIGRATION.lock() = None;
     assert_eq!(code, 1, "{err}");
     assert!(err.contains("simulated crash"), "{err}");
     assert!(

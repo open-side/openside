@@ -5,7 +5,11 @@
 
 use std::collections::BTreeSet;
 
-use openside_core::{ApprovalTier, ContentKind, DeferKind, MessageId, SessionId, TicketId};
+use openside_core::{
+    ApprovalTier, ContentKind, CredentialAction, CredentialAuth, CredentialAuthKind,
+    CredentialErrorCode, CredentialOutcome, CredentialScope, CredentialUsage,
+    CredentialUsageWindow, DeferKind, MessageId, ModelAccountRef, SessionId, TicketId,
+};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
@@ -44,6 +48,9 @@ fn daemon_type(message: &DaemonMessage) -> &'static str {
         DaemonMessage::UserMessage { .. } => "user_message",
         DaemonMessage::Abort => "abort",
         DaemonMessage::ToolResult { .. } => "tool_result",
+        DaemonMessage::CredentialResponse { .. } => "credential_response",
+        DaemonMessage::CredentialError { .. } => "credential_error",
+        DaemonMessage::CredentialReported { .. } => "credential_reported",
         DaemonMessage::TicketResolved { .. } => "ticket_resolved",
         DaemonMessage::SubagentCancel { .. } => "subagent_cancel",
         DaemonMessage::SubagentSteer { .. } => "subagent_steer",
@@ -62,6 +69,8 @@ fn sidecar_type(message: &SidecarMessage) -> &'static str {
         SidecarMessage::MessageAccepted { .. } => "message_accepted",
         SidecarMessage::MessageResult { .. } => "message_result",
         SidecarMessage::ToolCall { .. } => "tool_call",
+        SidecarMessage::CredentialRequest { .. } => "credential_request",
+        SidecarMessage::CredentialReport { .. } => "credential_report",
         SidecarMessage::Deferred { .. } => "deferred",
         SidecarMessage::StateSnapshot { .. } => "state_snapshot",
         SidecarMessage::Settled => "settled",
@@ -104,6 +113,7 @@ fn daemon_samples() -> Vec<DaemonMessage> {
             credentials: object(json!({"order": ["env"]})),
             agent: object(json!({"tool_retries": 3, "profile": "full"})),
         },
+        team: None,
     };
     let mut samples = vec![
         open(None),
@@ -159,6 +169,61 @@ fn daemon_samples() -> Vec<DaemonMessage> {
             message_id: None,
         },
     ];
+    for kind in [
+        CredentialAuthKind::ApiKey,
+        CredentialAuthKind::ClaudeCode,
+        CredentialAuthKind::CodexCli,
+        CredentialAuthKind::Bearer,
+    ] {
+        samples.push(DaemonMessage::CredentialResponse {
+            id: "credential-rpc".into(),
+            request_id: "model-request".into(),
+            lease_id: "lease-1".into(),
+            generation: 7,
+            account: ModelAccountRef {
+                source: "vault".into(),
+                account_id: "opaque-1".into(),
+            },
+            auth: CredentialAuth {
+                kind,
+                value: "synthetic-wire-secret-canary".into(),
+                upstream_account_id: Some("synthetic-upstream-id".into()),
+                expires_at_ms: Some(1_000_000),
+            },
+        });
+    }
+    for code in [
+        CredentialErrorCode::AuthUnavailable,
+        CredentialErrorCode::AccountBlocked,
+        CredentialErrorCode::AccountNotInPool,
+        CredentialErrorCode::ProviderUnavailable,
+        CredentialErrorCode::InvalidCredentialRequest,
+    ] {
+        samples.push(DaemonMessage::CredentialError {
+            id: "credential-rpc".into(),
+            request_id: "model-request".into(),
+            code,
+            reason: "No eligible account in the configured pool".into(),
+            retry_at_ms: None,
+            generation: 7,
+        });
+    }
+    for action in [
+        CredentialAction::Complete,
+        CredentialAction::Refresh,
+        CredentialAction::Rotate,
+        CredentialAction::Stop,
+    ] {
+        samples.push(DaemonMessage::CredentialReported {
+            id: "credential-report-rpc".into(),
+            request_id: "model-request".into(),
+            lease_id: "lease-1".into(),
+            generation: 8,
+            action,
+            retry_at_ms: Some(10_000),
+            reason: Some("Account report committed".into()),
+        });
+    }
     for mode in [MessageMode::Queue, MessageMode::Steer, MessageMode::Now] {
         samples.push(DaemonMessage::UserMessage {
             message_id: MessageId::new("message-1"),
@@ -210,7 +275,7 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
                 python: "3.13".into(),
                 pydantic_ai: "1.0".into(),
                 pydantic_ai_harness: "0.1".into(),
-                openside_agent: "0.1.0".into(),
+                openside_agent: "0.1.1".into(),
             },
         },
         SidecarMessage::Ready {
@@ -261,6 +326,69 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
         },
         SidecarMessage::Bye,
     ];
+    samples.push(SidecarMessage::CredentialRequest {
+        id: "credential-rpc".into(),
+        request_id: "model-request".into(),
+        provider: "anthropic".into(),
+        model: "anthropic:model-id".into(),
+        attempt: 0,
+        subagent: None,
+    });
+    samples.push(SidecarMessage::CredentialRequest {
+        id: "credential-child-rpc".into(),
+        request_id: "model-child-request".into(),
+        provider: "anthropic".into(),
+        model: "anthropic:model-id".into(),
+        attempt: 63,
+        subagent: Some("child-1".into()),
+    });
+    for outcome in [
+        CredentialOutcome::Success,
+        CredentialOutcome::Auth,
+        CredentialOutcome::RateLimit,
+        CredentialOutcome::Quota,
+        CredentialOutcome::Policy,
+        CredentialOutcome::Transient,
+        CredentialOutcome::Cancelled,
+    ] {
+        for scope in [CredentialScope::Account, CredentialScope::Model] {
+            samples.push(SidecarMessage::CredentialReport {
+                id: "credential-report-rpc".into(),
+                request_id: "model-request".into(),
+                lease_id: "lease-1".into(),
+                outcome,
+                scope,
+                stream_started: false,
+                retry_after_ms: Some(60_000),
+                usage: None,
+                usage_windows: vec![CredentialUsageWindow {
+                    name: "weekly".into(),
+                    used_percent: None,
+                    reset_at_ms: None,
+                }],
+            });
+        }
+    }
+    samples.push(SidecarMessage::CredentialReport {
+        id: "credential-stream-report-rpc".into(),
+        request_id: "model-request".into(),
+        lease_id: "lease-1".into(),
+        outcome: CredentialOutcome::Success,
+        scope: CredentialScope::Account,
+        stream_started: true,
+        retry_after_ms: None,
+        usage: Some(CredentialUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_tokens: 80,
+            cache_write_tokens: 0,
+        }),
+        usage_windows: vec![CredentialUsageWindow {
+            name: "weekly".into(),
+            used_percent: Some(25.0),
+            reset_at_ms: Some(10_000.0),
+        }],
+    });
     for outcome in [
         RunOutcome::Completed,
         RunOutcome::Aborted,
@@ -294,6 +422,9 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
         Event::TurnEnded,
         Event::AssistantDelta { text: "a".into() },
         Event::AssistantFinal { text: "a".into() },
+        Event::SessionTitleProposed {
+            title: "Compare Acme plans".into(),
+        },
         Event::ThinkingDelta { text: "a".into() },
         Event::SubagentLifecycle {
             subagent_id: "sub-1".into(),
@@ -384,4 +515,43 @@ fn published_version_range_and_protocol_match_the_daemon_pin() {
         schema["$defs"]["Hello"]["properties"]["protocol"]["const"],
         crate::PROTOCOL_VERSION
     );
+}
+
+#[test]
+fn credential_attempt_bound_matches_the_daemon_owner() {
+    let schema: Value = serde_json::from_str(SCHEMA).unwrap();
+    assert_eq!(
+        schema["$defs"]["CredentialRequest"]["properties"]["attempt"]["maximum"],
+        openside_core::MAX_CREDENTIAL_ATTEMPTS - 1,
+    );
+}
+
+#[test]
+fn team_context_wire_caps_and_roles() {
+    for role in [
+        openside_core::TeamRole::Chief,
+        openside_core::TeamRole::Teammate,
+    ] {
+        let mut spec = crate::tests::spec();
+        spec.team = Some(openside_core::TeamContext {
+            role,
+            agent_id: "owner".into(),
+            persona: "🦉".repeat(1500),
+            roster: "界".repeat(2000),
+        });
+        let wire = crate::open_wire(spec.clone()).unwrap();
+        assert!(validator("DaemonToSidecar").is_valid(&wire));
+        assert_eq!(
+            wire["team"]["persona"].as_str().unwrap().chars().count(),
+            1500
+        );
+        let mut invalid = wire.clone();
+        invalid["team"]["role"] = json!("admin");
+        assert!(!validator("DaemonToSidecar").is_valid(&invalid));
+        spec.team.as_mut().unwrap().persona.push('x');
+        assert!(crate::open_wire(spec.clone()).is_err());
+        spec.team.as_mut().unwrap().persona.pop();
+        spec.team.as_mut().unwrap().roster.push('x');
+        assert!(crate::open_wire(spec).is_err());
+    }
 }

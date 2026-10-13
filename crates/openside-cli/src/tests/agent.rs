@@ -29,6 +29,13 @@ async fn daemon(environment: &Environment) -> (PathBuf, Seen, JoinHandle<()>) {
                 "background":true,"output":"two shops checked"});
             match (method.as_str(), path.as_str()) {
                 ("POST", "/v1/sessions") => respond(201, session_json(3)),
+                ("GET", "/v1/agents/chief") => respond(200, json!({
+                    "id":"chief","kind":"chief","name":"Juno","initials":"J","color":"#2f6fed",
+                    "persona":{"role":"Coordinator","responsibilities":[],"boundaries":[],"voice":""},
+                    "skills":null,"model":null,"account_pool":null,"channel":null,"mode":"guard",
+                    "home_session_id":"s-1","status":"active","hidden":false,"pinned":true,
+                    "created_at":"2026-01-01T00:00:00Z","retired_at":null,"persona_version":1
+                })),
                 ("GET", "/v1/sessions/s-1") => respond(200, session_json(3)),
                 ("POST", "/v1/sessions/s-1/messages") => respond(
                     202,
@@ -77,9 +84,16 @@ async fn daemon(environment: &Environment) -> (PathBuf, Seen, JoinHandle<()>) {
                 ),
                 ("POST", "/v1/sessions/s-1/tools/browser_screenshot") => respond(
                     200,
-                    json!({"tool_call_id":"api-tool-2","status":"done","result":{"saved":true},
-                        "artifacts":["api-tool-2.png"]}),
+                    if body["args"]["output"] == true {
+                        json!({"tool_call_id":"api-tool-2","status":"done","result":{"saved":true,"purpose":"output"},
+                            "artifacts":["screenshots/api-tool-2.png"]})
+                    } else {
+                        json!({"tool_call_id":"api-tool-2","status":"done","result":{"saved":false,"purpose":"working"}})
+                    },
                 ),
+                ("GET", "/v1/sessions/s-1/artifacts/screenshots%2Fapi-tool-2.png") => {
+                    Response::builder().status(200).body(Body::from("screenshot-bytes")).unwrap()
+                }
                 ("POST", "/v1/sessions/s-1/tools/request_login") => respond(
                     200,
                     json!({"tool_call_id":"api-tool-3","status":"deferred","ticket_id":"t-login","deferral":"external"}),
@@ -140,16 +154,20 @@ async fn run_delegates_detached_or_waits_for_the_replies() {
     let environment = Environment::new().await;
     let (socket, seen, server) = daemon(&environment).await;
 
-    let (code, out, err) = cli(&socket, &["--mode", "read-only", "run", "find it"], "").await;
+    let (code, out, err) = cli(&socket, &["run", "find it"], "").await;
     assert_eq!(code, 0, "{err}");
     assert_eq!(out, "s-1\tm-1\n");
-    let created = seen
+    assert!(seen
         .lock()
         .iter()
-        .find(|(method, path, _)| method == "POST" && path == "/v1/sessions")
-        .cloned()
-        .unwrap();
-    assert_eq!(created.2["mode"], "read-only");
+        .any(|(method, path, _)| method == "GET" && path == "/v1/agents/chief"));
+    assert!(!seen
+        .lock()
+        .iter()
+        .any(|(method, path, _)| method == "POST" && path == "/v1/sessions"));
+    let (code, out, err) = cli(&socket, &["chat", "continue"], "").await;
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "s-1\tm-1\n");
 
     let (code, out, err) = cli(
         &socket,
@@ -181,7 +199,9 @@ async fn run_delegates_detached_or_waits_for_the_replies() {
         .any(|(_, path, body)| path == "/v1/sessions/s-1/messages"
             && body["text"] == "goal from stdin"));
 
-    // Session options only fit a new session.
+    let (code, _, err) = cli(&socket, &["--mode", "full", "run", "x"], "").await;
+    assert_eq!(code, 2);
+    assert!(err.contains("openside session new"), "{err}");
     let (code, ..) = cli(
         &socket,
         &["--mode", "full", "run", "--session", "s-1", "x"],
@@ -263,7 +283,47 @@ async fn browser_verbs_call_the_daemon_tools_and_wait_for_a_person() {
     )
     .await;
     assert_eq!(code, 0);
-    assert!(out.ends_with("artifact: api-tool-2.png\n"), "{out}");
+    assert!(!out.contains("artifact:"), "{out}");
+    assert!(out.contains("\"purpose\":\"working\""), "{out}");
+    let (code, out, _) = cli(
+        &socket,
+        &[
+            "browser",
+            "screenshot",
+            "s-1",
+            "tab_id=tab-1",
+            "output=true",
+        ],
+        "",
+    )
+    .await;
+    assert_eq!(code, 0);
+    assert!(
+        out.ends_with("artifact: screenshots/api-tool-2.png\n"),
+        "{out}"
+    );
+    let out_file = environment.directory.path().join("shot.png");
+    let (code, _, err) = cli(
+        &socket,
+        &[
+            "browser",
+            "screenshot",
+            "s-1",
+            "tab_id=tab-1",
+            "--out",
+            out_file.to_str().unwrap(),
+        ],
+        "",
+    )
+    .await;
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(std::fs::read(out_file).unwrap(), b"screenshot-bytes");
+    assert!(seen
+        .lock()
+        .iter()
+        .filter(|(_, path, _)| path.ends_with("/browser_screenshot"))
+        .map(|(_, _, body)| body["args"]["output"] == true)
+        .eq([false, true, true]));
 
     // A login ticket is answered by the person; its resolution is the command's result.
     let (code, out, err) = cli(&socket, &["browser", "login", "s-1", "tab_id=tab-1"], "").await;

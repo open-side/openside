@@ -857,14 +857,16 @@ async fn forward(State(state): State<Arc<ProxyState>>, request: Request) -> Resp
 /// Whether `(method, path)` matches a documented public API route.
 pub fn is_public_route(method: &str, path: &str) -> bool {
     openside_proto::ROUTES.iter().any(|route| {
+        if route.method.as_str() != method {
+            return false;
+        }
         let template: Vec<_> = route.path.split('/').collect();
         let actual: Vec<_> = path.split('/').collect();
-        route.method.as_str() == method
-            && template.len() == actual.len()
+        template.len() == actual.len()
             && template
                 .iter()
                 .zip(&actual)
-                .all(|(t, a)| (t.starts_with('{') && !a.is_empty()) || t == a)
+                .all(|(t, a)| (t.starts_with('{') && t.ends_with('}') && !a.is_empty()) || t == a)
     })
 }
 

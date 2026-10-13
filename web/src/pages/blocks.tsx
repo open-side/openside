@@ -1,9 +1,10 @@
 import type { LucideIcon } from "lucide-react";
-import { ChevronRight, Ellipsis, LockKeyhole, Plus, TriangleAlert } from "lucide-react";
+import { ChevronRight, Ellipsis, Plus, TriangleAlert } from "lucide-react";
 import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { Resource } from "../hooks/useResource";
 import { Button, cx, Dialog, DialogActions, ICON_STROKE, IconButton, PopoverMenu, Spinner } from "../ui";
 import "./pages.css";
+import { ScopeNotice } from "./ScopeNotice";
 
 /**
  * A block of a Workspace section (aside-relay `SectionList`). Without a title, `summary` (a count
@@ -71,21 +72,24 @@ export interface ResourceCardProps extends Omit<HTMLAttributes<HTMLElement>, "ti
   badgeTone?: BadgeTone;
   /** Leading glyph in a neutral tile. */
   icon?: LucideIcon;
+  /** Replaces the icon tile with custom content, e.g. a site's favicon; give it the `resource-card-icon` class. */
+  leading?: ReactNode;
   /** Controls at the end of the header row: a switch, a select or the row menu. */
   trailing?: ReactNode;
   children?: ReactNode;
 }
 
 /** One row of a `resource-list` (a grouped list), or a standalone card outside one. */
-export function ResourceCard({ title, detail, badge, badgeTone, icon: Icon, trailing, children, className, ...rest }: ResourceCardProps) {
+export function ResourceCard({ title, detail, badge, badgeTone, icon: Icon, leading, trailing, children, className, ...rest }: ResourceCardProps) {
   return (
     <article {...rest} className={cx("resource-card", className)}>
       <div className="resource-card-header">
-        {Icon && (
-          <span className="resource-card-icon" aria-hidden="true">
-            <Icon size={18} strokeWidth={ICON_STROKE} />
-          </span>
-        )}
+        {leading ??
+          (Icon && (
+            <span className="resource-card-icon" aria-hidden="true">
+              <Icon size={18} strokeWidth={ICON_STROKE} />
+            </span>
+          ))}
         <div className="resource-card-copy">
           <h4 className="resource-card-title">
             <span>{title}</span>
@@ -183,7 +187,7 @@ export function ResourceView<T>({
   what: string;
   children: (data: T) => ReactNode;
 }) {
-  if (resource.forbidden) return <ScopeNotice what={what} />;
+  if (resource.forbidden) return <ScopeNotice what={what} onGranted={() => void resource.reload()} />;
   if (!resource.data) {
     return resource.error ? (
       <div className="load-error" role="alert">
@@ -202,22 +206,6 @@ export function ResourceView<T>({
       {resource.error ? <ErrorNote>{resource.error}</ErrorNote> : null}
       {children(resource.data)}
     </>
-  );
-}
-
-/** A 403: this device was paired without the `admin` scope every Workspace section needs. */
-export function ScopeNotice({ what }: { what: string }) {
-  return (
-    <div className="empty-state scope-notice" role="alert">
-      <span className="empty-state-icon" aria-hidden="true">
-        <LockKeyhole size={22} strokeWidth={ICON_STROKE} />
-      </span>
-      <strong>This device needs the admin scope</strong>
-      <p>
-        It was paired without permission to manage {what}. On the computer running openside, run{" "}
-        <code>openside pair --scope admin</code> and open the new link on this device.
-      </p>
-    </div>
   );
 }
 

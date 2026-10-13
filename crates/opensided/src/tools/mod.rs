@@ -19,11 +19,15 @@ use crate::{engine::Shared, persistence::Result};
 
 pub(crate) mod api_call;
 pub(crate) mod browser;
+pub(crate) mod connections;
 mod files;
+pub(crate) mod forms;
 mod human;
+mod imports;
 pub(crate) mod login;
 pub(crate) mod memory;
 pub(crate) mod otp;
+pub(crate) mod present;
 pub(crate) mod repl;
 mod shell;
 pub(crate) mod vault;
@@ -36,11 +40,13 @@ pub(crate) const API_CALL_PREFIX: &str = "api-";
 pub(crate) struct ToolEnv {
     pub(crate) shared: Shared,
     pub(crate) session: SessionId,
+    pub(crate) agent_id: Option<String>,
     pub(crate) mode: PolicyMode,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) policy: Policy,
     pub(crate) tool_call_id: String,
     pub(crate) approved_actions: Vec<Action>,
+    pub(crate) action_approved: bool,
     /// The subagent running this call; `None` for the session's parent agent.
     pub(crate) subagent: Option<String>,
     pub(crate) cancellation: tokio_util::sync::CancellationToken,
@@ -50,8 +56,15 @@ pub(crate) struct ToolEnv {
 impl ToolEnv {
     pub(crate) fn new(shared: Shared, state: &SessionState) -> Self {
         let workspace = state.workspace.as_ref().map(PathBuf::from);
+        let mode = match crate::agents::for_session(&shared, state) {
+            Ok(Some(agent)) => {
+                crate::agents::ceiling(&shared, &agent, state.mode).unwrap_or(PolicyMode::ReadOnly)
+            }
+            Ok(None) => state.mode,
+            Err(_) => PolicyMode::ReadOnly,
+        };
         let policy = Policy {
-            mode: state.mode.into(),
+            mode: mode.into(),
             approved_roots: workspace.iter().cloned().collect(),
             // Session-level rules only; host::execute layers the live daemon policy beneath.
             layers: Vec::new(),
@@ -60,10 +73,12 @@ impl ToolEnv {
         Self {
             shared,
             session: state.id.clone(),
-            mode: state.mode,
+            agent_id: state.agent_id.clone(),
+            mode,
             workspace,
             policy,
             approved_actions: Vec::new(),
+            action_approved: false,
             tool_call_id: String::new(),
             subagent: None,
             cancellation: Default::default(),
@@ -132,6 +147,8 @@ pub(crate) struct TicketRequest {
     pub(crate) login: Option<openside_proto::TicketLogin>,
     pub(crate) choice: Option<openside_proto::TicketChoice>,
     pub(crate) approval: Option<openside_proto::TicketApproval>,
+    pub(crate) form: Option<openside_proto::TicketForm>,
+    pub(crate) hire: Option<openside_proto::HireDraft>,
     /// Page nodes a `login` or `choice` tool found and pinned, by the ids its ticket shows;
     /// `tickets::open` keeps them only for the document they came from.
     pub(crate) pins: Vec<(String, openside_browser::NodeHandle)>,
@@ -197,9 +214,18 @@ impl Registry {
             Arc::new(login::RequestLogin),
             Arc::new(login::RequestChoice),
             Arc::new(login::WaitForApproval),
+            Arc::new(forms::RequestForm),
+            Arc::new(present::Present),
             Arc::new(vault::Passkey),
             Arc::new(memory::MemorySearch),
             Arc::new(memory::MemoryWrite),
+            Arc::new(imports::ImportLookup),
+            Arc::new(connections::ConnectionTool(connections::Kind::List)),
+            Arc::new(connections::ConnectionTool(connections::Kind::Open)),
+            Arc::new(connections::ConnectionTool(connections::Kind::Check)),
+            Arc::new(connections::ConnectionTool(connections::Kind::Confirm)),
+            Arc::new(connections::ConnectionTool(connections::Kind::Observe)),
+            Arc::new(connections::ConnectionTool(connections::Kind::Fetch)),
             Arc::new(crate::skills::SkillTool),
             Arc::new(repl::BrowserRepl),
             Arc::new(crate::subagents::Delegate),
@@ -207,6 +233,16 @@ impl Registry {
             Arc::new(crate::tasks::TaskTool::Steer),
             Arc::new(crate::tasks::TaskTool::Cancel),
             Arc::new(crate::tasks::TaskTool::Status),
+            Arc::new(crate::team::TeamTool::Hire),
+            Arc::new(crate::team::TeamTool::Propose),
+            Arc::new(crate::team::TeamTool::Delegate),
+            Arc::new(crate::team::TeamTool::Steer),
+            Arc::new(crate::team::TeamTool::Status),
+            Arc::new(crate::team::TeamTool::Answer),
+            Arc::new(crate::team::TeamTool::Responsibility),
+            Arc::new(crate::team::TeamTool::Retire),
+            Arc::new(crate::team::TeamTool::Ask),
+            Arc::new(crate::team::TeamTool::Report),
         ];
         let redactors = Arc::new(RwLock::new(Vec::new()));
         let browser = Arc::new(browser::Controller::new(
@@ -345,8 +381,18 @@ pub(crate) const TICKET_KEEP: &[&[&str]] = &[
     &["choice", "options", "*", "id"],
     &["approval", "origin"],
     &["approval", "icon"],
+    &["form", "origin"],
+    &["form", "fields", "*", "id"],
+    &["form", "fields", "*", "kind"],
+    &["form", "fields", "*", "card"],
+    &["form", "fields", "*", "autocomplete"],
+    &["form", "fields", "*", "validation"],
+    &["form", "fields", "*", "target_origin"],
+    &["hire", "mode"],
+    &["hire", "color"],
     // Resolution statuses are daemon-chosen constants; free answers stay redacted.
     &["resolution", "status"],
+    &["resolution", "agent_id"],
 ];
 
 /// `target.tab_id`, `target.origin`, `target.field_ref`: kept by `tickets::open` only when
@@ -362,9 +408,13 @@ pub(crate) const TICKET_TARGET_KEEP: [&[&str]; 3] = [
 /// `kind` tag; the ticket of `ticket.opened` is kept as in [`TICKET_KEEP`].
 pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
     let fields: &[&[&'static str]] = match tag {
+        "connection.saved" => &[&["connection_id"], &["site"]],
+        "connection.used" => &[&["connection_id"], &["site"], &["mode"], &["method"]],
         "message.queued" => &[
             &["message_id"],
             &["mode"],
+            &["author_kind"],
+            &["from_agent"],
             &["attachments", "*", "kind"],
             &["attachments", "*", "mime"],
             &["attachments", "*", "sha256"],
@@ -379,8 +429,65 @@ pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
         "tool.updated" | "tool.ended" => &[&["tool_call_id"]],
         // Paths are chosen by the model or the person, so they stay redacted.
         "artifact.saved" => &[&["mime"], &["tool_call_id"], &["tool"]],
-        "ticket.resolved" => &[&["ticket_id"], &["resolution", "status"]],
+        "ticket.resolved" => &[
+            &["ticket_id"],
+            &["resolution", "status"],
+            &["resolution", "agent_id"],
+        ],
         "ticket.rejected" | "ticket.expired" => &[&["ticket_id"]],
+        "card.presented" => &[
+            &["tool_call_id"],
+            &["card", "id"],
+            &["card", "kind"],
+            &["card", "status"],
+            &["card", "interaction"],
+            &["card", "blocks", "*", "type"],
+            &["card", "blocks", "*", "layout"],
+            &["card", "blocks", "*", "tone"],
+            &["card", "blocks", "*", "placement"],
+            &["card", "actions", "*", "style"],
+            &["card", "actions", "*", "target", "type"],
+            &["card", "site", "favicon_ref", "type"],
+            &["card", "site", "favicon_ref", "data_url"],
+            &["card", "blocks", "*", "media", "path"],
+            &["card", "blocks", "*", "items", "*", "image", "path"],
+            &[
+                "card",
+                "blocks",
+                "*",
+                "items",
+                "*",
+                "site",
+                "favicon_ref",
+                "data_url",
+            ],
+            &[
+                "card",
+                "blocks",
+                "*",
+                "row_sites",
+                "*",
+                "favicon_ref",
+                "data_url",
+            ],
+            &["card", "blocks", "*", "rows", "*", "*", "image", "path"],
+            &["card", "blocks", "*", "rows", "*", "value", "image", "path"],
+            &["card", "blocks", "*", "total", "value", "image", "path"],
+        ],
+        "team.hired" => &[&["agent_id"], &["ticket_id"], &["request_message_id"]],
+        "team.handoff" => &[
+            &["handoff_id"],
+            &["from_agent"],
+            &["to_agent"],
+            &["handoff_kind"],
+            &["dedupe_key"],
+        ],
+        "team.handoff_ended" => &[&["handoff_id"], &["status"]],
+        "team.question" => &[&["question_id"], &["from_agent"]],
+        "team.answered" => &[&["question_id"]],
+        "team.transferred" => &[&["from_agent"], &["to_agent"], &["routine_ids", "*"]],
+        "team.retired" => &[&["agent_id"], &["successor"]],
+        "team.restored" => &[&["agent_id"]],
         "subagent.started" => &[
             &["subagent_id"],
             &["parent_tool_call_id"],
@@ -390,7 +497,8 @@ pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
         "subagent.ended" | "subagent.lifecycle" => &[&["subagent_id"], &["status"]],
         "subagent.progress" => &[&["subagent_id"]],
         "tab.opened" | "tab.closed" | "tab.asleep" => &[&["tab_id"]],
-        "session.created" => &[&["model"], &["mode"], &["workspace"]],
+        "session.created" => &[&["model"], &["mode"], &["workspace"], &["agent_id"]],
+        "session.updated" => &[&["mode"]],
         "session.driver_recorded" => &[&["device_id"]],
         "runtime.started" => &[&["tools", "*"]],
         "runtime.error" => &[&["code"]],
@@ -422,12 +530,14 @@ pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
 pub(crate) fn touches_browser(name: &str) -> bool {
     name.starts_with("browser_")
         || name.starts_with("vault_")
+        || name.starts_with("connection_")
         || matches!(
             name,
             "request_otp"
                 | "register_authenticator"
                 | "request_login"
                 | "request_choice"
+                | "request_form"
                 | "wait_for_approval"
         )
 }

@@ -23,6 +23,18 @@ pub(crate) async fn delete(
 ) -> Result<StatusCode, ApiFailure> {
     let id = SessionId::new(id);
     s.db.state(&id).await.map_err(|_| ApiFailure::not_found())?;
+    if s.agents
+        .list()
+        .map_err(|_| ApiFailure::internal())?
+        .iter()
+        .any(|agent| agent.home_session_id == id)
+    {
+        return Err(ApiFailure::new(
+            StatusCode::CONFLICT,
+            "agent_home_immutable",
+            "Retire the teammate instead of deleting its home conversation",
+        ));
+    }
     if s.command(&id, Action::Tombstone).await.is_err() {
         // A concurrent delete that won the race leaves a tombstone behind: report it as gone.
         return Err(if s.db.state(&id).await.is_err() {

@@ -58,6 +58,8 @@ pub(crate) enum RemoteCommand {
     Setup(SetupArgs),
     /// Transports the running daemon has up, with their public URLs.
     Status,
+    /// Bootstrap the browser on this computer with local-person authority (local socket only).
+    LocalAccess,
     /// Saved profiles for reaching other daemons with `--remote NAME` (add one with
     /// `openside connect`).
     Profiles {
@@ -342,6 +344,31 @@ pub(crate) async fn status<W: Write>(
         .map_err(output_error)?;
     }
     Ok(())
+}
+
+pub(crate) async fn local_access<W: Write>(
+    client: &Client,
+    json: bool,
+    stdout: &mut W,
+) -> Result<(), String> {
+    let access: openside_proto::LocalAccess = client.get("/v1/remote/local-access").await?;
+    if json {
+        return emit(stdout, &access);
+    }
+    writeln!(
+        stdout,
+        "Local access secret (this daemon boot only): {}",
+        access.secret
+    )
+    .map_err(output_error)?;
+    match access.url {
+        Some(url) => writeln!(stdout, "Open on this computer: {url}").map_err(output_error),
+        None => writeln!(
+            stdout,
+            "Enable daemon.listen and restart the daemon before opening the web UI."
+        )
+        .map_err(output_error),
+    }
 }
 
 #[cfg(test)]

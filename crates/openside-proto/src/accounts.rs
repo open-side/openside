@@ -19,7 +19,7 @@ pub struct AccountsResponse {
 pub struct AccountSource {
     /// Stable plugin name.
     pub name: String,
-    /// Plugin kind: omp-broker, env, command, codex-cli or builtin.
+    /// Plugin kind: omp-broker, vault, env, command, claude-code, codex-cli or builtin.
     pub kind: String,
     /// At least one account is usable (command results remain unverified).
     pub available: bool,
@@ -39,12 +39,18 @@ pub struct AccountStatus {
     pub label: String,
     /// Provider identifier.
     pub provider: String,
-    /// Configured model identifiers for this provider, not an invented broker catalog.
+    /// Account-reported models, or configured models when no catalog is supplied.
     pub models: Vec<String>,
     /// Broker-reported usage windows; empty when unavailable.
     pub usage_windows: Vec<AccountUsageWindow>,
     /// Latest active block expiry, as Unix milliseconds, or null.
     pub blocked_until_ms: Option<f64>,
+    /// Per-account readiness when supplied; absent in older diagnostic sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<bool>,
+    /// Sanitized per-account explanation, without provider response bodies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// One attributed usage window, without broker identifiers or metadata.

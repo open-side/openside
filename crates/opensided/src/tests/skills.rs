@@ -282,7 +282,7 @@ async fn project_skills_follow_the_session_workspace_and_stay_read_only() {
         (StatusCode::OK, &json!(false), &json!("project"))
     );
     assert!(
-        crate::skills::index_part(&daemon.shared, workspace.to_str())
+        crate::skills::index_part(&daemon.shared, workspace.to_str(), None)
             .await
             .is_none()
     );
@@ -299,7 +299,7 @@ async fn project_skills_follow_the_session_workspace_and_stay_read_only() {
         .is_file());
 
     // The prompt marks repository skills as untrusted; user skills carry no marker.
-    let index = crate::skills::index_part(&daemon.shared, workspace.to_str())
+    let index = crate::skills::index_part(&daemon.shared, workspace.to_str(), None)
         .await
         .unwrap();
     assert!(

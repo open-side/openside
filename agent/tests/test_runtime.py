@@ -488,7 +488,9 @@ async def test_steer_after_last_model_request_starts_new_run(tmp_path, monkeypat
         assert len(daemon.snapshots()) == 2
 
 
-async def test_snapshot_restores_pin_ids_and_script_cursor(tmp_path, monkeypatch):
+async def test_snapshot_ignores_retired_pins_and_restores_script_cursor(
+    tmp_path, monkeypatch
+):
     install_script(
         tmp_path, monkeypatch, [text_response("first"), text_response("second")]
     )
@@ -499,25 +501,25 @@ async def test_snapshot_restores_pin_ids_and_script_cursor(tmp_path, monkeypatch
     monkeypatch.setattr(providers, "build_model", must_not_resolve_credentials)
     async with fake_daemon() as (daemon, session):
         await daemon.open()
-        session.pins.set("test-session", "synthetic", 17, 25.0)
         await daemon.user()
         await daemon.until("settled")
         snapshot = daemon.snapshots()[-1]
+        old_data = json.loads(snapshot["data"])
+        assert "pins" not in old_data
+        old_data["pins"] = (
+            '{"test-session":{"synthetic":{"credential_id":17,"last_request_at":25}}}'
+        )
+        snapshot["data"] = json.dumps(old_data)
     async with fake_daemon() as (daemon, session):
         await daemon.open(resume_state=snapshot)
-        pin = session.pins.get("test-session", "synthetic")
-        assert pin is not None and pin.credential_id == 17
+        assert not hasattr(session, "pins")
         await daemon.user("continued")
         final = await daemon.until("event", kind="assistant.final")
         assert final["event"]["text"] == "second"
         await daemon.until("settled")
         state = SnapshotData.model_validate_json(daemon.snapshots()[-1]["data"])
         assert state.script_cursor == 2
-        assert json.loads(state.pins) == {
-            "test-session": {
-                "synthetic": {"credential_id": 17, "last_request_at": 25.0}
-            }
-        }
+        assert "pins" not in state.model_dump()
 
 
 async def test_shutdown_mid_tool_aborts_snapshots_then_bye(tmp_path, monkeypatch):

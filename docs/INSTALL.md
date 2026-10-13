@@ -62,18 +62,14 @@ Linux 배포판 패키지 이름은 보통 `bubblewrap` 이다.
 
 ## 3. 모델 자격 증명
 
-openside 는 자격 증명을 디스크에 저장하지 않는다. Rust 는 `[credentials]` 테이블을 해석하지 않고 사이드카에 그대로 넘긴다. 소스와 순서의 상세는 `agent/README.md` 와 [CONFIGURATION.md](CONFIGURATION.md#credentials) 를 본다. 공급자별 기본 순서(`agent/src/openside_agent/providers/config.py`):
-
-- `anthropic`: `omp-broker` → `env` → `command`
-- `openai-codex`: `omp-broker` → `codex-cli`
-- 그 밖: `env` → `command`
+UI의 Models & accounts에서 설정하거나 동등한 CLI 명령을 사용한다. API 키와 관리 대상 구독 OAuth 상태는 OS 키체인 기반 Vault에 암호화하여 저장하며, 기본 CLI 홈은 읽기 전용 상태로 유지된다. 자격 증명 확인과 갱신은 데몬이 전담하며, 사이드카에는 리프레시 토큰 대신 유효한 최신 접근 리스만 제공한다. 마이그레이션 시에는 기존 소스의 계정만 승계되며, 다른 소스를 추가하려면 사람이 명시적으로 프로바이더 풀을 구성해야 한다. [Models & accounts](specs/models-accounts.md)와 [Configuration](CONFIGURATION.md#credentials)을 참고한다.
 
 소스 종류:
 
 - `env`: API 키 환경변수. 기본 이름은 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`(`openai`, `openai-chat`, `openai-responses`), `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`/`GEMINI_API_KEY`, `GITHUB_COPILOT_API_KEY`/`GITHUB_COPILOT_API_TOKEN`/`COPILOT_GITHUB_TOKEN`. 표에 없는 공급자는 `<PROVIDER>_API_KEY`(대문자, `-`→`_`). 데몬 프로세스 환경에 있어야 한다.
 - `command`: `credentials.command.<provider>` 에 셸 없이 실행할 argv 를 둔다. stdout 이 키이며 기본 타임아웃은 10초다.
-- `codex-cli`: `CODEX_HOME/auth.json` 또는 `~/.codex/auth.json` 을 Pydantic AI 에 위임한다.
-- `builtin`: `credentials.order` 에 명시했을 때만 Pydantic AI 기본 동작에 맡긴다.
+- `claude-code`/`codex-cli`: 기존 읽기 전용 기본 로그인을 사용하거나 `openside accounts add <source> --label <label>`로 격리된 계정을 만든다. 화면에 안내되는 외부 명령을 실행하며 openside 자체는 별도의 OAuth 로그인 흐름을 두지 않는다.
+- `vault`: 숨겨진 표준 입력을 통해 라벨이 지정된 API 키 계정을 등록한다(`openside key set <provider> --label <label>`). `builtin`은 데몬이 확인할 수 있는 프로바이더 환경변수 인증을 명시적으로 사용하며, 사이드카가 홈 디렉터리나 자격 증명 환경변수를 직접 검사하도록 허용하지는 않는다.
 - `omp-broker`(선택): oh-my-pi auth broker 를 쓰는 사용자용이다. 토큰이 없으면 오류 없이 비활성화되므로 broker 가 없는 머신에서는 아무 설정도 필요 없다. `OPENSIDE_BROKER_URL`, `OPENSIDE_BROKER_TOKEN` 또는 `credentials.omp_broker.url`, `credentials.omp_broker.token_file` 로 지정한다.
 
 예: Anthropic API 키만 쓰는 최소 설정.

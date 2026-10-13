@@ -1,10 +1,12 @@
-import { Ban, Check, ChevronRight, CircleAlert } from "lucide-react";
+import { Ban, Bot, Check, ChevronRight, CircleAlert } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { ApiError } from "../api/client";
 import { useClient } from "../context";
 import type { SubagentView } from "../state/session";
-import { Button, ICON_STROKE, Spinner } from "../ui";
+import { Button, Dialog, ICON_STROKE, Spinner } from "../ui";
 import { StopTaskDialog } from "./StopTaskDialog";
+import { taskPhrase } from "./toolStatus";
+import "./browser.css";
 
 export const STATUS_LABEL: Record<SubagentView["status"], string> = {
   running: "Running",
@@ -110,11 +112,7 @@ function SubagentRow({ sessionId, child }: { sessionId: string; child: SubagentV
             <span className="subagent-task">{child.task}</span>
             <span className="subagent-meta">
               <span className={`subagent-status status-${child.status}`}>{STATUS_LABEL[child.status]}</span>
-              <span aria-hidden="true"> · </span>
-              <span className="subagent-count" aria-label="Progress events">
-                {child.progress.length}
-              </span>
-              <span aria-hidden="true"> events</span>
+              {child.status === "running" ? <span> · {taskPhrase(child.progress)}</span> : null}
             </span>
           </span>
           <ChevronRight className="subagent-chevron" size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
@@ -126,7 +124,7 @@ function SubagentRow({ sessionId, child }: { sessionId: string; child: SubagentV
           </p>
           {child.reason ? <p className="subagent-detail">{child.reason}</p> : null}
           {child.progress.length ? (
-            <ol className="subagent-events" aria-label="Subagent events">
+            <ol className="subagent-events thin-scroll" aria-label="Subagent events">
               {child.progress.map((progress, index) => (
                 <li key={index}>
                   <code>{describe(progress)}</code>
@@ -143,22 +141,42 @@ function SubagentRow({ sessionId, child }: { sessionId: string; child: SubagentV
 
 /**
  * `delegate` children of this session, rebuilt from `subagent.*` events like the rest of the
- * screen. Background tasks are chips in the transcript instead (Timeline).
+ * screen. A pill in the composer's tool row opens them in a sheet; background tasks are chips
+ * in the transcript instead (Timeline).
  */
-export function SubagentPanel({ sessionId, subagents }: { sessionId: string; subagents: SubagentView[] }) {
+export function AgentsTray({ sessionId, subagents }: { sessionId: string; subagents: SubagentView[] }) {
+  const [open, setOpen] = useState(false);
   const delegated = subagents.filter((child) => !child.background);
   if (!delegated.length) return null;
   const active = delegated.filter((child) => child.status === "running" || child.status === "waiting_human").length;
+  const waiting = delegated.some((child) => child.status === "waiting_human");
   return (
-    <section className="panel subagents" aria-label="Subagents">
-      <h3>
-        Agents <span className="subagents-count">{active ? `${active} active` : `${delegated.length} finished`}</span>
-      </h3>
-      <ul>
-        {delegated.map((child) => (
-          <SubagentRow key={child.id} sessionId={sessionId} child={child} />
-        ))}
-      </ul>
-    </section>
+    <>
+      <button
+        type="button"
+        className={`tool-pill agents-pill${waiting ? " waiting-pill" : ""}`}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+      >
+        <Bot size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        <span className="tool-pill-label">{`${delegated.length} ${delegated.length === 1 ? "agent" : "agents"}`}</span>
+      </button>
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        size="wide"
+        className="tray-sheet"
+        title="Agents"
+        description={active ? `${active} working` : `${delegated.length} finished`}
+      >
+        <div className="tray-scroll thin-scroll">
+          <ul className="subagent-list" aria-label="Subagents">
+            {delegated.map((child) => (
+              <SubagentRow key={child.id} sessionId={sessionId} child={child} />
+            ))}
+          </ul>
+        </div>
+      </Dialog>
+    </>
   );
 }

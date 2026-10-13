@@ -228,6 +228,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
+    #[cfg(unix)]
     /// The unit is accepted by systemd's own verifier when it is available.
     #[test]
     fn systemd_unit_restarts_on_failure_and_passes_systemd_analyze() {
@@ -304,6 +305,7 @@ mod tests {
         assert!(error.contains("docs/PLATFORMS.md"), "{error}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn install_writes_the_unit_into_the_given_directory() {
         let root = tempfile::tempdir().unwrap();
@@ -328,6 +330,7 @@ mod tests {
         assert!(execute(&relative, &mut Vec::new()).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn unit_paths_cannot_inject_directives_or_shell() {
         let unit = render(Platform::Systemd, Path::new("/opt/$HOME %h/opensided"));

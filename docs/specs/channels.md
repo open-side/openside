@@ -6,7 +6,7 @@
 - 어댑터는 데몬 공개 API v1 의 클라이언트다. 세션 로직·정책·승인 판단은 모두 데몬에 있고, 어댑터는 채팅 메시지를 API 호출로, 이벤트 스트림을 채팅 메시지로 옮기기만 한다.
 - 어댑터는 `openside_proto::ROUTES` 에 없는 경로를 호출하지 않는다. `DaemonClient` 가 요청마다 이를 검사하고, e2e 테스트는 기록용 프록시로 실제 요청 경로를 모두 대조한다(G-5).
 - 데몬에는 TCP loopback 의 bearer 토큰으로 연결한다. 유닉스 소켓은 관리자 권한이라 쓰지 않는다. 토큰은 `read`·`steer`·`approve` 범위만 있으면 된다. `human_step` 범위가 없으므로 `secret_input`·`login`·기기 승인·인수 티켓은 데몬도 거부한다. `choice` 티켓은 `approve` 범위만 요구하므로 봇이 답할 수 있다.
-- 한 번에 `openside-channels run` 하나가 켜진 어댑터를 모두 돌린다. 종료는 SIGINT/SIGTERM.
+- Vault가 관리하는 계정은 식별자마다 수퍼바이저 슬롯 1개와 취소 토큰 1개를 할당받아 opensided 안에서 실행된다. 데몬의 TCP 리스너가 열려 있으면 변경사항이 즉시 반영되고, 열려 있지 않으면 restart_required를 반환한다. 환경 변수나 명령(command) 소스로 자격 증명을 제공받는 기존 계정은 보안 계정 입력폼에서 자격 증명을 교체하기 전까지 `openside-channels run`이 계속 소유권을 갖는다.
 
 ```
 openside-channels run              # 켜진 어댑터 실행
@@ -16,9 +16,10 @@ openside-channels pair             # 봇용 기기 토큰 발급
 
 ## 2. 스레드 = 세션
 - 채팅 스레드 하나가 세션 하나다. 스레드 키는 Telegram 은 채팅 ID, Slack 은 `channel` + `thread_ts`, Discord 는 채널 ID 다.
-- 매핑은 `<state_dir>/threads.json`(기본 `<data_dir>/channels`, 디렉터리 0700, 파일 0600, 원자적 쓰기)에 둔다. 세션 ID, `/model` 로 고른 모델, 승인 카드, 이벤트 커서, 플랫폼 오프셋이 들어 있다. 비밀 값은 들어 있지 않다.
+- 관리 대상 매핑은 `<state_dir>/<kind>/<account_id>/threads.json`에 저장되며, 같은 서비스의 대화·스레드 ID라도 계정이 다르면 세션, 오프셋, 감시자(watcher)를 공유하지 않는다. 레거시 `legacy-{kind}` ID는 자격 증명을 이전한 뒤에도 `<state_dir>/threads.json`을 유지한다. 디렉터리와 파일 권한은 0700/0600으로 유지하고 모든 쓰기는 원자적으로 처리한다. 매핑 파일에는 시크릿을 저장하지 않는다.
 - 첫 메시지가 세션을 만들고(`POST /v1/sessions`) 이후 메시지는 같은 세션에 이어진다(`POST /v1/sessions/{id}/messages`). 어댑터를 재시작해도 같은 세션을 쓰고, 이미 보낸 답글을 다시 올리지 않는다.
 - 세션은 데몬의 기본 정책 모드로 만든다. 어댑터가 모드나 작업 디렉터리를 바꾸지 않는다.
+- 채널 세션은 불변의 teammate agent_id를 갖는다. 지정되지 않은 계정은 기본적으로 chief로 설정된다. Agent.channel의 `{kind,account_id}`와 명시적인 account.agent_id는 반드시 일치해야 하며, 바인딩이 충돌하면 시크릿과 설정을 쓰기 전에 거부된다. 소유자가 없거나 은퇴한 경우 chief로 넘어가지 않고 즉시 닫힌 채로 실패한다. 프로필이 바뀌면 선택한 어댑터만 다시 적용하고, 계정을 삭제하면 커밋 후 프로필 바인딩을 해제한다. 소유자를 재지정한 뒤 다음 메시지가 오면 매핑된 세션의 불변 소유자와 계정의 유효 소유자를 비교한다. 두 값이 다르면 홈이 아닌 새 세션을 만들어 해당 스레드만 다시 매핑하고 "This conversation now continues with <name>." 메시지를 보낸다. 기존 세션 태그와 대화 이력은 그대로 유지되며, 다시 바인딩된 어댑터는 이전 소유자의 이벤트 감시자를 재개하지 않는다.
 - 스레드마다 `GET /v1/sessions/{id}/events` SSE 를 하나 열고, 끊기면 백오프 후 `Last-Event-ID` 로 이어 받는다. `seq` 가 중복이면 버린다.
 - 전달은 최소 한 번(at-least-once)이다. 커서는 답글이 확정된 시점에만 저장하므로, 재시작 도중 죽으면 마지막 답글이 한 번 더 올라올 수 있다. 사용자 메시지는 `ch-<해시>` 형태의 결정적 `message_id` 로 보내서 데몬이 중복을 걸러 낸다.
 
@@ -55,7 +56,9 @@ Telegram·Discord 는 `/`, Slack 은 `/` 를 플랫폼이 가로채므로 `!` �
 - 비어 있지 않은 목록은 **모두** 만족해야 처리한다. 예를 들어 Telegram 은 `allowed_chats` 와 `allowed_users` 를 둘 다 지정하면 두 조건을 모두 통과한 메시지만 받는다. 거부한 요청은 응답하지 않고 ID 만 로그에 남긴다.
 
 ## 7. 설정과 비밀
-설정 키는 [`docs/CONFIGURATION.md`](../CONFIGURATION.md) 의 `[channels]` 를 본다. 비밀(봇 토큰, signing secret, 데몬 토큰)은 설정 파일에 값으로 쓰지 않는다. 환경변수 이름(`*_env`) 또는 명령 argv(`*_cmd`)로 지정한다. 값은 로그와 오류에 나오지 않으며(Telegram 은 토큰이 URL 경로에 있어 요청 URL 도 오류에서 뺀다), 어댑터는 프록시와 리다이렉트를 따라가지 않는다.
+자세한 설정은 [`docs/CONFIGURATION.md`](../CONFIGURATION.md)의 `[channels]` 항목을 참고한다. 관리 대상 계정의 자격 증명은 Vault에 암호화된 `channel_secret` 타입으로 보관된다. API 응답에는 메타데이터만 포함되고 Debug 출력과 로그에서는 가려지며, 브라우저 출처(origin)는 비워 두고 동기화나 브라우저 항목 목록 조회 및 자동 완성 대상에서도 제외된다. 자격 증명을 교체할 때는 해당 어댑터만 멈춘 뒤 교체하며, 잘못되었거나 만료된 자격 증명이 다른 계정으로 넘어가지 않는다. Vault를 잠그면 어댑터가 들고 있던 자격 증명을 먼저 취소한 뒤 반환한다. 서비스당 1개 계정에 한해 파일 전용 환경 변수나 argv 소스를 계속 허용하지만, GUI나 CLI로 추가하는 새 계정은 설정 파일이나 argv를 통한 자격 증명 입력을 받지 않는다. 플랫폼 HTTP 클라이언트는 프록시와 리다이렉트를 계속 비활성화하고 오류 메시지에서 자격 증명이 포함된 Telegram URL을 제외하며, 업스트림 응답 본문은 일절 로그에 남기지 않는다.
+
+채널 서비스 식별자는 openside 자체의 Vault 잠금 상태를 따른다. API나 GUI에서 명시적으로 잠그면 모든 관리 대상 어댑터를 먼저 멈춘 뒤 반환하고, 잠금을 해제하면 대상 계정들의 실행을 재개한다. OS 화면 잠금이나 키링 유휴 잠금이 걸려도 openside Vault가 복호화된 상태로 남아 있다면 봇을 멈추거나 신뢰된 channel_secret 접근 권한을 회수하지 않는다. 브라우저 및 프로바이더 자격 증명 정책은 이전과 같다.
 
 ### 데몬 토큰 발급
 ```
@@ -103,9 +106,12 @@ curl --unix-socket "$SOCKET" -X POST http://localhost/v1/devices/pair \
 - 봇에 채널의 메시지 보내기 권한이 있어야 한다.
 
 ## 9. 필요한 데몬 엔드포인트
-채널 전용 엔드포인트는 필요 없었다. 사용한 공개 경로: `GET /v1/settings`, `GET·POST /v1/sessions`, `GET /v1/sessions/{id}`, `POST /v1/sessions/{id}/messages`, `POST /v1/sessions/{id}/stop`, `GET /v1/sessions/{id}/events`, `GET /v1/tickets`, `GET /v1/tickets/{id}`, `POST /v1/tickets/{id}/resolve`, `POST /v1/tickets/{id}/reject`, `POST /v1/devices/pair`(유닉스 소켓, `pair` 명령만). `openside` CLI 에는 기기 발급 명령이 없어서 `openside-channels pair` 가 같은 공개 API 를 호출한다.
+계정 설정에는 `GET /v1/settings/channels`(Read), `POST /v1/settings/channels/{kind}/accounts`, `PATCH`/`DELETE /v1/settings/channels/{kind}/accounts/{account_id}`, `POST .../{account_id}/test`(Admin 및 person_device 필요, 로컬 소켓은 예외)를 사용한다. 연결 테스트는 읽기 전용 플랫폼 식별 엔드포인트를 호출하며 업스트림 응답 본문 대신 정제된 상태와 코드만 반환한다. 어댑터의 세션·메시지·티켓 트래픽은 읽기·조종(steer)·승인 권한만 갖춘 채 문서화된 공개 API 라우트를 계속 이용한다. CLI도 동일하게 `openside channels list|add|rm|test` 명령을 지원하며, add 실행 시 숨김 stdin으로만 값을 입력받고 Slack의 경우 signing-secret을 한 번 더 묻는다.
+
+Slack과 Discord의 관리 콜백은 기존 데몬이나 원격 URL의 공개 `POST /v1/hooks/{kind}/{account_id}` 엔드포인트를 사용하며, GUI에서 복사할 수 있도록 webhook_url 형태로 반환된다. Bearer 토큰은 쓰지 않는다. Slack은 v0 HMAC-SHA256을 상수 시간 비교로 검증하고, Discord는 엄격한 Ed25519 검증을 수행해 저차수(low-order) 키를 거부한다. 서명 타임스탬프 유효 시간은 5분으로 제한된다. 재전송 공격을 막기 위해 계정별로 타임스탬프와 본문 원본을 해시 처리하고 5분 단조 만료 시간을 적용한다. 요청 본문 크기는 최대 256 KiB, 읽기 제한 시간은 10초이며, 계정당 분당 120개 요청으로 제한된다. 알 수 없거나 비활성화된 계정은 Vault나 플랫폼을 조회하지 않고 정제된 404를 반환하며, 잘못된 형식의 자격 증명, 서명 실패, 업스트림 오류가 발생해도 입력값을 그대로 노출하지 않는다.
 
 ## 10. 검증
 - `crates/openside-channels/tests/channels.rs`: 가짜 Telegram·Slack·Discord 서버로 허용 목록, Slack 서명(없음·틀림·변조·오래됨), Discord Ed25519(틀림·변조·`PING`), STT 거절·전사·크기 제한, 토큰이 다른 출처로 나가지 않는 것을 확인한다.
 - `crates/openside-e2e/tests/channels.rs`: 실제 데몬과 스크립트 사이드카로 스레드=세션, 재시작 후 유지, 명령, 승인·거절·선택지·`/answer`, `secret_input` 거절, 음성 전사, Slack·Discord 왕복을 확인하고, 매번 봇이 호출한 모든 경로가 공개 `ROUTES` 에 있는지 대조한다.
 - 실제 Telegram·Slack·Discord 계정으로 한 실험은 없다.
+- 집중 테스트 범위는 `openside-config`(기본·레거시·다중 계정 원자적 작성기 왕복 테스트), `openside-vault/src/channel.rs`(메타데이터, Debug, 브라우저, 동기화, 디스크, 감사 로그에서 자격 증명 카나리 유출 방지 및 OS 유휴 상태와 명시적 Vault 잠금 비교), `openside-channels/tests/accounts.rs`(독립된 Telegram 계정 식별자), `opensided/src/tests/channels.rs`(스코프와 person-device 정책, 프로덕션 서명 훅 검증, 재생·시간 편차·속도 제한, 명시적 Vault 잠금 및 재개, 실제 데몬/세션 API를 통한 동시 실행 Slack 계정 2개의 chief/teammate 독립 태그·페르소나·삭제)를 포함한다. 비공개 레지스트리 단위 테스트는 충돌하거나 없거나 은퇴한 소유자를 chief로 넘기지 않고 거부하는지 확인한다. 플랫폼 서버와 모델 실행은 외부와 격리되어 있으며, 외부 계정 인가 권한을 주장하지 않는다.

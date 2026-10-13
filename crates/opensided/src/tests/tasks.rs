@@ -24,9 +24,20 @@ async fn front_denies_actions_but_allows_reads_and_session_model_fallback() {
             "browser_snapshot",
             json!({"tab_id":"task-tab"}),
             "front-read"
-        )
+        ),
+        None
     )
     .is_none());
+    assert!(matches!(
+        parent
+            .call(call(
+                "browser_import_lookup",
+                json!({"kind":"bookmarks"}),
+                "front-import-read",
+            ))
+            .await,
+        ToolOutcome::Deferred { .. }
+    ));
     daemon
         .shared
         .command(&session, crate::engine::Action::Recover)
@@ -35,6 +46,11 @@ async fn front_denies_actions_but_allows_reads_and_session_model_fallback() {
     let opened = runtime.0.lock().opened.clone();
     let agent: Value = serde_json::from_str(&opened[0].agent_json).unwrap();
     assert_eq!(agent["orchestration"], "front");
+    assert!(agent["front_tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool == "browser_import_lookup"));
     assert!(agent.get("front_model").is_none());
     assert_eq!(opened[0].model, std::any::type_name::<TestRuntime>());
     daemon.shutdown().await;
@@ -75,6 +91,11 @@ async fn restart_repairs_a_task_end_without_a_report_and_never_queues_it_twice()
     }
     let events = daemon.shared.db.events(&session, 0).await.unwrap();
     assert_eq!(events.iter().filter(|event| matches!(&event.kind, EventKind::MessageQueued { message_id, text, .. } if message_id.as_str() == "task-report-task-1" && text.contains("durable result"))).count(), 1);
+    assert!(events
+        .iter()
+        .any(|event| matches!(&event.kind, EventKind::MessageQueued {
+        message_id, author_kind: MessageAuthorKind::Internal, from_agent: None, ..
+    } if message_id.as_str() == "task-report-task-1")));
     assert_eq!(
         runtime
             .0

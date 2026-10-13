@@ -23,10 +23,22 @@ def test_schema_covers_every_message_type_in_both_directions():
         "open",
         "user_message",
         "tool_result",
+        "credential_response",
+        "credential_error",
+        "credential_reported",
         "ticket_resolved",
         "shutdown",
     } <= inbound
-    assert {"hello", "ready", "event", "tool_call", "state_snapshot", "bye"} <= outbound
+    assert {
+        "hello",
+        "ready",
+        "event",
+        "tool_call",
+        "credential_request",
+        "credential_report",
+        "state_snapshot",
+        "bye",
+    } <= outbound
     for name in ("Hello", "Open", "Event"):
         assert {"v", "type"} <= set(defs[name]["required"]), name
 

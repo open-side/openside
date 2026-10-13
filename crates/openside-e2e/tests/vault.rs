@@ -351,6 +351,7 @@ fn ended<'a>(events: &'a [Event], call: &str) -> (&'a Value, bool) {
                 tool_call_id,
                 result,
                 is_error,
+                ..
             } if tool_call_id == call => Some((result, *is_error)),
             _ => None,
         })
@@ -999,7 +1000,7 @@ async fn password_and_otp_fill_reach_no_surface_and_every_value_read_is_blocked(
         tool("browser_act", json!({"tab_id":tab,"target":username,"action":"hover"}), "act-hover"),
         tool("bash", json!({"command":format!("cat '{vault_file}'; env")}), "bash-vault"),
         tool("bash", json!({"command":format!("find '{data_dir}' -type f -exec cat {{}} + | head -c 1500000")}), "bash-data"),
-        tool("read", json!({"path":"/proc/self/environ"}), "read-environ"),
+        tool("read", json!({"path":if cfg!(target_os = "linux") { "/proc/self/environ" } else { "/dev/null" }}), "read-environ"),
         tool("memory_search", json!({"query":"password"}), "memory"),
         text("probed"),
     ]).await;
@@ -1013,20 +1014,28 @@ async fn password_and_otp_fill_reach_no_surface_and_every_value_read_is_blocked(
     for call in ["act-click", "act-hover", "memory"] {
         ok(&events, call);
     }
-    // Process and kernel files are protected paths, so the daemon's environment is not readable.
+    // macOS has no proc environ file; its native device filesystem must also remain unreadable.
     assert!(
         denied(&events, "read-environ").contains("protected"),
         "read-environ must be refused as a protected path"
     );
-    // The shell sandbox may hide the vault and data directories entirely; either way the
-    // commands ran, and the daemon's own environment is what `env` shows.
+    // This fixture has no provider credentials; encrypted vault bytes must reveal no plaintext.
     for call in ["bash-vault", "bash-data"] {
-        assert_eq!(
-            ok(&events, call)["exit_code"],
-            0,
-            "{call}: {}",
-            ok(&events, call)
-        );
+        let output = ok(&events, call);
+        // Oversized results retain a JSON prefix, with exit_code before escaped stdout.
+        let exit_code = output["exit_code"].as_i64().or_else(|| {
+            if output["truncated"] != true {
+                return None;
+            }
+            output["preview"]
+                .as_str()?
+                .strip_prefix("{\"exit_code\":")?
+                .split_once(',')?
+                .0
+                .parse::<i64>()
+                .ok()
+        });
+        assert_eq!(exit_code, Some(0), "{call}: {output}");
     }
     assert!(
         ok(&events, "bash-vault").to_string().contains("PATH="),

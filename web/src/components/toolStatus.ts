@@ -147,3 +147,9 @@ export function outcomeNote(outcome: string, reason: string | undefined): string
   const label = outcome.charAt(0).toUpperCase() + outcome.slice(1);
   return reason ? `${label}: ${reason}` : label;
 }
+
+/** A conversation titled with a bare URL reads as its site. */
+export function displayTitle(title: string): string {
+  const trimmed = title.trim();
+  return /^\S+$/.test(trimmed) ? (hostOf(trimmed) ?? title) : title;
+}

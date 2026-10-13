@@ -117,10 +117,53 @@ async fn cli_resume_after_daemon_restart_restores_history_and_script_cursor() {
     let id = summary["session_id"].as_str().unwrap();
     let previous_seq = summary["last_seq"].as_u64().unwrap();
     assert_eq!(harness.snapshot(id)["script_cursor"], 1);
+    if !first
+        .iter()
+        .any(|record| record["kind"] == "session.title_proposed")
+    {
+        let mut metadata = harness.events(id, previous_seq).await;
+        while !matches!(
+            metadata.next().await.kind,
+            EventKind::SessionTitleProposed { .. }
+        ) {}
+    }
+    // Pinning supplies a deterministic metadata tail even if naming beat the settled marker.
+    let pinned = harness
+        .request(
+            "PATCH",
+            &format!("/v1/sessions/{id}"),
+            Some(json!({"pinned":true})),
+        )
+        .await;
+    assert_eq!(pinned.status, 200);
+    assert_eq!(pinned.body["status"], "idle");
+    let metadata_seq = pinned.body["last_seq"].as_u64().unwrap();
+    assert!(metadata_seq > previous_seq);
     harness.restart().await;
     let idle = records_for(&harness, &["--json", "session", "resume", id]).await;
-    assert_eq!(idle.len(), 1);
-    assert_eq!(idle[0]["last_seq"], previous_seq);
+    let (idle_summary, metadata) = idle.split_last().unwrap();
+    assert_eq!(idle_summary["last_seq"], metadata_seq);
+    assert!(metadata.iter().all(|record| matches!(
+        record["kind"].as_str(),
+        Some("usage" | "session.title_proposed" | "session.updated")
+    )));
+    let seen: Vec<_> = metadata
+        .iter()
+        .map(|record| record["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seen, (previous_seq + 1..=metadata_seq).collect::<Vec<_>>());
+    assert_eq!(
+        harness.snapshot(id)["script_cursor"],
+        1,
+        "idle replay must not run the model again"
+    );
+    let current = records_for(&harness, &["--json", "session", "resume", id]).await;
+    assert_eq!(
+        current.len(),
+        1,
+        "the replay advances the saved event cursor"
+    );
+    assert_eq!(current[0]["last_seq"], metadata_seq);
     let resumed = records_for(
         &harness,
         &["--json", "session", "resume", id, "second task"],
@@ -132,7 +175,7 @@ async fn cli_resume_after_daemon_restart_restores_history_and_script_cursor() {
         .iter()
         .map(|event| serde_json::from_value(event.clone()).unwrap())
         .collect();
-    assert!(events.iter().all(|event| event.seq > previous_seq));
+    assert!(events.iter().all(|event| event.seq > metadata_seq));
     assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "restored conversation reply")));
     let snapshot = harness.snapshot(id);
     assert_eq!(snapshot["script_cursor"], 2);

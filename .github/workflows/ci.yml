@@ -33,7 +33,7 @@ jobs:
       # The daemon's shell sandbox needs bwrap; without it the real-sidecar E2Es fail with
       # runtime error sandbox_unavailable. The hosted ubuntu image does not ship it.
       - name: Install sandbox and isolated headed QA runtime
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap podman
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap podman zbar-tools
       # Ubuntu 24.04 runners restrict unprivileged user namespaces through AppArmor, which breaks
       # both bwrap and Chromium's sandbox (launches die with `Disconnected`).
       - name: Allow unprivileged user namespaces

@@ -46,6 +46,12 @@ impl Config {
             .clone()
             .unwrap_or_else(|| loaded.paths.data_dir.clone());
         let socket = self.socket.clone().unwrap_or_else(|| loaded.socket_path());
+        #[cfg(unix)]
+        std::os::unix::net::SocketAddr::from_pathname(&socket).map_err(|error| {
+            format!(
+                "Invalid daemon Unix socket path: {error}. Set a shorter --socket, OPENSIDE_SOCKET, or daemon.socket."
+            )
+        })?;
         let listen = self.listen.or(loaded.config.daemon.listen);
         if listen.is_some_and(|address| !address.ip().is_loopback()) {
             return Err("TCP listener must be loopback".into());
@@ -78,5 +84,39 @@ impl Resolved {
             PolicyModeSetting::Guard => PolicyMode::Guard,
             PolicyModeSetting::Full => PolicyMode::Full,
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod socket_path_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_daemon_socket_is_rejected_before_startup() {
+        let root = tempfile::Builder::new()
+            .prefix("osds-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let loaded = crate::tests::resolved_config(root.path()).loaded;
+        let socket = root.path().join("long-".repeat(30)).join("opensided.sock");
+        let config = Config {
+            socket: Some(socket),
+            ..Config::default()
+        };
+        let result = config.resolve_loaded(loaded);
+        assert!(result.is_err_and(|error| error.to_string().contains("Set a shorter --socket")));
+        assert!(!root.path().join("data").exists());
+    }
+
+    #[test]
+    fn oversized_default_daemon_socket_has_the_same_actionable_error() {
+        let root = tempfile::Builder::new()
+            .prefix("osds-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let mut loaded = crate::tests::resolved_config(root.path()).loaded;
+        loaded.paths.runtime_dir = root.path().join("long-".repeat(30));
+        let result = Config::default().resolve_loaded(loaded);
+        assert!(result.is_err_and(|error| error.to_string().contains("Set a shorter --socket")));
     }
 }

@@ -10,10 +10,48 @@ SplitViewHorizontal is already enabled by default in the pinned Chromium source,
 and bookmarks register an ordinary native side-panel entry without a feature
 gate. No Helium, Cromite, xplorer or other fork code is copied.
 
+Vertical tabs next to the daemon web UI's own conversation sidebar read as two
+sidebars. The `openside-browser` launcher (`tools/openside-browser`; copy it to
+`~/.local/bin` beside the `openside` CLI) therefore seeds `vertical_tabs.enabled=false`
+into its dedicated profile when that key is absent and the profile is not open; a
+user's later toggle in the browser writes the key and is never overwritten. The
+patch default stays `true` for other launchers. The same seeding step also sets
+`auto_pin_new_tab_groups=false` and `bookmark_bar.show_tab_groups=false` (same
+rule: only when absent) so the Agent Tabs group is not duplicated as a pinned chip
+in the bookmarks bar.
+
 The authenticated gateway's `browser.status` observes those three native states.
 `patched.rs::native_ux_defaults_are_enabled` launches headless with the socket
 handshake and asserts all three. It proves availability/defaults, not visual
 layout quality or headed keyboard ergonomics.
+
+## P9: glass chrome (`0011`)
+
+The web UI's look (24 dip surfaces, pill controls, translucent glass over the sky
+gradient) is applied to the native browser chrome. `0011` changes only values and
+one paint call; no new feature flag, preference, or GN argument:
+
+| Surface | Change | Source |
+| --- | --- | --- |
+| Agent Tabs group created by the gateway | colour `kBlue` -> `kGrey`, matching the extension's group | `chrome/browser/openside/agent_gateway.cc` |
+| Grey tab-group chip | fill `#1D1D1F` (light) / `#F5F5F7` (dark) instead of slate grey | `chrome/browser/ui/color/chrome_color_mixer.cc` |
+| Tab-group chip | radius 16 (pill) horizontal and vertical; header padding unchanged | `tabs/common/tab_group_style.cc` |
+| Vertical tabs | corner radius 16 (pill rows) | `chrome/browser/ui/layout_constants.cc` |
+| Vertical tab strip | toolbar-coloured sheet at 0.58 opacity over the frame (theme gradient); replaced by the organizer fade while that panel is open | `frame/layout/browser_view_tabbed_layout_impl.cc` |
+| Vertical tab strip scrollbar | `kHiddenButEnabled`: wheel and touch scroll, never drawn | `tabs/common/tab_strip_view.cc` |
+| Side panel content | corner radius 8 -> 24 | `chrome/browser/ui/views/chrome_layout_provider.cc` |
+| Area around a side panel (header, border) | frame (theme gradient) instead of flat toolbar colour | `frame/main_background_region_view.cc` |
+
+The look comes together with the launcher's theme: `tools/openside-browser` writes
+`$XDG_DATA_HOME/openside/browser-theme-{light,dark}` (the web `--backdrop`
+gradient as `theme_frame`, `#1d1d1f`/`#f5f5f7` text) and loads it beside the
+extension. `OPENSIDE_BROWSER_THEME=light|dark|off` overrides the desktop colour
+scheme. Without a theme the strip still turns translucent but shows Chromium's
+default frame colour.
+
+Not changed: horizontal tab shape, the main content region radius (8), tab-group
+chip colours other than grey, and the native side-panel header controls (title,
+pin, close), which stay Chromium's.
 
 ## P8: opt-in ordinary daemon web UI
 

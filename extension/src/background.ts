@@ -1,14 +1,17 @@
 import { client, ledger } from "./api";
 import { groupAgentTabs, clearAgentTabs } from "./agent-tabs";
-import { announceCodes, CODE_NOTIFICATION } from "./codes";
+import { CODE_NOTIFICATION } from "./codes";
+import { checkNotifications, handleDesktopRequest, openConversation, SETTLED_NOTIFICATION } from "./desktop";
 import { parseOmnibox, withContext, type TabContext } from "./context";
 import { pairing, rememberSession } from "./storage";
 import { parseStart, validMenu, validTabId } from "./messages";
+import { handleImportRequest } from "./imports";
+import { IMPORT_APPLY, IMPORT_STATUS, IMPORT_PERMISSION_OPEN, IMPORT_PERMISSION_STATUS } from "../../web/src/import/protocol";
 declare const __TEST_MATCHES__: boolean;
 void chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
 async function start(tabId: number, text: string, context?: TabContext): Promise<string> {
   const api = client(await pairing());
-  const session = await api.createSession({ title: (context?.title || text).slice(0, 200), model: null, mode: null, workspace: null });
+  const session = await api.createSession({ agent_id: null, title: null, model: null, mode: null, workspace: null });
   await rememberSession(tabId, session.id);
   await api.submitMessage(session.id, { message_id: crypto.randomUUID(), text: withContext(text, context), mode: "now" });
   return session.id;
@@ -60,12 +63,35 @@ async function syncGroups(): Promise<void> {
 }
 chrome.alarms.create("agent-tabs", { periodInMinutes: 0.5 });
 chrome.alarms.create("codes", { periodInMinutes: 0.5 });
-async function checkCodes(): Promise<void> { await announceCodes((await client(await pairing()).listTickets("pending")).tickets); }
+// While a task runs, look again every few seconds: alarms cannot fire faster than every 30 s, which
+// would miss tasks that finish in between. Each look is an extension API call, so the worker stays alive.
+let watching = false;
+async function checkCodes(): Promise<void> {
+  const running = await checkNotifications();
+  if (running && !watching) {
+    watching = true;
+    setTimeout(() => { watching = false; void checkCodes().catch(() => undefined); }, 5000);
+  }
+}
+// The web app's Settings toggle talks to the extension here; the sender origin is vetted in desktop.ts.
+chrome.runtime.onMessageExternal.addListener((message: unknown, sender, reply) => {
+  if (message && typeof message === "object" && "type" in message && [IMPORT_APPLY, IMPORT_STATUS, IMPORT_PERMISSION_OPEN, IMPORT_PERMISSION_STATUS].includes(String(message.type))) {
+    void handleImportRequest(message, sender.origin).then(reply, () => reply({ ok: false, reason: "apply_failed" }));
+    return true;
+  }
+  void handleDesktopRequest(message, sender.origin).then(result => { reply(result); if (result.ok && result.enabled) void checkCodes().catch(() => undefined); });
+  return true;
+});
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === "agent-tabs") void syncGroups();
   if (alarm.name === "codes") void checkCodes().catch(() => undefined);
 });
 chrome.notifications.onClicked.addListener(id => {
+  if (id.startsWith(SETTLED_NOTIFICATION)) {
+    void chrome.notifications.clear(id);
+    void openConversation(id.slice(SETTLED_NOTIFICATION.length)).catch(() => undefined);
+    return;
+  }
   if (!id.startsWith(CODE_NOTIFICATION)) return;
   void chrome.notifications.clear(id);
   // The click is the person's gesture; the panel lists code requests from every conversation.

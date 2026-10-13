@@ -10,8 +10,8 @@ before grading. Chromium's internal GUID-named file alone is not a completed
 named-file task.
 
 These are synthetic regression tasks, **not** the public Online-Mind2Web,
-BU Bench V1, or Odysseys datasets. The output uses the public Aside BU Bench V1
-result/summary interface. Local categories identify the kind of interaction;
+BU Bench V1, or Odysseys datasets. The output uses the public BU Bench V1
+result format for task results and run summaries. Local categories identify the kind of interaction;
 they do not claim scores on the corresponding public datasets.
 
 ## Install once

@@ -10,6 +10,7 @@ const PAGE: &str = r#"<!doctype html><style>body{margin:0;background:#e00000}</s
 const BLUE: &str =
     r#"<!doctype html><style>body{margin:0;background:#0000e0}</style><title>Blue</title>"#;
 const NOISE: &str = r#"<!doctype html><canvas id="c" width="1440" height="900"></canvas><script>const ctx=c.getContext('2d'),img=ctx.createImageData(1440,900);setInterval(()=>{const d=new Uint32Array(img.data.buffer);for(let i=0;i<d.length;i++)d[i]=(Math.random()*0xffffffff)|0xff000000;ctx.putImageData(img,0,0)},30)</script>"#;
+const RAPID: &str = r#"<!doctype html><style>body{margin:0;background:#0047ab}</style><h1 id="step"></h1><script>const step=Number(new URLSearchParams(location.search).get('step')||0);document.getElementById('step').textContent=step;setTimeout(()=>location.replace('/rapid?step='+(step+1)),350);</script>"#;
 
 struct Fixture {
     daemon: Daemon,
@@ -52,7 +53,8 @@ async fn fixture() -> Option<Fixture> {
             Router::new()
                 .route("/", get(|| async { Html(PAGE) }))
                 .route("/blue", get(|| async { Html(BLUE) }))
-                .route("/noise", get(|| async { Html(NOISE) })),
+                .route("/noise", get(|| async { Html(NOISE) }))
+                .route("/rapid", get(|| async { Html(RAPID) })),
         )
         .await
         .unwrap();
@@ -159,6 +161,11 @@ async fn frame(socket: &mut Socket) -> (String, String) {
         } = message(socket).await
         {
             assert_eq!((width, height), (720, 450));
+            let (image_width, image_height) = jpeg_size(&data);
+            assert_eq!(
+                (u32::from(image_width), u32::from(image_height)),
+                (width, height)
+            );
             return (data, tab_id);
         }
     }
@@ -198,15 +205,72 @@ async fn token(f: &Fixture, scope: CapabilityScope) -> String {
 }
 
 #[tokio::test]
+async fn preview_delivers_frames_while_documents_change_faster_than_its_cadence() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    result(
+        host(&f.daemon, &f.session)
+            .await
+            .call(call(
+                "browser_navigate",
+                json!({"tab_id":f.tab,"url":format!("{}/rapid",f.origin)}),
+                "rapid",
+            ))
+            .await,
+    );
+    let token = token(&f, CapabilityScope::Browse).await;
+    let mut socket = connect(&f, &f.session, &token).await.unwrap();
+    let (first, last) = tokio::time::timeout(Duration::from_secs(8), async {
+        let first = frame(&mut socket).await;
+        assert_eq!(first.1, f.tab);
+        assert_eq!(frame(&mut socket).await.1, f.tab);
+        let last = frame(&mut socket).await;
+        assert_eq!(last.1, f.tab);
+        (first.0, last.0)
+    })
+    .await
+    .expect("document changes must not postpone preview delivery indefinitely");
+    assert_ne!(first, last, "frames must follow the changing page");
+    let browser = f
+        .daemon
+        .shared
+        .registry
+        .browser
+        .existing()
+        .await
+        .map_err(|error| error.0)
+        .unwrap();
+    let url = browser.url(&f.tab).await.unwrap();
+    let step = url.split_once("?step=").unwrap().1.parse::<u64>().unwrap();
+    assert!(step >= 2, "the page must keep navigating: {url}");
+    socket.close(None).await.unwrap();
+    f.daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn preview_frames_follow_agent_navigation_and_tab_switch_with_bounded_size_and_rate() {
     let Some(f) = fixture().await else {
         return;
     };
     let token = token(&f, CapabilityScope::Browse).await;
     let mut socket = connect(&f, &f.session, &token).await.unwrap();
+    let shared = f.daemon.shared.clone();
+    let session = f.session.clone();
+    let target = f.tab.clone();
+    let thumbnails = tokio::spawn(async move {
+        for _ in 0..5 {
+            assert!(
+                crate::preview::capture_thumbnail(&shared, &session, &target)
+                    .await
+                    .is_some()
+            );
+        }
+    });
     let (red, tab) = frame(&mut socket).await;
     assert_eq!(tab, f.tab);
     assert_eq!(jpeg_size(&red), (720, 450));
+    thumbnails.await.unwrap();
     result(
         host(&f.daemon, &f.session)
             .await

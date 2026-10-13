@@ -1,13 +1,14 @@
-import { isApprovalTicket, isChoiceTicket, isLoginTicket } from "../../web/src/otp/loginForm";
-import { codeHelp, isOtpTicket, otpRegistrationOf, registrationQuestion } from "../../web/src/otp/otpForm";
-import { siteOf } from "../../web/src/otp/authCard";
+import { announcementMessage, announcementTitle, isAttentionTicket } from "../../web/src/cards/attention";
 import type { Ticket } from "./api";
 export const CODE_NOTIFICATION = "code:";
 // Chrome opens a side panel only inside a user gesture, so a code, login or choice request
 // cannot open it by itself: the toolbar badge counts waiting requests and each new one is
 // announced once with a notification whose click opens the panel. Nothing takes focus on its own.
-export async function announceCodes(tickets: Ticket[]): Promise<void> {
-  const waiting = tickets.filter(ticket => isOtpTicket(ticket) || otpRegistrationOf(ticket) || isLoginTicket(ticket) || isChoiceTicket(ticket) || isApprovalTicket(ticket));
+// With desktop notifications on (`all`), every pending request is announced, not just the ones that
+// need a human step, except those of the conversation the person is already looking at.
+export interface AnnounceOptions { all?: boolean; focused?: (sessionId: string) => boolean }
+export async function announceCodes(tickets: Ticket[], { all = false, focused }: AnnounceOptions = {}): Promise<void> {
+  const waiting = tickets.filter(ticket => all || isAttentionTicket(ticket));
   await chrome.action.setBadgeBackgroundColor({ color: "#2f6fed" });
   await chrome.action.setBadgeText({ text: waiting.length ? String(waiting.length) : "" });
   const stored: unknown = (await chrome.storage.session.get("codesNotified")).codesNotified;
@@ -16,19 +17,12 @@ export async function announceCodes(tickets: Ticket[]): Promise<void> {
   for (const id of notified) if (!ids.has(id)) void chrome.notifications.clear(`${CODE_NOTIFICATION}${id}`);
   for (const ticket of waiting) {
     if (notified.has(ticket.id)) continue;
-    const registration = otpRegistrationOf(ticket);
+    // Marked as announced below either way, so leaving the conversation later does not replay it.
+    if (focused?.(ticket.session_id)) continue;
     chrome.notifications.create(`${CODE_NOTIFICATION}${ticket.id}`, {
       type: "basic", iconUrl: "icon.png",
-      title: registration ? "Save authenticator?" : isLoginTicket(ticket) ? "Login needed" : isChoiceTicket(ticket) ? "Choice needed" : isApprovalTicket(ticket) ? "Approve on your phone" : "Code needed",
-      message: registration
-        ? registrationQuestion(registration)
-        : isOtpTicket(ticket)
-          ? codeHelp(ticket)
-          : isLoginTicket(ticket)
-            ? `Log in to ${siteOf(ticket.login.origin)}`
-            : isChoiceTicket(ticket)
-              ? ticket.choice.question
-              : ticket.summary,
+      title: announcementTitle(ticket),
+      message: announcementMessage(ticket),
       contextMessage: "Click to answer in the openside side panel",
     });
   }

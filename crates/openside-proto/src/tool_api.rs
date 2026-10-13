@@ -76,8 +76,8 @@ pub struct ToolCallResponse {
     /// How the pending ticket resumes the call when `status` is `deferred`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deferral: Option<TicketDeferral>,
-    /// Artifact paths the call saved (a screenshot's PNG), readable through
-    /// `GET /v1/sessions/{id}/artifacts/{path}`.
+    /// Delivered artifact paths, readable through `GET /v1/sessions/{id}/artifacts/{path}`.
+    /// Observation screenshots have no artifact; browser_screenshot needs output=true to save one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<String>,
     /// Denial reason or failure message.

@@ -7,7 +7,8 @@
 ## 1. 원칙
 - 세션당 Python 프로세스 1개. 데몬이 띄우고, 데몬이 죽이면 같이 죽는다(프로세스 그룹).
 - **툴은 데몬이 실행한다.** 사이드카에 노출되는 툴은 `open.tools` 로 받은 명세뿐이고, 호출은 `tool_call` reverse RPC 다. 사이드카가 자체 파일/셸/브라우저 툴을 노출하지 않는다.
-- **비밀은 이 프로토콜의 어떤 메시지에도 실리지 않는다**: 모델 자격증명(사이드카가 자격증명 소스에서 직접 읽음), Vault 값, `secret_input` 값, 데몬 능력 토큰. 사이드카 `error.message`·stderr 도 정제된 문장만 담는다.
+- 외부 모델 요청을 시도할 때마다 인증된 비공개 소켓을 통해 데몬에서 모델 자격 증명을 가져온다. 계정 선택, 세션 어피니티, 갱신, 쿨다운, 유효하지 않은 계정 상태 관리는 모두 데몬이 전담한다. 사이드카는 임시 API 키나 액세스 토큰만 전달받으며 리프레시 토큰, 자격 증명 홈 디렉터리, 브로커 베어러 토큰은 절대 받지 않는다. 처리 결과 역시 업스트림 응답 본문 없이 애플리케이션 정의 결과만 보고한다. 자격 증명은 상태 스냅샷, 공개 API, 이벤트, 오류, 로그, argv, 환경변수에 일절 노출되지 않는다. Python 진단 도구 또한 데몬이 정제해 제공한 계정 메타데이터만 읽으며, 독립 실행 진단 도구가 로그인 준비 완료 상태를 자체 판정할 수 없다.
+- 자격 증명이 담긴 직렬화된 Rust 프레임은 버퍼 메모리를 0으로 초기화(zeroizing)한다. Python은 소비되거나 해제된 자체 가변 JSONL 및 토큰 버퍼를 비우고, HTTP 시도가 끝나면 주입된 인증 헤더를 제거한다. 다만 CPython, JSON 디코딩, HTTP SDK 내부에서 생성되는 불변 문자열이나 전송 복사본은 완벽히 지우기 어려우므로 프로세스 메모리가 완전히 소거된다고 보장하지는 않는다.
 - 사이드카는 대화 상태를 직렬화해 데몬에 넘기고(`state_snapshot`), 데몬은 그 내용을 해석하지 않고 보관했다가 재기동 시 `open.resume_state` 로 돌려준다.
 - 큐는 데몬이 소유한다(`MessageQueue`). 사이드카는 받은 메시지를 즉시 처리할 뿐 별도 영속 큐를 갖지 않는다.
 
@@ -15,7 +16,7 @@
 1. 데몬이 비공개 디렉터리(0700, 런타임 디렉터리 아래)에 유닉스 소켓을 만들고 0600 으로 바꾼 뒤 리슨한다.
 2. 설정 `agent.command`(argv 배열) 를 실행한다. 환경: 데몬 환경 상속 + `OPENSIDE_SIDECAR_SOCKET=<경로>`, `OPENSIDE_SIDECAR_NONCE=<무작위 32 hex>`(일회용 접속 확인 값, 자격증명 아님). stdin 은 닫고, stdout 은 버리고, stderr 는 데몬이 줄 단위로 읽어 길이 제한(줄당 2 KiB, 최근 64줄) 진단 버퍼에 둔다.
 3. 사이드카가 접속해 `hello` 를 보낸다. 데몬은 첫 접속 1개만 받고, `nonce` 가 다르거나 `agent.startup_timeout_ms`(기본 30000) 안에 `hello` 가 없으면 프로세스를 죽이고 `Unavailable`. 접속 후 소켓 파일은 지운다.
-   `hello.protocol` 이 1 이 아니거나 `hello.versions.openside_agent` 가 지원 범위 **`>=0.1.0,<0.2.0`** 밖이면 역시 프로세스를 죽이고 `Unavailable`(메시지에 지원 범위를 적는다. 상대가 보낸 버전 문자열은 32자 이하의 버전 모양일 때만 그대로 쓴다). `0.1.0+local` 같은 접미사는 허용한다. 범위는 Rust `openside_agent_sidecar::supported_agent_versions()` 와 스키마의 `x-openside-agent-versions` 가 같은 값이며, 양쪽 테스트가 일치를 확인한다. 범위를 바꾸려면 둘 다 바꾸고 `agent/src/openside_agent/__init__.py` 의 `__version__` 이 그 안에 있어야 한다.
+   `hello.protocol`은 반드시 1이어야 하고 `hello.versions.openside_agent`는 **`>=0.1.1,<0.2.0`** 범위 안에 있어야 한다. 그렇지 않으면 데몬이 프로세스를 중지하고 `Unavailable`을 반환한다. 0.1.0 버전은 데몬 풀 리스를 쓰지 않고 로컬에서 자격 증명을 불러올 위험이 있어 의도적으로 거부한다. 정제된 거부 응답에는 길이 제한이 적용된 버전 형태의 피어 텍스트만 표시될 수 있으며, 그 외 텍스트는 `<invalid>`로 대체된다. `0.1.1+local` 같은 접미사는 허용된다. Rust `supported_agent_versions()`, 생성된 `x-openside-agent-versions`, Python 패키지 버전은 함께 검증된다.
 4. 프레이밍: UTF-8 JSON 객체 하나 + `\n`. 한 줄 최대 **4 MiB**(`MAX_LINE_BYTES = 4194304`).
 5. 봉투: 모든 메시지는 `{"v":1,"type":"<이름>", ...}`. `v != 1` 은 거부.
 6. 자원 상한(데몬 쪽): 동시에 실행 중인 `tool_call` 은 연결당 최대 32개. 넘는 호출은 실행하지 않고 즉시 `tool_result{outcome:{status:"error", message:"too many concurrent tool calls"}}`. 중복 `rpc_id` 검사는 실행 중인 것 + 최근 완료 1024개 범위. 사이드카 → 데몬 이벤트 큐는 256개로 제한하고, 데몬이 소비하지 못하면 소켓 읽기를 멈춰 사이드카 쪽이 막힌다(메모리 증가 대신 역압).
@@ -34,6 +35,9 @@
 | `user_message` | `message_id`, `text`, `mode: "queue"\|"steer"\|"now"` | 유휴면 새 런 시작. 실행 중이면 `steer`/`now` 는 다음 모델 요청 직전에 주입, `queue` 는 현재 런의 작업이 끝난 뒤 처리 |
 | `abort` | — | 현재 런 취소. 유휴면 무시 |
 | `tool_result` | `rpc_id`, `outcome` | `tool_call` 응답(§6) |
+| `credential_response` | `id`, `request_id`, `lease_id`, `generation`, `account{source,account_id}`, `auth{kind,value,upstream_account_id?,expires_at_ms?}` | 시도별 비공개 자격 증명 리스. 모델에는 일절 노출되지 않음(§6.1) |
+| `credential_error` | `id`, `request_id`, `code`, `reason`, `retry_at_ms?`, `generation` | 고정·정제된 자격 증명 거부 응답. 로컬 소스 다운그레이드 불가(§6.1) |
+| `credential_reported` | `id`, `request_id`, `lease_id`, `generation`, `action`, `retry_at_ms?`, `reason?` | 재취득 전 커밋된 리포트 반영을 확인(§6.1) |
 | `ticket_resolved` | `ticket_id`, `tool_call_id`, `resolution` | 보류 호출 해결(§7) |
 | `subagent_cancel` | `subagent_id` | 서브에이전트 취소(§10). 모르거나 이미 끝난 서브에이전트면 오류 없이 무시 |
 | `discard_deferred` | — | 복원한 보류 이어하기(continuation)를 실행하지 않고 버린다. 보류 호출·`delegate` 대기·미종료 서브에이전트·`deferred_messages` 를 지우고, 히스토리는 답이 없는 tool-call batch 앞까지 자른 뒤 `state_snapshot` 을 보낸다(§8). 실행 중이면 무시 |
@@ -41,8 +45,12 @@
 | `shutdown` | — | 진행 중 런 취소 → 마지막 `state_snapshot` → `bye` → 종료(0). 데몬은 5초 후 프로세스 그룹 SIGKILL |
 
 `ToolSpec = {name, description, parameters(JSON Schema object), approval: "read"|"write"|"exec"|"sensitive", deferrable: bool}`. 스키마는 데몬의 `schemars` 출력이 유일한 원본이다(사이드카에서 이중 정의 금지).
-`model.id`/`fallback[]` 는 설정값 문자열(`provider:model`)이며 코드에 특정 ID 를 두지 않는다. `config.credentials` 는 설정 파일의 `[credentials]` 절(비밀 아님: 소스 순서, broker URL, 토큰 **파일 경로**, 환경변수 이름, `api_key_cmd` argv)이다.
+`model.id`와 `fallback[]`은 명시적으로 설정된 `provider:model` 식별자다. `config.credentials`에는 비밀값이 아닌 요청 구성 옵션만 포함된다. 소스 설정, 자격 증명 경로, Vault 키, 브로커 베어러 토큰은 데몬에만 남는다. SDK 클라이언트는 추출된 계정 자격 증명이 아니라 플레이스홀더 키만 유지한다.
 `resume_state = {format:"openside-agent-state/1", data:"<불투명 문자열>"}`.
+
+선택 필드인 `open.team`은 `{role: "chief"|"teammate", agent_id, persona, roster}` 구조다. 생략하거나 null로 지정하면 기존 레거시 세션 방식으로 동작한다. 양쪽 모두 1,500 유니코드 문자를 초과하는 persona 문자열이나 2,000자를 초과하는 roster 문자열을 거부하며, 임의로 자르지 않는다. 데몬은 이름/persona와 이름/역할만 포함된 roster를 렌더링한다. 사이드카는 이 블록을 그대로 덧붙이고 기존 전면 지시문 대신 신뢰할 수 있는 `[CHIEF]` 또는 `[TEAMMATE]` 지시문 블록을 추가한다. 이 역할 지시문은 persona 길이 제한과 별개로 계산된다. 역할에 맞지 않는 `team_*` 도구 명세가 있으면 치명적인 `tool_gate` 오류와 함께 시작에 실패하며, 데몬은 실행 중에도 권한을 다시 검사한다.
+
+chief는 조율을 총괄한다. 반복 작업에는 teammate를 배정하고, 위임에는 자체 완결형 패킷을 사용하며, 대기나 폴링 대신 실시간 제어(live steering)로 조율한다. 판단이 필요한 질문은 chief를 거쳐 회신하고, 중요한 작업에는 독립적인 리뷰어를 배치하며, 소유권 이전 시 사람에게 앞으로 해당 영역을 누가 맡는지 안내한다. teammate는 담당 영역을 책임지며, `team_ask_chief`로 결정을 묻고 `team_report`로 근거를 보고한다. 두 역할 모두 사람의 명시적 승인 없이 배포하거나 게시할 수 없다.
 
 ## 5. 사이드카 → 데몬
 | type | 필드 | 의미 |
@@ -53,6 +61,8 @@
 | `message_accepted` | `message_id` | 메시지가 대화 히스토리에 들어감(모델 요청에 포함) |
 | `message_result` | `message_id`, `outcome: completed\|aborted\|failed\|deferred`, `reason?` | 메시지를 포함한 런의 종료. 런에 들어간 모든 메시지마다 1회. `deferred` 로 끝난 메시지는 재개 런이 끝날 때 최종 결과(`completed`/`aborted`/`failed`)를 한 번 더 받는다. 재개 런이 다시 보류되면 `deferred` 를 반복해서 보내지 않는다 |
 | `tool_call` | `rpc_id`, `tool_call_id`, `name`, `args`, `subagent?`, `approval_ticket?` | reverse RPC. 동시에 여러 개 가능. 데몬은 같은 `rpc_id` 로 `tool_result` 를 1회 보낸다 |
+| `credential_request` | `id`, `request_id`, `provider`, `model`, `attempt`, `subagent?` | 연결에 바인딩된 데몬 세션에서 새 시도용 자격 증명 발급(§6.1) |
+| `credential_report` | `id`, `request_id`, `lease_id`, `outcome`, `stream_started`, `retry_after_ms?`, `scope`, `usage?`, `usage_windows[]` | 리스에 바인딩된 분류 결과, 관측된 토큰 수, 정제된 사용량 윈도우(§6.1) |
 | `subagent_steer_result` | `control_id`, `delivered` | 동일한 `control_id`를 담아 `subagent_steer`에 응답한다. 대상 에이전트가 지시 사항을 수락했을 때만 `delivered:true`로 설정하고, 대상을 알 수 없거나 이미 종료된 경우에는 `false`로 설정한다. 데몬은 이 값이 `true`일 때만 202를 반환하며, 그렇지 않으면 409 `subagent_finished`를 반환한다. |
 | `deferred` | `calls[{tool_call_id, ticket_id, kind}]` | 런이 보류 호출 때문에 멈춤(`DeferredToolRequests`). 이후 `message_result{deferred}` |
 | `state_snapshot` | `state{format, data}` | 직렬화된 대화 상태. **일관된 지점(런 종료: completed/aborted/failed/deferred)마다** 전송. 데몬은 최신 것만 보관 |
@@ -67,6 +77,15 @@
 `turn.started{}`, `turn.ended{}`(모델 요청 1회 단위), `assistant.delta{text}`, `assistant.final{text}`, `thinking.delta{text}`, `subagent.lifecycle{subagent_id, status, output?}`(`running`/`waiting_human`/`completed`/`failed`/`cancelled`), `subagent.progress{subagent_id, progress}`(`progress.kind`: `model_request`, `model_response`, `steer_queued`, `steer_injected`), `usage{model, input_tokens, output_tokens}`.
 툴 생명주기(`tool.started/ended`)는 **데몬이 직접** 기록한다(툴을 실행하는 쪽이 데몬이고, 인자 redaction 이 데몬에서 일어나므로). 사이드카는 보내지 않는다.
 
+어시스턴트의 첫 번째 응답이 완료되면 `session.title_proposed{title}`이 발행된다. 사이드카는 자체 백그라운드 작업에서 도구를 사용하지 않는 별도의 제목 생성 요청을 보낸다. 이 요청은 최대 48개 출력 토큰과 10초 제한 시간을 가지며, 완료 후 스냅샷에 `title_attempted`를 기록한다. 제목 생성 작업 때문에 `message_result`, `settled`, 후속 메시지, 세션 종료가 지연되지 않으며, 제목 제안 이벤트는 `settled` 이후에 도착할 수도 있다. 세션이 종료되면 제목 생성 작업은 취소되고 회수된다. 제목 생성에 실패하더라도 어시스턴트 응답이 실패 처리되지는 않는다. 데몬은 최대 6단어로 정규화된 제목만 수락하며, URL 형태는 절대 허용하지 않는다. 세션 생성 시 명시적으로 지정한 제목이나 사용자가 `session.updated`로 변경한 제목이 항상 우선하며, 변경된 제목이 현재 자동 생성 제목과 같더라도 마찬가지다. 제목 생성 요청은 별도의 `usage` 이벤트를 발생시키며, 화면에 보이는 대화 내용이나 스크립트 커서는 변경하지 않는다.
+
+데몬은 제목을 이미 사용자가 직접 설정했거나 제안된 제목이 수락된 경우 비공개 설정인 `open.config.agent.title_needed`를 false로 변경한다. 그러면 사이드카는 제목 생성 요청을 보내지 않으며, 이는 이전 스냅샷이 저장되기 전에 비정상 종료된 경우에도 마찬가지다. 스크립트 픽스처에서 해당 항목이 생략되면 기본값은 true로 지정된다. 이미 진행 중인 제목 생성 요청이 있더라도 사용자가 제목을 변경하면 데몬 리듀서에서는 항상 사용자가 변경한 제목이 우선 적용된다.
+
+생성된 제목, 사용량, 이름 변경, 고정(pinning) 같은 메타데이터는 태스크 종료 마커 뒤에 전달될 수 있다. 실행 중이지 않은 세션에서 새로운 텍스트 없이 `openside session resume`을 실행하면 확인된 `Session.last_seq`까지 수신되지 않은 모든 이벤트를 다시 재생한 뒤 반환하며, 마지막 이벤트가 `session.settled`일 것이라고 단정하지 않는다. 새 메시지가 있거나 실행 중인 세션인 경우에는 여전히 새로운 종료 이벤트를 대기한다. 재생된 모든 이벤트는 저장된 커서 위치를 전진시키므로, 이후 다시 resume을 실행하더라도 메타데이터가 중복 재생되지 않는다.
+
+
+
+
 ## 6. 툴 호출(reverse RPC)
 `tool_result.outcome`:
 - `{"status":"done","for_model": <JSON 값>}` → 툴 반환값.
@@ -74,6 +93,21 @@
 - `{"status":"deferred","ticket_id":"…","kind":"external"}` → `CallDeferred(metadata={ticket_id})`. `request_human_step`, `ask_user` 의 경로.
 - `{"status":"denied","reason":"…","hint":"…"|null}` / `{"status":"error","message":"…"}` → `ModelRetry`(이유와 대안 문장). 재시도 한도는 사이드카 설정(기본 3).
 사이드카는 동일한 `tool_call_id`에 `approval_ticket`을 실어 재호출할 수 있다. 데몬은 세션, 호출 ID, 도구, 호출 주체(부모 또는 같은 `subagent`)가 일치하는지, 그리고 승인된 `Confirm`으로 해결되었는지 검증한다. 데몬은 `Ask` 확인 티켓을 열 때 화면 표시용으로 가공된 인자가 아니라 원본 인자 전체와 권한(capability) 및 대상을 포함한 정책 동작(policy actions) 전체를 재귀적으로 키 정렬한 canonical JSON의 SHA-256 해시를 내부에 영구 보관한다. 재호출이 성립하려면 이 바인딩이 일치해야 하며, 도구 실행 전에 해당 승인을 원자적으로 영구 보관 장치에 `consumed`로 표기해야 한다. 인자나 정책 동작의 권한 및 대상이 불일치하면 `approval_args_mismatch`로 거부하고, 이미 사용된 승인은 `approval_already_used`로 거부한다. 명시적 `Deny`는 여전히 우선권을 가진다. 선점 표기 후 크래시가 발생했다면 해당 승인은 재시도할 수 없다.
+
+### 6.1 Credential RPC
+
+비공개 자격 증명 채널은 `tool_call`과 독립적이며 모델 툴 게이트에 절대 노출되지 않는다. 요청에는 길이 제한이 있는 불투명 상관관계 `id`와 논리적 `request_id`를 사용한다. `request_id`는 재시도 전반에서 바뀌지 않는다. `attempt`는 0부터 63까지의 0 기반 인덱스로, 업스트림 시도는 최대 64회까지 허용된다. 선택 항목인 `subagent`는 데몬이 인식하는 자식 ID로 해당 Agent 제약을 적용하는 데 쓴다. 어떤 프레임도 다른 세션 ID를 지정할 수 없다. 유효한 정렬 계정 풀과 웜 세션 어피니티의 소유권은 오직 데몬에만 있다.
+
+`auth.kind`는 `api_key`, `claude_code`, `codex_cli`, `bearer` 중 하나다. 유일한 비밀값은 `auth.value`다. Codex는 요청 헤더에 필요한 비공개 업스트림 계정 ID도 함께 전달받을 수 있다. 리프레시 토큰이나 자격 증명 홈 디렉터리 필드는 허용되지 않는다. Python은 현재 시도에 필요한 자체 가변 토큰 버퍼만 보관하고 `finally` 블록에서 이를 소거하며, 선택된 프로바이더 오리진에만 인증 정보를 주입한다. Codex는 SDK의 자격 증명 파일 로드와 OAuth 갱신을 건너뛰도록 `openai_client`를 주입한다. SDK 수준 재시도는 비활성화하여 데몬 정책을 우회한 채 동일 자격 증명으로 다시 전송하지 못하도록 막는다.
+
+결과(outcome) 종류는 `success`, `auth`, `rate_limit`, `quota`, `policy`, `transient`, `cancelled`다. 세부 정보가 없는 단순 429는 계정 레이트 리밋이고, 구조화된 쿼터 코드는 쿼터 소진이며, 일반 401은 인증 실패, 그 외 403 권한 오류는 정책 거부다. 입증된 분당/동시성 한도 초과나 전송/5xx 실패는 일시적 오류(transient)로 분류한다. `retry_after_ms`는 프로바이더가 알린 유한하고 제한된 대기 시간만 담으며, 재시도/초기화 시각 정보가 없으면 임의로 60초를 채우지 않고 알 수 없음(unknown)으로 둔다. 범위는 구조화된 쿼터/정책 데이터로 `model` 범위임이 입증되지 않는 한 `account`다. 리포트에는 원시 응답 본문, 헤더, 예외 텍스트, 업스트림 식별자를 일절 포함하지 않는다.
+
+`credential_reported.action`은 `complete`, `refresh`, `rotate`, `stop` 중 하나다. 데몬은 계정, 리비전, 리스 변경 사항을 먼저 커밋한 뒤 확인(ack)을 보낸다. Python은 실패 확인을 받은 후에야 동일한 논리 ID와 다음 시도 번호로 자격 증명을 다시 요청한다. 오직 데몬의 `refresh`나 `rotate` 지시가 있을 때만 재전송이 허용된다. 스트리밍 컨텍스트가 한 번이라도 스트림을 호출자에게 넘겨준 뒤에는 실패하더라도 해당 요청을 다시 전송하거나 로테이션하지 않는다. 취소/중단/종료 시에 한해 Python은 확인을 기다리지 않고 `cancelled` 리포트를 전송하며 늦게 도착하는 응답은 무시해 셧다운 디스패치 데드락을 방지한다.
+
+거부되거나 풀이 소진·차단되면 고정된 기계 판독 사유와 신뢰할 만한 재시도 시각을 담아 타입화된 `AuthUnavailable` 오류를 발생시킨다. 기본 원칙은 닫힌 채로 실패한다(fail-closed). 목록에 없는 소스로의 다운그레이드는 허용되지 않는다. G-2 규정에 따른 혼합 소스 계정 로테이션은 사람이 명시한 유효 풀 내부에서만 동작한다. 다른 프로바이더로의 변경은 명시적으로 구성된 폴백 모델이 필요하며, 인증 불가(`AuthUnavailable`)는 폴백 조건이 아니다. 사이드카 스냅샷은 더 이상 자격 증명 pin을 보관하지 않으며, 레거시 `pins`가 포함된 기존 스냅샷은 해당 키를 버리고 정상 디코딩한다.
+
+데몬이 실행한 사이드카는 신뢰받는 실행 코드이며 공격 성향을 지닌 보안 주체로 취급되지 않는다. 비공개 소켓과 nonce는 해당 프로세스를 인증하고, 리스 및 최대 64회 시도 규칙은 상호 협력 프로토콜 요청을 제어한다. 즉, 보안이 손상된 사이드카가 복사된 업스트림 토큰을 RPC 외부에서 사용하거나 분류된 결과/사용량 리포트를 조작하는 행위 자체를 방지하지는 못한다. 적대적 사이드카를 완전히 격리하려면 데몬 소유의 업스트림 아웃바운드 제어나 독립 검증된 상태 증명이 필요하다.
+
 
 ## 7. 티켓 해결과 재개
 `ticket_resolved.resolution`:
@@ -100,6 +134,9 @@
 ], "delay_ms": 0}
 ```
 모델 요청마다 다음 응답을 하나 소비한다(스트리밍 시 텍스트를 단어 단위 delta 로 쪼갬). 응답이 바닥나면 텍스트 `"[script exhausted]"`. `{"type":"wait_steer"}` 파트가 있으면 다음 steer 메시지가 주입될 때까지(최대 `delay_ms`, 파트에 `timeout_ms` 가 있으면 그 값) 그 응답을 지연한다. `"subagents": {"<부모 delegate tool_call_id>": [응답…]}` 로 서브에이전트별 응답 목록을 따로 줄 수 있으며, 각 서브에이전트는 자기 소비 위치를 가진다. 스크립트 상태(소비 위치)는 `state_snapshot` 에 포함돼 재기동 후 이어진다.
+
+스크립트 수준의 선택적 `title` 문자열은 스크립트 전용 별도 제목 모델을 지정하며, 기본값은 `Discuss the request`다. 제목 생성은 `responses` 항목을 소모하지 않고 실제 프로바이더를 호출하지도 않으며, 1회 실행 여부는 `title_attempted`를 통해 복원된다.
+
 - `echo`: 가장 최근에 입력된 사용자 프롬프트를 그대로 출력한다.
 - `{{result:call.field.path}}`: 최상위 문자열 인자 안에서 도구 호출 반환 객체의 필드 경로 또는 숫자 배열 인덱스를 따라가 값을 치환한다.
 - `script.subagents`: `task_start` 및 `delegate` 호출 ID를 하위 에이전트 응답 목록과 매핑하며, 하위 작업마다 독립적인 커서와 steer 이벤트를 관리한다.
@@ -127,7 +164,7 @@
 ### 도구 권한 및 실행 제약
 - Front 에이전트에게 주어지는 도구는 다음과 같다:
   - Task 제어 도구: `task_start(goal, optional tools)`, `task_steer(task_id, message)`, `task_cancel(task_id)`, `task_status()`
-  - 브라우저 및 보조 도구: `browser_tabs`, `browser_snapshot`, `browser_screenshot`, `memory_search`, `skill`
+  - 브라우저 및 보조 도구: `browser_tabs`, `browser_snapshot`, `browser_screenshot`, `browser_import_lookup`, `memory_search`, `skill`
 - Front 에이전트가 브라우저나 시스템을 직접 변경하려 시도하면 데몬이 `front_agent_cannot_act` 오류를 내며 거부한다.
 - `task_*` 도구는 하위 작업(child task)에 부여하지 않으며, `delegate` 도구는 프론트 모드에서 감춘다.
 - `task_start`는 세션 모델을 기반으로 백그라운드 ADR020 하위 에이전트를 띄우고, 즉시 `task_id`와 running 상태를 반환한다. 작업이 시작될 때 `subagent.started`(background: true) 이벤트를, 작업이 끝나면 `subagent.ended` 이벤트로 최종 출력을 기록한다.
@@ -154,3 +191,9 @@
 - 사용하지 않는 탭은 세션을 중지, 보관, 삭제할 때 정리하거나 10분 TTL이 지나면 닫으며, 기동 직후 최종 상태를 다시 확인한다.
 - 예열 API는 202 Accepted를 반환하는 멱등성을 지닌 최선 노력(best-effort) 방식으로 작동한다. 예열 중 발생한 실패는 실제 메시지를 처리할 때 드러난다.
 - 테스트 시에는 `OPENSIDE_TEST_DISABLE_PREWARM`과 `OPENSIDE_AGENT_SCRIPT` 환경변수를 설정해 자동 사전 준비 및 예열을 우회할 수 있으며, 이 경로에서는 실제 공급자(live provider) 호출을 측정하지 않는다.
+
+## 공유 Card
+
+`present`는 데몬 카탈로그가 제공하며 기존 도구 RPC를 통해 실행된다. 사이드카는 비공개 UI 도구를 직접 실행하지 않는다. 호출에 성공하면 `{card_id}`만 반환하며, `card.presented`는 `present:<tool_call_id>` 아래에 표준 프레젠테이션을 단 한 번 영속화한다. 유효하지 않은 초안은 도구 성공 반환값이나 프레젠테이션 이벤트 없이 재시도 프롬프트를 받는다.
+
+사람 개입 단계(human-step) 도구는 원래의 도구 호출 ID를 계속 보류하고 재개한다. 사람 대상 Ticket/Card 메타데이터와 응답 내용은 모델 컨텍스트로 전달되지 않는다. 양식/OTP/로그인 결과는 실제 입력값을 담지 않으며, 페이지/양식 응답은 `state_snapshot`에 절대 들어가지 않는다. 터미널 수명주기 이벤트는 교체 Card를 원자적으로 전달하며, Card가 누락된 과거 이벤트는 API 재생 시 데몬 프로젝터가 채워 넣는다.

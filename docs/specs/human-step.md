@@ -3,6 +3,8 @@
 작성: 2026-10-11, 구현 후 갱신. 상태: **구현됨**. 관련: PP-11, PP-22, C-1, C-8, D-4, B-8. 코드: `crates/opensided/src/{tickets,api,host,takeover}.rs`, `crates/opensided/src/tools/{human,browser}.rs`, `crates/openside-browser/src/screencast.rs`, `crates/openside-proto/src/{api,takeover}.rs`. 툴 쪽 상세는 `docs/09` §6, 사이드카 재개 경로는 `docs/specs/sidecar-protocol.md` §6~7.
 `unverified` = 확인하지 못한 가정.
 
+관찰된 로그인은 데몬 전용 쿠키 키 기준선을 최대 10분 동안 유지한다. 로그인 티켓과 Vault 로그인은 성공적으로 완료된 뒤에만 연결 정보를 저장한다. takeover는 진행 전에 로그인 페이지여야 하고, 완료 후에는 로그인·OTP·오류 페이지가 아니어야 한다. OTP 입력만으로는 성공으로 간주하지 않으며, 동일 origin에서 브라우저를 새로 관찰했을 때 더 이상 로그인이나 OTP 페이지로 분류되지 않아야 한다. 신원 확인과 마스킹은 연결 서비스에서 이루어지며, 쿠키 값은 연결 메타데이터, 이벤트, 감사 기록에 일절 포함되지 않는다.
+
 ## 1. 문제
 SMS 코드, 이메일 코드, 기기 푸시 승인(Apple "허용"), CAPTCHA, passkey, 본인확인은 **에이전트가 우회하면 안 되는 벽**이다.
 에이전트는 이 과정을 사람에게 넘겨야 한다. 문제는 그 사람이 자리에 없을 때다.
@@ -52,6 +54,15 @@ daemon: 해결 → ticket_resolved → 사이드카가 같은 tool call 의 결�
 - 값을 채운 문서에서는 `browser_screenshot` 이 거부된다(`screenshot_unavailable_after_secret_fill`, 힌트 `navigate or take a snapshot instead`). 비밀 문서 표시는 `browser-state.json` 에 저장돼 데몬 재시작 뒤에도 유지된다. 재시작 전에는 redactor 가 스냅샷의 값을 가린다. 데몬 재시작 뒤에는 메모리의 redaction 필터가 없으므로, 비밀 문서로 기록된 문서의 `browser_snapshot`(전체·diff)을 `snapshot_unavailable_after_secret_fill` 로 거부하고 내비게이션 후 다시 허용한다(테스트 `recovered_secret_document_denies_snapshot_until_navigation`). 비밀 문서 표시는 값 입력 전에 디스크에 먼저 기록한다.
 - `resolve` 오류 코드: `409 origin_mismatch`(티켓은 pending 유지), `409 secret_input_failed`(노드·입력 실패), `503 secret_input_unavailable`(브라우저 없음), 입력 싱크가 없으면 `501 secret_input_unavailable`, 값이 문자열이 아니면 `invalid_value`. 입력 전에 값 없는 입력 의도(티켓 id·작업 id)를 먼저 기록하고, 이전 시도가 커밋되지 않은 채 남아 있으면 다시 넣지 않고 `409 secret_input_indeterminate` 로 거절한다(티켓은 pending 유지; 사람이 reject 하거나 에이전트가 새 단계를 연다). 입력은 페이지와 분리된 격리 월드(`Page.createIsolatedWorld`)에서 노드에 묶인 한 번의 `Runtime.callFunctionOn`(최상위 문서·연결 상태·origin·편집 가능 요소 확인 후 격리 월드의 value setter + `input`/`change`)으로 한다. 페이지가 프로토타입 setter·`Object.getOwnPropertyDescriptor`·`dispatchEvent` 를 바꿔도 값을 가로채지 못한다(테스트 `secret_insertion_ignores_page_world_setter_and_builtin_hooks`). 비밀 문서 표시는 탭마다 최근 32개 문서를 보관하고, 티켓의 문서가 탭의 현재 문서일 때만 추가하므로 낡은 티켓이 새 문서의 표시를 덮어쓰지 못한다(`stale_secret_ticket_cannot_displace_newer_document_taint`). 입력은, 커서 위치 추가가 아니라 값 교체다.
 - 같은 대상(`tab_id`+`origin`+`field_ref`)에 대한 `secret_input` 요청은 세션당 3회로 제한한다(`secret input target request limit reached`).
+
+### request_form — FillOnly
+
+`request_form({tab_id, reason?, purpose:"form"|"payment"})`은 에이전트가 소유한 활성 페이지와 그 내부 프레임에서 화면에 보이는 편집 가능 필드를 탐색한다. 결제 필드는 유효하다고 확인된 `cc-*` autocomplete 메타데이터가 있어야 한다. 티켓에는 필드 메타데이터만 담기며, 필드 값이나 호출자가 전달한 선택자는 일절 포함되지 않는다. 각 필드에는 크로스 오리진 결제 프로바이더를 포함하여 검증된 프레임 origin이 표시된다. 필드는 최대 16개까지 제공된다. PAN 검증 시 표시용 공백과 하이픈을 제거하고 12~19자리 숫자 여부와 Luhn 알고리즘을 확인한 뒤 정규화된 숫자만 채운다. 유효기간은 데몬의 현재 월 이전일 수 없으며, OTP는 사이트 텍스트 형식에 맞춰 최대 64자까지 허용한다. 표준 필드 스키마로 표현할 수 없는 분할/선택 결제 컨트롤은 일부 필드를 임의로 꾸며내지 않고 거부하며, 기존 Takeover 흐름을 이용하도록 안내한다.
+
+비밀 정보가 아닌 명시적 주소 자동완성 필드는 최대 10개의 가져온 추천값을 제공할 수 있으며, 각 추천값은 필드 제한 길이와 160자 이하로 제한된다. 이 값은 사람에게 보여주는 Ticket/Card 메타데이터일 뿐이며, 초기값으로 쓰이거나 자동으로 채워지지 않는다. 비밀번호, 식별자, OTP, 결제 필드에는 추천값을 전혀 제공하지 않는다. 채널 메시지에는 양식 입력용 비공개 웹 링크만 포함되며, 필드 메타데이터, 추천값, 응답 버튼은 포함되지 않는다. 사이드카는 지연된 티켓 ID와 값 없는 처리 결과만 받으며, 사람에게 보여주는 Ticket/Card는 전달받지 않는다.
+
+데몬은 최상위 문서와 origin, 프레임 ID와 로더 및 origin, 호스팅 OOPIF 타깃, 백엔드 노드 ID를 고정(pin)한다. 처리 요청은 `{values:{field_id:string|bool}}` 형태만 허용하며, 모든 필드를 검사하고 값 마스킹 처리기를 등록하며 고정된 문서를 다시 검증한다. 이후 문서를 비공개로 지정하고 값이 포함되지 않은 입력 의도를 영구 저장한 뒤 실제 입력을 진행한다. 입력은 클릭, Enter 키 입력, 양식 제출 없이 격리된 월드(isolated world)에서 수행된다. 성공 시 `{status:"filled",field_count,next:"review_page"}`만 반환한다. 의도를 저장한 뒤에 발생한 실패는 모두 `form_fill_indeterminate`로 처리하며, 재시도 시에도 절대 무작정 다시 채우지 않는다. 입력 전 페이지가 이동하면 `target_changed`나 기존 타깃 미제공 오류를 반환하며 거부한다. 결제 정보는 Vault에 저장되지 않는다. 이후 구매나 양식 제출을 진행하려면 별도의 승인 절차를 거쳐야 한다.
+
 
 ### request_otp — 인증 코드 한 가지 도구
 
@@ -165,15 +176,15 @@ Apple/Google 의 "기기에서 허용" 은 openside 가 할 일이 없다. 사�
 - `takeover.*` 이벤트는 없다. 연결 상태는 클라이언트가 소켓으로 안다.
 - CAPTCHA 해결 서비스 연동, 자동 풀이는 **하지 않는다**(우회 금지 정책). passkey/보안키는 사람 기기에서만 가능하므로 `device_approval` 로 처리한다.
 
-### Read-only session browser preview (WS-5)
+### 읽기 전용 세션 브라우저 미리보기 (WS-5)
 
-- `GET /v1/sessions/{id}/browser/preview` upgrades to a WebSocket without a human-step ticket. It requires `browse` (`steer` implies `browse`), not `read`: JPEG pixels cannot be redacted like text events. The same-origin and browser bearer-subprotocol rules above apply; only `openside.v1` is echoed.
-- `PreviewServerMessage` is server-only: `frame{data(base64 JPEG),width,height,tab_id}`, `withheld{code,tab_id}`, `paused{reason:"takeover",tab_id}`, `no_tab`, and `ended{reason:revoked|session_stopped|session_deleted}`. Text and binary client messages are ignored, with a 1 KiB message/frame limit; this route never forwards input.
-- Preview follows the most recent successful browser tool's owned tab, or the sole live owned tab if no current tab is known. It does not launch a browser. JPEG quality is 40 and encoded dimensions are at most 720x450. Chromium has a bounded startup allowance of at most three frames (older binaries ignore `maxFramesInFlight:1`); thereafter one capture credit is released per 500 ms, including replaced frames, enforcing sustained capture at most 2 fps. Each viewer's delivery is at most 2 fps, including startup. Takeover retains its eager replacement ACKs for low latency. A session shares one latest-frame feed among at most eight viewers; additional viewers receive `429 too_many_viewers`.
-- A takeover reservation stops the preview capture before human capture starts. The preview clears its image and reports `paused` while the ticket is pending, then automatically resumes. Secret-tainted tabs report `withheld{screenshot_unavailable_after_secret_fill}`, including after navigation. Before a secret is inserted or takeover begins, capture is stopped and its generation is invalidated. The writer's final synchronous admission rechecks that generation, device revocation and the stream's latched lifetime. Queued stale frames are discarded. At most one frame admitted **before** a takeover/taint/revocation transition may finish sending afterward, within the five-second write deadline; no frame captured after that transition is sent while the exclusion holds. Private sessions refuse the upgrade with `409 private_session`.
-- Each viewer has an eight-message bounded writer queue and reserves four slots for control messages. Revocation closes only that device's sockets. Committed stop/deletion latches an `ended` reason for existing viewers, even if the session immediately resumes; a new viewer can attach to the resumed session. Handshake registration replays terminal events since its initial state read to close the registration race. The last viewer leaving stops capture. Final messages and the close handshake are best-effort within one second, after capture resources are released.
-- Once a conversation has used the browser, the session screen shows the live browser card at the top of the conversation (`BrowserPreview`): the read-only screencast, what the agent is doing, "Action needed" while a ticket waits, Minimize (a slim pill) and Cancel task; tapping the picture opens the browser sheet on the same connection. Private sessions never show it. The shared `BrowserFrame` renderer is also used by `TakeoverView`.
-- Evidence: `crates/openside-browser/src/screencast_tests.rs` checks deterministic CDP credits and real animated Chromium frame/ACK counts; `crates/opensided/src/tests/preview.rs` includes stop/immediate-resume, explicit no-frame windows with visible secrets and takeover input, foreign-owned tabs, and before/after writer-admission barriers; `web/src/components/BrowserPreview.test.tsx` and `crates/openside-e2e/tests/web_pip.rs::web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover_ticket` cover the displayed image.
+- `GET /v1/sessions/{id}/browser/preview`는 사람 개입 티켓 없이 WebSocket으로 연결을 업그레이드한다. 텍스트 이벤트와 달리 JPEG 픽셀은 마스킹할 수 없으므로 `read`가 아닌 `browse` 권한(`steer`는 `browse`를 포함)이 필요하다. 앞서 설명한 동일 출처 규정과 브라우저 bearer 서브프로토콜 규칙이 동일하게 적용되며, 응답에는 `openside.v1`만 반환된다.
+- `PreviewServerMessage`는 서버 전송 전용 메시지다. 규격은 `frame{data(base64 JPEG),width,height,tab_id}`, `withheld{code,tab_id}`, `paused{reason:"takeover",tab_id}`, `no_tab`, `ended{reason:revoked|session_stopped|session_deleted}`로 구성된다. 클라이언트가 보내는 텍스트 및 바이너리 메시지는 무시되며 메시지/프레임 크기는 1KiB로 제한된다. 이 라우트는 사용자 입력을 절대 전달하지 않는다.
+- 미리보기는 가장 최근에 브라우저 도구가 성공적으로 사용한 탭을 추적하며, 현재 탭이 확인되지 않으면 에이전트가 소유한 유일한 활성 탭을 추적한다. 미리보기 자체가 브라우저를 직접 실행하지는 않는다. JPEG 화질은 40이고 인코딩 해상도는 최대 720x450이다. Chromium은 시작 시 최대 3개 프레임까지 제한된 여유분을 허용한다(구버전 바이너리는 `maxFramesInFlight:1`을 무시함). 이후에는 대체된 프레임을 포함하여 500ms마다 캡처 크레딧이 1개씩 충전되어 지속 캡처 속도가 최대 2fps로 유지된다. 각 시청자에 대한 전송 속도 역시 시작 구간을 포함하여 최대 2fps로 제한된다. Takeover는 지연 시간을 낮추기 위해 즉각적인 대체 ACK 처리를 유지한다. 한 세션의 최신 프레임 피드는 최대 8명의 시청자가 공유하며, 추가 시청자에게는 `429 too_many_viewers`를 반환한다.
+- takeover가 예약되면 사람의 브라우저 캡처가 시작되기 전에 미리보기 캡처가 중단된다. 티켓이 대기 중인 동안 미리보기는 이미지를 비우고 `paused` 상태를 보고한 뒤, 완료 시 자동으로 재개된다. 비밀 정보로 오염(taint)된 탭은 페이지가 이동한 뒤에도 `withheld{screenshot_unavailable_after_secret_fill}`을 보고한다. 비밀 정보가 입력되거나 takeover가 시작되기 전에 캡처를 중단하고 해당 세대를 무효화한다. 프레임 작성기는 최종 동기 전송 허가 단계에서 세대 번호, 기기 권한 취소 여부, 스트림의 잠금 수명을 다시 확인한다. 큐에 남아 있던 만료된 프레임은 폐기된다. takeover, 오염, 권한 취소 상태로 전환되기 **전에** 전송이 승인된 프레임은 5초 전송 마감시간 이내라면 최대 1장까지만 이후 전송을 마칠 수 있으며, 전환 이후 캡처된 프레임은 제외 상태가 유지되는 동안 일절 전송되지 않는다. 비공개 세션에서는 연결 업그레이드가 `409 private_session`으로 거부된다.
+- 각 시청자는 8개 메시지 크기의 유한한 전송 큐를 가지며, 제어 메시지용 슬롯 4개를 따로 예약해 둔다. 권한이 취소되면 해당 기기의 소켓만 닫힌다. 세션 중지나 삭제가 확정되면 기존 시청자에게 `ended` 사유가 고정되며, 이는 세션이 즉시 재개되더라도 마찬가지다. 재개된 세션에는 새로운 시청자가 연결할 수 있다. 핸드셰이크 등록 시에는 초기 상태를 읽은 시점부터 발생한 종료 이벤트를 다시 재생하여 등록 시점의 경쟁 상태(race condition)를 해소한다. 마지막 시청자가 나가면 캡처가 중단된다. 캡처 리소스를 해제한 뒤 최종 메시지 전송과 연결 종료 핸드셰이크는 최대 1초 동안 best-effort 방식으로 처리된다.
+- 대화에서 브라우저를 한 번이라도 사용하면 세션 화면 대화 상단에 활성 브라우저 카드(`BrowserPreview`)가 표시된다. 여기에는 읽기 전용 화면 중계, 에이전트의 현재 작업 내용, 티켓 대기 시 표시되는 "Action needed", 최소화(얇은 알약 형태), 작업 취소 버튼이 포함된다. 화면 이미지를 탭하면 동일한 연결을 통해 브라우저 시트가 열린다. 비공개 세션에서는 이 카드가 절대 표시되지 않는다. 공용 `BrowserFrame` 렌더러는 `TakeoverView`에서도 함께 사용된다.
+- 검증 근거: `crates/openside-browser/src/screencast_tests.rs`에서는 결정론적 CDP 크레딧과 실제 애니메이션이 포함된 Chromium 프레임/ACK 횟수를 확인한다. `crates/opensided/src/tests/preview.rs`에서는 중지 후 즉시 재개, 비밀 정보 노출 및 takeover 입력 시 프레임이 전송되지 않는 명시적 구간, 외부 소유 탭, 전송 허가 전후 배리어 동작을 검증한다. 화면에 표시되는 이미지는 `web/src/components/BrowserPreview.test.tsx`와 `crates/openside-e2e/tests/web_pip.rs::web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover_ticket`에서 다룬다.
 
 ## 4. 자동화 가능한 보조 경로 (옵트인)
 1. **TOTP**: Vault 에 시드가 있으면 사람 없이 `vault_otp` 가 처리한다(C-2). 이건 human step 이 아니다. **구현됨.**
@@ -240,3 +251,13 @@ Apple/Google 의 "기기에서 허용" 은 openside 가 할 일이 없다. 사�
 - 대기 중에는 런이 끝나고 상태는 직렬화된 대화(`state_snapshot`)와 데몬의 티켓으로 남는다. 그래서 사이드카가 재시작돼도 `pending_deferred` 로 복구한다.
 - omp `follow_up` 재개 방식(pending 반환 + 재개 메시지 템플릿)과 S-7 전환 스파이크는 omp 런타임 제거로 필요 없어졌다.
 - 서브에이전트가 생성한 티켓의 소유권 관리와 재개는 harness 가 아니라 사이드카 자체 어댑터(ADR-020, `docs/04-sidecar-integration.md` §10)가 담당한다.
+
+## 공유 Card
+
+티켓은 사람 개입 단계에서 유일한 권한 근거로 유지된다. 데몬이 티켓을 바탕으로 구성한 `card`는 화면 표시용 데이터일 뿐 별도의 권한 체계가 아니다. 웹과 확장 프로그램은 동일한 Card 렌더러를 사용하며, CLI도 같은 타입 블록을 출력한다. 대기 중인 요청은 48픽셀 크기의 버블로 시작해 선택하면 펼쳐진다. 요청을 해결·반려하거나 요청이 만료되면 다른 요청을 덧붙이지 않고 해당 항목의 상태를 직접 바꾼다.
+
+프로바이더 선택 버튼은 캡처된 실제 페이지 컨트롤을 따른다. 이후의 로그인은 쇼핑몰 출처가 아니라 프로바이더의 정확한 출처에 바인딩된 새 티켓으로 처리된다. 저장된 계정 목록에서는 마스킹된 힌트만 노출한다. OTP 등록과 일회성 자동 완성은 기존 티켓 및 Vault 인코딩 방식을 유지하며, 입력한 답변은 Card 필드나 대화 기록, 사이드카 상태로 저장되지 않는다.
+
+`request_form`은 최상위 문서와 임베디드 프레임의 컨트롤을 실시간으로 감지한다. 결제 입력란은 모두 비공개로 처리되며 각 필드에는 검증된 대상 출처가 명시된다. 요청을 해결하더라도 양식을 채우기만 할 뿐 결제 버튼을 누르거나 페이지를 제출하지 않는다. 이후의 중요한 작업은 별도로 캡처된 Confirm 단계를 거쳐야 한다. 반려되거나 만료된 요청은 절대 실행되지 않으며, 페이지가 변경되면 다시 상태를 확인해야 한다. 페어링된 두 기기가 동시에 요청을 처리하려 할 때는 데몬의 동일한 전환 게이트를 거치므로 한 기기만 양식을 채우거나 작업을 재개할 수 있다.
+
+표준 전송 방식은 `cards.md`를 참고하고, 스크립트 기반 프로바이더와 로컬 페이지를 격리해 검증하는 기준은 `crates/openside-e2e/tests/cards.rs`를 확인한다. 테스트용 자격 증명, 설정 키, 결제 정보는 모두 가상 데이터를 사용한다. 카나리 검사는 의도된 일시적 입력·요청 및 비공개 픽스처 페이지를 제외하고, 영구 데이터, 대화 기록, 도구 인자, 감사 및 로그 출력, 사이드카 스냅샷, 정착된 웹 상태 전반에 걸쳐 수행된다.

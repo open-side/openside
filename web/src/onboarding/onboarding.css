@@ -58,7 +58,7 @@
 }
 .onb-progress li {
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgb(255 255 255 / 0.14);
   transition: background-color var(--normal) var(--ease);
 }
@@ -103,7 +103,7 @@
 }
 .onb code {
   padding: 1px 5px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: rgb(255 255 255 / 0.1);
   color: var(--text);
   font-family: var(--font-code);
@@ -147,7 +147,7 @@
   gap: 12px;
   padding: 10px 14px 10px 10px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--glass-inset-bg);
   font-size: 0.9375rem;
 }
@@ -157,7 +157,7 @@
   place-items: center;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgb(255 255 255 / 0.1);
 }
 
@@ -172,7 +172,7 @@
   min-height: 56px;
   padding: 10px 14px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--glass-inset-bg);
   cursor: pointer;
   transition:
@@ -250,7 +250,7 @@
   margin: 0;
   padding: 12px 14px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--glass-inset-bg);
 }
 .onb-result-title {
@@ -311,7 +311,7 @@
   margin-top: 6px;
   padding: 4px 4px 4px 14px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: rgb(8 11 24 / 0.32);
 }
 .onb-command code {
@@ -327,7 +327,7 @@
   gap: 12px;
   padding: 10px 14px 10px 12px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--glass-inset-bg);
   font-size: 0.9375rem;
 }
@@ -348,7 +348,7 @@
   place-items: center;
   width: 24px;
   height: 24px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgb(255 255 255 / 0.1);
   color: var(--muted);
 }
@@ -392,4 +392,226 @@
 }
 .onb a.ui-button {
   text-decoration: none;
+}
+
+/* Step 1: the browsers found on this computer, all selected. */
+.onb-note a,
+.onb-lead a {
+  color: var(--glass-strong-fg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.onb .cli-hint {
+  color: var(--muted);
+}
+.onb .cli-hint code {
+  background: rgb(255 255 255 / 0.1);
+}
+.onb-profiles {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.onb-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 14px 10px 12px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
+  cursor: pointer;
+  transition:
+    border-color var(--fast) var(--ease),
+    background-color var(--fast) var(--ease);
+}
+.onb-profile:hover {
+  background: rgb(255 255 255 / 0.1);
+}
+.onb-profile[data-checked] {
+  border-color: rgb(255 255 255 / 0.5);
+}
+.onb-profile:has(:focus-visible) {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+.onb-profile > input,
+.onb-check > input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--glass-strong-fg);
+}
+.onb-profile > .onb-brand-tile {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  color: #fff;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+}
+.onb-profile > .onb-profile-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.onb-profile-copy > strong {
+  color: var(--glass-strong-fg);
+  font-weight: 600;
+}
+.onb-profile-copy > span {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.onb-profile-copy > .onb-profile-counts {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.onb-profile-copy > .onb-profile-counts--quiet {
+  color: var(--muted);
+}
+.onb-profile-copy > .onb-profile-warning {
+  color: var(--warning, var(--muted));
+}
+
+.onb-kinds {
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
+}
+.onb-kinds > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+.onb-kinds > summary:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+  border-radius: var(--radius-lg);
+}
+.onb-kinds-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  padding: 0 14px 10px;
+}
+.onb-kinds-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.onb-meter {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: rgb(255 255 255 / 0.14);
+  overflow: hidden;
+}
+.onb-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--glass-strong-fg);
+  transition: width var(--normal) var(--ease);
+}
+.onb-notes {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0 0 0 18px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.onb-vault {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
+}
+.onb-vault-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.onb-field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.onb-field input {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-md);
+  background: rgb(8 11 24 / 0.32);
+  color: var(--text);
+  font: inherit;
+}
+.onb-field input:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+}
+
+@media (max-width: 520px) {
+  .onb-kinds-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .onb-actions .ui-button--primary {
+    flex: 1 1 100%;
+  }
+}
+.onb-csv {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.onb-restore {
+  display: grid;
+  gap: 6px;
+}
+.onb-restore ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 0.875rem;
+}
+.onb-restore a {
+  color: var(--glass-strong-fg);
+  overflow-wrap: anywhere;
+}
+.onb-listing > ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 14px 10px 32px;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.onb-listing a {
+  color: var(--glass-strong-fg);
 }

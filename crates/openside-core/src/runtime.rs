@@ -57,8 +57,32 @@ pub struct ToolSpec {
     pub deferrable: bool,
 }
 
+/// Daemon-assigned authority for selecting sidecar instructions and team tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TeamRole {
+    /// Coordinates delegation and routes decisions to the person.
+    Chief,
+    /// Owns an area but must route delegation and decisions through the chief.
+    Teammate,
+}
+
+/// Trusted session identity, kept separate from user-supplied conversation text.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TeamContext {
+    /// Determines the permitted team tool surface, not a user-editable persona.
+    pub role: TeamRole,
+    /// Stable registry identity; display-name edits do not change it.
+    pub agent_id: String,
+    /// Rendered name and persona, limited to 1,500 Unicode scalar characters.
+    pub persona: String,
+    /// Name/role-only roster, limited to 2,000 Unicode scalar characters.
+    pub roster: String,
+}
+
 /// Parameters for opening or restoring a sidecar session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionSpec {
     /// Durable session identifier.
     pub session: SessionId,
@@ -72,10 +96,23 @@ pub struct SessionSpec {
     pub tools: Vec<ToolSpec>,
     /// Last consistent run-end snapshot, when restoring a session.
     pub resume_state: Option<AgentState>,
-    /// Opaque credential-source configuration as JSON, or `{}` when absent; no values.
+    /// Validated non-secret provider request-shaping metadata; credentials use private leases.
     pub credentials_json: String,
     /// Sidecar runtime options as a JSON object (`open.config.agent`).
     pub agent_json: String,
+    /// Absent for legacy sessions, which retain their existing orchestration.
+    pub team: Option<TeamContext>,
+}
+
+impl std::fmt::Debug for SessionSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionSpec")
+            .field("session", &self.session)
+            .field("model", &self.model)
+            .field("fallback_models", &self.fallback_models)
+            .field("credentials_json", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Reverse-RPC invocation executed by the daemon.
@@ -144,6 +181,34 @@ pub enum ToolOutcome {
 pub trait HostToolHandler: Send + Sync {
     /// Execute one invocation without blocking the transport reader.
     fn call(&self, call: ToolCall) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + '_>>;
+
+    /// Resolve private per-attempt authentication through the daemon's policy owner, not a tool.
+    fn credentials(
+        &self,
+        _request: crate::CredentialRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<crate::CredentialSnapshot, crate::CredentialError>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async { Err(crate::CredentialError::unavailable()) })
+    }
+
+    /// Commit a lease-bound outcome before another resolve; no provider error text is accepted.
+    fn credential_report(
+        &self,
+        _report: crate::CredentialReport,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<crate::CredentialReportAck, crate::CredentialError>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async { Err(crate::CredentialError::unavailable()) })
+    }
 
     /// The runtime dropped earlier messages from one agent's model context (`None` = the
     /// parent, otherwise a subagent id), so tool results delivered before now may no longer be
@@ -242,6 +307,11 @@ pub enum RuntimeEvent {
     AssistantFinal {
         /// Complete visible text.
         text: String,
+    },
+    /// A short model-written conversation title, separate from assistant output.
+    SessionTitleProposed {
+        /// Proposed title; the daemon validates it before publication.
+        title: String,
     },
     /// Streaming model thinking text.
     ThinkingDelta {
@@ -406,7 +476,7 @@ pub trait AgentRuntime: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentState;
+    use super::{AgentState, SessionSpec};
 
     #[test]
     fn snapshot_debug_discloses_length_not_content() {
@@ -418,5 +488,23 @@ mod tests {
         assert!(debug.contains("test-format"));
         assert!(debug.contains("data_len: 13"));
         assert!(!debug.contains(&state.data));
+    }
+
+    #[test]
+    fn session_spec_debug_never_discloses_private_credentials() {
+        let spec = SessionSpec {
+            session: crate::SessionId::new("privacy"),
+            model: "anthropic:test".into(),
+            fallback_models: Vec::new(),
+            system_prompt_parts: Vec::new(),
+            tools: Vec::new(),
+            resume_state: None,
+            credentials_json: "{\"_vault_keys\":{\"anthropic\":\"debug-canary-secret\"}}".into(),
+            agent_json: "{}".into(),
+            team: None,
+        };
+        let debug = format!("{spec:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("debug-canary-secret"));
     }
 }

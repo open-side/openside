@@ -57,6 +57,7 @@ fn session(status: &str) -> Value {
 }
 
 async fn handle(State(shared): State<Shared>, request: Request<Body>) -> Response {
+    assert_eq!(request.headers().get("x-openside-client").unwrap(), "mcp");
     let method = request.method().to_string();
     let target = request
         .uri()

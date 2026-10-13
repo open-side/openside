@@ -545,8 +545,8 @@ async fn browser_snapshot_results_with_heavy_escaping_stay_structured_under_the_
 type PixelBox = (u32, u32, u32, u32);
 
 /// Width, height and bounding box of the red fixture button in a screenshot, in PNG pixels.
-fn button_box(path: &Path) -> (u32, u32, Option<PixelBox>) {
-    let decoder = png::Decoder::new(std::fs::File::open(path).unwrap());
+fn button_box(bytes: &[u8]) -> (u32, u32, Option<PixelBox>) {
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().unwrap();
     let mut pixels = vec![0; reader.output_buffer_size()];
     let frame = reader.next_frame(&mut pixels).unwrap();
@@ -593,7 +593,7 @@ async fn browser_pointer_clicks_canvas_from_screenshot_and_gates_sensitive_targe
         "shot-1",
     )
     .await;
-    // B-4: the capture reaches vision models as an image part referencing the stored file.
+    // CUA observations must reach vision without becoming user deliverables.
     let ToolOutcome::DoneWithParts { parts, .. } = &outcome else {
         panic!("screenshot without image part: {outcome:?}")
     };
@@ -604,25 +604,15 @@ async fn browser_pointer_clicks_canvas_from_screenshot_and_gates_sensitive_targe
             parts[0].mime.as_str(),
             parts[0].artifact_ref.as_deref()
         ),
-        (
-            1,
-            openside_core::ContentKind::Image,
-            "image/png",
-            Some("shot-1.png")
-        )
+        (1, openside_core::ContentKind::Image, "image/png", None)
     );
     let image = parts[0].data.clone().unwrap();
     assert!(
         image.starts_with(b"\x89PNG") && image.len() <= crate::artifacts::MODEL_IMAGE_MAX_BYTES
     );
     let shot = model(outcome);
-    assert_eq!(shot["saved"], true);
-    let artifacts = daemon
-        .shared
-        .config
-        .data_dir
-        .join(format!("artifacts/{session}"));
-    let (width, height, found) = button_box(&artifacts.join("shot-1.png"));
+    assert_eq!(shot["saved"], false);
+    let (width, height, found) = button_box(&image);
     assert_eq!(
         (width, height),
         (1440, 900),
@@ -656,17 +646,19 @@ async fn browser_pointer_clicks_canvas_from_screenshot_and_gates_sensitive_targe
         browser.evaluate(&tab, "document.title").await.unwrap(),
         "Clicked"
     );
-    model(
-        tool(
-            &daemon,
-            &session,
-            "browser_screenshot",
-            json!({"tab_id":tab}),
-            "shot-2",
-        )
-        .await,
-    );
-    let (_, _, after) = button_box(&artifacts.join("shot-2.png"));
+    let after_shot = tool(
+        &daemon,
+        &session,
+        "browser_screenshot",
+        json!({"tab_id":tab}),
+        "shot-2",
+    )
+    .await;
+    let ToolOutcome::DoneWithParts { parts, .. } = &after_shot else {
+        panic!("screenshot without image part: {after_shot:?}")
+    };
+    assert!(parts[0].artifact_ref.is_none());
+    let (_, _, after) = button_box(parts[0].data.as_deref().unwrap());
     assert_eq!(after, None, "the canvas button turned green");
 
     // A DOM target under the point gets browser_act's Sensitive gate.

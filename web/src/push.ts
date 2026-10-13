@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ApiError, type Client } from "./api/client";
+import { desktopRequested, disableDesktop, enableDesktop, extensionAvailable } from "./desktopNotify";
 
 /** The daemon's id for this browser's push subscription; the keys stay in the browser. */
 const SUBSCRIPTION_KEY = "openside.push.subscription";
@@ -39,16 +40,41 @@ async function registration(): Promise<ServiceWorkerRegistration> {
   return navigator.serviceWorker.ready;
 }
 
-export async function enableNotifications(client: Client): Promise<string> {
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") {
-    throw new Error("Notifications are blocked for this site. Allow them in the browser's site settings.");
-  }
+export const PERMISSION_BLOCKED =
+  "Notifications are blocked for this site. Click the lock icon in the address bar, set Notifications to Allow, then try again.";
+const PUSH_SERVICE_UNAVAILABLE =
+  "This browser's push service is not available, and the openside extension is not installed. Install the openside extension to get desktop notifications, or use a browser with Web Push.";
+
+/** Web Push cannot work in this browser; the desktop path may still. Carries the text for when it cannot. */
+class PushUnavailable extends Error {}
+
+/** DOMException has a numeric `code`, so the generic ApiError check must not look at it. */
+export function describeFailure(cause: unknown): string {
+  // Duck-typed: a DOMException from another realm is not `instanceof Error`.
+  if (typeof cause === "object" && cause !== null && "message" in cause && typeof cause.message === "string" && cause.message) return cause.message;
+  return "Notifications could not be changed. Reload openside and try again.";
+}
+
+async function subscribePush(client: Client): Promise<string> {
+  if ((await Notification.requestPermission()) !== "granted") throw new PushUnavailable(PERMISSION_BLOCKED);
   const worker = await registration();
-  const { public_key } = await client.vapidKey();
-  const subscription =
-    (await worker.pushManager.getSubscription()) ??
-    (await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlBytes(public_key) }));
+  let publicKey: string;
+  try {
+    publicKey = (await client.vapidKey()).public_key;
+  } catch (cause) {
+    throw cause instanceof ApiError ? new Error(`The daemon could not provide its push key: ${cause.message}`) : cause;
+  }
+  let subscription = await worker.pushManager.getSubscription();
+  if (!subscription) {
+    try {
+      subscription = await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlBytes(publicKey) });
+    } catch (cause) {
+      // The patched openside browser has no push-service key, so subscribe() rejects with AbortError.
+      if (cause instanceof DOMException && cause.name === "NotAllowedError") throw new PushUnavailable(PERMISSION_BLOCKED);
+      if (cause instanceof DOMException && ["AbortError", "NotSupportedError", "InvalidStateError"].includes(cause.name)) throw new PushUnavailable(PUSH_SERVICE_UNAVAILABLE);
+      throw cause;
+    }
+  }
   const { endpoint, keys } = subscription.toJSON();
   if (!endpoint || !keys?.p256dh || !keys.auth) throw new Error("The browser returned an incomplete push subscription.");
   const stored = await client.createPushSubscription({ endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } });
@@ -59,7 +85,25 @@ export async function enableNotifications(client: Client): Promise<string> {
   return stored.id;
 }
 
+export type NotificationMode = "push" | "desktop";
+
+/** Real Web Push where the browser has it; otherwise (or when its push service is missing) the extension's desktop notifications. */
+export async function enableNotifications(client: Client): Promise<NotificationMode> {
+  if (pushSupported()) {
+    try {
+      await subscribePush(client);
+      return "push";
+    } catch (cause) {
+      if (!(cause instanceof PushUnavailable)) throw cause;
+      if (!(await extensionAvailable())) throw cause;
+    }
+  }
+  await enableDesktop(client);
+  return "desktop";
+}
+
 export async function disableNotifications(client: Client): Promise<void> {
+  if (desktopRequested()) await disableDesktop(client);
   const id = storedSubscription();
   if (id) {
     try {
@@ -69,7 +113,7 @@ export async function disableNotifications(client: Client): Promise<void> {
     }
   }
   localStorage.removeItem(SUBSCRIPTION_KEY);
-  const worker = await navigator.serviceWorker.getRegistration("/");
+  const worker = await navigator.serviceWorker?.getRegistration("/");
   await (await worker?.pushManager.getSubscription())?.unsubscribe();
 }
 

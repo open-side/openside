@@ -1,9 +1,9 @@
-"""Opaque run-end snapshots; credentials are represented only by pin IDs."""
+"""Opaque run-end snapshots; credential policy remains entirely in the daemon."""
 
 import json
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
 from openside_agent.protocol import (
@@ -15,7 +15,6 @@ from openside_agent.protocol import (
     StateSnapshot,
     UserMessage,
 )
-from openside_agent.providers import CredentialPins
 
 SubagentStatus = Literal["running", "waiting_human", "completed", "failed", "cancelled"]
 TERMINAL: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
@@ -45,8 +44,8 @@ class PendingDelegate(BaseModel):
 
 # Base64 bytes of inline media kept in one snapshot, across the parent history, every
 # child history and queued steer messages. Snapshots travel in one wire line (4 MiB), so
-# older media is replaced by a note, newest first kept; the daemon still holds every
-# attachment and screenshot as an artifact.
+# older media is replaced by a note, newest first kept. Observation screenshots have no
+# artifact copy; attachments and delivered screenshots remain in daemon storage.
 SNAPSHOT_MEDIA_BUDGET = 1024 * 1024
 
 
@@ -140,8 +139,18 @@ class SnapshotData(BaseModel):
     steer_buffer: list[UserMessage] = Field(default_factory=list[UserMessage])
     # Messages whose run ended deferred; the resumed run reports their final outcome.
     deferred_messages: list[str] = Field(default_factory=list[str])
-    pins: str = "{}"
     script_cursor: int = Field(default=0, ge=0)
+    title_attempted: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_retired_pins(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            data = cast(dict[str, Any], value)
+            if "pins" in data:
+                return {key: item for key, item in data.items() if key != "pins"}
+            return data
+        return value
 
     @classmethod
     def capture(
@@ -149,12 +158,12 @@ class SnapshotData(BaseModel):
         messages: list[ModelMessage],
         pending: list[PendingCall],
         steer: list[UserMessage],
-        pins: CredentialPins,
         cursor: int,
         *,
         delegates: list[PendingDelegate],
         subagents: list[SubagentState],
         deferred_messages: list[str],
+        title_attempted: bool = False,
     ) -> AgentState:
         data = cls(
             messages=dump_messages(messages),
@@ -163,8 +172,8 @@ class SnapshotData(BaseModel):
             subagents=[child.model_copy(deep=True) for child in subagents],
             steer_buffer=[message.model_copy(deep=True) for message in steer],
             deferred_messages=deferred_messages,
-            pins=pins.to_json(),
             script_cursor=cursor,
+            title_attempted=title_attempted,
         )
         _shed_snapshot(data, SNAPSHOT_MEDIA_BUDGET)
         if not _fits(data):

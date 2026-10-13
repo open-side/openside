@@ -663,12 +663,20 @@ impl Driver {
                 *count -= 1;
             }
         }
-        let reply = reply.map_err(|error| {
+        let mut reply = reply.map_err(|error| {
             OpError::new(format!(
                 "page.cdp({method}): {}",
                 browser_error(error).message
             ))
         })?;
+        if method == "Network.getCookies" {
+            // The model may inspect cookie metadata, but never authentication values.
+            for cookie in reply["cookies"].as_array_mut().into_iter().flatten() {
+                if let Some(cookie) = cookie.as_object_mut() {
+                    cookie.insert("value".into(), Value::String("[REDACTED]".into()));
+                }
+            }
+        }
         if method == "Page.addScriptToEvaluateOnNewDocument" {
             if let Some(identifier) = reply["identifier"].as_str() {
                 self.scripts.init.borrow_mut().push(identifier.to_owned());

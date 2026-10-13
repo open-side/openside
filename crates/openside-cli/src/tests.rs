@@ -17,9 +17,13 @@ use tokio::{
 };
 
 mod agent;
+mod cards;
+mod channels;
+mod connections;
 mod import;
 mod mcp;
 mod memory;
+mod models;
 mod policy;
 mod reference;
 mod repl;
@@ -119,6 +123,7 @@ struct MockState {
     malformed: bool,
     duplicate: bool,
     runtime_error: bool,
+    runtime_warning: bool,
     settle_on_events: bool,
 }
 
@@ -296,6 +301,14 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
                     state.events.push(event(seq, kind, payload));
                 }
             }
+            if state.runtime_warning {
+                let seq = state.events.len() as u64 + 1;
+                state.events.push(event(
+                    seq,
+                    "runtime.error",
+                    json!({"code":"sandbox_unavailable","message":"policy-only isolation"}),
+                ));
+            }
             let seq = state.events.len() as u64 + 1;
             state
                 .events
@@ -406,6 +419,7 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
             }
             ticket["status"] = json!("resolved");
             ticket["resolution"] = match ticket["kind"].as_str() {
+                _ if ticket["form"].is_object() => json!({"status":"filled","next":"review"}),
                 Some("secret_input") => json!({"status":"filled"}),
                 // Like the daemon: a login or choice resolution never carries the answer.
                 Some("login") => json!({"status":"submitted","next":"done"}),
@@ -414,6 +428,17 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
                 }
                 _ => json!({"answer":body["value"]}),
             };
+            if let Some(card) = ticket["card"].as_object_mut() {
+                card.insert("status".into(), json!("done"));
+                card.insert("actions".into(), json!([]));
+                card.insert(
+                    "blocks".into(),
+                    json!([{
+                        "id":"receipt", "type":"notice", "tone":"neutral", "placement":"inline",
+                        "text":"Fields filled; review the page before submitting."
+                    }]),
+                );
+            }
             respond(200, ticket)
         }
         ("POST", "/v1/tickets/t-1/done") => {
@@ -541,6 +566,43 @@ async fn resume_settled_session_with_current_cursor_returns_without_waiting() {
     assert_eq!(code, 0, "{error}");
     assert_eq!(json_lines(&output).len(), 1);
     assert_eq!(json_lines(&output)[0]["last_seq"], 4);
+}
+
+#[tokio::test]
+async fn resume_replays_post_terminal_metadata_without_waiting_for_another_settlement() {
+    let fixture = Fixture::new().await;
+    assert_eq!(fixture.run(&["hello"]).await.0, 0);
+    {
+        let mut state = fixture.state.lock();
+        state.events.push(event(
+            5,
+            "usage",
+            json!({"model":"script","input_tokens":3,"output_tokens":3}),
+        ));
+        state.events.push(event(
+            6,
+            "session.title_proposed",
+            json!({"title":"Plan the work"}),
+        ));
+        let session = state.session.as_mut().unwrap();
+        session["last_seq"] = json!(6);
+        assert_eq!(session["status"], "idle");
+    }
+    let (code, output, error) = fixture.run(&["--json", "session", "resume", "s-1"]).await;
+    assert_eq!(code, 0, "{error}");
+    let records = json_lines(&output);
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0]["seq"], 5);
+    assert_eq!(records[1]["seq"], 6);
+    assert_eq!(records.last().unwrap()["status"], "settled");
+    assert_eq!(records.last().unwrap()["last_seq"], 6);
+    let (code, output, error) = fixture.run(&["--json", "session", "resume", "s-1"]).await;
+    assert_eq!(code, 0, "{error}");
+    assert_eq!(
+        json_lines(&output).len(),
+        1,
+        "the emitted metadata advances the durable cursor"
+    );
 }
 
 #[tokio::test]
@@ -829,12 +891,13 @@ async fn login_asks_each_field_with_the_password_hidden_and_sends_values_once() 
     // Page text is printed without control characters.
     assert!(
         error.starts_with(
-            "Log in to Naver[2J (https://nid.naver.com)\nID or phone number: Password: "
+            "Log in to Naver[2J (https://nid.naver.com)\nID or phone number: \nPassword: "
         ),
         "{error}"
     );
     assert!(error.contains("Stay signed in [y/N]: "));
     assert!(!output.contains(password) && !error.contains(password));
+    assert!(!output.contains("jane") && !error.contains("jane"));
 
     let mut stdin = std::io::Cursor::new(format!("jane\n{password}\n\n"));
     let (code, _, error) = fixture
@@ -1097,6 +1160,21 @@ async fn malformed_events_and_runtime_failures_do_not_claim_success() {
     let (code, _, error) = fixture.run(&["hello"]).await;
     assert_eq!(code, 1);
     assert!(error.contains("runtime error failed"));
+}
+
+#[tokio::test]
+async fn sandbox_warning_is_visible_but_task_streaming_still_settles() {
+    let fixture = Fixture::new().await;
+    fixture.state.lock().runtime_warning = true;
+    let (code, output, error) = fixture.run(&["--json", "hello"]).await;
+    assert_eq!(code, 0, "{error}");
+    assert!(error.contains("warning: policy-only isolation"));
+    let events = json_lines(&output);
+    assert!(events.iter().any(|event| event["kind"] == "runtime.error"));
+    assert!(events
+        .iter()
+        .any(|event| event["kind"] == "assistant.final"));
+    assert_eq!(events.last().unwrap()["status"], "settled");
 }
 
 #[tokio::test]

@@ -52,6 +52,9 @@ const MAX_MESSAGE: usize = 32 * 1024;
 const MAX_KEY: usize = 32;
 const MAX_KEY_TEXT: usize = 16;
 
+static LOGIN_STARTS: LazyLock<parking_lot::Mutex<HashMap<(SessionId, String), Instant>>> =
+    LazyLock::new(Default::default);
+
 /// The controller of one takeover ticket. Input dispatch and [`finish`] serialize on `admit`,
 /// so once `finish` returns no input of this lease runs again.
 struct Lease {
@@ -160,6 +163,23 @@ pub(crate) async fn reserve(
     let _gate = shared.registry.browser.gate.lock().await;
     *RESERVED.lock().entry(key.clone()).or_default() += 1;
     crate::preview::yield_tab(shared, session, &key.1);
+    if let Some(browser) = shared.registry.browser.tab_browser(session, &key.1).await {
+        if let (Ok(url), Ok(snapshot)) = (browser.url(&key.1).await, browser.snapshot(&key.1).await)
+        {
+            if crate::browser_state::classify(&snapshot.nodes, &url, "").0
+                == openside_proto::PageKind::Login
+            {
+                if let Ok(origin) = browser.origin(&key.1).await {
+                    let _ =
+                        crate::connections::begin_login(shared, &browser, session, &key.1, &origin)
+                            .await;
+                    let mut starts = LOGIN_STARTS.lock();
+                    starts.retain(|_, at| at.elapsed() < Duration::from_secs(600));
+                    starts.insert(key.clone(), Instant::now());
+                }
+            }
+        }
+    }
     Some(Reservation(key))
 }
 
@@ -218,11 +238,16 @@ pub(crate) async fn finish(shared: &Shared, ticket: &Ticket, reason: TakeoverEnd
     let Some(tab_id) = tab(ticket) else {
         return;
     };
+    if reason != TakeoverEndReason::Done {
+        LOGIN_STARTS
+            .lock()
+            .remove(&(ticket.session_id.clone(), tab_id.to_owned()));
+    }
     shared.registry.browser.forget_captures(tab_id).await;
     if let Some(browser) = shared
         .registry
         .browser
-        .session_browser(&ticket.session_id)
+        .tab_browser(&ticket.session_id, tab_id)
         .await
     {
         browser.invalidate_references(tab_id).await;
@@ -242,9 +267,35 @@ pub(crate) async fn done_result(shared: &Shared, ticket: &Ticket) -> Value {
     if let Some(browser) = shared
         .registry
         .browser
-        .session_browser(&ticket.session_id)
+        .tab_browser(&ticket.session_id, tab_id)
         .await
     {
+        let started = LOGIN_STARTS
+            .lock()
+            .remove(&(ticket.session_id.clone(), tab_id.to_owned()));
+        if started.is_some_and(|at| at.elapsed() < Duration::from_secs(600)) {
+            if let (Ok(url), Ok(snapshot)) =
+                (browser.url(tab_id).await, browser.snapshot(tab_id).await)
+            {
+                let kind = crate::browser_state::classify(&snapshot.nodes, &url, "").0;
+                if !matches!(
+                    kind,
+                    openside_proto::PageKind::Login
+                        | openside_proto::PageKind::Otp
+                        | openside_proto::PageKind::Error
+                ) {
+                    let _ = crate::connections::complete_login(
+                        shared,
+                        &browser,
+                        &ticket.session_id,
+                        tab_id,
+                        openside_proto::ConnectionSource::Takeover,
+                        None,
+                    )
+                    .await;
+                }
+            }
+        }
         // The tab ledger's title lags behind the page; read the live document instead.
         if let Ok(url) = browser.url(tab_id).await {
             result["url"] = json!(crate::browser::public_url(&url));
@@ -342,7 +393,7 @@ async fn open(
     let browser = s
         .registry
         .browser
-        .session_browser(&ticket.session_id)
+        .tab_browser(&ticket.session_id, &tab_id)
         .await
         .ok_or(HttpError(StatusCode::CONFLICT, "tab_unavailable"))?;
     Controller::owned(&browser, &ticket.session_id, &tab_id)

@@ -90,7 +90,7 @@ export function Dialog({ open, onClose, title, description, back, size = "defaul
         <BaseDialog.Viewport className="ui-dialog-viewport">
           <BaseDialog.Popup
             ref={popup}
-            className={cx("ui-dialog", size === "wide" && "ui-dialog--wide", className)}
+            className={cx("ui-dialog", "glass-float", size === "wide" && "ui-dialog--wide", className)}
             initialFocus={initialFocus}
           >
             <div className="ui-dialog-handle" aria-hidden="true" onPointerDown={startDrag}>
@@ -119,7 +119,7 @@ export function Dialog({ open, onClose, title, description, back, size = "defaul
                 }
               />
             </header>
-            <div className="ui-dialog-body">{children}</div>
+            <div className="ui-dialog-body thin-scroll">{children}</div>
           </BaseDialog.Popup>
         </BaseDialog.Viewport>
       </BaseDialog.Portal>
@@ -208,7 +208,7 @@ export function Drawer({ open, onClose, label, children }: DrawerProps) {
     >
       <BaseDialog.Portal>
         <BaseDialog.Backdrop className="ui-backdrop ui-drawer-backdrop" />
-        <BaseDialog.Popup ref={ref} className="ui-drawer" aria-label={label} {...swipe}>
+        <BaseDialog.Popup ref={ref} className="ui-drawer glass-float" aria-label={label} {...swipe}>
           {children}
         </BaseDialog.Popup>
       </BaseDialog.Portal>

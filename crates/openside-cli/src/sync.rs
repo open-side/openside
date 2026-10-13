@@ -76,6 +76,7 @@ pub(crate) async fn execute<W: Write>(
                     "/v1/sync/pair",
                     Some(&PairSyncRequest {
                         pairing_code: code.clone(),
+                        ..PairSyncRequest::default()
                     }),
                 )
                 .await?;

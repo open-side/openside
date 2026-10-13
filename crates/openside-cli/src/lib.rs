@@ -10,17 +10,19 @@
 //! trailing LF or CRLF; both keep secrets out of argv and shell history.
 //! `--totp` with either form instead sends the input as `{"totp": ...}`, registering the site's
 //! authenticator on a `request_otp` ticket that offers it.
-//! A `login` ticket asks one prompt per page field (hidden for masked fields, `[y/N]` for
+//! A `login` ticket asks one prompt per page field (hidden for text fields, `[y/N]` for
 //! checkboxes) and sends `{"values": ..., "save": ...}`; saving follows the site's `can_save`
 //! unless `--no-save` (`--save` insists and fails where saving is not allowed).
 //! `--alternative ID` and `--account ITEM_ID` answer it without typing. A `choice` ticket lists
 //! the page's options and sends `{"option": id}` for the picked number. `-` reads the same
 //! answers from piped stdin, one line per prompt.
-//! Apart from `repl` and `vault init|unlock|add`, these are the only stdin-reading commands,
-//! and they never print the supplied value.
+//! Apart from `repl`, `vault init|unlock|add`, and `key set`, these are the only stdin-reading
+//! commands, and they never print the supplied value.
 //! `--model`, `--mode read-only|guard|full`, and `--workspace PATH` select session
 //! creation settings; workspace paths are canonicalized to absolute paths.
 //! `doctor [--config PATH] [--json]` diagnoses local installation without a daemon.
+//! `models` lists grouped model readiness; `key set <provider>` reads a hidden stdin line and
+//! stores the value in the Vault; `key list|rm <provider>` never prints stored values.
 //! `routine list|show|add|run|runs|pause|resume|rm|suggest` manage scheduled routines
 //! (`docs/specs/routines.md`); `add` takes `--cron EXPR [--timezone ZONE]` or
 //! `--interval-secs N`, and `--heartbeat SESSION` to follow up an existing session.
@@ -60,8 +62,17 @@
 //! object, one per line. `openside "task"` does this by default when stdout is not a
 //! terminal (`openside "x" | cat`); other commands need `--json` explicitly. Ticket
 //! instructions go to stderr, including in JSON mode.
-//! No command requires a TTY; output has no ANSI colours. A settled session with
-//! pending tickets exits successfully with status `waiting_human`.
+//! No command requires a TTY. A settled session with pending tickets exits successfully
+//! with status `waiting_human`.
+//!
+//! On a terminal the output is designed for people: a branded `--help`, aligned
+//! tables, status glyphs, grouped `doctor` sections, and a live `openside "task"` view
+//! (markdown text on stdout; tool rows, a spinner and the final summary on stderr).
+//! When stdout is not a terminal, and for `--json`, output stays exactly the plain
+//! tab-separated or JSONL text, with no ANSI codes. `--color auto|always|never`
+//! overrides detection; `NO_COLOR` and `CLICOLOR=0` or `TERM=dumb` turn colour off,
+//! `CLICOLOR_FORCE` turns it on when piped. `--color always` also asks a piped
+//! `openside "task"` for the human view instead of JSONL.
 //!
 //! Resume cursors contain only a session ID and sequence, in mode-0600 files under
 //! `$XDG_STATE_HOME/openside/cli` (or `$HOME/.local/state/openside/cli`). They are
@@ -76,11 +87,14 @@
 mod accounts;
 mod agent;
 mod browser;
+mod channels;
 mod client;
+mod connections;
 mod cursor;
 mod import;
 mod mcp;
 mod memory;
+mod models;
 mod pair;
 mod policy;
 mod prompt;
@@ -93,8 +107,10 @@ mod service;
 mod skills;
 mod sse;
 mod sync;
+mod team;
 mod token;
 mod tool_call;
+mod ui;
 mod vault;
 mod wait;
 
@@ -106,7 +122,6 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
-use http_body_util::BodyExt;
 use openside_config::doctor::{self, DoctorOptions, Status};
 use openside_config::StoredVault;
 use openside_proto::{
@@ -128,7 +143,8 @@ use sse::Decoder;
     version,
     about = "Non-interactive openside API client",
     arg_required_else_help = true,
-    color = clap::ColorChoice::Never
+    color = clap::ColorChoice::Never,
+    styles = ui::clap_styles()
 )]
 struct Args {
     #[arg(
@@ -163,6 +179,15 @@ struct Args {
         value_name = "TOKEN"
     )]
     token: Option<String>,
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "auto",
+        value_name = "WHEN",
+        help = "Colour the human output: auto (a terminal that supports it; NO_COLOR and TERM=dumb turn it off), always (also into a pipe; CLICOLOR_FORCE does the same) or never"
+    )]
+    color: ui::ColorWhen,
     #[command(subcommand)]
     command: Option<Command>,
     #[arg(value_name = "TASK")]
@@ -184,7 +209,30 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     /// Show credential-source accounts, configured models, usage and rate-limit blocks.
-    Accounts,
+    Accounts {
+        #[command(subcommand)]
+        command: Option<accounts::AccountCommand>,
+    },
+    /// List models grouped by provider, with credential readiness and source.
+    Models {
+        #[command(subcommand)]
+        command: Option<models::ModelCommand>,
+    },
+    /// Manage encrypted provider API keys (set reads from stdin, never argv).
+    Key {
+        #[command(subcommand)]
+        command: models::KeyCommand,
+    },
+    /// Manage independent chat channel accounts; secrets use hidden stdin only.
+    Channels {
+        #[command(subcommand)]
+        command: channels::ChannelCommand,
+    },
+    /// Manage the chief and durable specialist teammates.
+    Team {
+        #[command(subcommand)]
+        command: Option<team::TeamCommand>,
+    },
     Session {
         #[command(subcommand)]
         command: SessionCommand,
@@ -211,6 +259,11 @@ enum Command {
         #[command(subcommand)]
         command: vault::VaultCommand,
     },
+    /// Manage browser sign-ins, per-agent grants and audit records (admin).
+    Connections {
+        #[command(subcommand)]
+        command: connections::ConnectionsCommand,
+    },
     /// End-to-end encrypted sync of pinned tabs and vault items between devices.
     Sync {
         #[command(subcommand)]
@@ -226,10 +279,11 @@ enum Command {
         command: skills::SkillsCommand,
     },
     /// Delegate a goal to the openside browser agent; prints the session and message ids.
+    #[command(visible_alias = "chat")]
     Run {
         /// What the agent should do; `-` reads it from stdin.
         goal: String,
-        /// Run in this session instead of a new one.
+        /// Run in this session instead of the chief's home conversation.
         #[arg(long, value_name = "SESSION_ID")]
         session: Option<String>,
         /// Wait until the run ends (through any tickets a person answers) and print the replies.
@@ -351,7 +405,7 @@ enum TicketCommand {
         id: String,
         #[arg(
             allow_hyphen_values = true,
-            help = "JSON or text; '-' reads secret_input from stdin; omitted on a secret_input, login or choice ticket, asks at prompts"
+            help = "JSON or text; secret, login, OTP and payment values only through a hidden prompt or '-'; form/login/choice stdin uses one line per field"
         )]
         value: Option<String>,
         #[arg(
@@ -470,14 +524,20 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    use std::io::IsTerminal;
-    let piped = !std::io::stdout().is_terminal();
+    let argv: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let term = ui::Terminal::from_process();
+    let detected = ui::Ui::detect(ui::scan_color(&argv), &ui::Env::from_process(), &term);
+    if let Some(detected) = detected {
+        ui::install(detected);
+    }
+    let mut stdout = ui::stream(std::io::stdout(), detected.is_some_and(|ui| ui.color));
+    let mut stderr = ui::stream(std::io::stderr(), detected.is_some_and(|ui| ui.err_color));
     run_inner(
-        args,
+        argv,
         &mut std::io::stdin(),
-        &mut std::io::stdout(),
-        &mut std::io::stderr(),
-        piped,
+        &mut stdout,
+        &mut stderr,
+        !term.stdout_tty,
     )
     .await
 }
@@ -513,15 +573,46 @@ where
     W: Write,
     E: Write,
 {
-    let args = match Args::try_parse_from(args) {
+    let argv: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let key_input = argv
+        .windows(2)
+        .any(|pair| pair[0] == "key" && pair[1] == "set");
+    let channel_input = argv
+        .windows(2)
+        .any(|pair| pair[0] == "channels" && pair[1] == "add");
+    let parsed = match ui::pretty() {
+        Some(ui) => {
+            use clap::{CommandFactory, FromArgMatches};
+            Args::command()
+                .term_width(ui.width)
+                .try_get_matches_from(argv)
+                .and_then(|mut matches| {
+                    Args::from_arg_matches_mut(&mut matches)
+                        .map_err(|error| error.format(&mut Args::command()))
+                })
+        }
+        None => Args::try_parse_from(argv),
+    };
+    let args = match parsed {
         Ok(mut args) => {
-            args.json |= json_when_task && args.task.is_some();
+            args.json |=
+                json_when_task && args.task.is_some() && args.color != ui::ColorWhen::Always;
             args
         }
         Err(error) => {
             let usage = error.use_stderr();
             let result = if usage {
-                write!(stderr, "{error}")
+                if key_input {
+                    writeln!(stderr, "openside: invalid key command; use `openside key set <provider>` and supply the key on stdin")
+                } else if channel_input {
+                    writeln!(stderr, "openside: invalid channel command; use `openside channels add <kind> <id> --label <label>` and supply credentials on hidden stdin")
+                } else if let Some(ui) = ui::pretty() {
+                    write!(stderr, "{}", ui::render_help_error(&error, ui))
+                } else {
+                    write!(stderr, "{error}")
+                }
+            } else if let Some(ui) = ui::pretty() {
+                write!(stdout, "{}", ui::render_help_error(&error, ui))
             } else {
                 write!(stdout, "{error}")
             };
@@ -549,10 +640,9 @@ where
     }
     let creates_session = matches!(
         args.command,
-        None | Some(Command::Run { session: None, .. })
-            | Some(Command::Session {
-                command: SessionCommand::New { .. }
-            })
+        None | Some(Command::Session {
+            command: SessionCommand::New { .. }
+        })
     );
     if !creates_session
         && (args.model.is_some()
@@ -562,7 +652,7 @@ where
     {
         let _ = writeln!(
             stderr,
-            "openside: --model, --mode, --workspace and --browser-space apply to a new session: a task, `run` without --session, or `session new`"
+            "openside: --model, --mode, --workspace and --browser-space apply only to new sessions; use `openside session new --model MODEL --mode MODE --workspace PATH --browser-space SPACE` or a bare task"
         );
         if args.json {
             let _ = emit(
@@ -678,7 +768,21 @@ async fn execute<R: Read, W: Write, E: Write>(
 ) -> Result<(), String> {
     summary.status = "ok";
     match &args.command {
-        Some(Command::Accounts) => accounts::run(client, args.json, stdout).await,
+        Some(Command::Accounts { command }) => {
+            accounts::run(command.as_ref(), client, args.json, stdout).await
+        }
+        Some(Command::Models { command }) => {
+            models::run(command.as_ref(), client, args.json, stdout).await
+        }
+        Some(Command::Key { command }) => {
+            models::key(command, client, args.json, stdin, stdout, stderr).await
+        }
+        Some(Command::Channels { command }) => {
+            channels::run(command, client, args.json, stdin, stdout, stderr).await
+        }
+        Some(Command::Team { command }) => {
+            team::execute(command.as_ref(), args.json, client, stdout).await
+        }
         None => {
             let task = args
                 .task
@@ -696,6 +800,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                 ReplayPoint {
                     last_seen: 0,
                     terminal_after: session.last_seq,
+                    end_at: None,
                 },
                 stdout,
                 stderr,
@@ -723,8 +828,13 @@ async fn execute<R: Read, W: Write, E: Write>(
                 return Err("the goal is empty".into());
             }
             let create = create_request(args, None)?;
+            let default_home = match session {
+                None => Some(team::chief_home(client).await?),
+                Some(_) => None,
+            };
+            let target = session.as_deref().or(default_home.as_deref());
             if *stream {
-                let started = agent::start(client, session.as_deref(), &create, &goal).await?;
+                let started = agent::start(client, target, &create, &goal).await?;
                 summary.session_id = Some(started.session.id.to_string());
                 return follow(
                     args,
@@ -733,6 +843,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                     ReplayPoint {
                         last_seen: started.session.last_seq,
                         terminal_after: started.session.last_seq,
+                        end_at: None,
                     },
                     stdout,
                     stderr,
@@ -743,7 +854,7 @@ async fn execute<R: Read, W: Write, E: Write>(
             agent::run(
                 agent::RunOptions {
                     goal: &goal,
-                    session: session.as_deref(),
+                    session: target,
                     create,
                     wait: *wait,
                     timeout: timeout.map(std::time::Duration::from_secs),
@@ -786,6 +897,8 @@ async fn execute<R: Read, W: Write, E: Write>(
                 let list: SessionList = client.get("/v1/sessions").await?;
                 if args.json {
                     emit(stdout, &list)?;
+                } else if let Some(ui) = ui::pretty() {
+                    write!(stdout, "{}", ui::sessions(ui, &list)).map_err(output_error)?;
                 } else {
                     for session in &list.sessions {
                         writeln!(
@@ -857,6 +970,17 @@ async fn execute<R: Read, W: Write, E: Write>(
                 } else {
                     session.last_seq.saturating_sub(1)
                 };
+                let end_at = if text.is_none() && session.status != SessionStatus::Running {
+                    Some((
+                        session.last_seq,
+                        match session.status {
+                            SessionStatus::Idle => "settled",
+                            status => status_name(status),
+                        },
+                    ))
+                } else {
+                    None
+                };
                 follow(
                     args,
                     client,
@@ -864,6 +988,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                     ReplayPoint {
                         last_seen: last_seq,
                         terminal_after,
+                        end_at,
                     },
                     stdout,
                     stderr,
@@ -882,6 +1007,13 @@ async fn execute<R: Read, W: Write, E: Write>(
                 let list: TicketList = client.get(path).await?;
                 if args.json {
                     emit(stdout, &list)?;
+                } else if list.tickets.iter().any(|ticket| ticket.card.is_some()) {
+                    for ticket in &list.tickets {
+                        print_ticket(false, client, stdout, ticket, summary)?;
+                    }
+                } else if let Some(ui) = ui::pretty() {
+                    write!(stdout, "{}", ui::tickets(ui, &list, ui::now_secs()))
+                        .map_err(output_error)?;
                 } else {
                     for ticket in &list.tickets {
                         writeln!(
@@ -890,7 +1022,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                             ticket.id,
                             ticket.session_id,
                             ticket_kind(ticket.kind),
-                            ticket.summary
+                            plain(&ticket.summary)
                         )
                         .map_err(output_error)?;
                     }
@@ -899,8 +1031,8 @@ async fn execute<R: Read, W: Write, E: Write>(
             }
             TicketCommand::Show { id } => {
                 let ticket: Ticket = client.get(&client::ticket_path(id, "")).await?;
-                print_ticket(args.json, stdout, &ticket, summary)?;
-                if !args.json {
+                print_ticket(args.json, client, stdout, &ticket, summary)?;
+                if !args.json && ticket.card.is_none() {
                     print_ticket_details(stdout, &ticket)?;
                 }
                 Ok(())
@@ -929,12 +1061,17 @@ async fn execute<R: Read, W: Write, E: Write>(
                             .to_owned(),
                     );
                 }
-                let fetched: Option<Ticket> = if ask || piped || login_flags {
-                    Some(client.get(&client::ticket_path(id, "")).await?)
-                } else {
-                    None
-                };
-                let kind = fetched.as_ref().map(|ticket| ticket.kind);
+                // Fetch metadata even for argv values so private fields cannot bypass stdin handling.
+                let fetched: Ticket = client.get(&client::ticket_path(id, "")).await?;
+                let kind = Some(fetched.kind);
+                let private = fetched.kind == TicketKind::SecretInput
+                    || fetched.kind == TicketKind::Login
+                    || fetched.form.as_ref().is_some_and(|form| {
+                        form.payment || form.fields.iter().any(ui::cards::sensitive)
+                    });
+                if private && !ask && !piped {
+                    return Err("private fields must use the hidden prompt or stdin; omit the value or pass '-'".to_owned());
+                }
                 if *totp && kind != Some(TicketKind::SecretInput) {
                     return Err("--totp only answers a secret_input ticket".to_owned());
                 }
@@ -944,21 +1081,29 @@ async fn execute<R: Read, W: Write, E: Write>(
                             .to_owned(),
                     );
                 }
-                let prompted = matches!(
-                    kind,
-                    Some(TicketKind::SecretInput | TicketKind::Login | TicketKind::Choice)
-                );
+                let prompted = (ask || piped)
+                    && (fetched.form.is_some()
+                        || matches!(
+                            kind,
+                            Some(
+                                TicketKind::SecretInput
+                                    | TicketKind::Login
+                                    | TicketKind::Choice
+                                    | TicketKind::Info
+                            )
+                        ));
                 if ask && !prompted {
                     return Err(
-                        "a value is required; only secret_input, login and choice tickets ask for one at a prompt"
+                        "a value is required; secret_input, login, choice, information and page form tickets support prompts"
                             .to_owned(),
                     );
                 }
-                let value = match fetched.as_ref().filter(|_| prompted) {
-                    Some(ticket) if ticket.kind == TicketKind::SecretInput => {
+                let value = match (prompted.then_some(&fetched), fetched.form.as_ref()) {
+                    (Some(_), Some(form)) => prompt::form_answer(form, stdin, stderr)?,
+                    (Some(ticket), _) if ticket.kind == TicketKind::SecretInput => {
                         secret_answer(ticket, ask, *totp, stdin, stderr)?
                     }
-                    Some(ticket) if ticket.kind == TicketKind::Login => {
+                    (Some(ticket), _) if ticket.kind == TicketKind::Login => {
                         let login = ticket
                             .login
                             .as_ref()
@@ -975,14 +1120,17 @@ async fn execute<R: Read, W: Write, E: Write>(
                             stderr,
                         )?
                     }
-                    Some(ticket) => {
+                    (Some(ticket), _) if ticket.kind == TicketKind::Info => {
+                        prompt::information_answer(ticket, stdin, stderr)?
+                    }
+                    (Some(ticket), _) => {
                         let choice = ticket
                             .choice
                             .as_ref()
                             .ok_or("this choice ticket carries no options")?;
                         choice_answer(choice, stdin, stderr)?
                     }
-                    None => {
+                    (None, _) => {
                         let value = value.as_deref().unwrap_or_default();
                         serde_json::from_str(value)
                             .unwrap_or_else(|_| Value::String(value.to_owned()))
@@ -993,10 +1141,11 @@ async fn execute<R: Read, W: Write, E: Write>(
                     .json(
                         "POST",
                         &client::ticket_path(id, "resolve"),
-                        Some(&ResolveTicketRequest { value }),
+                        Some(&ResolveTicketRequest { hire: None, value }),
                     )
                     .await;
-                let ticket: Ticket = match kind.filter(|_| prompted) {
+                let ticket: Ticket = match kind {
+                    _ if fetched.form.is_some() => result.map_err(|_| "could not resolve page form (details withheld)".to_owned())?,
                     Some(TicketKind::SecretInput) => result.map_err(|error| {
                         if error.starts_with("API error person_approval_required ") {
                             "could not enroll authenticator: API error person_approval_required (HTTP 403); ask a person to respond on their paired device, then use MCP ticket_wait. Only the operator should issue a person token (openside token create --person)".to_owned()
@@ -1019,13 +1168,13 @@ async fn execute<R: Read, W: Write, E: Write>(
                     })?,
                     _ => result?,
                 };
-                print_ticket(args.json, stdout, &ticket, summary)
+                print_ticket(args.json, client, stdout, &ticket, summary)
             }
             TicketCommand::Done { id } => {
                 let ticket: Ticket = client
                     .json::<_, Value>("POST", &client::ticket_path(id, "done"), None)
                     .await?;
-                print_ticket(args.json, stdout, &ticket, summary)
+                print_ticket(args.json, client, stdout, &ticket, summary)
             }
             TicketCommand::Reject { id, reason } => {
                 let ticket: Ticket = client
@@ -1037,7 +1186,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                         }),
                     )
                     .await?;
-                print_ticket(args.json, stdout, &ticket, summary)
+                print_ticket(args.json, client, stdout, &ticket, summary)
             }
         },
         Some(Command::Routine { command }) => {
@@ -1057,6 +1206,9 @@ async fn execute<R: Read, W: Write, E: Write>(
         }
         Some(Command::Vault { command }) => {
             vault::execute(command, args.json, client, stdin, stdout, stderr).await
+        }
+        Some(Command::Connections { command }) => {
+            connections::execute(command, args.json, client, stdout, stderr, summary).await
         }
         Some(Command::Sync { command }) => sync::execute(command, args.json, client, stdout).await,
         Some(Command::Repl {
@@ -1090,6 +1242,9 @@ async fn execute<R: Read, W: Write, E: Write>(
         Some(Command::Connect(_)) => unreachable!("connect runs without an API client"),
         Some(Command::Remote { command }) => match command {
             remote::RemoteCommand::Status => remote::status(client, args.json, stdout).await,
+            remote::RemoteCommand::LocalAccess => {
+                remote::local_access(client, args.json, stdout).await
+            }
             remote::RemoteCommand::Setup(_) | remote::RemoteCommand::Profiles { .. } => {
                 unreachable!("remote setup and profiles run without an API client")
             }
@@ -1137,6 +1292,8 @@ async fn run_doctor<W: Write>(
     summary.status = if summary.failed { "error" } else { "ok" };
     if json {
         emit(stdout, &report)
+    } else if let Some(ui) = ui::pretty() {
+        write!(stdout, "{}", ui::doctor(ui, &report)).map_err(output_error)
     } else {
         write!(stdout, "{}", report.render_text()).map_err(output_error)
     }
@@ -1144,6 +1301,7 @@ async fn run_doctor<W: Write>(
 
 fn print_ticket<W: Write>(
     json: bool,
+    client: &Client,
     stdout: &mut W,
     ticket: &Ticket,
     summary: &mut Summary,
@@ -1151,17 +1309,34 @@ fn print_ticket<W: Write>(
     summary.session_id = Some(ticket.session_id.to_string());
     if json {
         emit(stdout, ticket)
+    } else if let Some(card) = &ticket.card {
+        let ui = ui::pretty().copied().unwrap_or_else(ui::cards::plain_ui);
+        let origin = client.web_origin();
+        write!(
+            stdout,
+            "{}",
+            ui::cards::render(
+                &ui,
+                card,
+                &ui::cards::Context {
+                    session_id: ticket.session_id.as_str(),
+                    web_origin: origin.as_deref(),
+                    client: Some(client),
+                }
+            )
+        )
+        .map_err(output_error)
     } else {
         writeln!(
             stdout,
             "{}\t{}\t{}",
             ticket.id,
             ticket_kind(ticket.kind),
-            ticket.summary
+            plain(&ticket.summary)
         )
         .map_err(output_error)?;
         if let Some(instructions) = &ticket.instructions {
-            writeln!(stdout, "{instructions}").map_err(output_error)?;
+            writeln!(stdout, "{}", plain(instructions)).map_err(output_error)?;
         }
         Ok(())
     }
@@ -1264,7 +1439,7 @@ fn secret_answer<R: Read, E: Write>(
         } else {
             "Secret"
         };
-        prompt::read_hidden(&format!("{what} for {site}"), stdin, stderr)?
+        prompt::read_hidden(&format!("{what} for {}", plain(site)), stdin, stderr)?
     } else {
         let mut input = String::new();
         stdin
@@ -1292,8 +1467,7 @@ struct LoginFlags<'a> {
     account: Option<&'a str>,
 }
 
-/// A `login` answer: another sign-in or a saved account from the flags, otherwise one prompt per
-/// field in page order (hidden for masked fields; piped stdin gives one line per field).
+// Login identifiers are private too: canonical login cards mark every text field secret.
 fn login_answer<R: Read, E: Write>(
     login: &TicketLogin,
     flags: LoginFlags<'_>,
@@ -1332,7 +1506,7 @@ fn login_answer<R: Read, E: Write>(
         stderr,
         "Log in to {} ({})",
         plain(&login.site_name),
-        login.origin
+        plain(&login.origin)
     )
     .map_err(output_error)?;
     let mut values = serde_json::Map::new();
@@ -1345,11 +1519,7 @@ fn login_answer<R: Read, E: Write>(
                 "y" | "yes"
             ))
         } else {
-            let answer = if field.masked {
-                prompt::read_hidden(&label, stdin, stderr)?
-            } else {
-                prompt::read_visible(&label, stdin, stderr)?
-            };
+            let answer = prompt::read_hidden(&label, stdin, stderr)?;
             if field.required && answer.is_empty() {
                 return Err(format!("{label} is required"));
             }
@@ -1401,6 +1571,7 @@ fn ticket_kind(kind: TicketKind) -> &'static str {
         TicketKind::Takeover => "takeover",
         TicketKind::Login => "login",
         TicketKind::Choice => "choice",
+        TicketKind::Hire => "hire",
     }
 }
 
@@ -1420,6 +1591,7 @@ fn print_waiting<W: Write>(
 /// describe; workspace paths are made absolute.
 fn create_request(args: &Args, title: Option<String>) -> Result<CreateSessionRequest, String> {
     Ok(CreateSessionRequest {
+        agent_id: None,
         title,
         model: args.model.clone(),
         mode: args.mode.map(Into::into),
@@ -1458,6 +1630,8 @@ async fn send_message(client: &Client, id: &str, text: &str) -> Result<(), Strin
 struct ReplayPoint {
     last_seen: u64,
     terminal_after: u64,
+    // Metadata can follow a terminal marker, so idle replay ends at the observed log boundary.
+    end_at: Option<(u64, &'static str)>,
 }
 
 async fn follow<W: Write, E: Write>(
@@ -1469,25 +1643,44 @@ async fn follow<W: Write, E: Write>(
     stderr: &mut E,
     summary: &mut Summary,
 ) -> Result<(), String> {
+    // Everything that reaches stderr goes through the guard so a redrawn status line is erased
+    // before any other line, and on every exit path.
+    let mut stderr_guard = ui::live::Stderr::new(stderr);
+    let stderr = &mut stderr_guard;
+    let mut live = ui::pretty()
+        .filter(|_| !args.json)
+        .map(|ui| ui::live::Live::new(*ui));
+    if let Some(live) = live.as_mut() {
+        live.begin(id, stderr)?;
+    }
     let mut last_seq = replay.last_seen;
     let cursor = Cursor::new(client.endpoint_key(), id)?;
     summary.last_seq = Some(last_seq);
     let mut pending = BTreeSet::new();
+    let mut seeded = Vec::new();
+    let mut shown_tickets = BTreeSet::new();
+    let web_origin = client.web_origin();
+    let card_context = ui::cards::Context {
+        session_id: id,
+        web_origin: web_origin.as_deref(),
+        client: Some(client),
+    };
     if last_seq > 0 {
         let tickets: TicketList = client.get("/v1/tickets?status=pending").await?;
-        pending.extend(
-            tickets
-                .tickets
-                .into_iter()
-                .filter(|ticket| ticket.session_id.as_str() == id)
-                .map(|ticket| ticket.id.to_string()),
-        );
+        for ticket in tickets
+            .tickets
+            .into_iter()
+            .filter(|ticket| ticket.session_id.as_str() == id)
+        {
+            pending.insert(ticket.id.to_string());
+            seeded.push(ticket);
+        }
     }
     let mut response = client.events(id, last_seq).await?;
     let mut decoder = Decoder::default();
     let mut saw_delta = false;
     let mut ends_with_newline = true;
-    while let Some(frame) = response.body_mut().frame().await {
+    while let Some(frame) = ui::live::next_frame(&mut response, &mut live, stderr).await {
         let frame = frame.map_err(|_| "event stream connection failed".to_owned())?;
         let Ok(bytes) = frame.into_data() else {
             continue;
@@ -1503,6 +1696,22 @@ async fn follow<W: Write, E: Write>(
             }
             if args.json {
                 emit(stdout, &event)?;
+            } else if let Some(live) = live.as_mut() {
+                if let Some(card) = ui::cards::event_card(&event.kind) {
+                    live.card(card, &card_context, stdout, stderr)?;
+                }
+                live.event(&event, stdout, stderr)?;
+            } else if let Some(card) = ui::cards::event_card(&event.kind) {
+                if !ends_with_newline {
+                    writeln!(stdout).map_err(output_error)?;
+                }
+                ends_with_newline = true;
+                let rendered = ui::cards::render(&ui::cards::plain_ui(), card, &card_context);
+                if card.ticket_id.is_some() {
+                    write!(stderr, "{rendered}").map_err(output_error)?;
+                } else {
+                    write!(stdout, "{rendered}").map_err(output_error)?;
+                }
             } else {
                 match &event.kind {
                     EventKind::TurnStarted {} => {
@@ -1543,13 +1752,25 @@ async fn follow<W: Write, E: Write>(
             match &event.kind {
                 EventKind::TicketOpened { ticket } => {
                     pending.insert(ticket.id.to_string());
+                    shown_tickets.insert(ticket.id.to_string());
                     // On a terminal the notice shares the screen with a half-written reply line.
                     if !args.json && !ends_with_newline {
                         writeln!(stdout).map_err(output_error)?;
                         ends_with_newline = true;
                         stdout.flush().map_err(output_error)?;
                     }
-                    if let Some(approval) = &ticket.approval {
+                    if ticket.card.is_some() {
+                        // The canonical card was already emitted or rendered above.
+                    } else if let Some(live) = live.as_mut() {
+                        live.ticket(
+                            ticket,
+                            &|action, value| {
+                                client.ticket_command(ticket.id.as_str(), action, value)
+                            },
+                            resolve_hint(ticket),
+                            stderr,
+                        )?;
+                    } else if let Some(approval) = &ticket.approval {
                         let number = approval
                             .number
                             .as_deref()
@@ -1570,21 +1791,7 @@ async fn follow<W: Write, E: Write>(
                         ).map_err(output_error)?;
                         stderr.flush().map_err(output_error)?;
                     } else {
-                        let (action, value) = match ticket.kind {
-                            TicketKind::Confirm => ("resolve", Some("true".to_owned())),
-                            TicketKind::SecretInput => ("resolve", Some("-".to_owned())),
-                            // Both ask at prompts: one per login field, or the numbered options.
-                            TicketKind::Login | TicketKind::Choice => ("resolve", None),
-                            TicketKind::DeviceApproval | TicketKind::Takeover => ("done", None),
-                            TicketKind::Info => (
-                                "resolve",
-                                Some(match ticket.options.first() {
-                                    Some(option) => serde_json::to_string(&option.value)
-                                        .map_err(|_| "could not encode ticket option".to_owned())?,
-                                    None => "your answer".to_owned(),
-                                }),
-                            ),
-                        };
+                        let (action, value) = resolve_hint(ticket)?;
                         writeln!(
                         stderr,
                         "Ticket {} ({}): {}\nResolve in another process: {}\nFor HTTP connections, supply OPENSIDE_TOKEN or --token to that process.",
@@ -1603,7 +1810,7 @@ async fn follow<W: Write, E: Write>(
                 }
                 EventKind::TicketResolved { ticket_id, .. }
                 | EventKind::TicketRejected { ticket_id, .. }
-                | EventKind::TicketExpired { ticket_id } => {
+                | EventKind::TicketExpired { ticket_id, .. } => {
                     pending.remove(ticket_id.as_str());
                 }
                 EventKind::MessageCompleted {
@@ -1614,24 +1821,60 @@ async fn follow<W: Write, E: Write>(
                 }
                 _ => {}
             }
-            if let EventKind::RuntimeError { code, message } = &event.kind {
-                return Err(format!("runtime error {code}: {message}"));
-            }
-            let terminal = match event.kind {
-                EventKind::SessionSettled {} => Some(if pending.is_empty() {
-                    "settled"
+            if let EventKind::RuntimeError { code, message, .. } = &event.kind {
+                if code == "sandbox_unavailable" {
+                    writeln!(stderr, "openside: warning: {message}").map_err(output_error)?;
                 } else {
-                    "waiting_human"
-                }),
-                EventKind::SessionStopped {} => Some("stopped"),
-                _ => None,
+                    return Err(format!("runtime error {code}: {message}"));
+                }
+            }
+            let terminal = if let Some((seq, status)) = replay.end_at {
+                (event.seq >= seq).then_some(status)
+            } else {
+                match event.kind {
+                    EventKind::SessionSettled {} => Some(if pending.is_empty() {
+                        "settled"
+                    } else {
+                        "waiting_human"
+                    }),
+                    EventKind::SessionStopped {} => Some("stopped"),
+                    _ => None,
+                }
             };
             if let Some(status) = terminal.filter(|_| event.seq > replay.terminal_after) {
                 summary.status = status;
                 if !args.json && !ends_with_newline {
                     writeln!(stdout).map_err(output_error)?;
                 }
-                print_waiting(args.json, stdout, id, status)?;
+                if !args.json {
+                    for ticket in &seeded {
+                        if pending.contains(ticket.id.as_str())
+                            && !shown_tickets.contains(ticket.id.as_str())
+                        {
+                            if let Some(card) = &ticket.card {
+                                if let Some(live) = live.as_mut() {
+                                    live.card(card, &card_context, stdout, stderr)?;
+                                } else {
+                                    write!(
+                                        stderr,
+                                        "{}",
+                                        ui::cards::render(
+                                            &ui::cards::plain_ui(),
+                                            card,
+                                            &card_context
+                                        )
+                                    )
+                                    .map_err(output_error)?;
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(live) = live.as_mut() {
+                    live.finish(status, id, stdout, stderr)?;
+                } else {
+                    print_waiting(args.json, stdout, id, status)?;
+                }
                 return Ok(());
             }
         }
@@ -1640,6 +1883,29 @@ async fn follow<W: Write, E: Write>(
         "event stream ended before the session settled or stopped; use session resume to continue"
             .into(),
     )
+}
+
+/// How a person answers a ticket from another process: the `ticket` verb and its value.
+fn resolve_hint(ticket: &Ticket) -> Result<(&'static str, Option<String>), String> {
+    if ticket.form.is_some() {
+        return Ok(("resolve", None));
+    }
+    Ok(match ticket.kind {
+        TicketKind::Confirm => ("resolve", Some("true".to_owned())),
+        TicketKind::Hire => ("resolve", Some("\"hire\"".to_owned())),
+        TicketKind::SecretInput => ("resolve", Some("-".to_owned())),
+        // Both ask at prompts: one per login field, or the numbered options.
+        TicketKind::Login | TicketKind::Choice => ("resolve", None),
+        TicketKind::DeviceApproval | TicketKind::Takeover => ("done", None),
+        TicketKind::Info => (
+            "resolve",
+            Some(match ticket.options.first() {
+                Some(option) => serde_json::to_string(&option.value)
+                    .map_err(|_| "could not encode ticket option".to_owned())?,
+                None => "your answer".to_owned(),
+            }),
+        ),
+    })
 }
 
 fn emit<W: Write, T: Serialize>(stdout: &mut W, value: &T) -> Result<(), String> {

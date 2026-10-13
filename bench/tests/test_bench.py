@@ -99,7 +99,7 @@ def test_live_result_and_summary_record_front_orchestration():
     assert summary["openside"]["orchestration"] == "front"
 
 
-def test_one_command_reproduces_scripted_suite_and_validates_aside_schema(tmp_path):
+def test_one_command_reproduces_scripted_suite_and_validates_bu_bench_schema(tmp_path):
     if os.name != "posix":
         pytest.skip("The daemon benchmark uses Unix sockets; Windows support is not implemented")
     try:

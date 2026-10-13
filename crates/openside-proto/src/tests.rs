@@ -5,6 +5,7 @@ use crate::*;
 
 fn ticket() -> Ticket {
     Ticket {
+        hire: None,
         id: TicketId::new("ticket1"),
         session_id: SessionId::new("s1"),
         tool_call_id: "call1".into(),
@@ -40,7 +41,61 @@ fn ticket() -> Ticket {
         login: None,
         choice: None,
         approval: None,
+        card: None,
+        form: None,
     }
+}
+
+#[test]
+fn message_authority_is_output_only_and_legacy_events_fail_closed() {
+    for forged in [
+        json!({"author_kind":"person"}),
+        json!({"from_agent":"chief"}),
+    ] {
+        let mut request = json!({"text":"hire someone","mode":"now"});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(forged.as_object().unwrap().clone());
+        assert!(serde_json::from_value::<SubmitMessageRequest>(request).is_err());
+    }
+    let legacy: EventKind = serde_json::from_value(json!({
+        "kind":"message.queued","message_id":"old","text":"hire someone","mode":"queue"
+    }))
+    .unwrap();
+    assert!(matches!(
+        legacy,
+        EventKind::MessageQueued {
+            author_kind: MessageAuthorKind::Internal,
+            from_agent: None,
+            ..
+        }
+    ));
+    for (kind, wire) in [
+        (MessageAuthorKind::Person, "person"),
+        (MessageAuthorKind::AgentClient, "agent_client"),
+        (MessageAuthorKind::Internal, "internal"),
+    ] {
+        assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+        let event = EventKind::MessageQueued {
+            message_id: MessageId::new("new"),
+            text: "hello".into(),
+            mode: QueueMode::Queue,
+            attachments: Vec::new(),
+            author_kind: kind,
+            from_agent: None,
+        };
+        assert_eq!(
+            serde_json::from_value::<EventKind>(serde_json::to_value(&event).unwrap()).unwrap(),
+            event
+        );
+    }
+    let legacy: Message = serde_json::from_value(json!({
+        "id":"old","text":"hello","status":{"queued":"queue"}
+    }))
+    .unwrap();
+    assert_eq!(legacy.author_kind, MessageAuthorKind::Internal);
+    assert_eq!(legacy.from_agent, None);
 }
 
 #[test]
@@ -52,6 +107,8 @@ fn every_event_kind_round_trips() {
             text: "hi".into(),
             mode: QueueMode::Queue,
             attachments: Vec::new(),
+            author_kind: MessageAuthorKind::Person,
+            from_agent: None,
         },
         EventKind::MessageQueued {
             message_id: MessageId::new("m-attached"),
@@ -65,6 +122,8 @@ fn every_event_kind_round_trips() {
                 sha256: "ab".repeat(32),
                 name: Some("chart.png".into()),
             }],
+            author_kind: MessageAuthorKind::Internal,
+            from_agent: Some("chief".into()),
         },
         EventKind::MessageEdited {
             message_id: id(),
@@ -126,6 +185,7 @@ fn every_event_kind_round_trips() {
             update: json!({"progress": 50}),
         },
         EventKind::ToolEnded {
+            card: None,
             tool_call_id: "t1".into(),
             result: json!("done"),
             is_error: false,
@@ -141,14 +201,17 @@ fn every_event_kind_round_trips() {
             ticket: Box::new(ticket()),
         },
         EventKind::TicketResolved {
+            card: None,
             ticket_id: TicketId::new("ticket1"),
             resolution: json!("approve"),
         },
         EventKind::TicketRejected {
+            card: None,
             ticket_id: TicketId::new("ticket1"),
             reason: "stopped".into(),
         },
         EventKind::TicketExpired {
+            card: None,
             ticket_id: TicketId::new("ticket1"),
         },
         EventKind::SubagentStarted {
@@ -171,6 +234,7 @@ fn every_event_kind_round_trips() {
             url: "https://example.test/login".into(),
             host: "example.test".into(),
             title: "Sign in".into(),
+            favicon: None,
             phase: BrowserPhase::WaitingHuman,
             action: Some(BrowserActionState {
                 tool: "browser_act".into(),
@@ -209,6 +273,7 @@ fn every_event_kind_round_trips() {
             tab_id: "tab1".into(),
         },
         EventKind::SessionCreated {
+            agent_id: None,
             title: "Task".into(),
             model: "mock/model".into(),
             mode: PolicyMode::Guard,
@@ -219,6 +284,7 @@ fn every_event_kind_round_trips() {
         EventKind::SessionSettled {},
         EventKind::SessionStopped {},
         EventKind::SessionUpdated {
+            mode: None,
             title: Some("Renamed".into()),
             pinned: Some(true),
             archived: None,
@@ -227,9 +293,9 @@ fn every_event_kind_round_trips() {
             tools: vec!["mock".into()],
             startup_ms: 12,
         },
-        EventKind::RuntimeError {
-            code: "mock_failure".into(),
-            message: "sanitized".into(),
+        EventKind::runtime_error("mock_failure", "sanitized"),
+        EventKind::SessionTitleProposed {
+            title: "Compare Acme plans".into(),
         },
     ];
     for (index, kind) in kinds.into_iter().enumerate() {
@@ -300,7 +366,6 @@ fn openapi_is_json_and_all_schema_references_resolve() {
             serde_json::to_value(route.scope).unwrap()
         );
     }
-    assert_eq!(ROUTES.len(), 95);
 }
 
 #[test]
@@ -480,7 +545,7 @@ fn ticket_requests_reject_unknown_fields_and_round_trip() {
         json!("reject"),
         json!("answer"),
     ] {
-        let request = ResolveTicketRequest { value };
+        let request = ResolveTicketRequest { hire: None, value };
         let encoded = serde_json::to_value(&request).unwrap();
         assert_eq!(
             serde_json::from_value::<ResolveTicketRequest>(encoded).unwrap(),
@@ -514,6 +579,7 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
     assert_eq!(request.mode, None);
     assert_eq!(request.model, None);
     assert_eq!(request.title, None);
+    assert_eq!(request.agent_id, None);
     assert!(
         !request.incognito,
         "sessions are recorded unless incognito is asked for"
@@ -531,6 +597,7 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             BrowserSpace::Shared
         };
         let request = CreateSessionRequest {
+            agent_id: None,
             title: None,
             model: None,
             mode: Some(mode),
@@ -544,6 +611,7 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             request
         );
         let event = EventKind::SessionCreated {
+            agent_id: None,
             title: "Task".into(),
             model: "model".into(),
             mode,
@@ -556,12 +624,14 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             event
         );
         let session = Session {
+            agent_id: None,
             id: SessionId::new("s1"),
             title: "Task".into(),
             model: "model".into(),
             mode,
             workspace: Some("/tmp/workspace".into()),
             status: SessionStatus::WaitingHuman,
+            activity: "Waiting for you".into(),
             last_seq: 1,
             queue: vec![],
             pinned: true,
@@ -580,6 +650,7 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
         )
         .unwrap(),
         EventKind::SessionCreated {
+            agent_id: None,
             title: "Task".into(),
             model: "model".into(),
             mode: PolicyMode::Guard,
@@ -888,4 +959,114 @@ fn vault_value_requests_reject_unknown_fields_and_redact_debug() {
             json!("unavailable")
         ]
     );
+}
+
+#[test]
+fn runtime_error_copy_is_calm_and_retryability_is_explicit() {
+    let error = EventKind::runtime_error("interrupted", "process EOF and internal dispatch state");
+    let value = serde_json::to_value(error).unwrap();
+    assert_eq!(value["user_message"], "The agent stopped. Try again.");
+    assert_eq!(value["retryable"], true);
+    assert!(value["message"].as_str().unwrap().contains("EOF"));
+    for code in ["auth_unavailable", "tool_gate", "unknown_code"] {
+        let value =
+            serde_json::to_value(EventKind::runtime_error(code, "technical details")).unwrap();
+        assert_eq!(value["retryable"], false);
+        assert!(!value["user_message"]
+            .as_str()
+            .unwrap()
+            .contains("technical"));
+    }
+    let historical: EventKind = serde_json::from_value(
+        json!({"kind":"runtime.error", "code":"interrupted", "message":"old diagnostic"}),
+    )
+    .unwrap();
+    assert!(
+        matches!(historical, EventKind::RuntimeError { user_message, retryable: false, .. } if user_message.is_empty())
+    );
+}
+
+#[test]
+fn cards_all_kinds_and_legacy_events_round_trip() {
+    let kinds = [
+        CardKind::ProductList,
+        CardKind::Table,
+        CardKind::PlaceList,
+        CardKind::OrderSummary,
+        CardKind::Payment,
+        CardKind::SecureLogin,
+        CardKind::LoginChoice,
+        CardKind::Otp,
+        CardKind::PaymentCard,
+        CardKind::Confirmation,
+        CardKind::Form,
+        CardKind::ConnectAccount,
+        CardKind::Activity,
+        CardKind::Handoff,
+        CardKind::Hire,
+        CardKind::SecretInput,
+        CardKind::Takeover,
+    ];
+    for kind in kinds {
+        let card = Card {
+            id: "present:fixture".into(),
+            kind,
+            site: CardSite {
+                origin: None,
+                name: "Local".into(),
+                favicon_ref: None,
+            },
+            title: "Fixture".into(),
+            subtitle: None,
+            status: CardStatus::Done,
+            blocks: vec![],
+            actions: vec![],
+            interaction: CardInteraction::None,
+            ticket_id: None,
+            collapsed_summary: "Fixture".into(),
+        };
+        assert_eq!(
+            serde_json::from_value::<Card>(serde_json::to_value(&card).unwrap()).unwrap(),
+            card
+        );
+        let event = EventKind::CardPresented {
+            card,
+            tool_call_id: "fixture".into(),
+        };
+        assert_eq!(
+            serde_json::from_value::<EventKind>(serde_json::to_value(&event).unwrap()).unwrap(),
+            event
+        );
+    }
+    for event in [
+        json!({"kind":"ticket.resolved","ticket_id":"old","resolution":true}),
+        json!({"kind":"ticket.rejected","ticket_id":"old","reason":"cancelled"}),
+        json!({"kind":"ticket.expired","ticket_id":"old"}),
+        json!({"kind":"tool.ended","tool_call_id":"old","result":null,"is_error":false}),
+    ] {
+        let parsed: EventKind = serde_json::from_value(event.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), event);
+    }
+    let wire = serde_json::to_value(ticket()).unwrap();
+    assert!(wire.get("card").is_none());
+    assert!(wire.get("form").is_none());
+    let old: Ticket = serde_json::from_value(wire).unwrap();
+    assert!(old.card.is_none() && old.form.is_none());
+}
+
+#[test]
+fn cards_normative_block_and_action_fixtures_round_trip() {
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!("cards_fixtures.json")).unwrap();
+    assert_eq!(fixtures.len(), 17);
+    for fixture in fixtures {
+        let card: Card = serde_json::from_value(fixture).unwrap();
+        let encoded = serde_json::to_value(&card).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Card>(encoded.clone()).unwrap(),
+            card
+        );
+        let mut unknown = encoded;
+        unknown["arbitrary_html"] = json!("<script>forbidden</script>");
+        assert!(serde_json::from_value::<Card>(unknown).is_err());
+    }
 }

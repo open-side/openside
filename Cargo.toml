@@ -21,6 +21,7 @@ members = [
     "crates/openside-sync",
     "crates/openside-push",
     "crates/openside-relay",
+    "crates/openside-model-fetch",
 ]
 
 [workspace.package]

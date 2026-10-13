@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openside.dev/specs/bench-schema.json",
-  "title": "Aside-compatible benchmark task result or run summary",
-  "$comment": "Reconstructed from public at-inc/aside-benchmarks commit 7cde728f6af4ba10065fc9e0557762d0e156d3dd, bu-bench-v1/runner/types.ts (TaskResult, ModelSelection, RunSummary) and published result.json/run_summary.json artifacts. Source: https://github.com/at-inc/aside-benchmarks/blob/7cde728f6af4ba10065fc9e0557762d0e156d3dd/bu-bench-v1/runner/types.ts . Upstream publishes TypeScript interfaces, not a JSON Schema. The single openside extension carries local-suite measurements; this is not an upstream-authored schema or a live benchmark score.",
+  "title": "BU Bench V1 compatible benchmark task result or run summary",
+  "$comment": "Reconstructed from public BU Bench V1 result interfaces at commit 7cde728f6af4ba10065fc9e0557762d0e156d3dd, bu-bench-v1/runner/types.ts (TaskResult, ModelSelection, RunSummary) and published result.json/run_summary.json artifacts. Source: https://github.com/at-inc/aside-benchmarks/blob/7cde728f6af4ba10065fc9e0557762d0e156d3dd/bu-bench-v1/runner/types.ts . Upstream publishes TypeScript interfaces, not a JSON Schema. The single openside extension carries local-suite measurements; this is not an upstream-authored schema or a live benchmark score.",
   "oneOf": [{"$ref": "#/$defs/task"}, {"$ref": "#/$defs/summary"}],
   "$defs": {
     "count": {"type": "integer", "minimum": 0},

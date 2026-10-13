@@ -53,6 +53,12 @@ pub enum EventKind {
         /// Stored attachments, referenced by artifact path; bytes never enter the log.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<crate::Attachment>,
+        /// Caller-derived authority; historical logs fail closed for immediate hiring.
+        #[serde(default)]
+        author_kind: crate::MessageAuthorKind,
+        /// Only daemon team deliveries may identify a team sender.
+        #[serde(default)]
+        from_agent: Option<String>,
     },
     /// Pending message text replaced.
     #[serde(rename = "message.edited")]
@@ -162,6 +168,9 @@ pub enum EventKind {
         result: Value,
         /// Whether the invocation failed.
         is_error: bool,
+        /// Atomic presentation outcome for a resumed approval; ordinary calls omit it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
     },
     /// A tool created or modified a file now kept in the session's artifact directory.
     #[serde(rename = "artifact.saved")]
@@ -190,6 +199,9 @@ pub enum EventKind {
         ticket_id: TicketId,
         /// Redacted resolution; never a secret-input value.
         resolution: Value,
+        /// Same-row presentation committed with the authoritative transition.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
     },
     /// Pending ticket rejected.
     #[serde(rename = "ticket.rejected")]
@@ -198,12 +210,26 @@ pub enum EventKind {
         ticket_id: TicketId,
         /// Sanitized rejection detail.
         reason: String,
+        /// Value-free cancellation receipt committed with rejection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
     },
     /// Pending ticket expired.
     #[serde(rename = "ticket.expired")]
     TicketExpired {
         /// Ticket identifier.
         ticket_id: TicketId,
+        /// Inactive receipt committed with expiry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+    /// Validated read-only presentation, idempotently keyed by its original tool call.
+    #[serde(rename = "card.presented")]
+    CardPresented {
+        /// Daemon-normalized data with local raster references and no input values.
+        card: crate::Card,
+        /// Original tool invocation; its result contains only the card identity.
+        tool_call_id: String,
     },
     /// The parent's `delegate` call was admitted and a child agent started.
     #[serde(rename = "subagent.started")]
@@ -282,6 +308,9 @@ pub enum EventKind {
     /// First event in a session log.
     #[serde(rename = "session.created")]
     SessionCreated {
+        /// Immutable owner tag; historical creation events remain unassigned.
+        #[serde(default)]
+        agent_id: Option<String>,
         /// Initial conversation title.
         title: String,
         /// Provider-qualified model.
@@ -312,6 +341,9 @@ pub enum EventKind {
     /// User-visible list metadata changed; omitted fields are unchanged.
     #[serde(rename = "session.updated")]
     SessionUpdated {
+        /// Daemon-approved replacement ceiling for an agent's home conversation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<PolicyMode>,
         /// Replacement title.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
@@ -321,6 +353,12 @@ pub enum EventKind {
         /// New archived flag.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         archived: Option<bool>,
+    },
+    /// A model-written conversation title; explicit titles and later user renames win.
+    #[serde(rename = "session.title_proposed")]
+    SessionTitleProposed {
+        /// Sanitized conversation title of at most six words, never a URL.
+        title: String,
     },
     /// Sidecar ready handshake completed with an exact tool-gate match.
     #[serde(rename = "runtime.started")]
@@ -337,11 +375,178 @@ pub enum EventKind {
         code: String,
         /// Redacted failure detail.
         message: String,
+        /// Calm user-facing copy; `message` remains technical detail.
+        #[serde(default)]
+        user_message: String,
+        /// Whether resubmitting the last user message is a useful next step.
+        #[serde(default)]
+        retryable: bool,
     },
     /// What an agent is doing in a browser tab, derived by the daemon from the tool call and
     /// the page itself (labels come from the page, never from the model).
     #[serde(rename = "browser.state")]
     BrowserState(Box<BrowserState>),
+    /// A completed sign-in saved value-free connection metadata.
+    #[serde(rename = "connection.saved")]
+    ConnectionSaved {
+        /// Opaque registry ID.
+        connection_id: String,
+        /// Registrable site, never a callback URL.
+        site: String,
+        /// Write-time-masked account label.
+        identity: Option<String>,
+    },
+    /// A granted agent use; no request values enter the event.
+    #[serde(rename = "connection.used")]
+    ConnectionUsed {
+        /// Opaque registry ID.
+        connection_id: String,
+        /// Registrable site.
+        site: String,
+        /// Page opening or in-page fetch.
+        mode: crate::ConnectionUseMode,
+        /// HTTP method for fetch, absent for page opening.
+        method: Option<String>,
+    },
+    /// A completed hire, correlated to its human authorization.
+    #[serde(rename = "team.hired")]
+    TeamHired {
+        /// Stable registry identity, independent of later renames.
+        agent_id: String,
+        /// Display name at the time of hiring.
+        name: String,
+        /// Approving ticket, absent for an immediate person-requested hire.
+        ticket_id: Option<String>,
+        /// Authoritative person message permitting immediate hiring.
+        request_message_id: Option<MessageId>,
+        /// Common card projection, absent in historical records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+    /// A durable work packet shared between the sender and recipient homes.
+    #[serde(rename = "team.handoff")]
+    TeamHandoff {
+        /// Stable identity used for report and event deduplication.
+        handoff_id: String,
+        /// Registry identity of the delegating chief.
+        from_agent: String,
+        /// Registry identity accountable for the result.
+        to_agent: String,
+        /// Business purpose; `kind` remains the event discriminator.
+        handoff_kind: crate::HandoffKind,
+        /// Human-readable goal from the accepted packet.
+        goal: String,
+        /// Caller-provided identity unique among open handoffs.
+        dedupe_key: String,
+        /// Common card projection, absent in historical records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+    /// A settled handoff whose report is delivered through the durable outbox.
+    #[serde(rename = "team.handoff_ended")]
+    TeamHandoffEnded {
+        /// Correlates the receipt with the original handoff card.
+        handoff_id: String,
+        /// Terminal outcome; never `open`.
+        status: crate::HandoffStatus,
+        /// Redacted outcome text, when available.
+        summary: Option<String>,
+        /// Common receipt replacing the active handoff card.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+    /// A teammate requests a decision from the chief, not another teammate.
+    #[serde(rename = "team.question")]
+    TeamQuestion {
+        /// Stable identity retained through answer delivery.
+        question_id: String,
+        /// Registry identity of the blocked teammate.
+        from_agent: String,
+        /// Decision question shown in the chief's home.
+        text: String,
+        /// Candidate answers supplied as context, not authority.
+        options: Vec<String>,
+        /// Common card projection, absent in historical records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+    /// The chief's answer was durably queued for the asking teammate.
+    #[serde(rename = "team.answered")]
+    TeamAnswered {
+        /// Correlates with the original decision question.
+        question_id: String,
+        /// Inactive receipt for the answered question.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+    /// Cross-store ownership updates have completed.
+    #[serde(rename = "team.transferred")]
+    TeamTransferred {
+        /// Previous accountable registry identity.
+        from_agent: String,
+        /// New accountable registry identity.
+        to_agent: String,
+        /// Routine identities retained across ownership changes.
+        routine_ids: Vec<String>,
+        /// Responsibility lines moved to the new owner.
+        responsibilities: Vec<String>,
+        /// Common card projection, absent in historical records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+    /// A teammate is retired after its ownership saga.
+    #[serde(rename = "team.retired")]
+    TeamRetired {
+        /// Retained registry identity whose home is now archived.
+        agent_id: String,
+        /// Explicit successor; no implicit channel fallback is authorized.
+        successor: Option<String>,
+        /// Common card projection, absent in historical records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+    /// A retired profile is active again without reclaiming transferred work.
+    #[serde(rename = "team.restored")]
+    TeamRestored {
+        /// Existing registry identity, not a newly hired agent.
+        agent_id: String,
+        /// Common card projection, absent in historical records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<crate::Card>,
+    },
+}
+
+impl EventKind {
+    /// Keep operational diagnostics out of the conversation's default reading path.
+    pub fn runtime_error(code: impl Into<String>, message: impl Into<String>) -> Self {
+        let code = code.into();
+        let (user_message, retryable) = match code.as_str() {
+            "interrupted" => ("The agent stopped. Try again.", true),
+            "browser_tab_limit" => ("Too many tabs are open. Close a tab and try again.", true),
+            "auth_unavailable" => (
+                "Your model connection needs attention. Check Settings.",
+                false,
+            ),
+            "sandbox_unavailable" => (
+                "Extra protection for commands isn't available on this computer.",
+                false,
+            ),
+            "tool_gate" => (
+                "The agent couldn't start safely. Check for an update.",
+                false,
+            ),
+            "model_error" | "runtime_error" | "runtime_unavailable" => {
+                ("Something went wrong on my side. Try again.", true)
+            }
+            _ => ("Something went wrong on my side.", false),
+        };
+        Self::RuntimeError {
+            code,
+            message: message.into(),
+            user_message: user_message.into(),
+            retryable,
+        }
+    }
 }
 
 /// Typed browser situation for one tab, rendered as a live card per Task.
@@ -358,6 +563,9 @@ pub struct BrowserState {
     pub host: String,
     /// Page title.
     pub title: String,
+    /// PNG data URL, at most 32×32 pixels and 8 KiB decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favicon: Option<String>,
     /// What the agent is doing in the tab.
     pub phase: BrowserPhase,
     /// The tool call behind this state.

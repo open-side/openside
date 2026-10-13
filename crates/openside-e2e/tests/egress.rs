@@ -587,6 +587,7 @@ fn tool_result<'a>(events: &'a [openside_proto::Event], id: &str) -> &'a Value {
         .iter()
         .find_map(|event| match &event.kind {
             openside_proto::EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error,

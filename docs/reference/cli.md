@@ -17,6 +17,7 @@ Usage: openside [OPTIONS] [TASK] [COMMAND]
 | `--remote <NAME>` | Remote daemon profile saved by `openside connect` (see `openside remote profiles list`) Environment: `OPENSIDE_REMOTE`. |
 | `--url <URL>` | Loopback HTTP endpoint (requires a token) |
 | `--token <TOKEN>` | Environment: `OPENSIDE_TOKEN`. |
+| `--color <WHEN>` | Colour the human output: auto (a terminal that supports it; NO_COLOR and TERM=dumb turn it off), always (also into a pipe; CLICOLOR_FORCE does the same) or never One of `auto`, `always`, `never`. Default: `auto`. |
 | `[TASK]` |  |
 | `--model <MODEL>` | Model for the new session |
 | `--mode <MODE>` | Permission mode for the new session One of `read-only`, `guard`, `full`. |
@@ -30,8 +31,398 @@ Usage: openside [OPTIONS] [TASK] [COMMAND]
 Show credential-source accounts, configured models, usage and rate-limit blocks
 
 ```text
-Usage: openside accounts [OPTIONS]
+Usage: openside accounts [OPTIONS] [COMMAND]
 ```
+
+#### `openside accounts add`
+
+Create an isolated CLI home and print the external sign-in command
+
+```text
+Usage: openside accounts add [OPTIONS] --label <LABEL> <SOURCE>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `--label <LABEL>` | Required. |
+
+#### `openside accounts show`
+
+Show login readiness and the exact external sign-in command for this account
+
+```text
+Usage: openside accounts show [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+
+#### `openside accounts enable`
+
+Enable one existing subscription account
+
+```text
+Usage: openside accounts enable [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+
+#### `openside accounts disable`
+
+Disable one existing subscription account
+
+```text
+Usage: openside accounts disable [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+
+#### `openside accounts rm`
+
+Remove an openside account; never delete the default user CLI home
+
+```text
+Usage: openside accounts rm [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+
+### `openside models`
+
+List models grouped by provider, with credential readiness and source
+
+```text
+Usage: openside models [OPTIONS] [COMMAND]
+```
+
+#### `openside models set`
+
+Set default/fallback selection; Team homes update on their next turn
+
+```text
+Usage: openside models set [OPTIONS] <MODEL>
+```
+
+| Argument | Description |
+|---|---|
+| `<MODEL>` |  |
+| `--fallback <FALLBACKS>` |  |
+
+#### `openside models pool`
+
+List or replace explicit ordered provider account pools
+
+```text
+Usage: openside models pool [OPTIONS] <COMMAND>
+```
+
+##### `openside models pool list`
+
+List provider pools without credential values
+
+```text
+Usage: openside models pool list [OPTIONS]
+```
+
+##### `openside models pool set`
+
+Replace membership with source:account-id references; empty disables routing
+
+```text
+Usage: openside models pool set [OPTIONS] <PROVIDER> [ACCOUNTS]...
+```
+
+| Argument | Description |
+|---|---|
+| `<PROVIDER>` |  |
+| `[ACCOUNTS]` |  |
+
+#### `openside models account`
+
+Prefer an authorized account for subsequent requests; omit account to clear
+
+```text
+Usage: openside models account [OPTIONS] <SESSION> [ACCOUNT]
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` |  |
+| `[ACCOUNT]` |  |
+
+### `openside key`
+
+Manage encrypted provider API keys (set reads from stdin, never argv)
+
+```text
+Usage: openside key [OPTIONS] <COMMAND>
+```
+
+#### `openside key list`
+
+List labelled provider accounts, masked suffixes and enabled state, never values
+
+```text
+Usage: openside key list [OPTIONS]
+```
+
+#### `openside key set`
+
+Create a labelled account or replace --key-id; reads a hidden stdin line only
+
+```text
+Usage: openside key set [OPTIONS] <PROVIDER>
+```
+
+| Argument | Description |
+|---|---|
+| `<PROVIDER>` |  |
+| `--label <LABEL>` |  |
+| `--key-id <KEY_ID>` |  |
+
+#### `openside key update`
+
+Change account metadata without reading or replacing the key
+
+```text
+Usage: openside key update [OPTIONS] <PROVIDER> <KEY_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<PROVIDER>` |  |
+| `<KEY_ID>` |  |
+| `--label <LABEL>` |  |
+| `--enabled <ENABLED>` | One of `true`, `false`. |
+| `--reserve-percent <RESERVE_PERCENT>` |  |
+
+#### `openside key rm`
+
+Remove only this provider account
+
+```text
+Usage: openside key rm [OPTIONS] <PROVIDER> <KEY_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<PROVIDER>` |  |
+| `<KEY_ID>` |  |
+
+### `openside channels`
+
+Manage independent chat channel accounts; secrets use hidden stdin only
+
+```text
+Usage: openside channels [OPTIONS] <COMMAND>
+```
+
+#### `openside channels list`
+
+List account labels and effective status, never credentials
+
+```text
+Usage: openside channels list [OPTIONS]
+```
+
+#### `openside channels add`
+
+Add a channel identity; credentials are read from hidden stdin only
+
+```text
+Usage: openside channels add [OPTIONS] --label <LABEL> <KIND> <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<KIND>` |  |
+| `<ID>` |  |
+| `--label <LABEL>` | Required. |
+| `--enabled` |  |
+| `--agent <AGENT>` |  |
+| `--api-base <API_BASE>` |  |
+| `--listen <LISTEN>` |  |
+| `--public-key <PUBLIC_KEY>` |  |
+| `--allow-chat <ALLOWED_CHATS>` |  |
+| `--allow-user <ALLOWED_USERS>` |  |
+| `--allow-workspace <ALLOWED_WORKSPACES>` |  |
+| `--allow-channel <ALLOWED_CHANNELS>` |  |
+| `--allow-guild <ALLOWED_GUILDS>` |  |
+
+#### `openside channels rm`
+
+Remove only this account, stopping its adapter and deleting its Vault credentials
+
+```text
+Usage: openside channels rm [OPTIONS] <KIND> <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<KIND>` |  |
+| `<ID>` |  |
+
+#### `openside channels test`
+
+Perform a read-only connectivity check, without sending a chat message
+
+```text
+Usage: openside channels test [OPTIONS] <KIND> <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<KIND>` |  |
+| `<ID>` |  |
+
+### `openside team`
+
+Manage the chief and durable specialist teammates
+
+```text
+Usage: openside team [OPTIONS] [COMMAND]
+```
+
+#### `openside team list`
+
+List the roster, including hidden and retired teammates
+
+```text
+Usage: openside team list [OPTIONS]
+```
+
+#### `openside team show`
+
+Inspect a profile by its id or case-insensitive name; does not change visibility
+
+```text
+Usage: openside team show [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside team hire`
+
+Hire a specialist; the role is also their initial responsibility
+
+```text
+Usage: openside team hire [OPTIONS] --name <NAME> --role <ROLE>
+```
+
+| Argument | Description |
+|---|---|
+| `--name <NAME>` | Required. |
+| `--role <ROLE>` | Required. |
+| `--from-session <SESSION_ID>` | Include a bounded recent conversation excerpt as onboarding context |
+
+#### `openside team retire`
+
+Retire a teammate and hand their work to the chief or a selected successor
+
+```text
+Usage: openside team retire [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+| `--hand-to <ID>` |  |
+| `--pause` | Pause owned routines while handing ownership to the chief |
+
+#### `openside team undo`
+
+Undo a hire, restoring its recorded ownership and retiring the teammate
+
+```text
+Usage: openside team undo [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside team restore`
+
+Restore a retired teammate without reclaiming work already handed over
+
+```text
+Usage: openside team restore [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside team rename`
+
+Rename a profile without changing its identity or home conversation
+
+```text
+Usage: openside team rename [OPTIONS] <ID> <NAME>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+| `<NAME>` |  |
+
+#### `openside team hide`
+
+Hide a profile from the sidebar without pausing work
+
+```text
+Usage: openside team hide [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside team unhide`
+
+Show a hidden profile in the sidebar again
+
+```text
+Usage: openside team unhide [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside team proposals`
+
+List or clear topics whose hire suggestions you turned off
+
+```text
+Usage: openside team proposals [OPTIONS] [COMMAND]
+```
+
+##### `openside team proposals allow`
+
+Allow the selected topic to be suggested again
+
+```text
+Usage: openside team proposals allow [OPTIONS] <KEY>
+```
+
+| Argument | Description |
+|---|---|
+| `<KEY>` |  |
 
 ### `openside session`
 
@@ -114,7 +505,7 @@ Usage: openside ticket resolve [OPTIONS] <ID> [VALUE]
 | Argument | Description |
 |---|---|
 | `<ID>` |  |
-| `[VALUE]` | JSON or text; '-' reads secret_input from stdin; omitted on a secret_input, login or choice ticket, asks at prompts |
+| `[VALUE]` | JSON or text; secret, login, OTP and payment values only through a hidden prompt or '-'; form/login/choice stdin uses one line per field |
 | `--totp` | With '-' or the prompt: the input is the site's authenticator (otpauth:// URI or base32 setup key) to save in the vault instead of a code; request_otp tickets that offer registration only |
 | `--save` | Login tickets: save the login to the vault (the default when the site allows it; needs the approve scope) |
 | `--no-save` | Login tickets: log in without saving to the vault |
@@ -494,6 +885,135 @@ Usage: openside vault audit [OPTIONS]
 | `--session <SESSION>` |  |
 | `--limit <N>` |  |
 
+### `openside connections`
+
+Manage browser sign-ins, per-agent grants and audit records (admin)
+
+```text
+Usage: openside connections [OPTIONS] <COMMAND>
+```
+
+#### `openside connections list`
+
+List sign-ins and separately marked candidates (metadata only)
+
+```text
+Usage: openside connections list [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--site <SITE>` | Exact registrable site domain, filtered without changing the API object shape |
+
+#### `openside connections show`
+
+Show a connection and its explicit per-agent grants
+
+```text
+Usage: openside connections show [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside connections check`
+
+Check whether the browser is still signed in
+
+```text
+Usage: openside connections check [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside connections relogin`
+
+Sign in again, using the Vault or an existing human-step ticket
+
+```text
+Usage: openside connections relogin [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside connections revoke`
+
+Remove access and sign out every shared-profile account on the site
+
+```text
+Usage: openside connections revoke [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+| `--keep-signed-in` | Forget metadata and grants without clearing the shared browser's sign-in |
+
+#### `openside connections grant`
+
+Set a stable agent ID's connection access; ordinary action policy still applies
+
+```text
+Usage: openside connections grant [OPTIONS] <ID> <AGENT> <ACCESS>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+| `<AGENT>` |  |
+| `<ACCESS>` | One of `allowed`, `ask`, `denied`. |
+
+#### `openside connections audit`
+
+Show newest-first metadata audit records
+
+```text
+Usage: openside connections audit [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--connection <CONNECTION>` |  |
+| `--agent <AGENT>` |  |
+| `--action <ACTION>` | One of `detected`, `verified`, `expired`, `needs_login`, `relogin`, `open`, `fetch`, `grant`, `forget`, `sign_out`. |
+
+#### `openside connections spaces`
+
+Manage opt-in separate account profiles
+
+```text
+Usage: openside connections spaces [OPTIONS] <COMMAND>
+```
+
+##### `openside connections spaces add`
+
+Create a separate account profile and start its sign-in flow
+
+```text
+Usage: openside connections spaces add [OPTIONS] <SITE>
+```
+
+| Argument | Description |
+|---|---|
+| `<SITE>` |  |
+
+##### `openside connections spaces remove`
+
+Stop a separate account profile and delete its sign-in and profile directory
+
+```text
+Usage: openside connections spaces remove [OPTIONS] <SPACE_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SPACE_ID>` |  |
+
 ### `openside sync`
 
 End-to-end encrypted sync of pinned tabs and vault items between devices
@@ -706,7 +1226,7 @@ Usage: openside run [OPTIONS] <GOAL>
 | Argument | Description |
 |---|---|
 | `<GOAL>` | What the agent should do; `-` reads it from stdin |
-| `--session <SESSION_ID>` | Run in this session instead of a new one |
+| `--session <SESSION_ID>` | Run in this session instead of the chief's home conversation |
 | `--wait` | Wait until the run ends (through any tickets a person answers) and print the replies |
 | `--follow` | Stream the run's text, progress and tickets until the session settles |
 | `--timeout <SECS>` | With --wait: give up after this many seconds (status `timeout`, exit 1) |
@@ -870,7 +1390,7 @@ Usage: openside browser pointer [OPTIONS] <SESSION> [ARG]...
 
 #### `openside browser screenshot`
 
-browser_screenshot: capture a tab; prints the saved artifact path (`--out FILE` saves it)
+browser_screenshot: observe a tab; output=true delivers it (`--out FILE` saves and delivers it)
 
 ```text
 Usage: openside browser screenshot [OPTIONS] <SESSION> [ARG]...
@@ -1183,6 +1703,14 @@ Transports the running daemon has up, with their public URLs
 
 ```text
 Usage: openside remote status [OPTIONS]
+```
+
+#### `openside remote local-access`
+
+Bootstrap the browser on this computer with local-person authority (local socket only)
+
+```text
+Usage: openside remote local-access [OPTIONS]
 ```
 
 #### `openside remote profiles`

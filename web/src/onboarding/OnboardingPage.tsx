@@ -1,64 +1,50 @@
-import { Bot, Check, Globe, KeyRound, Minus, Smartphone } from "lucide-react";
+import { Check, Minus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { ApiError } from "../api/client";
 import { useClient } from "../context";
-import { BrandMark, Button, cx, ICON_STROKE, useToast } from "../ui";
+import { BrandMark, Button, cx, useToast } from "../ui";
 import "../pages/pages.css";
 import { AgentsStep } from "./AgentsStep";
+import { AssistantStep } from "./AssistantStep";
 import { dismissGuide } from "./dismissed";
 import { ImportStep } from "./ImportStep";
+import { ModelsStep } from "./ModelsStep";
 import "./onboarding.css";
 import { PairStep } from "./PairStep";
 import { EMPTY_SUMMARY, type StepProps, type Summary } from "./summary";
-import { VaultStep } from "./VaultStep";
 
 export const STEPS = [
-  { id: "welcome", label: "Welcome", title: "Welcome to openside", lead: "Your agent works in a real browser on this computer. A few quick steps connect it to what you already use." },
+  {
+    id: "import",
+    label: "Browser",
+    title: "Bring your browser with you",
+    lead: "Start from where you already are. openside finds the browsers on this computer and brings over your sign-ins, passwords, bookmarks and history, so your agent can work in sites you’re already signed in to.",
+  },
+  { id: "models", label: "Models", title: "Connect a model", lead: "openside needs a model to answer. Add an API key, or use a Claude Code or Codex subscription already on this computer; keys are stored encrypted in the vault." },
   { id: "agents", label: "Agents", title: "Connect your agents", lead: "Install the openside browser skill so the agents on this computer hand browser work to openside. It adds one folder, openside-browser, to each agent’s skills." },
-  { id: "import", label: "Browser data", title: "Bring your browser data", lead: "Copy history, bookmarks and cookies from a browser on this computer, so the agent starts signed in where you are. You see the counts before anything is written." },
-  { id: "vault", label: "Vault", title: "Keep logins in the vault", lead: "The vault stores logins and one-time-code keys encrypted on this computer. Login values are left out of the agent’s tool results, but scripts the agent runs on a page can read its filled fields." },
   { id: "pair", label: "Phone", title: "Pair your phone", lead: "Approve requests and watch the agent work from your phone." },
+  { id: "assistant", label: "Assistant", title: "Name your assistant", lead: "This is who you talk to. They take your requests, bring in teammates for work that keeps coming back, and come to you when something needs your call." },
   { id: "done", label: "Done", title: "You’re all set", lead: "You can open this guide again any time from Settings." },
 ] as const;
 
 export type StepId = (typeof STEPS)[number]["id"];
 
 const BODY: Partial<Record<StepId, (props: StepProps) => ReactNode>> = {
-  agents: (props) => <AgentsStep {...props} />,
   import: (props) => <ImportStep {...props} />,
-  vault: (props) => <VaultStep {...props} />,
+  models: (props) => <ModelsStep {...props} />,
+  agents: (props) => <AgentsStep {...props} />,
   pair: (props) => <PairStep {...props} />,
+  assistant: (props) => <AssistantStep {...props} />,
 };
-
-const OVERVIEW = [
-  { icon: Bot, text: "Connect the coding agents on this computer" },
-  { icon: Globe, text: "Bring in your browser’s history, bookmarks and cookies" },
-  { icon: KeyRound, text: "Keep logins in the vault" },
-  { icon: Smartphone, text: "Pair your phone" },
-] as const;
-
-function Welcome() {
-  return (
-    <ul className="onb-overview">
-      {OVERVIEW.map(({ icon: Icon, text }) => (
-        <li key={text}>
-          <span className="onb-overview-icon" aria-hidden="true">
-            <Icon size={18} strokeWidth={ICON_STROKE} />
-          </span>
-          {text}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 function Recap({ summary }: { summary: Summary }) {
   const rows: { label: string; value: string | null }[] = [
+    { label: "Browser data", value: summary.imported ? `Brought over: ${summary.imported}` : null },
+    { label: "Models", value: summary.models ? `${summary.models} ready` : null },
     { label: "Agents", value: summary.skills.length ? `Browser skill for ${summary.skills.join(", ")}` : null },
-    { label: "Browser data", value: summary.imported ? `Imported from ${summary.imported}` : null },
-    { label: "Vault", value: summary.vaultReady ? "Set up" : null },
     { label: "Phone", value: summary.phone ? `${summary.phone} paired` : null },
+    { label: "Assistant", value: summary.assistant },
   ];
   return (
     <ul className="onb-recap" aria-label="Summary">
@@ -95,7 +81,7 @@ export function OnboardingPage() {
   const heading = useRef<HTMLHeadingElement>(null);
 
   const update = useCallback((patch: Partial<Summary>) => setSummary((current) => ({ ...current, ...patch })), []);
-  const show = (id: StepId) => setParams(id === "welcome" ? {} : { step: id });
+  const show = (id: StepId) => setParams(id === STEPS[0].id ? {} : { step: id });
 
   useEffect(() => {
     heading.current?.focus({ preventScroll: true });
@@ -118,10 +104,11 @@ export function OnboardingPage() {
   const first = index === 0;
   const last = step.id === "done";
   const complete =
-    (step.id === "agents" && summary.skills.length > 0) ||
     (step.id === "import" && summary.imported !== null) ||
-    (step.id === "vault" && summary.vaultReady) ||
-    (step.id === "pair" && summary.phone !== null);
+    (step.id === "models" && summary.models !== null) ||
+    (step.id === "agents" && summary.skills.length > 0) ||
+    (step.id === "pair" && summary.phone !== null) ||
+    (step.id === "assistant" && summary.assistant !== null);
   const next = STEPS[index + 1];
 
   return (
@@ -150,7 +137,6 @@ export function OnboardingPage() {
             {step.title}
           </h1>
           <p className="onb-lead">{step.lead}</p>
-          {first ? <Welcome /> : null}
           {Body?.({ update })}
           {last ? <Recap summary={summary} /> : null}
         </section>
@@ -165,8 +151,8 @@ export function OnboardingPage() {
               Open openside
             </Button>
           ) : (
-            <Button variant={first || complete ? "primary" : "secondary"} disabled={leaving} onClick={() => show(next!.id)}>
-              {first ? "Get started" : complete ? "Continue" : "Skip this step"}
+            <Button variant={complete ? "primary" : first ? "ghost" : "secondary"} disabled={leaving} onClick={() => show(next!.id)}>
+              {complete ? "Continue" : first ? "Skip for now" : "Skip this step"}
             </Button>
           )}
         </footer>

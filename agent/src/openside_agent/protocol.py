@@ -10,6 +10,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    SecretStr,
     TypeAdapter,
     ValidationError,
 )
@@ -41,13 +42,20 @@ class ModelSpec(WireModel):
 
 
 class OpenConfig(WireModel):
-    credentials: dict[str, Any]
+    credentials: dict[str, Any] = Field(repr=False)
     agent: dict[str, Any]
 
 
 class AgentState(WireModel):
     format: Literal["openside-agent-state/1"] = STATE_FORMAT
     data: str
+
+
+class TeamContext(WireModel):
+    role: Literal["chief", "teammate"]
+    agent_id: str
+    persona: Annotated[str, Field(max_length=1500)]
+    roster: Annotated[str, Field(max_length=2000)]
 
 
 class Open(Envelope):
@@ -58,6 +66,7 @@ class Open(Envelope):
     tools: list[ToolSpec]
     resume_state: AgentState | None = None
     config: OpenConfig
+    team: TeamContext | None = None
 
 
 class ContentPart(WireModel):
@@ -140,6 +149,102 @@ class ToolResult(Envelope):
     outcome: ToolOutcome
 
 
+CredentialId = Annotated[str, Field(min_length=1, max_length=128)]
+CredentialProvider = Annotated[str, Field(min_length=1, max_length=64)]
+CredentialErrorCode = Literal[
+    "auth_unavailable",
+    "account_blocked",
+    "account_not_in_pool",
+    "provider_unavailable",
+    "invalid_credential_request",
+]
+
+
+class ModelAccountRef(WireModel):
+    source: Literal[
+        "omp-broker", "vault", "env", "command", "claude-code", "codex-cli", "builtin"
+    ]
+    account_id: CredentialId
+
+
+class CredentialAuth(WireModel):
+    kind: Literal["api_key", "claude_code", "codex_cli", "bearer"]
+    value: SecretStr = Field(repr=False, min_length=1, max_length=16384)
+    upstream_account_id: str | None = Field(default=None, repr=False, max_length=1024)
+    expires_at_ms: int | None = Field(default=None, ge=0)
+
+
+class CredentialRequest(Envelope):
+    type: Literal["credential_request"] = "credential_request"
+    id: CredentialId
+    request_id: CredentialId
+    provider: CredentialProvider
+    model: Annotated[str, Field(min_length=1, max_length=256)]
+    attempt: Annotated[int, Field(ge=0, le=63)]
+    subagent: CredentialId | None = None
+
+
+class CredentialResponse(Envelope):
+    type: Literal["credential_response"] = "credential_response"
+    id: CredentialId
+    request_id: CredentialId
+    lease_id: CredentialId
+    generation: Annotated[int, Field(ge=0)]
+    account: ModelAccountRef
+    auth: CredentialAuth = Field(repr=False)
+
+
+class CredentialError(Envelope):
+    type: Literal["credential_error"] = "credential_error"
+    id: CredentialId
+    request_id: CredentialId
+    code: CredentialErrorCode
+    reason: str = Field(repr=False, max_length=512)
+    retry_at_ms: int | None = Field(default=None, ge=0)
+    generation: Annotated[int, Field(ge=0)]
+
+
+class CredentialUsage(WireModel):
+    input_tokens: Annotated[int, Field(ge=0)]
+    output_tokens: Annotated[int, Field(ge=0)]
+    cache_read_tokens: Annotated[int, Field(ge=0)]
+    cache_write_tokens: Annotated[int, Field(ge=0)]
+
+
+class CredentialUsageWindow(WireModel):
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+    used_percent: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    reset_at_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class CredentialReport(Envelope):
+    type: Literal["credential_report"] = "credential_report"
+    id: CredentialId
+    request_id: CredentialId
+    lease_id: CredentialId
+    outcome: Literal[
+        "success", "auth", "rate_limit", "quota", "policy", "transient", "cancelled"
+    ]
+    stream_started: bool
+    retry_after_ms: int | None = Field(default=None, ge=0, le=86400000)
+    scope: Literal["account", "model"]
+    usage: CredentialUsage | None = None
+    usage_windows: list[CredentialUsageWindow] = Field(
+        default_factory=list[CredentialUsageWindow], max_length=64
+    )
+
+
+class CredentialReported(Envelope):
+    type: Literal["credential_reported"] = "credential_reported"
+    id: CredentialId
+    request_id: CredentialId
+    lease_id: CredentialId
+    generation: Annotated[int, Field(ge=0)]
+    action: Literal["complete", "refresh", "rotate", "stop"]
+    retry_at_ms: int | None = Field(default=None, ge=0)
+    reason: str | None = Field(default=None, repr=False, max_length=512)
+
+
 class Approved(WireModel):
     status: Literal["approved"] = "approved"
 
@@ -212,6 +317,11 @@ class AssistantFinal(WireModel):
     text: str
 
 
+class SessionTitleProposed(WireModel):
+    kind: Literal["session.title_proposed"] = "session.title_proposed"
+    title: str
+
+
 class ThinkingDelta(WireModel):
     kind: Literal["thinking.delta"] = "thinking.delta"
     text: str
@@ -243,6 +353,7 @@ EventBody = Annotated[
     | TurnEnded
     | AssistantDelta
     | AssistantFinal
+    | SessionTitleProposed
     | ThinkingDelta
     | SubagentLifecycle
     | SubagentProgress
@@ -339,6 +450,9 @@ Inbound = Annotated[
     | UserMessage
     | Abort
     | ToolResult
+    | CredentialResponse
+    | CredentialError
+    | CredentialReported
     | TicketResolved
     | Shutdown
     | Error
@@ -354,6 +468,8 @@ Outbound = Annotated[
     | MessageAccepted
     | MessageResult
     | ToolCall
+    | CredentialRequest
+    | CredentialReport
     | Deferred
     | StateSnapshot
     | Settled
@@ -378,12 +494,17 @@ class JsonLineConnection:
         self._discarding = False
 
     async def send(self, message: Envelope) -> None:
-        payload = message.model_dump_json(exclude_none=True).encode("utf-8")
-        if len(payload) > MAX_LINE_BYTES:
-            raise ValueError("Outgoing protocol line exceeds the size limit")
-        async with self._write_lock:
-            self.writer.write(payload + b"\n")
-            await self.writer.drain()
+        payload = bytearray(message.model_dump_json(exclude_none=True), "utf-8")
+        try:
+            if len(payload) > MAX_LINE_BYTES:
+                raise ValueError("Outgoing protocol line exceeds the size limit")
+            payload.append(10)
+            async with self._write_lock:
+                # drain() waits for a watermark, not transport buffer release.
+                self.writer.write(bytes(payload))
+                await self.writer.drain()
+        finally:
+            payload[:] = b"\x00" * len(payload)
 
     async def protocol_error(self) -> None:
         await self.send(
@@ -398,23 +519,28 @@ class JsonLineConnection:
         while True:
             newline = self._buffer.find(b"\n")
             if newline >= 0:
-                line = bytes(self._buffer[:newline])
+                line = self._buffer[:newline]
+                self._buffer[: newline + 1] = b"\x00" * (newline + 1)
                 del self._buffer[: newline + 1]
-                if self._discarding:
-                    self._discarding = False
-                    continue
-                if len(line) > MAX_LINE_BYTES:
-                    await self.protocol_error()
-                    continue
                 try:
-                    return INBOUND_ADAPTER.validate_json(line)
-                except (ValidationError, ValueError, RecursionError):
-                    await self.protocol_error()
-                    continue
+                    if self._discarding:
+                        self._discarding = False
+                        continue
+                    if len(line) > MAX_LINE_BYTES:
+                        await self.protocol_error()
+                        continue
+                    try:
+                        return INBOUND_ADAPTER.validate_json(line)
+                    except (ValidationError, ValueError, RecursionError):
+                        await self.protocol_error()
+                        continue
+                finally:
+                    line[:] = b"\x00" * len(line)
             if len(self._buffer) > MAX_LINE_BYTES:
                 if not self._discarding:
                     await self.protocol_error()
                 self._discarding = True
+                self._buffer[:] = b"\x00" * len(self._buffer)
                 self._buffer.clear()
             chunk = await self.reader.read(65536)
             if not chunk:
@@ -424,5 +550,7 @@ class JsonLineConnection:
             self._buffer.extend(chunk)
 
     async def close(self) -> None:
+        self._buffer[:] = b"\x00" * len(self._buffer)
+        self._buffer.clear()
         self.writer.close()
         await self.writer.wait_closed()

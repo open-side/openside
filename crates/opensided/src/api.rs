@@ -24,6 +24,7 @@ use crate::{
     persistence::{random_id, Error},
 };
 
+#[derive(Debug)]
 pub(crate) struct HttpError(pub(crate) StatusCode, pub(crate) &'static str);
 impl HttpError {
     pub(crate) fn internal() -> Self {
@@ -99,14 +100,16 @@ impl From<Error> for HttpError {
 type Result<T, E = HttpError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
-pub(crate) struct Access(Vec<CapabilityScope>);
+pub(crate) struct Access(pub(crate) Vec<CapabilityScope>);
 impl Access {
     pub(crate) fn has(&self, scope: CapabilityScope) -> bool {
         self.0.iter().any(|held| held.grants(scope))
     }
     fn ticket(&self, ticket: &Ticket) -> Result<()> {
         let scope = match ticket.kind {
-            TicketKind::Confirm | TicketKind::Info | TicketKind::Choice => CapabilityScope::Approve,
+            TicketKind::Confirm | TicketKind::Info | TicketKind::Choice | TicketKind::Hire => {
+                CapabilityScope::Approve
+            }
             TicketKind::SecretInput
             | TicketKind::DeviceApproval
             | TicketKind::Takeover
@@ -207,8 +210,89 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
     let api = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/accounts", get(crate::accounts::list))
+        .route(
+            "/v1/agents",
+            get(crate::agents::api::list).post(crate::agents::api::create),
+        )
+        .route(
+            "/v1/agents/{id}",
+            get(crate::agents::api::get).patch(crate::agents::api::update),
+        )
+        .route("/v1/agents/{id}/retire", post(crate::agents::api::retire))
+        .route("/v1/agents/{id}/restore", post(crate::agents::api::restore))
+        .route(
+            "/v1/agents/{id}/transfer",
+            post(crate::agents::api::transfer),
+        )
+        .route(
+            "/v1/agents/{id}/handoffs",
+            get(crate::agents::api::handoffs).post(crate::agents::api::handoff),
+        )
+        .route(
+            "/v1/team/proposals/suppressed",
+            get(crate::agents::api::suppressed_proposals),
+        )
+        .route(
+            "/v1/team/proposals/{key}",
+            axum::routing::delete(crate::agents::api::clear_proposal),
+        )
         .route("/v1/browser/tabs", get(crate::browser_tabs_api::list))
         .route("/v1/settings", get(crate::session_meta::settings))
+        .route(
+            "/v1/settings/models",
+            get(crate::models_api::get).put(crate::models_api::put),
+        )
+        .route("/v1/settings/keys", get(crate::models_api::keys))
+        .route(
+            "/v1/settings/keys/{provider}",
+            post(crate::models_api::create_key),
+        )
+        .route(
+            "/v1/settings/keys/{provider}/{key_id}",
+            axum::routing::put(crate::models_api::set_key)
+                .patch(crate::models_api::update_key)
+                .delete(crate::models_api::delete_key),
+        )
+        .route(
+            "/v1/settings/subscriptions",
+            get(crate::model_subscriptions_api::list),
+        )
+        .route(
+            "/v1/settings/subscriptions/{source}",
+            post(crate::model_subscriptions_api::create),
+        )
+        .route(
+            "/v1/settings/subscriptions/{source}/{account_id}",
+            get(crate::model_subscriptions_api::get)
+                .patch(crate::model_subscriptions_api::update)
+                .delete(crate::model_subscriptions_api::remove),
+        )
+        .route("/v1/settings/pools", get(crate::model_accounts::list_pools))
+        .route(
+            "/v1/settings/pools/{provider}",
+            axum::routing::put(crate::model_accounts::update_pool),
+        )
+        .route(
+            "/v1/sessions/{id}/account",
+            axum::routing::put(crate::model_accounts::set_preference),
+        )
+        .route("/v1/settings/channels", get(crate::channels_api::get))
+        .route(
+            "/v1/settings/channels/{kind}/accounts",
+            post(crate::channels_api::add),
+        )
+        .route(
+            "/v1/settings/channels/{kind}/accounts/{account_id}",
+            axum::routing::patch(crate::channels_api::patch).delete(crate::channels_api::delete),
+        )
+        .route(
+            "/v1/settings/channels/{kind}/accounts/{account_id}/test",
+            post(crate::channels_api::test),
+        )
+        .route(
+            "/v1/hooks/{kind}/{account_id}",
+            post(crate::channels_api::hook),
+        )
         .route("/v1/sessions", get(crate::session_meta::list).post(create))
         .route(
             "/v1/sessions/{id}",
@@ -223,6 +307,7 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             )),
         )
         .route("/v1/sessions/{id}/artifacts", get(crate::artifacts::list))
+        .route("/v1/favicons/{origin}", get(crate::favicons::get))
         .route(
             "/v1/sessions/{id}/artifacts/{path}",
             get(crate::artifacts::raw),
@@ -239,6 +324,7 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
         .route("/v1/sessions/{id}/prewarm", post(prewarm_session))
         .route("/v1/browser/prewarm", post(prewarm_browser))
         .route("/v1/sessions/{id}/events", get(events))
+        .route("/v1/sessions/{id}/events/poll", get(poll_events))
         .route("/v1/sessions/{id}/repl", post(crate::tools::repl::route))
         .route("/v1/tools", get(crate::tools::api_call::catalog))
         .route(
@@ -294,6 +380,15 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             get(crate::memory::search).post(crate::memory::create),
         )
         .route("/v1/memory/health", get(crate::memory::health))
+        .route("/v1/memory/model", get(crate::memory_model::status))
+        .route(
+            "/v1/memory/model/download",
+            post(crate::memory_model::download),
+        )
+        .route("/v1/memory/model/cancel", post(crate::memory_model::cancel))
+        .route("/v1/daemon", get(crate::lifecycle::status))
+        .route("/v1/daemon/restart", post(crate::lifecycle::restart))
+        .route("/v1/doctor", get(crate::doctor_api::get))
         .route(
             "/v1/memory/{id}",
             get(crate::memory::get)
@@ -317,16 +412,79 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
         )
         .route("/v1/external-agents", get(crate::onboarding::agents))
         .route(
+            "/v1/external-agents/{id}",
+            axum::routing::put(crate::onboarding::set_agent)
+                .delete(crate::onboarding::delete_agent),
+        )
+        .route(
             "/v1/external-agents/{id}/browser-skill",
             post(crate::onboarding::install_skill),
         )
         .route("/v1/import/profiles", get(crate::import_api::profiles))
         .route("/v1/import", post(crate::import_api::run))
+        .route("/v1/import/preview", post(crate::import_api::preview))
+        .route("/v1/import/passwords", post(crate::import_api::passwords))
+        .route("/v1/import/jobs/{id}", get(crate::import_api::job))
+        .route(
+            "/v1/import/jobs/{id}/events",
+            get(crate::import_api::events),
+        )
+        .route("/v1/import/delivery", get(crate::import_delivery::pending))
+        .route(
+            "/v1/import/delivery/{id}/ack",
+            post(crate::import_delivery::ack),
+        )
+        .route(
+            "/v1/import/delivery/{id}/ticket",
+            post(crate::import_delivery::mint),
+        )
+        .route(
+            "/v1/extension/import/{ticket}",
+            get(crate::import_delivery::fetch),
+        )
         .route(
             "/v1/policy",
             get(crate::policy_api::get).put(crate::policy_api::put),
         )
         .route("/v1/policy/test", post(crate::policy_api::test))
+        .route(
+            "/v1/policy/validate",
+            post(crate::policy_api::validate_document),
+        )
+        .route(
+            "/v1/policy/network",
+            get(crate::policy_api::network).put(crate::policy_api::put_network),
+        )
+        .route("/v1/connections", get(crate::connections::api::list))
+        .route("/v1/connections/audit", get(crate::connections::api::audit))
+        .route(
+            "/v1/connections/spaces",
+            post(crate::connections::spaces::create),
+        )
+        .route(
+            "/v1/connections/spaces/{space_id}",
+            delete(crate::connections::spaces::delete),
+        )
+        .route(
+            "/v1/connections/{id}",
+            get(crate::connections::api::get).patch(crate::connections::api::update),
+        )
+        .route(
+            "/v1/connections/{id}/check",
+            post(crate::connections::api::check),
+        )
+        .route(
+            "/v1/connections/{id}/relogin",
+            post(crate::connections::api::relogin),
+        )
+        .route(
+            "/v1/connections/{id}/revoke",
+            post(crate::connections::api::revoke),
+        )
+        .route(
+            "/v1/connections/candidates/{id}/dismiss",
+            post(crate::connections::api::dismiss),
+        )
         .route("/v1/vault", get(crate::vault_api::status))
         .route("/v1/vault/setup", post(crate::vault_api::setup))
         .route("/v1/vault/unlock", post(crate::vault_api::unlock))
@@ -349,13 +507,45 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             axum::routing::delete(crate::sync::unpin),
         )
         .route("/v1/sync", get(crate::sync::get_status))
+        .route(
+            "/v1/sync/config",
+            axum::routing::put(crate::sync::configure),
+        )
+        .route("/v1/sync/unlock", post(crate::sync::unlock))
         .route("/v1/sync/setup", post(crate::sync::setup))
         .route("/v1/sync/pair", post(crate::sync::pair))
         .route("/v1/sync/run", post(crate::sync::run))
         .route("/v1/pairing", post(crate::pairing::create))
         .route("/v1/pairing/exchange", post(crate::pairing::exchange))
         .route("/v1/devices", get(crate::pairing::list))
+        .route("/v1/devices/me", get(crate::access_requests::mine))
+        .route(
+            "/v1/devices/me/access-requests",
+            post(crate::access_requests::request),
+        )
+        .route("/v1/access-requests", get(crate::access_requests::list))
+        .route(
+            "/v1/access-requests/{id}/approve",
+            post(crate::access_requests::approve),
+        )
+        .route(
+            "/v1/access-requests/{id}/deny",
+            post(crate::access_requests::deny),
+        )
         .route("/v1/remote/status", get(crate::remote::status))
+        .route("/v1/remote/local-access", get(crate::remote::local_access))
+        .route(
+            "/v1/remote/tailscale",
+            axum::routing::put(crate::remote::configure_tailscale),
+        )
+        .route(
+            "/v1/remote/cloudflare",
+            axum::routing::put(crate::remote::configure_cloudflare),
+        )
+        .route(
+            "/v1/remote/relay",
+            axum::routing::put(crate::remote::configure_relay),
+        )
         .route("/v1/push/vapid", get(crate::push::vapid))
         .route(
             "/v1/push/subscriptions",
@@ -423,8 +613,28 @@ fn bearer_token(value: &str) -> Option<&str> {
 }
 
 /// Routes only Unix-socket callers may use, whatever scopes a TCP token holds.
-pub(crate) const SOCKET_ONLY: &[(&str, &str)] =
-    &[("POST", "/v1/devices/pair"), ("POST", "/v1/pairing")];
+pub(crate) const SOCKET_ONLY: &[(&str, &str)] = &[
+    ("POST", "/v1/devices/pair"),
+    ("GET", "/v1/remote/local-access"),
+];
+
+pub(crate) const LOCAL_REQUIRED: &[(&str, &str)] = &[
+    ("PUT", "/v1/sync/config"),
+    ("POST", "/v1/daemon/restart"),
+    ("PUT", "/v1/policy"),
+    ("PUT", "/v1/policy/network"),
+    ("PUT", "/v1/external-agents/{id}"),
+    ("DELETE", "/v1/external-agents/{id}"),
+];
+
+pub(crate) const LOCAL_AWARE: &[(&str, &str)] = &[
+    ("GET", "/v1/settings/config"),
+    ("PUT", "/v1/settings/config"),
+    ("POST", "/v1/memory/model/download"),
+    ("POST", "/v1/sync/setup"),
+    ("POST", "/v1/sync/pair"),
+    ("POST", "/v1/sync/unlock"),
+];
 
 /// WebSocket routes (GET templates) whose browser clients may authenticate by subprotocol.
 /// Browsers cannot set `Authorization` on a WebSocket handshake, so they offer
@@ -477,6 +687,11 @@ pub(crate) async fn authorize(
     mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
+    // This marker can only remove person-message authority, never grant it to a token.
+    let agent_client = request
+        .headers()
+        .get("x-openside-client")
+        .is_some_and(|value| value == "mcp");
     if unix {
         request
             .extensions_mut()
@@ -484,6 +699,14 @@ pub(crate) async fn authorize(
         request
             .extensions_mut()
             .insert(Caller(None, DeviceKind::AgentClient));
+        request
+            .extensions_mut()
+            .insert(crate::remote::LocalAuthority(true));
+        request.extensions_mut().insert(if agent_client {
+            MessageAuthorKind::AgentClient
+        } else {
+            MessageAuthorKind::Person
+        });
         return next.run(request).await;
     }
     let template = request
@@ -533,6 +756,32 @@ pub(crate) async fn authorize(
     if SOCKET_ONLY.contains(&(route.method.as_str(), route.path)) {
         return HttpError(StatusCode::FORBIDDEN, "local_socket_required").into_response();
     }
+    let local_required = route.path == "/v1/pairing"
+        || route.path == "/v1/access-requests/{id}/approve"
+        || route.path.starts_with("/v1/import")
+        || (route.method.as_str() == "PUT" && route.path.starts_with("/v1/remote/"))
+        || LOCAL_REQUIRED.contains(&(route.method.as_str(), route.path));
+    let local_route = local_required
+        || route.path.starts_with("/v1/remote/")
+        || LOCAL_AWARE.contains(&(route.method.as_str(), route.path));
+    let local = if local_route
+        && kind == DeviceKind::PersonDevice
+        && access.has(CapabilityScope::Admin)
+        && crate::remote::local_tcp(&shared, &request)
+    {
+        match shared.db.device_is_local(device.clone()).await {
+            Ok(local) => local,
+            Err(_) => return HttpError::internal().into_response(),
+        }
+    } else {
+        false
+    };
+    if !local && local_required {
+        return HttpError(StatusCode::FORBIDDEN, "local_access_required").into_response();
+    }
+    request
+        .extensions_mut()
+        .insert(crate::remote::LocalAuthority(local));
     if shared.remote.is_revoked(&device) {
         return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
@@ -540,6 +789,13 @@ pub(crate) async fn authorize(
     request
         .extensions_mut()
         .insert(Caller(Some(device.clone()), kind));
+    request
+        .extensions_mut()
+        .insert(if agent_client || kind == DeviceKind::AgentClient {
+            MessageAuthorKind::AgentClient
+        } else {
+            MessageAuthorKind::Person
+        });
     // Never admit a device-controlled, unfinished body into a commit gate.
     let body_limit = if route.path == "/v1/sessions/{id}/messages" {
         crate::artifacts::SUBMIT_BODY_LIMIT
@@ -580,7 +836,12 @@ pub(crate) async fn authorize(
         Err(_) => return HttpError::internal().into_response(),
     };
     if !route.sse {
-        return response;
+        return crate::person_only::response(
+            response,
+            route.response_schema,
+            &Caller(Some(device), kind),
+        )
+        .await;
     }
     // A revoked device must not keep reading: end its streams the moment it is revoked.
     let (parts, body) = response.into_parts();
@@ -610,6 +871,24 @@ async fn create(
     Extension(caller): Extension<Caller>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<Session>)> {
+    let _agent_gate = s.agents.gate.lock().await;
+    let agent = request
+        .agent_id
+        .as_deref()
+        .map(|id| {
+            let agent = s
+                .agents
+                .get(id)?
+                .ok_or(HttpError(StatusCode::NOT_FOUND, "agent_not_found"))?;
+            if agent.status == AgentStatus::Retired {
+                return Err(HttpError(StatusCode::CONFLICT, "agent_retired"));
+            }
+            Ok::<_, HttpError>(agent)
+        })
+        .transpose()?;
+    if agent.is_some() && (request.incognito || request.browser_space != BrowserSpace::Shared) {
+        return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_browser_space"));
+    }
     if caller.widens(&s, request.mode, request.workspace.as_deref()) {
         return Err(HttpError(StatusCode::FORBIDDEN, "local_socket_required"));
     }
@@ -619,12 +898,22 @@ async fn create(
         None | Some("") => DEFAULT_SESSION_TITLE.to_owned(),
         Some(title) => crate::session_meta::valid_title(title)?,
     };
+    let lock_default_title = title == DEFAULT_SESSION_TITLE
+        && request
+            .title
+            .as_deref()
+            .is_some_and(|title| !title.trim().is_empty());
     let model = request
         .model
-        .or_else(|| s.config.loaded.config.models.default.clone())
+        .or_else(|| agent.as_ref().and_then(|agent| agent.model.clone()))
+        .or_else(|| s.models.default_model())
         .filter(|model| !model.trim().is_empty())
         .ok_or(HttpError(StatusCode::BAD_REQUEST, "model_not_configured"))?;
     let mode = request.mode.unwrap_or_else(|| s.policy.default_mode());
+    let mode = match &agent {
+        Some(agent) => crate::agents::ceiling(&s, agent, mode)?,
+        None => mode,
+    };
     let workspace = match request.workspace {
         Some(path) => {
             if !std::path::Path::new(&path).is_absolute() {
@@ -653,6 +942,7 @@ async fn create(
                 &stored_id,
                 None,
                 EventKind::SessionCreated {
+                    agent_id: request.agent_id,
                     title,
                     model,
                     mode,
@@ -664,8 +954,21 @@ async fn create(
         })
         .await?;
     let _ = s.events.send(event);
+    if lock_default_title {
+        s.emit(
+            &id,
+            None,
+            EventKind::SessionUpdated {
+                mode: None,
+                title: Some(DEFAULT_SESSION_TITLE.into()),
+                pinned: None,
+                archived: None,
+            },
+        )
+        .await?;
+    }
     caller.record_driver(&s, &id).await?;
-    if crate::tasks::front(&s)
+    if crate::tasks::front(&s, s.db.state(&id).await?.agent_id.as_deref())
         && !(std::env::var_os("OPENSIDE_AGENT_SCRIPT").is_some()
             && std::env::var_os("OPENSIDE_TEST_DISABLE_PREWARM").is_some())
     {
@@ -686,6 +989,7 @@ async fn session(State(s): State<Shared>, Path(id): Path<String>) -> Result<Json
 async fn submit(
     State(s): State<Shared>,
     Extension(caller): Extension<Caller>,
+    Extension(author_kind): Extension<MessageAuthorKind>,
     Path(id): Path<String>,
     Json(request): Json<SubmitMessageRequest>,
 ) -> Result<(StatusCode, Json<Message>)> {
@@ -699,11 +1003,21 @@ async fn submit(
         return Err(HttpError(StatusCode::BAD_REQUEST, "empty_message"));
     }
     let id = SessionId::new(id);
+    let agent_gate = s.agents.gate.lock().await;
     // Existence check, attachment publication and the append are one step per session:
     // concurrent retries of one message id cannot both publish, and a deleted session
     // cannot gain uploads.
     let gate = crate::artifacts::lifecycle(&s, &id).await;
     let state = s.db.state(&id).await.map_err(|_| HttpError::not_found())?;
+    if let Some(agent_id) = &state.agent_id {
+        let agent = s
+            .agents
+            .get(agent_id)?
+            .ok_or(HttpError(StatusCode::NOT_FOUND, "agent_not_found"))?;
+        if agent.status == AgentStatus::Retired {
+            return Err(HttpError(StatusCode::CONFLICT, "agent_retired"));
+        }
+    }
     caller.record_driver(&s, &id).await?;
     if s.auth_failed(&id).await? {
         return Err(HttpError::conflict());
@@ -725,10 +1039,13 @@ async fn submit(
             text: request.text,
             mode: request.mode.into(),
             attachments,
+            author_kind,
+            from_agent: None,
         },
     )
     .await?;
     drop(gate);
+    drop(agent_gate);
     s.command(&id, Action::Deliver).await?;
     Ok((StatusCode::ACCEPTED, Json(s.message(&id, &mid).await?)))
 }
@@ -816,6 +1133,7 @@ struct EventsQuery {
 }
 async fn events(
     State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
     Query(query): Query<EventsQuery>,
     headers: HeaderMap,
@@ -844,6 +1162,7 @@ async fn events(
     // lag never creates event gaps or a replay/live race.
     let mut live = s.events.subscribe();
     let stream = async_stream::stream! {
+        yield Ok(SseEvent::default().comment("ok"));
         loop {
             match s.db.events(&id, after).await {
                 Ok(page) if !page.is_empty() => {
@@ -857,7 +1176,12 @@ async fn events(
                                 | EventKind::SubagentEnded { .. }
                         );
                         if subagents || !child {
-                            if let Ok(data) = serde_json::to_string(&event) { yield Ok(SseEvent::default().id(event.seq.to_string()).data(data)); }
+                            if let Ok(mut value) = serde_json::to_value(&event) {
+                                crate::person_only::strip_person_only(&mut value, "Event", &caller);
+                                if let Ok(data) = serde_json::to_string(&value) {
+                                    yield Ok(SseEvent::default().id(event.seq.to_string()).data(data));
+                                }
+                            }
                         }
                         if matches!(event.kind, EventKind::SessionDeleted {}) { return; }
                     }
@@ -883,6 +1207,104 @@ async fn events(
         }
     };
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+#[derive(Deserialize)]
+struct EventPollQuery {
+    #[serde(default)]
+    after: u64,
+    #[serde(default = "poll_wait")]
+    wait: u64,
+    subagents: Option<bool>,
+}
+
+fn poll_wait() -> u64 {
+    20
+}
+
+async fn poll_events(
+    State(s): State<Shared>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+    Query(query): Query<EventPollQuery>,
+) -> Result<Json<EventPoll>> {
+    if query.wait > 25 {
+        return Err(HttpError::invalid_value());
+    }
+    let id = SessionId::new(id);
+    let mut live = s.events.subscribe();
+    let mut revocations = s.remote.revoked.subscribe();
+    let revocation = async {
+        match caller.0.as_deref() {
+            Some(device) => crate::pairing::until_revoked(&s, &mut revocations, device).await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::pin!(revocation);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(query.wait);
+    loop {
+        if caller
+            .0
+            .as_deref()
+            .is_some_and(|id| s.remote.is_revoked(id))
+        {
+            return Err(HttpError(StatusCode::UNAUTHORIZED, "unauthorized"));
+        }
+        let read = async {
+            let state_id = id.clone();
+            let last_seq =
+                s.db.store(move |store| Ok(store.session(&state_id).map(|state| state.last_seq)))
+                    .await?;
+            if last_seq.is_some_and(|last_seq| query.after > last_seq) {
+                return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_event_id"));
+            }
+            let page = s.db.events(&id, query.after).await?;
+            Ok::<_, HttpError>((last_seq, page))
+        };
+        let (last_seq, mut page) = tokio::select! {
+            biased;
+            () = &mut revocation => return Err(HttpError(StatusCode::UNAUTHORIZED, "unauthorized")),
+            read = read => read?,
+        };
+        if caller
+            .0
+            .as_deref()
+            .is_some_and(|id| s.remote.is_revoked(id))
+        {
+            return Err(HttpError(StatusCode::UNAUTHORIZED, "unauthorized"));
+        }
+        if !page.is_empty() {
+            let last_seq = page.last().map_or(query.after, |event| event.seq);
+            if query.subagents == Some(false) {
+                page.retain(|event| {
+                    !matches!(
+                        event.kind,
+                        EventKind::SubagentStarted { .. }
+                            | EventKind::SubagentLifecycle { .. }
+                            | EventKind::SubagentProgress { .. }
+                            | EventKind::SubagentEnded { .. }
+                    )
+                });
+            }
+            return Ok(Json(EventPoll {
+                events: page,
+                last_seq,
+            }));
+        }
+        if last_seq.is_none() {
+            return Err(HttpError::not_found());
+        }
+        tokio::select! {
+            biased;
+            () = &mut revocation => return Err(HttpError(StatusCode::UNAUTHORIZED, "unauthorized")),
+            _ = tokio::time::sleep_until(deadline) => return Ok(Json(EventPoll { events: Vec::new(), last_seq: query.after })),
+            result = live.recv() => {
+                if matches!(result, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+                    return Ok(Json(EventPoll { events: Vec::new(), last_seq: query.after }));
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -985,7 +1407,29 @@ async fn resolve(
         ticket = find(&s, id).await?;
         access.ticket(&ticket)?;
         pending(&ticket)?;
+        if request.hire.is_some() && ticket.kind != TicketKind::Hire {
+            return Err(HttpError::invalid_value());
+        }
         let value = match ticket.kind {
+            TicketKind::SecretInput | TicketKind::Info if ticket.form.is_some() => {
+                let form = ticket.form.as_ref().ok_or_else(HttpError::invalid_value)?;
+                release_denied(&s, &ticket, &form.origin).await?;
+                for field in &form.fields {
+                    let origin = field
+                        .target_origin
+                        .as_deref()
+                        .ok_or_else(HttpError::invalid_value)?;
+                    release_denied(&s, &ticket, origin).await?;
+                }
+                serde_json::to_value(
+                    crate::tools::forms::resolve_form(&s, &ticket, request.value).await?,
+                )
+                .map_err(|_| HttpError::invalid_value())?
+            }
+            TicketKind::Confirm if crate::tools::connections::is_grant_ticket(&ticket) => {
+                caller.person_approval(&s, &ticket).await?;
+                crate::tools::connections::resolve_grant(&s, &ticket, request.value).await?
+            }
             TicketKind::Confirm => {
                 if request.value != true
                     && request.value != false
@@ -1029,6 +1473,20 @@ async fn resolve(
                     && !ticket.options.iter().any(|option| option.value == answer)
                 {
                     return Err(HttpError::invalid_value());
+                }
+                if ticket
+                    .tool
+                    .as_ref()
+                    .is_some_and(|tool| tool.name == "browser_import_lookup")
+                {
+                    caller.person_approval(&s, &ticket).await?;
+                    denied_on(
+                        &s,
+                        &ticket,
+                        "browser-imports/default",
+                        &[openside_policy::Capability::PrivacyRead],
+                    )
+                    .await?;
                 }
                 json!({"answer":answer})
             }
@@ -1144,6 +1602,9 @@ async fn resolve(
                             return Err(refused(error.code));
                         }
                     };
+                    if value.get("status").and_then(Value::as_str) == Some("filled") {
+                        crate::tools::otp::filled(&s, &ticket).await;
+                    }
                     browser.persist(&s).await?;
                     value
                 }
@@ -1191,15 +1652,27 @@ async fn resolve(
                 denied_on(&s, &ticket, &origin, &[openside_policy::Capability::Browse]).await?;
                 crate::tools::login::resolve_choice(&s, &ticket, request.value).await?
             }
+            TicketKind::Hire => {
+                caller.person_approval(&s, &ticket).await?;
+                crate::tickets::resolve_hire(&s, &ticket, request.value, request.hire).await?
+            }
             TicketKind::DeviceApproval | TicketKind::Takeover => {
                 return Err(HttpError(StatusCode::BAD_REQUEST, "use_done"))
             }
         };
         // Statuses, next steps and ids are daemon constants; free text (an answer, a page's
         // error message) is scrubbed.
-        let value = s
-            .registry
-            .redact_except(value, &[&["status"], &["next"], &["option"], &["item_id"]])?;
+        let mut keep: Vec<&[&str]> = vec![
+            &["status"],
+            &["next"],
+            &["option"],
+            &["item_id"],
+            &["agent_id"],
+        ];
+        if crate::tools::connections::is_grant_ticket(&ticket) {
+            keep.push(&["access"]);
+        }
+        let value = s.registry.redact_except(value, &keep)?;
         crate::tickets::audit(
             &s,
             &ticket.session_id,
@@ -1213,6 +1686,7 @@ async fn resolve(
             &ticket.session_id,
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: ticket.id.clone(),
                 resolution: value,
             },
@@ -1220,6 +1694,7 @@ async fn resolve(
         .await?;
         if matches!(ticket.kind, TicketKind::SecretInput | TicketKind::Login)
             || ticket.otp_register.is_some()
+            || ticket.form.is_some()
         {
             // The ticket is no longer pending, so a stale intent can never block anything.
             let _ = s.registry.browser.clear_fill_intent(&s, &ticket.id).await;
@@ -1264,6 +1739,7 @@ async fn done(
             &ticket.session_id,
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: ticket.id.clone(),
                 resolution,
             },
@@ -1276,6 +1752,7 @@ async fn done(
 async fn reject(
     State(s): State<Shared>,
     Extension(access): Extension<Access>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
     Json(request): Json<RejectTicketRequest>,
 ) -> Result<Json<Ticket>> {
@@ -1285,6 +1762,16 @@ async fn reject(
         ticket = find(&s, id).await?;
         access.ticket(&ticket)?;
         pending(&ticket)?;
+        if ticket.kind == TicketKind::Hire {
+            caller.person_approval(&s, &ticket).await?;
+            if let Some(draft) = &ticket.hire {
+                s.agents.put_proposal(
+                    &crate::tickets::proposal_key(draft),
+                    "declined",
+                    chrono::Utc::now(),
+                )?;
+            }
+        }
         let reason = s
             .registry
             .redact(Value::String(
@@ -1310,7 +1797,7 @@ async fn pair(
     Json(request): Json<PairDeviceRequest>,
 ) -> Result<(StatusCode, Json<PairDeviceResponse>)> {
     let (device_id, token) =
-        s.db.pair_as(request.name.clone(), request.scopes.clone(), request.kind)
+        s.db.pair_local(request.name.clone(), request.scopes.clone(), request.kind)
             .await?;
     crate::pairing::audit(
         &s,
@@ -1326,6 +1813,7 @@ async fn pair(
             token,
             scopes: request.scopes,
             kind: request.kind,
+            import_secret: None,
         }),
     ))
 }
@@ -1348,6 +1836,7 @@ pub(crate) async fn resolve_as_human_step(
         Extension(Caller(None, DeviceKind::AgentClient)),
         Path(id.to_owned()),
         Json(ResolveTicketRequest {
+            hire: None,
             value: Value::String(value.as_str().to_owned()),
         }),
     )
@@ -1371,12 +1860,15 @@ mod storage_full_tests {
             (StatusCode::INSUFFICIENT_STORAGE, "storage_full")
         );
 
-        let io: Error = Box::new(std::io::Error::from_raw_os_error(28));
-        let error = HttpError::from(io);
-        assert_eq!(
-            (error.0, error.1),
-            (StatusCode::INSUFFICIENT_STORAGE, "storage_full")
-        );
+        #[cfg(unix)]
+        {
+            let io: Error = Box::new(std::io::Error::from_raw_os_error(28));
+            let error = HttpError::from(io);
+            assert_eq!(
+                (error.0, error.1),
+                (StatusCode::INSUFFICIENT_STORAGE, "storage_full")
+            );
+        }
 
         let busy = rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),

@@ -78,7 +78,7 @@ fn read_answer<R: Read, E: Write>(
     stderr: &mut E,
     hidden: bool,
 ) -> Result<String, String> {
-    write!(stderr, "{label}: ")
+    write!(stderr, "{}: ", crate::ui::clean(label))
         .and_then(|()| stderr.flush())
         .map_err(|_| "could not write the prompt".to_owned())?;
     let echo = if hidden { Some(EchoOff::new()?) } else { None };
@@ -103,4 +103,113 @@ fn read_answer<R: Read, E: Write>(
         text.pop();
     }
     Ok(text)
+}
+
+pub(crate) fn form_answer<R: Read, E: Write>(
+    form: &openside_proto::TicketForm,
+    stdin: &mut R,
+    stderr: &mut E,
+) -> Result<serde_json::Value, String> {
+    use openside_proto::{FieldInitial, InputKind};
+    use serde_json::{json, Map, Value};
+
+    writeln!(
+        stderr,
+        "Fill fields for {} ({})",
+        crate::ui::clean(&form.site_name),
+        crate::ui::clean(&form.origin)
+    )
+    .map_err(crate::output_error)?;
+    writeln!(
+        stderr,
+        "This fills fields only; it does not submit the page."
+    )
+    .map_err(crate::output_error)?;
+    let mut values = Map::new();
+    for field in &form.fields {
+        let hidden = form.payment || crate::ui::cards::sensitive(field);
+        let label = crate::ui::clean(&field.label);
+        let mut prompt = label.clone();
+        if let Some(origin) = &field.target_origin {
+            if origin != &form.origin {
+                prompt.push_str(&format!(" ({})", crate::ui::clean(origin)));
+            }
+        }
+        if field.kind == InputKind::Checkbox {
+            prompt.push_str(" [y/N]");
+        }
+        if !hidden {
+            if let Some(initial) = &field.initial {
+                let initial = match initial {
+                    FieldInitial::Text(text) => crate::ui::clean(text),
+                    FieldInitial::Checked(checked) => if *checked { "yes" } else { "no" }.into(),
+                };
+                prompt.push_str(&format!(" [blank keeps {initial}]"));
+            }
+        }
+        let answer = if hidden {
+            read_hidden(&prompt, stdin, stderr)?
+        } else {
+            read_visible(&prompt, stdin, stderr)?
+        };
+        let initial = field
+            .initial
+            .as_ref()
+            .filter(|_| !hidden && answer.is_empty());
+        let value = if let Some(initial) = initial {
+            match initial {
+                FieldInitial::Text(text) => Value::String(text.clone()),
+                FieldInitial::Checked(checked) => Value::Bool(*checked),
+            }
+        } else if field.kind == InputKind::Checkbox {
+            let checked = match answer.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" | "true" | "1" => true,
+                "" | "n" | "no" | "false" | "0" => false,
+                _ => return Err(format!("{label}: answer yes or no")),
+            };
+            if field.required && !checked {
+                return Err(format!("{label} is required"));
+            }
+            Value::Bool(checked)
+        } else {
+            if field.required && answer.is_empty() {
+                return Err(format!("{label} is required"));
+            }
+            if answer.chars().count() > usize::from(field.max_length) {
+                return Err(format!("{label} exceeds its maximum length"));
+            }
+            Value::String(answer)
+        };
+        values.insert(field.id.clone(), value);
+    }
+    Ok(json!({ "values": values }))
+}
+
+pub(crate) fn information_answer<R: Read, E: Write>(
+    ticket: &openside_proto::Ticket,
+    stdin: &mut R,
+    stderr: &mut E,
+) -> Result<serde_json::Value, String> {
+    if ticket.options.is_empty() {
+        return read_visible("Answer", stdin, stderr).map(serde_json::Value::String);
+    }
+    for (index, option) in ticket.options.iter().enumerate() {
+        writeln!(stderr, "{}. {}", index + 1, crate::ui::clean(&option.label))
+            .map_err(crate::output_error)?;
+    }
+    let answer = read_visible("Option number", stdin, stderr)?;
+    let picked = answer
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|n| ticket.options.get(n))
+        .or_else(|| {
+            ticket
+                .options
+                .iter()
+                .find(|option| option.value == answer.trim())
+        })
+        .ok_or_else(|| format!("pick a number from 1 to {}", ticket.options.len()))?;
+    Ok(serde_json::Value::String(picked.value.clone()))
 }

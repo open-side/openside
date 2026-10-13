@@ -36,6 +36,7 @@ fn result<'a>(events: &'a [Event], call: &str) -> &'a Value {
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,
@@ -110,18 +111,20 @@ impl Run {
             std::fs::write(
                 &wrapper,
                 format!(
-                    r#"import fcntl, runpy
+                    r#"# Opt-in live QA blocks report-driven broker mutations, but the daemon may
+# refresh an expired token while acquiring a credential snapshot.
+import fcntl, runpy
 from pathlib import Path
-from openside_agent.runtime import SessionHooks
-from openside_agent.providers.broker import BrokerClient
-broker_request = BrokerClient._request
-async def read_only(self, method, path, body=None):
-    if method != 'GET':
-        raise RuntimeError('Live login QA forbids broker writes')
-    return await broker_request(self, method, path, body)
-BrokerClient._request = read_only
-original = SessionHooks.before_model_request
-async def limited(self, ctx, request_context):
+from openside_agent.providers import AuthUnavailable
+from openside_agent.providers.credential_rpc import DaemonCredentialRpc
+credential_report = DaemonCredentialRpc.report
+async def read_only_report(self, lease, outcome, request_id, **kwargs):
+    if outcome.kind in ('auth', 'rate_limit', 'quota', 'policy'):
+        raise AuthUnavailable('live', ['Live login QA forbids report-driven broker mutation']) from None
+    return await credential_report(self, lease, outcome, request_id, **kwargs)
+DaemonCredentialRpc.report = read_only_report
+original = DaemonCredentialRpc.acquire
+async def limited(self, provider, model, request_id, attempt, subagent):
     with Path({count:?}).open('a+') as ledger:
         fcntl.flock(ledger, fcntl.LOCK_EX)
         ledger.seek(0)
@@ -130,8 +133,8 @@ async def limited(self, ctx, request_context):
             raise RuntimeError('Live login QA model request budget exhausted')
         ledger.write(str(used + 1) + '\n')
         ledger.flush()
-    return await original(self, ctx, request_context)
-SessionHooks.before_model_request = limited
+    return await original(self, provider, model, request_id, attempt, subagent)
+DaemonCredentialRpc.acquire = limited
 runpy.run_module('openside_agent', run_name='__main__')
 "#,
                     count = count.to_string_lossy(),
@@ -295,6 +298,7 @@ runpy.run_module('openside_agent', run_name='__main__')
             let event = self.stream.next().await;
             let found = match &event.kind {
                 EventKind::TicketResolved {
+                    card: _,
                     ticket_id,
                     resolution,
                 } if ticket_id == &ticket.id => Some(resolution.clone()),
@@ -611,6 +615,7 @@ async fn live_attempt(
         match &event.kind {
             EventKind::ToolStarted { name, .. } => steps.push(json!({"tool":name})),
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error,
@@ -735,6 +740,7 @@ async fn live_attempt(
                 }
             }
             EventKind::TicketResolved {
+                card: _,
                 ticket_id,
                 resolution,
             } => {
@@ -758,7 +764,7 @@ async fn live_attempt(
                     );
                 }
             }
-            EventKind::RuntimeError { code, message } => {
+            EventKind::RuntimeError { code, message, .. } => {
                 error = Some(format!("{code}: {message}"));
                 run.events.push(event);
                 break;
@@ -1575,10 +1581,12 @@ impl Ui {
     async fn capture(&mut self, name: &str, ticket: &Ticket) {
         use base64::Engine;
         let card = format!(
-            "document.querySelector('[data-ticket=\"{}\"] .auth-card, [data-ticket=\"{}\"]')",
-            ticket.id, ticket.id
+            "document.querySelector('.oc-card[data-ticket=\"{}\"]')",
+            ticket.id
         );
         self.wait(name, &format!("!!{card}")).await;
+        self.eval(&format!("{card}.querySelector('.oc-pill')?.click(); true"))
+            .await;
         for scheme in ["light", "dark"] {
             self.emulation
                 .call(

@@ -53,6 +53,15 @@ fn concrete(path: &str) -> String {
         .replace("{name}", "skill")
         .replace("{path}", "transcript.jsonl")
         .replace("{thumbnail_id}", "thumbnail")
+        .replace("{provider}", "anthropic")
+        .replace("{source}", "claude-code")
+        .replace("{kind}", "telegram")
+        .replace("{account_id}", "work")
+        .replace("{key}", "proposal")
+        .replace("{key_id}", "key")
+        .replace("{ticket}", "ticket")
+        .replace("{origin}", "invalid-origin")
+        .replace("{space_id}", "space")
         .replace("{id}", "session");
     assert!(!out.contains('{'), "unsubstituted path parameter in {out}");
     out
@@ -71,6 +80,17 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
     &[
         ("GET", "/v1/health", Read),
         ("GET", "/v1/accounts", Read),
+        ("GET", "/v1/agents", Read),
+        ("POST", "/v1/agents", Admin),
+        ("GET", "/v1/agents/{id}", Read),
+        ("PATCH", "/v1/agents/{id}", Steer),
+        ("POST", "/v1/agents/{id}/retire", Admin),
+        ("POST", "/v1/agents/{id}/restore", Admin),
+        ("POST", "/v1/agents/{id}/transfer", Admin),
+        ("GET", "/v1/agents/{id}/handoffs", Read),
+        ("POST", "/v1/agents/{id}/handoffs", Steer),
+        ("GET", "/v1/team/proposals/suppressed", Read),
+        ("DELETE", "/v1/team/proposals/{key}", Admin),
         ("GET", "/v1/browser/tabs", Read),
         ("GET", "/v1/sessions", Read),
         ("POST", "/v1/sessions", Steer),
@@ -89,16 +109,63 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("GET", "/v1/sessions/{id}/subagents", Read),
         ("POST", "/v1/sessions/{id}/subagents/{sid}/cancel", Steer),
         ("POST", "/v1/sessions/{id}/subagents/{sid}/steer", Steer),
+        ("GET", "/v1/sessions/{id}/events/poll", Read),
         ("POST", "/v1/sessions/{id}/repl", Browse),
         ("POST", "/v1/sessions/{id}/tools/{name}", Browse),
         ("GET", "/v1/tools", Read),
         ("GET", "/v1/sessions/{id}/artifacts", Read),
+        ("GET", "/v1/favicons/{origin}", Read),
         ("GET", "/v1/sessions/{id}/artifacts/{path}", Read),
         ("GET", "/v1/sessions/{id}/artifacts/{path}/preview", Read),
         ("GET", "/v1/sessions/{id}/visuals", Read),
         ("GET", "/v1/settings", Read),
         ("GET", "/v1/settings/config", Admin),
         ("PUT", "/v1/settings/config", Admin),
+        ("GET", "/v1/settings/models", Read),
+        ("PUT", "/v1/settings/models", Admin),
+        ("GET", "/v1/settings/keys", Admin),
+        ("POST", "/v1/settings/keys/{provider}", Admin),
+        ("PUT", "/v1/settings/keys/{provider}/{key_id}", Admin),
+        ("PATCH", "/v1/settings/keys/{provider}/{key_id}", Admin),
+        ("DELETE", "/v1/settings/keys/{provider}/{key_id}", Admin),
+        ("GET", "/v1/settings/subscriptions", Admin),
+        ("POST", "/v1/settings/subscriptions/{source}", Admin),
+        (
+            "GET",
+            "/v1/settings/subscriptions/{source}/{account_id}",
+            Admin,
+        ),
+        (
+            "PATCH",
+            "/v1/settings/subscriptions/{source}/{account_id}",
+            Admin,
+        ),
+        (
+            "DELETE",
+            "/v1/settings/subscriptions/{source}/{account_id}",
+            Admin,
+        ),
+        ("GET", "/v1/settings/pools", Read),
+        ("PUT", "/v1/settings/pools/{provider}", Admin),
+        ("PUT", "/v1/sessions/{id}/account", Steer),
+        ("GET", "/v1/settings/channels", Read),
+        ("POST", "/v1/settings/channels/{kind}/accounts", Admin),
+        (
+            "PATCH",
+            "/v1/settings/channels/{kind}/accounts/{account_id}",
+            Admin,
+        ),
+        (
+            "DELETE",
+            "/v1/settings/channels/{kind}/accounts/{account_id}",
+            Admin,
+        ),
+        (
+            "POST",
+            "/v1/settings/channels/{kind}/accounts/{account_id}/test",
+            Admin,
+        ),
+        ("POST", "/v1/hooks/{kind}/{account_id}", Read),
         ("GET", "/v1/tickets", Read),
         ("GET", "/v1/tickets/{id}", Read),
         ("POST", "/v1/tickets/{id}/resolve", Approve),
@@ -137,6 +204,16 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("GET", "/v1/vault/items", Admin),
         ("PATCH", "/v1/vault/items/{id}", Admin),
         ("GET", "/v1/vault/audit", Admin),
+        ("GET", "/v1/connections", Admin),
+        ("GET", "/v1/connections/{id}", Admin),
+        ("PATCH", "/v1/connections/{id}", Admin),
+        ("POST", "/v1/connections/{id}/check", Admin),
+        ("POST", "/v1/connections/{id}/relogin", Admin),
+        ("POST", "/v1/connections/{id}/revoke", Admin),
+        ("POST", "/v1/connections/candidates/{id}/dismiss", Admin),
+        ("GET", "/v1/connections/audit", Admin),
+        ("POST", "/v1/connections/spaces", Admin),
+        ("DELETE", "/v1/connections/spaces/{space_id}", Admin),
         ("GET", "/v1/vault", Admin),
         ("POST", "/v1/vault/setup", Admin),
         ("POST", "/v1/vault/unlock", Admin),
@@ -150,16 +227,46 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("POST", "/v1/sync/setup", Admin),
         ("POST", "/v1/sync/pair", Admin),
         ("POST", "/v1/sync/run", Admin),
+        ("PUT", "/v1/sync/config", Admin),
+        ("POST", "/v1/sync/unlock", Admin),
+        ("POST", "/v1/policy/validate", Read),
+        ("GET", "/v1/policy/network", Read),
+        ("PUT", "/v1/policy/network", Admin),
+        ("PUT", "/v1/external-agents/{id}", Admin),
+        ("DELETE", "/v1/external-agents/{id}", Admin),
+        ("GET", "/v1/memory/model", Read),
+        ("POST", "/v1/memory/model/download", Admin),
+        ("POST", "/v1/memory/model/cancel", Admin),
+        ("GET", "/v1/doctor", Admin),
+        ("GET", "/v1/daemon", Read),
+        ("POST", "/v1/daemon/restart", Admin),
         ("POST", "/v1/devices/pair", Admin),
         ("DELETE", "/v1/devices/{id}", Admin),
         ("GET", "/v1/devices", Admin),
+        ("GET", "/v1/devices/me", Read),
+        ("POST", "/v1/devices/me/access-requests", Read),
+        ("GET", "/v1/access-requests", Admin),
+        ("POST", "/v1/access-requests/{id}/approve", Admin),
+        ("POST", "/v1/access-requests/{id}/deny", Admin),
         ("GET", "/v1/onboarding", Read),
         ("PUT", "/v1/onboarding", Admin),
         ("GET", "/v1/external-agents", Admin),
         ("POST", "/v1/external-agents/{id}/browser-skill", Admin),
         ("GET", "/v1/import/profiles", Admin),
         ("POST", "/v1/import", Admin),
+        ("POST", "/v1/import/preview", Admin),
+        ("POST", "/v1/import/passwords", Admin),
+        ("GET", "/v1/import/jobs/{id}", Admin),
+        ("GET", "/v1/import/jobs/{id}/events", Admin),
+        ("GET", "/v1/import/delivery", Admin),
+        ("POST", "/v1/import/delivery/{id}/ack", Admin),
+        ("POST", "/v1/import/delivery/{id}/ticket", Admin),
+        ("GET", "/v1/extension/import/{ticket}", Read),
         ("GET", "/v1/remote/status", Admin),
+        ("GET", "/v1/remote/local-access", Admin),
+        ("PUT", "/v1/remote/tailscale", Admin),
+        ("PUT", "/v1/remote/cloudflare", Admin),
+        ("PUT", "/v1/remote/relay", Admin),
         ("POST", "/v1/pairing", Admin),
         ("POST", "/v1/pairing/exchange", Admin),
         ("GET", "/v1/push/vapid", Read),
@@ -299,6 +406,12 @@ async fn scope_matrix_covers_every_route_and_every_scope() {
     for route in ROUTES {
         let path = concrete(route.path);
         let method = route.method.as_str();
+        // Exercise admission without starting an external model download.
+        let payload = if route.path == "/v1/memory/model/download" {
+            json!({"unknown":true})
+        } else {
+            json!({})
+        };
         let public = openside_proto::PUBLIC_ROUTES.contains(&(method, route.path));
         let (status, _) = send(&router, method, &path, json!({}), None).await;
         if public {
@@ -315,7 +428,7 @@ async fn scope_matrix_covers_every_route_and_every_scope() {
             );
         }
         for (scope, token) in &tokens {
-            let (status, body) = send(&router, method, &path, json!({}), Some(token)).await;
+            let (status, body) = send(&router, method, &path, payload.clone(), Some(token)).await;
             let socket_only = api::SOCKET_ONLY.contains(&(method, route.path));
             if public {
                 assert!(
@@ -334,6 +447,19 @@ async fn scope_matrix_covers_every_route_and_every_scope() {
                     (StatusCode::FORBIDDEN, Some("local_socket_required")),
                     "{scope:?} {method} {path}: TCP may never mint tokens"
                 );
+            } else if route.path == "/v1/pairing"
+                || route.path == "/v1/access-requests/{id}/approve"
+                || route.path.starts_with("/v1/import")
+                || method == "PUT" && route.path.starts_with("/v1/remote/")
+                || api::LOCAL_REQUIRED.contains(&(method, route.path))
+            {
+                assert_eq!((status, body["code"].as_str()),
+                    (StatusCode::FORBIDDEN, Some("local_access_required")),
+                    "{scope:?} {method} {path}: remote admin may never issue credentials or expose transports");
+            } else if route.path == "/v1/extension/import/{ticket}" {
+                assert_eq!((status, body["code"].as_str()),
+                    (StatusCode::FORBIDDEN, Some("invalid_import_ticket")),
+                    "{scope:?} {method} {path}: Read is necessary but cannot substitute for a device-bound ticket");
             } else {
                 assert!(
                     status != StatusCode::UNAUTHORIZED && status != StatusCode::FORBIDDEN,
@@ -623,7 +749,7 @@ async fn every_scope_succeeds_at_its_own_work() {
         StatusCode::OK
     );
 
-    // The live policy is local-socket-only even for admin (a_remote_admin_cannot_widen_the_agent_*).
+    // Policy edits require local authority; a remote admin token alone cannot widen policy.
     assert_eq!(
         send(
             &router,
@@ -634,7 +760,7 @@ async fn every_scope_succeeds_at_its_own_work() {
         )
         .await
         .1["code"],
-        "local_socket_required"
+        "local_access_required"
     );
     assert_eq!(
         send(&router, "GET", "/v1/vault/audit", json!({}), Some(&admin))
@@ -846,18 +972,30 @@ const SEED: &str = "JBSWY3DPEHPK3PXP";
 /// refused on write), `delegate` and `task_start` admit children whose calls re-enter
 /// this hook, Task management touches only their lifecycle, and `browser_repl`
 /// evaluates policy per operation inside the snippet.
-const NO_POLICY_CAPABILITY: [&str; 11] = [
+const NO_POLICY_CAPABILITY: [&str; 23] = [
     "ask_user",
     "browser_repl",
     "browser_tabs",
+    "connection_confirm",
+    "connection_observe",
+    "connections_list",
     "delegate",
     "memory_search",
     "memory_write",
+    "present",
     "skill",
     "task_cancel",
     "task_start",
     "task_status",
     "task_steer",
+    "team_answer",
+    "team_ask_chief",
+    "team_delegate",
+    "team_hire",
+    "team_propose_hire",
+    "team_report",
+    "team_status",
+    "team_steer",
 ];
 
 struct Killer(u32);
@@ -1081,7 +1219,35 @@ fn tool_calls(
 ) -> Vec<(&'static str, Value)> {
     let (id, refs) = (&tab.id, &tab.refs);
     let marker = file.with_extension("marker");
+    let connection_site = crate::connections::site_url(&rig.good).unwrap().0;
+    let connection = rig
+        .daemon
+        .shared
+        .connections
+        .record(crate::connections::Record {
+            site: &connection_site,
+            keys: &[],
+            source: ConnectionSource::Login,
+            status: ConnectionStatus::Active,
+            identity: None,
+            identity_source: ConnectionIdentitySource::None,
+            home: Some(&rig.good),
+            session: Some(&rig.session),
+            agent: env.agent_id.as_deref().unwrap_or("chief"),
+            vault_item: None,
+            account_space: None,
+        })
+        .unwrap();
     let mut calls = vec![
+        ("browser_import_lookup", json!({"kind":"bookmarks"})),
+        ("connections_list", json!({})),
+        ("connection_check", json!({"connection_id":connection.id})),
+        (
+            "connection_confirm",
+            json!({"connection_id":connection.id,"identity":"fixture@example.test"}),
+        ),
+        ("connection_open", json!({"connection_id":connection.id})),
+        ("connection_observe", json!({"tab_id":id})),
         ("read", json!({"path": file})),
         ("write", json!({"path": file, "content": "written"})),
         (
@@ -1130,6 +1296,11 @@ fn tool_calls(
         ("request_login", json!({"tab_id": id})),
         ("request_choice", json!({"tab_id": id})),
         ("wait_for_approval", json!({"tab_id": id})),
+        ("request_form", json!({"tab_id": id, "purpose": "form"})),
+        (
+            "present",
+            json!({"card":{"id":"","kind":"table","site":{"origin":null,"name":"Local","favicon_ref":null},"title":format!("Result {CANARY}"),"subtitle":null,"status":"done","blocks":[],"actions":[],"interaction":"none","collapsed_summary":"Result"},"images":[]}),
+        ),
         (
             "vault_passkey",
             json!({"tab_id": id, "site": "fixture", "action": "login", "submit_ref": refs["Use passkey"]}),
@@ -1164,8 +1335,46 @@ fn tool_calls(
         ),
         ("task_cancel", json!({"task_id":"missing-task"})),
         (
+            "team_hire",
+            json!({"draft":{"name":"Mina","persona":{"role":"Price researcher","voice":"","responsibilities":["Track prices"],"boundaries":[]}},"request_message_id":"person"}),
+        ),
+        (
+            "team_propose_hire",
+            json!({"draft":{"name":"Mina","persona":{"role":"Price researcher","voice":"","responsibilities":["Track prices"],"boundaries":[]}}}),
+        ),
+        (
+            "team_delegate",
+            json!({"agent_id":"mina","packet":{"goal":"Compare","context":"","acceptance":"Report","constraints":""},"kind":"task","dedupe_key":"compare"}),
+        ),
+        (
+            "team_steer",
+            json!({"agent_id":"mina","text":"Use recent prices"}),
+        ),
+        ("team_status", json!({})),
+        (
+            "team_answer",
+            json!({"question_id":"question","text":"Proceed"}),
+        ),
+        (
+            "team_assign_responsibility",
+            json!({"agent_id":"mina","line":"Track prices"}),
+        ),
+        ("team_retire", json!({"agent_id":"mina"})),
+        (
+            "team_ask_chief",
+            json!({"question":"Which list?","options":["Current"],"blocks":"Comparison"}),
+        ),
+        (
+            "team_report",
+            json!({"status":"done","summary":"Comparison complete"}),
+        ),
+        (
             "browser_navigate",
             json!({"tab_id": id, "url": format!("{}/{CANARY}", rig.good)}),
+        ),
+        (
+            "connection_fetch",
+            json!({"connection_id":connection.id,"tab_id":id,"method":"GET","path":"/"}),
         ),
         ("browser_close_tab", json!({"tab_id": id})),
     ];
@@ -1214,6 +1423,7 @@ fn capability_name(capability: Capability) -> &'static str {
         Capability::Fetch => "fetch",
         Capability::VaultUse => "vault_use",
         Capability::Sensitive => "sensitive",
+        Capability::PrivacyRead => "privacy_read",
     }
 }
 
@@ -1586,7 +1796,7 @@ async fn run_every_tool(rig: &Rig, label: &str) -> Vec<(&'static str, String)> {
 /// Exactly the tools whose result carries text that a page, file, note, URL or the model's own
 /// arguments control. The control run must leak the canary through these and no others, so a
 /// tool that starts echoing page text (or stops) changes this list under review.
-const TEXT_RETURNING: [&str; 11] = [
+const TEXT_RETURNING: [&str; 12] = [
     "bash",
     "browser_navigate",
     "browser_open_tab",
@@ -1594,6 +1804,7 @@ const TEXT_RETURNING: [&str; 11] = [
     "browser_repl",
     "browser_snapshot",
     "browser_tabs",
+    "connection_fetch",
     "memory_search",
     "read",
     "skill",

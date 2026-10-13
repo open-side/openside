@@ -16,6 +16,7 @@ use crate::{api::HttpError, engine::Shared};
 #[derive(Deserialize)]
 pub(crate) struct ListQuery {
     q: Option<String>,
+    agent: Option<String>,
     #[serde(default)]
     archived: bool,
 }
@@ -35,6 +36,11 @@ pub(crate) async fn list(
                 .list_sessions()
                 .into_iter()
                 .filter(|session| session.archived == archived)
+                .filter(|session| match query.agent.as_deref() {
+                    None => true,
+                    Some("none") => session.agent_id.is_none(),
+                    Some(id) => session.agent_id.as_deref() == Some(id),
+                })
                 .filter_map(|session| {
                     let state = db.session(&session.id)?;
                     if let Some(needle) = &needle {
@@ -82,8 +88,8 @@ pub(crate) async fn update(
         Some(title) => Some(valid_title(&title)?),
         None => None,
     };
-    // Unchanged fields are dropped so the log only records real transitions.
-    let title = title.filter(|title| *title != current.title);
+    // A rename also claims an unchanged auto title, so a pending model proposal cannot win.
+    let title = title.filter(|title| *title != current.title || !current.title_locked);
     let pinned = request.pinned.filter(|pinned| *pinned != current.pinned);
     let archived = request
         .archived
@@ -93,6 +99,7 @@ pub(crate) async fn update(
             &id,
             None,
             EventKind::SessionUpdated {
+                mode: None,
                 title,
                 pinned,
                 archived,
@@ -111,10 +118,10 @@ pub(crate) async fn update(
 }
 
 pub(crate) async fn settings(State(s): State<Shared>) -> Json<Settings> {
-    let config = &s.config.loaded.config;
+    let models = s.models.models();
     Json(Settings {
-        default_model: config.models.default.clone(),
-        fallback_models: config.models.fallback.clone(),
+        default_model: models.default,
+        fallback_models: models.fallback,
         policy_mode: s.policy.default_mode(),
     })
 }

@@ -50,7 +50,7 @@ fn tool(name: &str, args: Value, id: &str) -> Value {
 // ignored, so test input goes through the prototype setter.
 const HELPERS: &str = r#"(() => {
   window.__violations = [];
-  document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(e.violatedDirective));
+  document.addEventListener('securitypolicyviolation', (e) => window.__violations.push({directive:e.violatedDirective,blocked:e.blockedURI,source:e.sourceFile,line:e.lineNumber}));
   window.__os = {
     fill(el, value) {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
@@ -60,6 +60,11 @@ const HELPERS: &str = r#"(() => {
     },
     button(scope, text) {
       return scope && Array.from(scope.querySelectorAll('button')).find((b) => b.textContent.trim() === text);
+    },
+    card(selector) {
+      const card = document.querySelector(selector);
+      card?.querySelector('.oc-pill')?.click();
+      return card;
     },
     send(text) {
       const f = document.querySelector('.composer');
@@ -156,9 +161,8 @@ impl Ui {
 
     async fn close(self) {
         assert_eq!(
-            self.eval("window.__violations ? window.__violations.length : 0")
-                .await,
-            0,
+            self.eval("window.__violations || []").await,
+            json!([]),
             "CSP violations in the UI"
         );
         self.browser.shutdown().await.unwrap();
@@ -274,6 +278,7 @@ fn ended_ok<'a>(events: &'a [Event], call: &str) -> &'a Value {
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,
@@ -285,7 +290,7 @@ fn ended_ok<'a>(events: &'a [Event], call: &str) -> &'a Value {
 
 /// The pending approval card's Approve button, once the card is on screen.
 const APPROVE: &str =
-    "__os.button(document.querySelector('section.ticket-pending[aria-label=\"Approval needed\"]'), 'Approve')";
+    "__os.button(__os.card('.oc-card[data-kind=\"confirmation\"][data-status=\"pending\"]'), 'Approve')";
 
 const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 40 20" preserveAspectRatio="none"><rect width="40" height="20" fill="#2f6fed"/></svg>"##;
 const HTML: &str = r##"<!doctype html><html><body style="margin:0;height:100vh;background:#d23c3c"><h1 style="margin:0;color:#fff">Quarterly summary</h1></body></html>"##;
@@ -373,35 +378,50 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
     )
     .await;
 
-    // The child shows up in the subagent view, waiting on the approval it raised.
+    // The child shows up in the Agents sheet (opened from the composer pill), waiting on the
+    // approval it raised.
     ui.wait(
         "subagent waiting on approval",
-        &format!("!!document.querySelector('.subagents li.subagent-waiting_human') && !!{APPROVE}"),
+        &format!("!!document.querySelector('.agents-pill') && !!{APPROVE}"),
+    )
+    .await;
+    ui.eval("document.querySelector('.agents-pill').click(); true")
+        .await;
+    ui.wait(
+        "agents sheet with the waiting child",
+        "!!document.querySelector('.subagent-list li.subagent-waiting_human')",
     )
     .await;
     let child = ui
-        .eval("document.querySelector('.subagents li[data-subagent]').dataset.subagent")
+        .eval("document.querySelector('.subagent-list li[data-subagent]').dataset.subagent")
         .await;
     assert_eq!(
-        ui.eval("document.querySelector('.subagents .subagent-task').textContent")
+        ui.eval("document.querySelector('.subagent-list .subagent-task').textContent")
             .await,
         "Write the report outside the workspace"
     );
     // The approval names the child that raised it: its id in data-subagent-id, its task as text.
     assert_eq!(
-        ui.eval("(() => { const chip = document.querySelector('section.ticket-pending .ticket-head .ticket-origin'); return [chip.dataset.subagentId, chip.textContent] })()")
+        ui.eval("(() => { const chip = document.querySelector('.oc-card[data-ticket][data-status=pending] .oc-asker'); return [chip.dataset.subagentId, chip.textContent] })()")
             .await,
-        json!([child.as_str().unwrap(), "Write the report outside the workspace"])
+        json!([child.as_str().unwrap(), "Write the report outside the workspace asked"])
     );
     // Live progress: the child's event stream is listed under it.
-    ui.eval("document.querySelector('.subagents details').open = true; true")
+    ui.eval("document.querySelector('.subagent-list details').open = true; true")
         .await;
     ui.wait(
         "subagent progress events",
-        "document.querySelectorAll('.subagents .subagent-events li').length > 0",
+        "document.querySelectorAll('.subagent-list .subagent-events li').length > 0",
     )
     .await;
     assert!(!outside.exists(), "the write must wait for approval");
+    ui.eval("document.querySelector('.tray-sheet button[aria-label=\"Close\"]').click(); true")
+        .await;
+    ui.wait(
+        "agents sheet closed",
+        "!document.querySelector('.tray-sheet')",
+    )
+    .await;
 
     ui.eval(&format!("{APPROVE}.click()")).await;
     ui.wait(
@@ -485,11 +505,15 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
     .await;
     ui.eval("__os.button(document.querySelector('.visuals figure'), 'Preview').click()")
         .await;
+    ui.eval("document.querySelector('.agents-pill').click(); true")
+        .await;
     ui.wait(
         "child completed in the subagent view",
-        "!!document.querySelector('.subagents li.subagent-completed')",
+        "!!document.querySelector('.subagent-list li.subagent-completed')",
     )
     .await;
+    ui.eval("document.querySelector('.tray-sheet button[aria-label=\"Close\"]').click(); true")
+        .await;
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "from child");
     let tickets = harness
         .request("GET", "/v1/tickets?status=resolved", None)
@@ -515,6 +539,17 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
 
     // PP-6: a reload rebuilds the same screen from the event log alone. Disclosure state is
     // view-local, so the progress list opened above is closed before comparing.
+    ui.eval("document.querySelectorAll('main.session .oc-card[data-open=true] .oc-close').forEach(b=>b.click()); true").await;
+    ui.wait(
+        "view-local Card disclosures collapsed",
+        "!document.querySelector('main.session .oc-card[data-open=true]')",
+    )
+    .await;
+    ui.wait(
+        "terminal Card announcement delivered",
+        "Array.from(document.querySelectorAll('main.session .oc-sr')).every(e=>!e.textContent) ",
+    )
+    .await;
     const SCREEN: &str = "(() => { document.querySelectorAll('main.session details').forEach((d) => { d.open = false }); \
         const main = document.querySelector('main.session'); return main ? [main.dataset.lastSeq, main.innerText] : null })()";
     let before = ui.eval(SCREEN).await;
@@ -630,7 +665,7 @@ async fn pp22_phone_viewport_approval_resumes_the_same_task() {
     // The card and its buttons fit the phone screen without horizontal scrolling.
     assert_eq!(
         ui.eval(&format!(
-            "(() => {{ const r = {APPROVE}.getBoundingClientRect(); const c = document.querySelector('section.ticket-pending').getBoundingClientRect(); \
+            "(() => {{ const r = {APPROVE}.getBoundingClientRect(); const c = document.querySelector('.oc-card[data-kind=\"confirmation\"][data-status=\"pending\"]').getBoundingClientRect(); \
              return r.right <= innerWidth && c.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth }})()"
         ))
         .await,
@@ -785,8 +820,7 @@ async fn web_ui_secret_input_and_takeover_screen_resume_the_agent() {
     ui.eval("__os.send('Continue')").await;
 
     // (b) The secret goes from a password field straight to the daemon.
-    let secret_card =
-        "document.querySelector('section.ticket-pending[aria-label=\"Secret needed\"]')";
+    let secret_card = "__os.card('.oc-card[data-kind=\"secret_input\"][data-status=\"pending\"]')";
     ui.wait(
         "secret card",
         &format!("!!{secret_card}?.querySelector('input[type=password]')"),
@@ -799,13 +833,12 @@ async fn web_ui_secret_input_and_takeover_screen_resume_the_agent() {
     .await;
     ui.wait(
         "secret submitted",
-        "Array.from(document.querySelectorAll('section.ticket .chip')).some((c) => c.textContent === 'Secret submitted')",
+        "!!document.querySelector('.oc-card[data-kind=\"secret_input\"][data-status=\"done\"]')",
     )
     .await;
 
     // (d) The takeover card opens the remote screen, which receives frames of the tab.
-    let takeover_card =
-        "document.querySelector('section.ticket-pending[aria-label=\"Hands-on step\"]')";
+    let takeover_card = "__os.card('.oc-card[data-kind=\"takeover\"][data-status=\"pending\"]')";
     ui.wait(
         "takeover card",
         &format!("!!__os.button({takeover_card}, 'Open remote screen')"),
@@ -824,6 +857,11 @@ async fn web_ui_secret_input_and_takeover_screen_resume_the_agent() {
         ui.eval("document.querySelector('.takeover-screen').dataset.frameWidth")
             .await,
         "1440"
+    );
+    assert_eq!(
+        ui.eval("!!document.querySelector('.takeover button[aria-label=\"Close\"]')")
+            .await,
+        true
     );
     // A click on the button and typing into the field, through the UI's own handlers.
     ui.eval(
@@ -848,12 +886,10 @@ async fn web_ui_secret_input_and_takeover_screen_resume_the_agent() {
     ui.eval("__os.button(document.querySelector('.takeover'), 'Done').click()")
         .await;
     ui.wait(
-        "takeover ended",
-        "document.querySelector('.takeover')?.dataset.status === 'ended'",
+        "takeover completed and dismissed",
+        "document.querySelector('.takeover') === null && !!document.querySelector('.oc-card[data-kind=\"takeover\"][data-status=\"done\"]')",
     )
     .await;
-    ui.eval("document.querySelector('.takeover button[aria-label=\"Close\"]').click()")
-        .await;
     ui.wait("agent resumed and settled", "__os.finalText('all done')")
         .await;
 
@@ -974,7 +1010,8 @@ async fn web_ui_inline_code_form_finishes_a_login_without_leaving_the_conversati
     ui.eval("__os.send('Sign in')").await;
 
     // The code form appears in the conversation itself: no new route, no dialog, no takeover.
-    let form = "document.querySelector('section.ticket-otp form.otp-form')";
+    let form =
+        "__os.card('.oc-card[data-kind=\"otp\"][data-status=\"pending\"]')?.querySelector('form')";
     ui.wait(
         "inline code form",
         &format!("!!{form}?.querySelector('input[autocomplete=one-time-code]')"),
@@ -986,13 +1023,13 @@ async fn web_ui_inline_code_form_finishes_a_login_without_leaving_the_conversati
     );
     assert_eq!(ui.eval("history.length").await, history);
     assert_eq!(
-        ui.eval("!!document.querySelector('[role=dialog], .takeover, .otp-sheet')")
+        ui.eval("!!document.querySelector('[role=dialog], .takeover, .card-sheet')")
             .await,
         false
     );
     assert_eq!(
         ui.eval(&format!(
-            "{form}.textContent.includes('Code from your email for')"
+            "{form}.textContent.includes('Enter the code sent by email.')"
         ))
         .await,
         true

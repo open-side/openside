@@ -162,6 +162,8 @@ impl DaemonTool for RequestHumanStep {
                         None
                     };
                     ToolExec::Defer(Box::new(TicketRequest {
+                        hire: None,
+                        form: None,
                         kind: args.kind.into(),
                         summary: args.summary,
                         instructions: args.instructions,
@@ -225,6 +227,8 @@ impl DaemonTool for AskUser {
         Box::pin(async move {
             match parse::<AskArgs>(&args) {
                 Ok(args) => ToolExec::Defer(Box::new(TicketRequest {
+                    hire: None,
+                    form: None,
                     kind: TicketKind::Info,
                     summary: args.question,
                     instructions: None,

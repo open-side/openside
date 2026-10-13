@@ -341,17 +341,15 @@ mod tests {
     fn verified_source_descriptor_survives_an_ancestor_swap_without_reading_the_link() {
         let workspace = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::fs::create_dir(workspace.path().join("parent")).unwrap();
-        std::fs::write(workspace.path().join("parent/file.txt"), b"original").unwrap();
-        std::fs::write(outside.path().join("file.txt"), b"substituted").unwrap();
-        let source = workspace.path().join("parent/file.txt");
+        let workspace_root = std::fs::canonicalize(workspace.path()).unwrap();
+        let outside_root = std::fs::canonicalize(outside.path()).unwrap();
+        std::fs::create_dir(workspace_root.join("parent")).unwrap();
+        std::fs::write(workspace_root.join("parent/file.txt"), b"original").unwrap();
+        std::fs::write(outside_root.join("file.txt"), b"substituted").unwrap();
+        let source = workspace_root.join("parent/file.txt");
         let (mut opened, _) = source_file(&source).unwrap();
-        std::fs::rename(
-            workspace.path().join("parent"),
-            workspace.path().join("old"),
-        )
-        .unwrap();
-        std::os::unix::fs::symlink(outside.path(), workspace.path().join("parent")).unwrap();
+        std::fs::rename(workspace_root.join("parent"), workspace_root.join("old")).unwrap();
+        std::os::unix::fs::symlink(&outside_root, workspace_root.join("parent")).unwrap();
         assert!(source_file(&source).is_err());
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut opened, &mut bytes).unwrap();

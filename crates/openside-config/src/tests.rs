@@ -536,24 +536,19 @@ fn agent_directory_search_prefers_env_then_installed_then_cargo_layout() {
 fn channels_default_off_accept_numeric_ids_and_fail_closed_without_allow_lists() {
     let path = Path::new("config.toml");
     let default = parse_config(path, "").unwrap_or_else(|err| panic!("default: {err}"));
-    assert!(
-        !default.channels.telegram.enabled
-            && !default.channels.slack.enabled
-            && !default.channels.discord.enabled
-    );
+    assert!(default.channels.accounts.is_empty());
     assert_eq!(default.channels.token_env, "OPENSIDE_TOKEN");
-    assert!(
-        default.channels.slack.listen.ip().is_loopback()
-            && default.channels.discord.listen.ip().is_loopback()
-    );
 
     let numeric = parse_config(
         path,
         "[channels.telegram]\nenabled = true\ntoken_env = \"T\"\nallowed_chats = [-1001, \"42\"]\nallowed_users = [7]",
     )
     .unwrap_or_else(|err| panic!("numeric: {err}"));
-    assert_eq!(numeric.channels.telegram.allowed_chats, ["-1001", "42"]);
-    assert_eq!(numeric.channels.telegram.allowed_users, ["7"]);
+    assert_eq!(
+        numeric.channels.accounts[0].options.allowed_chats,
+        ["-1001", "42"]
+    );
+    assert_eq!(numeric.channels.accounts[0].options.allowed_users, ["7"]);
 
     let (_root, loaded) = fixture();
     for (text, key) in [
@@ -594,11 +589,11 @@ fn channels_default_off_accept_numeric_ids_and_fail_closed_without_allow_lists()
 fn channels_example_parses_with_every_adapter_disabled() {
     let config = parse_config(Path::new("config.toml"), &example_toml())
         .unwrap_or_else(|err| panic!("example: {err}"));
-    assert!(
-        !config.channels.telegram.enabled
-            && !config.channels.slack.enabled
-            && !config.channels.discord.enabled
-    );
+    assert!(config
+        .channels
+        .accounts
+        .iter()
+        .all(|account| !account.enabled));
 }
 
 #[test]
@@ -659,4 +654,20 @@ fn front_is_default_without_a_separate_model_and_single_remains_explicit() {
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(configured.agent.orchestration, crate::Orchestration::Single);
     assert_eq!(configured.models.front.as_deref(), Some("provider:fast"));
+}
+
+#[test]
+fn team_concurrency_defaults_and_rejects_zero() {
+    let default: Config = toml::from_str("").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(default.team.max_running, 3);
+    let configured: Config =
+        toml::from_str("[team]\nmax_running=2\n").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(configured.team.max_running, 2);
+    assert!(toml::from_str::<Config>("[team]\nmax_running=0\n").is_err());
+    assert!(toml::from_str::<Config>("[team]\nmax_running=-1\n").is_err());
+    let serialized = toml::to_string(&configured).unwrap_or_else(|error| panic!("{error}"));
+    let reparsed = parse_config(Path::new("test-config.toml"), &serialized)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(reparsed.team.max_running, 2);
+    assert!(parse_config(Path::new("test-config.toml"), "[team]\nunknown=2\n").is_err());
 }

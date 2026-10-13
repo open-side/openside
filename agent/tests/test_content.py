@@ -33,7 +33,6 @@ from openside_agent.protocol import (
     StateSnapshot,
     UserMessage,
 )
-from openside_agent.providers import CredentialPins
 from openside_agent.runtime.state import (
     SNAPSHOT_MEDIA_BUDGET,
     SnapshotData,
@@ -184,7 +183,6 @@ def test_snapshot_keeps_newest_media_within_budget():
 
 def test_snapshot_media_budget_spans_children_and_queued_steers():
     from openside_agent.protocol import MAX_LINE_BYTES, UserMessage
-    from openside_agent.providers import CredentialPins
     from openside_agent.runtime.state import SubagentState
 
     # Each image fits one history's budget on its own (800 KB of base64).
@@ -234,7 +232,6 @@ def test_snapshot_media_budget_spans_children_and_queued_steers():
         parent,
         [],
         [steer],
-        CredentialPins(),
         0,
         delegates=[],
         subagents=children,
@@ -253,7 +250,6 @@ def test_snapshot_media_budget_spans_children_and_queued_steers():
 
 def test_multibyte_text_snapshot_fits_the_real_outgoing_line():
     from openside_agent.protocol import MAX_LINE_BYTES, StateSnapshot
-    from openside_agent.providers import CredentialPins
     from openside_agent.runtime.state import PendingCall, SubagentState
 
     # 300k Hangul characters are 900 KB of UTF-8: character counts would undercount 3x.
@@ -283,7 +279,6 @@ def test_multibyte_text_snapshot_fits_the_real_outgoing_line():
         history(3),
         pending,
         [],
-        CredentialPins(),
         0,
         delegates=[],
         subagents=children,
@@ -311,7 +306,6 @@ def capture_saved(data: SnapshotData):
         data.restore_messages(),
         data.pending_deferred,
         data.steer_buffer,
-        CredentialPins(),
         data.script_cursor,
         delegates=data.pending_delegates,
         subagents=data.subagents,

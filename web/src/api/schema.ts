@@ -4,6 +4,144 @@
  */
 
 export interface paths {
+    "/v1/access-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccessRequestList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/access-requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Grants the requested scopes to the device, in addition to the ones it holds. Requires the same local-person authority as pairing (local socket, or verified loopback TCP with a socket-issued person_device admin token and the current X-Openside-Local-Secret); a QR-paired, agent or proxied caller gets 403 local_access_required. 404 not_found for an unknown, expired or already decided request. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Device"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/access-requests/{id}/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/accounts": {
         parameters: {
             query?: never;
@@ -42,6 +180,389 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AgentList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["HireDraft"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Agent"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Agent"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Edit the profile for the next turn. Omitted nullable overrides are unchanged; explicit null inherits defaults. Permission widening and skills/model/account-pool/channel changes additionally require Admin and a person device (local socket exempt). Immutable identity and home fields cannot be patched. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateAgentRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Agent"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/agents/{id}/handoffs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["HandoffList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateHandoffRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Handoff"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Agent"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RetireAgentRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Agent"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TransferRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Agent"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -151,6 +672,564 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Exclude rows explicitly denied to this agent. */
+                    agent?: string;
+                    status?: components["schemas"]["ConnectionStatus"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ConnectionList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        get: {
+            parameters: {
+                query?: {
+                    connection?: string;
+                    agent?: string;
+                    action?: components["schemas"]["ConnectionAuditAction"];
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ConnectionAuditList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/candidates/{id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/spaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateAccountSpaceRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreateAccountSpaceResult"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/spaces/{space_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Connection"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateConnectionRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Connection"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/connections/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Connection"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/relogin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Start the existing login flow in the supplied shared session, or the chief agent's home session. Silent Vault completion returns signed_in. OTP, device approval and login continuations return needs_you with the matching existing ticket; other actionable states use a Finish signing in takeover ticket. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReloginConnectionRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReloginResult"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RevokeConnectionRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Identity of the running process: version, a random `boot_id` that changes on every start, when it started and how a restart would be carried out. A client that asked for a restart waits until `boot_id` changes. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DaemonStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Restart the daemon by graceful shutdown and in-place exec with the same PID and arguments, including under systemd or launchd. Returns 202 with the current boot_id; wait for a new boot_id to reconnect. Requires local access (403 local_access_required). A private single-use 0600 handoff in the 0700 data directory preserves the launcher secret only for this controlled exec, bound to the old boot_id and restart request id by an exec-only environment marker, with a five-minute TTL. Ordinary external or service-manager restarts rotate the secret. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RestartDaemonResponse"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/devices": {
         parameters: {
             query?: never;
@@ -189,6 +1268,99 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MyDevice"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices/me/access-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description A person's device asks for scopes it does not hold, for example admin to manage the vault. The request waits ten minutes for someone on the computer running openside to allow or decline it; a new request from the same device replaces the old one. 400 invalid_value when the device already holds every requested scope; 403 person_approval_required for an agent client. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RequestAccessRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccessRequest"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -289,6 +1461,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/doctor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Run the diagnostics of `openside doctor` inside the daemon and return them grouped by area, with a web fix for findings that have one. The vault probe reads only the file header and the keyring state. One report at a time; callers wait for the run in progress. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DoctorReport"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extension/import/{ticket}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Paired device-token fetch of its one-use native delivery ticket. HMAC-SHA256 authenticates ticket || batch_id || hex(SHA256(exact UTF-8 payload)) with the32-byte secret established only at locally authorized, pinned-extension-origin redemption. Payload never goes through a web page; owned cookie/payload buffers are zeroized where feasible, with JS/HTTP/WebSocket/library residuals. The extension verifies before native writes. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        /** @description Always no-store; payload contains cookie values. */
+                        "Cache-Control"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImportDeliverySigned"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/external-agents": {
         parameters: {
             query?: never;
@@ -296,7 +1560,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any `[skills.agents]` entry. `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`. */
+        /** @description The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any agent whose skills folder was added with `PUT /v1/external-agents/{id}` (stored as a `[skills.agents]` entry). `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`. */
         get: {
             parameters: {
                 query?: never;
@@ -334,6 +1598,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/external-agents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Add or change the skills folder of an agent that is not a preset. Requires local access (the computer's own user, or its launcher with X-Openside-Local-Secret): 403 local_access_required otherwise. The id is lowercase letters, digits and hyphens and not a preset name (400 invalid_agent); the folder must be absolute or `~/…`, without `..`, and resolve inside the user's home, config or data folders (400 invalid_skills_dir). Persisted as `[skills.agents]` in config.toml and effective at once; audited. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SetExternalAgentRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ExternalAgent"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        /** @description Forget a custom agent's skills folder. Requires local access. Presets cannot be removed (400 invalid_agent); 404 unknown_agent. Installed skill files are not touched. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ExternalAgentList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/external-agents/{id}/browser-skill": {
         parameters: {
             query?: never;
@@ -343,7 +1689,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown. */
+        /** @description Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown (add the folder with `PUT /v1/external-agents/{id}`). */
         post: {
             parameters: {
                 query?: never;
@@ -379,6 +1725,48 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/favicons/{origin}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -429,6 +1817,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/hooks/{kind}/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Public signed platform callback for one managed identity, not bearer authentication. Slack events/interactivity use v0 HMAC-SHA256; Discord uses strict Ed25519 verification. Both signed timestamps must be within five minutes. Exact-body replay detection is per account with five-minute monotonic expiry. Bodies are capped at 256 KiB with a ten-second read deadline; each account admits 120 requests per rolling minute. Unknown or inactive accounts return sanitized 404 without Vault or platform lookup. OS keyring idle lock does not stop service identities; an explicit openside Vault lock does. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Required by the selected platform's signing protocol. */
+                    "X-Slack-Request-Timestamp"?: string;
+                    /** @description Required by the selected platform's signing protocol. */
+                    "X-Slack-Signature"?: string;
+                    /** @description Required by the selected platform's signing protocol. */
+                    "X-Signature-Timestamp"?: string;
+                    /** @description Required by the selected platform's signing protocol. */
+                    "X-Signature-Ed25519"?: string;
+                };
+                path: {
+                    kind: "slack" | "discord";
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/x-www-form-urlencoded": {
+                        payload?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description channel_bad_signature */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description channel_account_not_found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description channel_body_timeout */
+                408: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description channel_replay */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description channel_body_too_large */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description channel_rate_limited */
+                429: {
+                    headers: {
+                        /** @description 60 seconds */
+                        "Retry-After"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/import": {
         parameters: {
             query?: never;
@@ -438,11 +1946,378 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Import history, bookmarks and cookies of a discovered profile into the daemon's browser profile. `dry_run` reads and decrypts everything and reports counts without writing; a real run reads everything before it writes anything. Cookies encrypted with the OS keyring (`v11`) need the CLI (`openside import --keyring-password-cmd`). One import runs at a time. 400 unknown_profile; 409 import_in_progress, profile_in_use; 422 source_locked, source_unreadable, source_corrupt, source_unsupported, keyring_password_required; 500 import_failed; 503 browser_unavailable. */
+        /** @description Start importing selected profiles and kinds into the agent's default browser profile; omitted selections mean everything from every detected profile. Requires local-person authority. Passwords go only into an unlocked openside Vault; 409 vault_setup_required or vault_locked before writes. This explicit run is the credential-access phase: macOS may show a Keychain permission request; Linux never requests unlocking. Returns an asynchronous job; progress is available through job polling or job SSE. One write at a time (409 import_in_progress). Keyring/encryption failures skip only the affected kind and are included in the summary. */
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ImportRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImportJob"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import/delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Local-person-only, value-free pending revision descriptors. Returns batch IDs and exact cookie permission origins, never bookmarks/history records or cookie values. Mint a device-bound single-use ticket for the paired extension; only the extension fetches authenticated native payloads. Agent cookies and read-only side-store destinations are already applied. */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Independent migration destination; defaults to the dedicated desktop user profile. */
+                    target?: components["schemas"]["ImportDeliveryTarget"];
+                };
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        /** @description Always no-store. */
+                        "Cache-Control"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImportDeliveryList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import/delivery/{id}/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Acknowledge one migration revision only after the selected destination applied it. Targets acknowledge independently; retries are idempotent. Requires the same local-person authority as importing browser data. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ImportDeliveryAck"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import/delivery/{id}/ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Local-person-only authorization of a pending revision for one import-enabled extension device. Ticket expires after120 seconds and is consumed once by that device; not a cookie or data payload. A retry needs a new ticket and uses native-store idempotency. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ImportDeliveryTicketRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImportDeliveryTicket"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImportJob"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import/jobs/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Replay durable per-job progress then stream new progress with SSE event import_progress and monotonically increasing event ids. Last-Event-ID resumes a stream; final completed/failed progress closes it. No secret data is included; local-person authority is required. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Last seen sequence in this stream; only later events are returned. */
+                    "Last-Event-ID"?: string;
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/event-stream": string;
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import/passwords": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Import browser-exported CSV passwords directly from an in-memory request into the encrypted Vault. Accepts Chrome, Edge, Firefox and Safari URL/username/password headers; never stores the CSV file or returns values. Dedupes normalized origin and username through Vault save_login. Requires local-person authority and an unlocked Vault (409 vault_setup_required, vault_locked). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ImportPasswordsRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImportCategoryReport"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Preview selected local profiles without target writes or browser startup; omitted selections mean all profiles and kinds. Cookie/password counts come only from source rows or binary record headers: no decryption, OS-keyring access, Unlock or credential verification. No unlocked Vault is required. Notes explain that the system may ask for access during the explicitly started import; actual counts can decrease after expired/unsupported/duplicate filtering. Other kinds are parsed and URL-sanitized normally. Requires local-person authority. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -458,7 +2333,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["ImportReport"];
+                        "application/json": components["schemas"]["ImportBatchReport"];
                     };
                 };
                 /** @description Sanitized error */
@@ -485,11 +2360,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Chrome, Chromium and Firefox profiles found in their standard locations on the daemon's computer, with the data each has. Directory paths are never returned; `POST /v1/import` takes the profile id. */
+        /** @description Detect all browser profiles in standard local locations, including Chromium brands, Firefox forks and Safari on macOS. Includes per-kind availability, local display metadata and permission warnings; never source paths. Requires local-person authority. */
         get: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -534,6 +2412,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Filter by an exact agent id, or shared for notes without an owner; omitted includes all owners. */
+                    owner?: string;
                     /** @description Search text; omit to list the most recently updated memories. */
                     q?: string;
                     /** @description Only memories of this kind. */
@@ -646,6 +2526,148 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The local embedding model and the download job: whether both model files exist, the stage and byte progress of the current or last download, its error code and whether a restart is needed before vector search starts. The daemon downloads only when asked; nothing runs implicitly. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryModelStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory/model/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Stop the running download; the installed model and the staged files are left untouched. A no-op when nothing is running. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryModelStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory/model/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Start downloading the embedding model into `memory.embedding.model_dir`: the file list and per-file checksums come from the model hub (SHA-256 for weights, git blob id for plain files), every request and redirect must pass `network.allow`, both files must match their checksum and load as a static model, and only then is the model swapped in atomically. One download at a time (409 download_in_progress). An empty body fetches the default model from the default source; naming a repo, revision or endpoint needs local access (403 local_access_required). 400 invalid_model_source; the outcome (including checksum_mismatch, checksum_unavailable, egress_refused, download_failed, unsupported_model) is reported by GET /v1/memory/model. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof; only needed to name a different repo, revision or endpoint. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StartMemoryModelRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryModelStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -944,11 +2966,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). The operator fixes kind here: person_device for phones/browsers, agent_client for external CLI/MCP agents. Redemption cannot change it. Issuing, exchanging and revoking are written to audit.jsonl. */
+        /** @description Issue a one-time pairing code valid for 180 monotonic seconds. Requires the local socket, or verified loopback TCP with a socket-issued person_device admin token and current X-Openside-Local-Secret. Proxied/relay traffic is refused with 403 local_access_required; loopback alone never proves locality. Requested scopes cannot exceed caller grants (403 scope_ceiling_exceeded). The local operator fixes person_device or agent_client in the offer; redemption cannot change kind. Codes and local secrets are never audited. */
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -1189,11 +3214,14 @@ export interface paths {
                 };
             };
         };
-        /** @description Replace the live policy. Invalid globs or a sensitive allow rule return 400 invalid_policy and change nothing. Applies to the next tool call of every session and is persisted in <data_dir>/policy.json, which overrides [policy] in config.toml. */
+        /** @description Replace the live policy. Invalid globs or a sensitive allow rule return 400 invalid_policy and change nothing; POST /v1/policy/validate reports which entry is wrong. Requires local access (403 local_access_required): the policy decides what agents may do, so it is edited from the computer itself. Applies to the next tool call of every session and is persisted in <data_dir>/policy.json, which overrides [policy] in config.toml. */
         put: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -1210,6 +3238,87 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["PolicySettings"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/policy/network": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The saved outbound allow-list (`network.allow`) and whether the running daemon still enforces an older one. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkPolicy"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        /** @description Replace `network.allow` in config.toml (validated like the file; 400 invalid_network_allow). Requires local access; it applies after the daemon restarts. Audited. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateNetworkPolicyRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkPolicy"];
                     };
                 };
                 /** @description Sanitized error */
@@ -1260,6 +3369,55 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["PolicyDecision"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/policy/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Check an edit of the live policy and/or the network allow-list without saving it. Returns every problem with the list and zero-based index of the entry, so a form can mark the exact row; PUT /v1/policy and PUT /v1/policy/network apply the same checks. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ValidatePolicyRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PolicyValidation"];
                     };
                 };
                 /** @description Sanitized error */
@@ -1490,6 +3648,153 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/remote/cloudflare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SetCloudflareRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RemoteStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/remote/local-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Local socket only: every call atomically replaces the one managed owner-bootstrap device/token, closes the predecessor's streams/polls, clears its push subscriptions, and audits rotation. A distinct persistent bootstrap marker survives boots; intentional CLI devices are never revoked by display name. Returns the per-boot locality secret and fresh person/admin token plus a loopback launch URL with credentials in its fragment. TCP/relay callers get 403 local_socket_required. Keep the proof only in sessionStorage; strip the fragment immediately and clear proof on sign-out, rejection or identity change. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["LocalAccess"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/remote/relay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SetRelayRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RemoteStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/remote/status": {
         parameters: {
             query?: never;
@@ -1500,7 +3805,10 @@ export interface paths {
         get: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -1527,6 +3835,57 @@ export interface paths {
             };
         };
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/remote/tailscale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ConfigureTailscaleRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RemoteStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         post?: never;
         delete?: never;
         options?: never;
@@ -1870,6 +4229,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Filter immutable agent ownership: none selects earlier untagged conversations; an agent id selects all its threads. */
+                    agent?: string;
                     /** @description Case-insensitive substring of the title or first message. */
                     q?: string;
                     /** @description List archived (true) or unarchived (false, default) sessions; pinned sessions come first. */
@@ -2050,6 +4411,57 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/v1/sessions/{id}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set/clear a preferred sticky account for the next request. Requires steer and membership in the existing effective global/Agent pool; preference never bypasses disablement, quota blocks or Agent restrictions. Invalid account400 account_not_in_pool. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateSessionAccountRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SessionAccountSelection"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/sessions/{id}/artifacts": {
@@ -2330,7 +4742,7 @@ export interface paths {
                     subagents?: boolean;
                 };
                 header?: {
-                    /** @description Last seen per-session sequence; only later events are returned. */
+                    /** @description Last seen sequence in this stream; only later events are returned. */
                     "Last-Event-ID"?: string;
                 };
                 path: {
@@ -2347,6 +4759,57 @@ export interface paths {
                     };
                     content: {
                         "text/event-stream": string;
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/events/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Bounded long polling for transports that buffer SSE. At most 512 raw durable events per page, ordered by seq; last_seq is the exclusive replay cursor and includes filtered subagent events. Subscribe-before-read prevents replay/live gaps. Pending requests wake immediately on device revocation. Delivers the deletion tombstone as the final event, then 404. A cursor beyond an active session's durable log returns 400 invalid_event_id. */
+        get: {
+            parameters: {
+                query?: {
+                    after?: number;
+                    wait?: number;
+                    subagents?: boolean;
+                };
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EventPoll"];
                     };
                 };
                 /** @description Sanitized error */
@@ -3029,6 +5492,232 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Manage independent labelled channel identities. Read lists are metadata only. Mutations require admin and a person device or the local socket. Credentials are encrypted in the Vault, never returned, synced or exposed to browser fill. Account changes affect only that account; failed credentials never select another identity. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelAccountList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/channels/{kind}/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Manage independent labelled channel identities. Read lists are metadata only. Mutations require admin and a person device or the local socket. Credentials are encrypted in the Vault, never returned, synced or exposed to browser fill. Account changes affect only that account; failed credentials never select another identity. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kind: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AddChannelAccountRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelAccount"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/channels/{kind}/accounts/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Manage independent labelled channel identities. Read lists are metadata only. Mutations require admin and a person device or the local socket. Credentials are encrypted in the Vault, never returned, synced or exposed to browser fill. Account changes affect only that account; failed credentials never select another identity. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kind: string;
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** @description Manage independent labelled channel identities. Read lists are metadata only. Mutations require admin and a person device or the local socket. Credentials are encrypted in the Vault, never returned, synced or exposed to browser fill. Account changes affect only that account; failed credentials never select another identity. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kind: string;
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateChannelAccountRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelAccount"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/settings/channels/{kind}/accounts/{account_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Manage independent labelled channel identities. Read lists are metadata only. Mutations require admin and a person device or the local socket. Credentials are encrypted in the Vault, never returned, synced or exposed to browser fill. Account changes affect only that account; failed credentials never select another identity. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kind: string;
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelAccountTest"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings/config": {
         parameters: {
             query?: never;
@@ -3036,11 +5725,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). */
+        /** @description The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable. */
         get: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot launcher proof that makes a loopback TCP caller local; paired devices elsewhere omit it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -3066,11 +5758,14 @@ export interface paths {
                 };
             };
         };
-        /** @description The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). */
+        /** @description The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable. */
         put: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot launcher proof that makes a loopback TCP caller local; paired devices elsewhere omit it. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -3105,6 +5800,675 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Administrator-only labelled account metadata: provider, key_id, label, last_four, created_at, enabled and reserve_percent. No API path returns key material; read-scoped devices receive403. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProviderKeyList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/keys/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    provider: "anthropic" | "openai" | "google";
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateProviderKeyRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProviderKeyInfo"];
+                    };
+                };
+                /** @description Missing admin scope or person-device authority */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Vault unavailable, or an ordinary legacy item conflicts with the provider id */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/keys/{provider}/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    provider: "anthropic" | "openai" | "google";
+                    key_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SetProviderKeyRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProviderKeyInfo"];
+                    };
+                };
+                /** @description Missing admin scope or person-device authority */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Vault unavailable, or an ordinary legacy item conflicts with the provider id */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    provider: "anthropic" | "openai" | "google";
+                    key_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing admin scope or person-device authority */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Vault unavailable, or an ordinary legacy item conflicts with the provider id */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    provider: "anthropic" | "openai" | "google";
+                    key_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateProviderKeyRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProviderKeyInfo"];
+                    };
+                };
+                /** @description Missing admin scope or person-device authority */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Vault unavailable, or an ordinary legacy item conflicts with the provider id */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/settings/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Local model readiness grouped by provider, from configured ids, source accounts and curated chat/tool-capable models. Credential values, email and upstream account identities are never included. Metadata is cached for at most five seconds; key/source/Vault lifecycle writes invalidate it. Readiness is not an upstream entitlement guarantee. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ModelCatalog"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        /** @description Set the default and ordered fallback ids without raw TOML editing. Requires admin; every id must be available in the current catalog (400 model_unavailable), at most16 distinct fallbacks and no default duplicate (400 invalid_models). Atomically persists selection without daemon restart. Ordinary sessions retain stored models; Team homes use their Agent override or the current default and reopen on the next idle/real turn when effective selection changes. Running requests finish their captured model. Response effective:new_sessions_and_home_next_turn. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateModelsRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ModelSelection"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProviderPoolList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/pools/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replace the explicit ordered provider trust boundary. Requires admin plus person_device or local socket. Known compatible account refs only; no duplicates, at most64; empty disables routing. Unlisted sources never become automatic fallbacks. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    provider: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateProviderPoolRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProviderPool"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SubscriptionList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/subscriptions/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    source: "claude-code" | "codex-cli";
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateSubscriptionAccountRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SubscriptionAccount"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/subscriptions/{source}/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    source: "claude-code" | "codex-cli";
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SubscriptionAccount"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** @description Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    source: "claude-code" | "codex-cli";
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** @description Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    source: "claude-code" | "codex-cli";
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateSubscriptionAccountRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SubscriptionAccount"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/v1/skills": {
@@ -3359,6 +6723,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sync/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Choose where synced data is stored: a shared directory or a WebDAV URL (https, or http on loopback), exactly one or neither to turn sync off, plus whether the live policy syncs and which memory tags sync. Requires local access. The backend of a device that already joined an account cannot change (409 sync_already_set_up). Persisted in `[sync]` of config.toml and effective at once without a restart. 400 invalid_sync_config. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateSyncConfigRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SyncStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sync/pair": {
         parameters: {
             query?: never;
@@ -3368,11 +6784,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Join the account of a pairing code with the same passphrase. 400 invalid_pairing_code, sync_wrong_passphrase; 409 as setup; 502 sync_backend_unavailable, sync_unauthorized. */
+        /** @description Join the account of a pairing code with the same passphrase, typed in the body (needs local access) or read from sync.passphrase_cmd. 400 invalid_pairing_code, sync_wrong_passphrase; 403 local_access_required when a secret is sent without local access; 409 as setup; 502 sync_backend_unavailable, sync_unauthorized. */
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP when the body carries a passphrase or WebDAV password. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -3462,15 +6881,22 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Create a sync account for this device: derive the key from sync.passphrase_cmd (kept in memory), create the account collection on the WebDAV share or directory and return the pairing code for the second device. 409 sync_not_configured, sync_already_set_up, sync_passphrase_unavailable, sync_password_unavailable; 502 sync_backend_unavailable, sync_unauthorized. */
+        /** @description Create a sync account for this device: derive the key from the passphrase in the body (typed in the app, memory only, needs local access) or from sync.passphrase_cmd, create the account collection on the WebDAV share or directory and return the pairing code for the second device. The body may be empty. 409 sync_not_configured, sync_already_set_up, sync_passphrase_unavailable, sync_password_unavailable; 403 local_access_required when a secret is sent without local access; 502 sync_backend_unavailable, sync_unauthorized. */
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP when the body carries a passphrase or WebDAV password. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SyncSecrets"];
+                };
+            };
             responses: {
                 /** @description Success */
                 201: {
@@ -3493,6 +6919,144 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sync/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Derive the sync key for the account this device joined from a passphrase typed in the app (or from `sync.passphrase_cmd` when none is given) and keep it in daemon memory only. A WebDAV password typed here is likewise memory-only. Requires local access when a secret is sent. 400 sync_wrong_passphrase; 409 sync_not_set_up, sync_passphrase_unavailable. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SyncSecrets"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SyncStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/team/proposals/suppressed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SuppressedProposalList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/team/proposals/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -4279,6 +7843,35 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A device waiting for someone on the daemon's computer to allow more scopes. */
+        AccessRequest: {
+            /**
+             * Format: date-time
+             * @description When the request was made.
+             */
+            created_at: string;
+            /** @description The requesting device. */
+            device_id: string;
+            /**
+             * Format: date-time
+             * @description Display time after which the request is dropped; the deadline itself is monotonic.
+             */
+            expires_at: string;
+            /** @description Decision identifier (`POST /v1/access-requests/{id}/approve`). */
+            id: string;
+            /** @description Label given at pairing. */
+            name: string;
+            /** @description Scopes asked for. */
+            scopes: components["schemas"]["CapabilityScope"][];
+        };
+        /**
+         * AccessRequestList
+         * @description Requests waiting for a decision.
+         */
+        AccessRequestList: {
+            /** @description Oldest first. */
+            requests: components["schemas"]["AccessRequest"][];
+        };
         /**
          * AccountSource
          * @description One credential plugin's availability.
@@ -4288,7 +7881,7 @@ export interface components {
             accounts: components["schemas"]["AccountStatus"][];
             /** @description At least one account is usable (command results remain unverified). */
             available: boolean;
-            /** @description Plugin kind: omp-broker, env, command, codex-cli or builtin. */
+            /** @description Plugin kind: omp-broker, vault, env, command, claude-code, codex-cli or builtin. */
             kind: string;
             /** @description Stable plugin name. */
             name: string;
@@ -4300,6 +7893,8 @@ export interface components {
          * @description Public account metadata; ids are opaque and labels never contain raw email addresses.
          */
         AccountStatus: {
+            /** @description Per-account readiness when supplied; absent in older diagnostic sources. */
+            available?: boolean | null;
             /**
              * Format: double
              * @description Latest active block expiry, as Unix milliseconds, or null.
@@ -4309,17 +7904,16 @@ export interface components {
             id: string;
             /** @description Safe display label. */
             label: string;
-            /** @description Configured model identifiers for this provider, not an invented broker catalog. */
+            /** @description Account-reported models, or configured models when no catalog is supplied. */
             models: string[];
             /** @description Provider identifier. */
             provider: string;
+            /** @description Sanitized per-account explanation, without provider response bodies. */
+            reason?: string | null;
             /** @description Broker-reported usage windows; empty when unavailable. */
             usage_windows: components["schemas"]["AccountUsageWindow"][];
         };
-        /**
-         * AccountUsageWindow
-         * @description One attributed usage window, without broker identifiers or metadata.
-         */
+        /** @description One attributed usage window, without broker identifiers or metadata. */
         AccountUsageWindow: {
             /** @description Safe ordinal window label. */
             name: string;
@@ -4349,10 +7943,269 @@ export interface components {
             /** @description Some entries exceeded the documented metadata limits. */
             truncated: boolean;
         };
+        /** @description Canonical Action wire contract; presentation never grants authority. */
+        Action: {
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Plain-text accessible label; never markup. */
+            label: string;
+            /** @description Visual recommendation; at most one primary per action area. */
+            style: components["schemas"]["ActionStyle"];
+            /** @description Typed dispatch intent; appearance grants no authority. */
+            target: components["schemas"]["ActionTarget"];
+        };
+        /** @description Canonical ActionStyle wire contract; presentation never grants authority. */
+        ActionStyle: "primary" | "secondary" | "destructive";
+        /** @description Canonical ActionTarget wire contract; presentation never grants authority. */
+        ActionTarget: {
+            /** @description Typed answer mapping validated against the current ticket. */
+            answer: components["schemas"]["TicketAnswer"];
+            /** @constant */
+            type: "ticket_resolve";
+        } | {
+            /** @constant */
+            type: "ticket_reject";
+        } | {
+            /** @constant */
+            type: "ticket_done";
+        } | {
+            /** @description Plain text rendered without interpreting markup or instructions. */
+            text: string;
+            /** @constant */
+            type: "follow_up";
+        } | {
+            /** @constant */
+            type: "link";
+            /** @description Validated HTTP(S) navigation URL without credentials or secret material. */
+            url: string;
+        } | {
+            /** @description Daemon-derived roster identity; not model-selected authority. */
+            agent_id: string;
+            /** @description Optional local thread anchor, never a remote URL. */
+            anchor?: string | null;
+            /** @constant */
+            type: "open_thread";
+        } | {
+            /** @description Daemon-issued authority reference; forbidden in model presentations. */
+            ticket_id: components["schemas"]["TicketId"];
+            /** @constant */
+            type: "open_ticket";
+        } | {
+            /** @description Daemon-derived connection identity; existing access scope still applies. */
+            connection_id: string;
+            /** @constant */
+            type: "open_connection";
+        } | {
+            /** @description Daemon-derived roster identity; not model-selected authority. */
+            agent_id: string;
+            /** @description Fresh team operation subject to existing authorization. */
+            command: components["schemas"]["TeamCardCommand"];
+            /** @constant */
+            type: "team_command";
+        } | {
+            /** @constant */
+            type: "takeover";
+        };
         /**
-         * ApiError
-         * @description JSON error response for non-successful HTTP requests.
+         * AddChannelAccountRequest
+         * @description Create one labelled identity with encrypted write-only credentials.
          */
+        AddChannelAccountRequest: {
+            /**
+             * @description Optional teammate assignment for new sessions.
+             * @default null
+             */
+            agent_id: string | null;
+            /** @description Encrypted immediately, never echoed in the resulting account response. */
+            credentials: components["schemas"]["ChannelCredentials"];
+            /**
+             * @description Defaults off until the owner explicitly enables the configured allow-lists.
+             * @default false
+             */
+            enabled: boolean;
+            /** @description Stable identifier chosen independently from the service's own account id. */
+            id: string;
+            /** @description Human-readable account label. */
+            label: string;
+            /**
+             * @description Non-secret settings editable entirely through the GUI.
+             * @default {
+             *       "allowed_channels": [],
+             *       "allowed_chats": [],
+             *       "allowed_guilds": [],
+             *       "allowed_users": [],
+             *       "allowed_workspaces": [],
+             *       "api_base": null,
+             *       "listen": null,
+             *       "poll_timeout_secs": null,
+             *       "public_key": null
+             *     }
+             */
+            options: components["schemas"]["ChannelAccountOptions"];
+        };
+        /**
+         * Agent
+         * @description Durable roster record; a conversation tag never changes its home identity.
+         */
+        Agent: {
+            /** @description Null inherits; a nonempty list restricts and orders the person's provider pool. */
+            account_pool?: components["schemas"]["ModelAccountRef"][] | null;
+            /** @description Null removes the explicit profile binding, without rewriting historical threads. */
+            channel?: components["schemas"]["AgentChannelBinding"] | null;
+            /** @description One exact value from ACCENT_COLORS. */
+            color: string;
+            /**
+             * Format: date-time
+             * @description Registry creation time, not the most recent activity time.
+             */
+            created_at: string;
+            /** @description Sidebar visibility only; hiding does not pause work. */
+            hidden: boolean;
+            /** @description Chosen once before the home event is written, enabling crash-safe repair. */
+            home_session_id: components["schemas"]["SessionId"];
+            /** @description Opaque stable identity; the chief always uses `chief`. */
+            id: string;
+            /** @description Display override of 1–3 characters, derived from the name when omitted at hire. */
+            initials: string;
+            /** @description Cannot be patched or changed during retirement/restoration. */
+            kind: components["schemas"]["AgentKind"];
+            /** @description Ceiling intersected with the chief, session and current daemon policy. */
+            mode: components["schemas"]["PolicyMode"];
+            /** @description Null inherits the person's default model. */
+            model?: string | null;
+            /** @description Unique display name, 1–24 Unicode scalar characters. */
+            name: string;
+            /** @description Validated so its rendered prompt fits the 1,500-character hard cap. */
+            persona: components["schemas"]["AgentPersona"];
+            /**
+             * Format: uint64
+             * @description Monotonic revision used to reopen warm runtimes after profile edits.
+             */
+            persona_version: number;
+            /** @description Person-selected roster priority, independent of legacy session pinning. */
+            pinned: boolean;
+            /**
+             * Format: date-time
+             * @description Null while active; preserved lifecycle metadata for retired records.
+             */
+            retired_at?: string | null;
+            /** @description Null inherits enabled skills; a list is an allowlist, not installed-skill ownership. */
+            skills?: string[] | null;
+            /** @description Retirement is not deletion; identity and historical context survive. */
+            status: components["schemas"]["AgentStatus"];
+        };
+        /** @description One exact channel identity, without credentials or a duplicate settings object. */
+        AgentChannelBinding: {
+            /** @description Opaque account id within this service, not its editable label. */
+            account_id: string;
+            /** @description One of telegram, slack, discord. */
+            kind: string;
+        };
+        /**
+         * AgentKind
+         * @description Immutable role that controls which team tools the daemon exposes.
+         */
+        AgentKind: "chief" | "teammate";
+        /**
+         * AgentList
+         * @description Roster ordered with the chief first, then by recent home-thread activity.
+         */
+        AgentList: {
+            /** @description Includes retired and hidden profiles so clients can present History and management. */
+            agents: components["schemas"]["AgentSummary"][];
+        };
+        /** @description Bounded durable instructions; task-specific instructions belong in handoff packets. */
+        AgentPersona: {
+            /**
+             * @description At most six nonempty lines of 100 characters; policy remains the hard boundary.
+             * @default []
+             */
+            boundaries: string[];
+            /**
+             * @description At most six nonempty lines of 100 characters; teammates require at least one.
+             * @default []
+             */
+            responsibilities: string[];
+            /** @description Specific non-generic role, 1–60 Unicode scalar characters. */
+            role: string;
+            /**
+             * @description At most 100 characters; never truncated when building the prompt.
+             * @default
+             */
+            voice: string;
+        };
+        /**
+         * AgentStatus
+         * @description Registry lifecycle, distinct from the home conversation's running/waiting state.
+         */
+        AgentStatus: "active" | "retired";
+        /** @description Roster projection with a device-local unread cursor rather than server receipts. */
+        AgentSummary: {
+            /** @description Null inherits; a nonempty list restricts and orders the person's provider pool. */
+            account_pool?: components["schemas"]["ModelAccountRef"][] | null;
+            /** @description Current work phrase, separate from the most recent message preview. */
+            activity: string;
+            /** @description Null removes the explicit profile binding, without rewriting historical threads. */
+            channel?: components["schemas"]["AgentChannelBinding"] | null;
+            /** @description One exact value from ACCENT_COLORS. */
+            color: string;
+            /**
+             * Format: date-time
+             * @description Registry creation time, not the most recent activity time.
+             */
+            created_at: string;
+            /** @description Sidebar visibility only; hiding does not pause work. */
+            hidden: boolean;
+            /** @description Chosen once before the home event is written, enabling crash-safe repair. */
+            home_session_id: components["schemas"]["SessionId"];
+            /** @description Opaque stable identity; the chief always uses `chief`. */
+            id: string;
+            /** @description Display override of 1–3 characters, derived from the name when omitted at hire. */
+            initials: string;
+            /** @description Cannot be patched or changed during retirement/restoration. */
+            kind: components["schemas"]["AgentKind"];
+            /** @description Bounded latest-message preview; this field is not a timestamp. */
+            last_activity: string;
+            /**
+             * Format: date-time
+             * @description Latest non-metadata event timestamp for stable roster ordering.
+             */
+            last_message_at: string;
+            /**
+             * Format: uint64
+             * @description Home SSE sequence; compare with the device's locally stored seen cursor.
+             */
+            last_seq: number;
+            /** @description Ceiling intersected with the chief, session and current daemon policy. */
+            mode: components["schemas"]["PolicyMode"];
+            /** @description Null inherits the person's default model. */
+            model?: string | null;
+            /** @description Unique display name, 1–24 Unicode scalar characters. */
+            name: string;
+            /** @description Whether the home conversation currently requires human attention. */
+            needs_you: boolean;
+            /** @description Validated so its rendered prompt fits the 1,500-character hard cap. */
+            persona: components["schemas"]["AgentPersona"];
+            /**
+             * Format: uint64
+             * @description Monotonic revision used to reopen warm runtimes after profile edits.
+             */
+            persona_version: number;
+            /** @description Person-selected roster priority, independent of legacy session pinning. */
+            pinned: boolean;
+            /**
+             * Format: date-time
+             * @description Null while active; preserved lifecycle metadata for retired records.
+             */
+            retired_at?: string | null;
+            /** @description Home conversation state, not the registry's active/retired lifecycle. */
+            session_status: components["schemas"]["SessionStatus"];
+            /** @description Null inherits enabled skills; a list is an allowlist, not installed-skill ownership. */
+            skills?: string[] | null;
+            /** @description Retirement is not deletion; identity and historical context survive. */
+            status: components["schemas"]["AgentStatus"];
+        };
+        /** @description JSON error response for non-successful HTTP requests. */
         ApiError: {
             /** @description Machine-readable failure code. */
             code: string;
@@ -4377,6 +8230,8 @@ export interface components {
             path: string;
             /** @description Time-limited, unauthenticated URL path for sandboxed rendering, when previewable. */
             preview_url?: string | null;
+            /** @description Delivery classification; working observations are omitted from the list route. */
+            purpose: components["schemas"]["ArtifactPurpose"];
             /**
              * Format: uint64
              * @description Byte size.
@@ -4394,9 +8249,11 @@ export interface components {
          * @description `GET /v1/sessions/{id}/artifacts` response, oldest first.
          */
         ArtifactList: {
-            /** @description Artifacts in creation order. */
+            /** @description User-visible files in creation order, excluding working observations. */
             artifacts: components["schemas"]["Artifact"][];
         };
+        /** @description Whether a file is a deliverable or an internal observation. */
+        ArtifactPurpose: "output" | "working";
         /** @description Where an artifact came from. */
         ArtifactSource: "attachment" | "tool" | "transcript" | "visual";
         /**
@@ -4433,6 +8290,88 @@ export interface components {
             /** @description Display file name; directories are stripped. */
             name?: string | null;
         };
+        /** @description Canonical Block wire contract; presentation never grants authority. */
+        Block: {
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Ordered data rows; tables require exactly the column count. */
+            rows: components["schemas"]["KvRow"][];
+            /** @description Optional captured ledger total; not calculated by the renderer. */
+            total?: components["schemas"]["KvRow"] | null;
+            /** @constant */
+            type: "kv_rows";
+        } | {
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Stable list identities, at most 30 across a card. */
+            items: components["schemas"]["ListItem"][];
+            /** @constant */
+            type: "list_items";
+        } | {
+            /** @description Stable typed table columns, at most twelve. */
+            columns: components["schemas"]["TableColumn"][];
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Presentation layout only, not a merchant-specific component. */
+            layout: components["schemas"]["TableLayout"];
+            /** @description Optional source marks exactly parallel to table rows. */
+            row_sites?: (components["schemas"]["CardSite"] | null)[] | null;
+            /** @description Ordered data rows; tables require exactly the column count. */
+            rows: components["schemas"]["CardValue"][][];
+            /** @constant */
+            type: "table";
+        } | {
+            /** @description Stable block identity. */
+            id: string;
+            /** @description Plain-text question label. */
+            label?: string | null;
+            /** @description Layout does not grant authority. */
+            layout: components["schemas"]["ChoiceLayout"];
+            /** @description Person-only choices, including saved-account identity and provider actions. */
+            options: components["schemas"]["ChoiceOption"][];
+            /** @description Whether the person must choose before submitting. */
+            required: boolean;
+            /** @constant */
+            type: "choice_options";
+        } | {
+            /** @description Input metadata only; transient answers are never serialized here. */
+            fields: components["schemas"]["InputField"][];
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @constant */
+            type: "input_fields";
+        } | {
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description At most one trailing bubble per card. */
+            placement: components["schemas"]["NoticePlacement"];
+            /** @description Plain text rendered without interpreting markup or instructions. */
+            text: string;
+            /** @description Presentation emphasis, not an authorization badge. */
+            tone: components["schemas"]["NoticeTone"];
+            /** @constant */
+            type: "notice";
+        } | {
+            /** @description Safe text retained when raster materialization fails. */
+            alt: string;
+            /** @description Optional safe plain-text image context. */
+            caption?: string | null;
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Session-owned bounded raster artifact. */
+            media: components["schemas"]["MediaRef"];
+            /** @constant */
+            type: "media";
+        } | {
+            /** @description Optional daemon-derived source participant. */
+            from?: components["schemas"]["CardPerson"] | null;
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Daemon-derived recipient or uncreated hire preview. */
+            to: components["schemas"]["CardPerson"];
+            /** @constant */
+            type: "people";
+        };
         /** @description The tool call that produced a browser state. */
         BrowserActionState: {
             /** @description Human phrase such as "Clicking" or "Opening example.com". */
@@ -4454,6 +8393,8 @@ export interface components {
             action?: components["schemas"]["BrowserActionState"] | null;
             /** @description Facts read from the page. */
             facts: components["schemas"]["PageFacts"];
+            /** @description PNG data URL, at most 32×32 pixels and 8 KiB decoded. */
+            favicon?: string | null;
             /** @description Host of `url`, empty for non-network pages. */
             host: string;
             /** @description Classification of the page. */
@@ -4496,6 +8437,256 @@ export interface components {
         BrowserTabOwnership: "agent" | "user" | "external";
         /** @description Capability required to access an HTTP operation. */
         CapabilityScope: "read" | "steer" | "approve" | "human_step" | "admin" | "browse" | "vault_use" | "otp_ingest";
+        /** @description Canonical Card wire contract; presentation never grants authority. */
+        Card: {
+            /** @description Typed intents validated against the authoritative source. */
+            actions: components["schemas"]["Action"][];
+            /** @description Ordered typed content; no HTML or executable templates. */
+            blocks: components["schemas"]["Block"][];
+            /** @description Value-free receipt or pending summary, bounded to 240 characters. */
+            collapsed_summary: string;
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Interactive cards require a daemon-issued ticket. */
+            interaction: components["schemas"]["CardInteraction"];
+            /** @description Semantic presentation family, not permission to act. */
+            kind: components["schemas"]["CardKind"];
+            /** @description Source attribution with an exact origin boundary. */
+            site: components["schemas"]["CardSite"];
+            /** @description Presentation lifecycle only; fresh ticket state governs actions. */
+            status: components["schemas"]["CardStatus"];
+            /** @description Optional plain-text context, bounded to 280 Unicode scalar values. */
+            subtitle?: string | null;
+            /** @description Daemon-issued authority reference; forbidden in model presentations. */
+            ticket_id?: components["schemas"]["TicketId"] | null;
+            /** @description Plain-text heading, bounded to 160 Unicode scalar values. */
+            title: string;
+        };
+        /** @description Canonical CardField wire contract; presentation never grants authority. */
+        CardField: "name" | "number" | "expiry" | "cvc" | "postal_code";
+        /** @description Canonical CardInteraction wire contract; presentation never grants authority. */
+        CardInteraction: "none" | "ask";
+        /** @description Canonical CardKind wire contract; presentation never grants authority. */
+        CardKind: "product_list" | "table" | "place_list" | "order_summary" | "payment" | "secure_login" | "login_choice" | "otp" | "payment_card" | "confirmation" | "form" | "connect_account" | "activity" | "handoff" | "hire" | "secret_input" | "takeover";
+        /** @description Canonical CardLink wire contract; presentation never grants authority. */
+        CardLink: {
+            /** @description Plain-text accessible label; never markup. */
+            label: string;
+            /** @description Validated HTTP(S) navigation URL without credentials or secret material. */
+            url: string;
+        };
+        /** @description Canonical CardPerson wire contract; presentation never grants authority. */
+        CardPerson: {
+            /** @description Daemon-derived roster identity; not model-selected authority. */
+            agent_id?: string | null;
+            /** @description Allowlisted team avatar token, never arbitrary CSS. */
+            color?: string | null;
+            /** @description Bounded text avatar fallback. */
+            initials: string;
+            /** @description Plain-text display name, not a verified identity claim. */
+            name: string;
+            /** @description Plain-text roster responsibility. */
+            role?: string | null;
+        };
+        /** @description Canonical CardSite wire contract; presentation never grants authority. */
+        CardSite: {
+            /** @description Daemon-normalized icon reference; never a remote image source. */
+            favicon_ref?: components["schemas"]["FaviconRef"] | null;
+            /** @description Plain-text display name, not a verified identity claim. */
+            name: string;
+            /** @description Exact canonical URL origin, including nondefault port. */
+            origin?: string | null;
+        };
+        /** @description Canonical CardStatus wire contract; presentation never grants authority. */
+        CardStatus: "pending" | "done" | "failed" | "expired";
+        /** @description Canonical CardValue wire contract; presentation never grants authority. */
+        CardValue: {
+            /** @description Plain text rendered without interpreting markup or instructions. */
+            text: string;
+            /** @constant */
+            type: "text";
+        } | {
+            /** @description Captured amount, not an authorization or computed charge. */
+            money: components["schemas"]["Money"];
+            /** @constant */
+            type: "money";
+        } | {
+            /** @description Explicit navigation only; never background fetching. */
+            link: components["schemas"]["CardLink"];
+            /** @constant */
+            type: "link";
+        } | {
+            /** @description Bounded integer rating metadata. */
+            rating: components["schemas"]["Rating"];
+            /** @constant */
+            type: "rating";
+        } | {
+            /** @description Safe text retained when raster materialization fails. */
+            alt: string;
+            /** @description Daemon-materialized raster artifact in the current session. */
+            image: components["schemas"]["MediaRef"];
+            /** @constant */
+            type: "image";
+        };
+        /**
+         * CatalogModel
+         * @description One candidate and the credential source that would serve a new sidecar.
+         */
+        CatalogModel: {
+            /** @description Opaque source-local account reference, or null when unavailable. */
+            account_id?: string | null;
+            /** @description Credential-free candidates, including blocked/unavailable choices. */
+            accounts: components["schemas"]["ModelAccount"][];
+            /** @description Local credential readiness under source priority and broker fail-close. */
+            available: boolean;
+            /** @description Explicit provider:model selector; image-only models are not chat defaults. */
+            id: string;
+            /** @description Model-name portion, never an account label or private identity. */
+            label: string;
+            /** @description Credential-value-free readiness or refusal explanation. */
+            reason: string;
+            /** @description First usable source, or null when unavailable. */
+            source?: string | null;
+        };
+        /** @description Metadata-only account response; credential fields are intentionally absent. */
+        ChannelAccount: {
+            /** @description Owner of newly created sessions; changing this does not reroute existing ones. */
+            agent_id?: string | null;
+            /** @description `vault` for managed accounts, `legacy` for file-only environment/command sources. */
+            credential_source: string;
+            /**
+             * @description Resolved supervised owner, including inherited profile bindings; null when inactive.
+             * @default null
+             */
+            effective_agent_id: string | null;
+            /** @description Desired enablement; status separately reports effective availability. */
+            enabled: boolean;
+            /** @description Stable per-kind id, independent of the account label. */
+            id: string;
+            /** @description Supported service discriminator. */
+            kind: string;
+            /** @description User-chosen label, never a credential suffix. */
+            label: string;
+            /** @description Non-secret platform options. */
+            options: components["schemas"]["ChannelAccountOptions"];
+            /** @description Actual loopback webhook listener, null for polling or inactive accounts. */
+            receiver_address?: string | null;
+            /** @description Live application unavailable; never implies another identity is in use. */
+            restart_required: boolean;
+            /** @description Whether the unlocked Vault contains the typed entry, or legacy references exist. */
+            secret_present: boolean;
+            /** @description Effective state of this account only. */
+            status: components["schemas"]["ChannelAccountStatus"];
+            /**
+             * @description Exact signed callback URL to paste into the platform; null for Telegram or legacy.
+             * @default null
+             */
+            webhook_url: string | null;
+        };
+        /**
+         * ChannelAccountList
+         * @description Read-scoped settings inventory, with no upstream credentials.
+         */
+        ChannelAccountList: {
+            /** @description All configured identities, including disabled and normalized legacy accounts. */
+            accounts: components["schemas"]["ChannelAccount"][];
+        };
+        /** @description Credential-free platform settings; allow-lists are intersected. */
+        ChannelAccountOptions: {
+            /**
+             * @description Slack or Discord channel allow-list.
+             * @default []
+             */
+            allowed_channels: string[];
+            /**
+             * @description Telegram chat allow-list; at least one relevant allow-list is required.
+             * @default []
+             */
+            allowed_chats: string[];
+            /**
+             * @description Discord guild allow-list.
+             * @default []
+             */
+            allowed_guilds: string[];
+            /**
+             * @description User allow-list intersected with channel and workspace restrictions.
+             * @default []
+             */
+            allowed_users: string[];
+            /**
+             * @description Slack team allow-list.
+             * @default []
+             */
+            allowed_workspaces: string[];
+            /**
+             * @description Custom destination is writable only through the local socket.
+             * @default null
+             */
+            api_base: string | null;
+            /**
+             * @description Remote writes permit only unprivileged loopback webhook listeners.
+             * @default null
+             */
+            listen: string | null;
+            /**
+             * Format: uint32
+             * @description Positive Telegram long-poll timeout; absent uses the configured default.
+             * @default null
+             */
+            poll_timeout_secs: number | null;
+            /**
+             * @description Public Ed25519 verification key for Discord inbound interactions.
+             * @default null
+             */
+            public_key: string | null;
+        };
+        /** @description Per-identity state; no status authorizes fallback to another account. */
+        ChannelAccountStatus: "connected" | "disabled" | "expired" | "unavailable" | "vault_locked" | "restart_required";
+        /**
+         * ChannelAccountTest
+         * @description Result of a read-only platform identity check, with sanitized failure codes.
+         */
+        ChannelAccountTest: {
+            /** @description Account tested; other accounts are unaffected. */
+            account_id: string;
+            /** @description Allow-listed machine-readable code, never upstream error text. */
+            code: string;
+            /** @description Service discriminator. */
+            kind: string;
+            /** @description Whether the upstream identity check succeeded. */
+            ok: boolean;
+            /** @description Whether enabled operation still needs a daemon listener or legacy runner restart. */
+            restart_required: boolean;
+            /** @description Tested credential state, independent of desired enablement. */
+            status: components["schemas"]["ChannelAccountStatus"];
+        };
+        /** @description Write-only input; Debug is masked and allocations are zeroized on drop. */
+        ChannelCredentials: {
+            /**
+             * @description Required for Slack inbound verification, forbidden for other services.
+             * @default null
+             */
+            signing_secret: string | null;
+            /** @description Bot credential supplied through a secure form or hidden stdin. */
+            token: string;
+        };
+        /** @description Canonical ChoiceAnswerEncoding wire contract; presentation never grants authority. */
+        ChoiceAnswerEncoding: "page_option" | "info_answer";
+        /** @description Canonical ChoiceLayout wire contract; presentation never grants authority. */
+        ChoiceLayout: "stack" | "providers";
+        /** @description Canonical ChoiceOption wire contract; presentation never grants authority. */
+        ChoiceOption: {
+            /** @description Optional immediate authoritative action; absence means selection for submit. */
+            action?: components["schemas"]["Action"] | null;
+            /** @description Plain-text secondary context bounded to 280 characters. */
+            description?: string | null;
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Plain-text accessible label; never markup. */
+            label: string;
+            /** @description Recognized provider selects a bundled glyph, not a remote image. */
+            provider?: components["schemas"]["LoginProvider"] | null;
+        };
         /**
          * CloudflareStatus
          * @description Supervised `cloudflared` state.
@@ -4514,10 +8705,270 @@ export interface components {
             url?: string | null;
         };
         /**
+         * ConfigureTailscaleRequest
+         * @description Enable or disable openside's Tailscale Serve handler.
+         */
+        ConfigureTailscaleRequest: {
+            /** @description Whether the transport should run. */
+            enabled: boolean;
+        };
+        /** @description Authentication material and the identity HMAC are deliberately absent from this view. */
+        Connection: {
+            /**
+             * @description Null selects the shared agent profile.
+             * @default null
+             */
+            account_space: string | null;
+            /**
+             * Format: uint32
+             * @description Number of recorded accounts in the same site/profile.
+             */
+            accounts_on_site: number;
+            /**
+             * Format: date-time
+             * @description UTC time the row was first created.
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Latest live fingerprint expiry, or null for session cookies.
+             */
+            expires_at?: string | null;
+            /** @description Bounded PNG data URL; no external URL is fetched by the client. */
+            favicon?: string | null;
+            /** @description Explicit overrides; unspecified teammates ask. */
+            grants: components["schemas"]["ConnectionGrant"][];
+            /** @description Same-site HTTP(S) URL without query, fragment or credentials. */
+            home_url?: string | null;
+            /** @description Opaque c_-prefixed identifier. */
+            id: string;
+            /** @description Write-time-masked label; never a raw email or account key. */
+            identity?: string | null;
+            /** @description Evidence behind the label, not a trust level. */
+            identity_source: components["schemas"]["ConnectionIdentitySource"];
+            /** @description Shared cookie-set identifier for site account switchers. */
+            jar_group?: string | null;
+            /** @description Cookie jar ownership, independent of the calling device. */
+            profile: components["schemas"]["ConnectionProfile"];
+            /** @description Registrable domain under the public and private suffix lists. */
+            site: string;
+            /** @description Strongest recorded sign-in source. */
+            source: components["schemas"]["ConnectionSource"];
+            /** @description Current confidence and liveness. */
+            status: components["schemas"]["ConnectionStatus"];
+            /**
+             * Format: date-time
+             * @description Most recent successful agent use, if any.
+             */
+            used_at?: string | null;
+            /** @description Stable agent ID associated with used_at. */
+            used_by?: string | null;
+            /** @description Optional saved login link; not the login's contents. */
+            vault_item_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Most recent authoritative sign-in or explicit probe.
+             */
+            verified_at?: string | null;
+        };
+        /** @description Per-agent access; absent teammates default to ask. */
+        ConnectionAccess: "allowed" | "ask" | "denied";
+        /** @description Closed audit vocabulary; arbitrary page text is never an action. */
+        ConnectionAuditAction: "detected" | "verified" | "expired" | "needs_login" | "relogin" | "open" | "fetch" | "grant" | "forget" | "sign_out";
+        /**
+         * ConnectionAuditList
+         * @description Bounded, newest-first audit response.
+         */
+        ConnectionAuditList: {
+            /** @description Filtered metadata records. */
+            records: components["schemas"]["ConnectionAuditRecord"][];
+        };
+        /**
+         * ConnectionAuditQuery
+         * @description Admin audit filters; all supplied predicates are combined.
+         */
+        ConnectionAuditQuery: {
+            /** @description One audit action. */
+            action?: components["schemas"]["ConnectionAuditAction"] | null;
+            /** @description Exact agent ID. */
+            agent?: string | null;
+            /** @description Exact connection ID. */
+            connection?: string | null;
+            /**
+             * Format: uint
+             * @description Defaults to 100 and is clamped to 1–1000.
+             */
+            limit?: number | null;
+        };
+        /** @description Append-only metadata audit; no credentials, identities or request bodies. */
+        ConnectionAuditRecord: {
+            /** @description Closed operation category. */
+            action: components["schemas"]["ConnectionAuditAction"];
+            /** @description Stable acting agent ID. */
+            agent_id: string;
+            /**
+             * Format: date-time
+             * @description UTC event time.
+             */
+            at: string;
+            /** @description Connection identifier, retained after removal. */
+            connection_id: string;
+            /** @description Only method and path for fetch, never queries, headers or bodies. */
+            detail?: string | null;
+            /** @description Originating session when the operation has one. */
+            session_id?: components["schemas"]["SessionId"] | null;
+            /** @description Registrable site, never a request URL. */
+            site: string;
+        };
+        /**
+         * ConnectionCheckArgs
+         * @description Explicit probe arguments; the probe uses the calling session's Browse policy.
+         */
+        ConnectionCheckArgs: {
+            /** @description Opaque registry ID. */
+            connection_id: string;
+        };
+        /**
+         * ConnectionConfirmArgs
+         * @description Page-derived identity input; excluded from Debug because it is not yet masked.
+         */
+        ConnectionConfirmArgs: {
+            /** @description Opaque registry ID; labels never select the authorization target. */
+            connection_id: string;
+            /** @description Transient label to mask and HMAC at the write boundary. */
+            identity: string;
+        };
+        /**
+         * ConnectionError
+         * @description Stable connection error codes; diagnostic data is not included.
+         */
+        ConnectionError: "connection_not_found" | "connection_denied" | "connection_needs_login" | "connection_cross_site" | "connection_browser_unavailable" | "connection_write_needs_approval";
+        /**
+         * ConnectionFetchArgs
+         * @description Same-origin request arguments; bodies and queries must never enter audit detail.
+         */
+        ConnectionFetchArgs: {
+            /** @description Opaque registry ID used for grant checks. */
+            connection_id: string;
+            /** @description Request-only JSON data, excluded from audit. */
+            json_body?: unknown;
+            /** @description GET/HEAD browse; other methods require bound write approval. */
+            method: string;
+            /** @description Same-origin path bound into the approval descriptor. */
+            path: string;
+            /** @description Request-only query data, excluded from audit. */
+            query?: {
+                [key: string]: string;
+            } | null;
+            /** @description Daemon-observed request ID; header values never appear in arguments. */
+            reuse_headers_from?: string | null;
+            /** @description Session-owned tab already at the connection origin. */
+            tab_id: string;
+        };
+        /** @description A grant is bound to a stable agent ID, not an identity label. */
+        ConnectionGrant: {
+            /** @description Additional gate; never bypasses Browse or write policy. */
+            access: components["schemas"]["ConnectionAccess"];
+            /** @description Stable team agent ID, or chief before team integration. */
+            agent_id: string;
+        };
+        /** @description Identity labels are descriptive and never grant authority. */
+        ConnectionIdentitySource: "probe" | "agent" | "login_ticket" | "vault" | "none";
+        /**
+         * ConnectionList
+         * @description Admin listing separates weak candidates from ordinary cards.
+         */
+        ConnectionList: {
+            /** @description Whether a managed browser is configured and available. */
+            browser_available: boolean;
+            /** @description Weak detections for the collapsed disclosure. */
+            candidates: components["schemas"]["Connection"][];
+            /** @description Non-candidate rows in stable site/ID order. */
+            connections: components["schemas"]["Connection"][];
+        };
+        /**
+         * ConnectionListQuery
+         * @description Admin list filters; candidate separation is retained after filtering.
+         */
+        ConnectionListQuery: {
+            /** @description Exclude connections explicitly denied to this agent. */
+            agent?: string | null;
+            /** @description Restrict to one liveness/confidence state. */
+            status?: components["schemas"]["ConnectionStatus"] | null;
+        };
+        /**
+         * ConnectionObserveArgs
+         * @description Request-metadata observation never includes header values or bodies.
+         */
+        ConnectionObserveArgs: {
+            /** @description Tab owned by the calling session. */
+            tab_id: string;
+        };
+        /**
+         * ConnectionOpenArgs
+         * @description Page-opening arguments, subject to independent grant and Browse gates.
+         */
+        ConnectionOpenArgs: {
+            /** @description Opaque registry ID. */
+            connection_id: string;
+            /** @description Optional same-site destination instead of home_url. */
+            url?: string | null;
+        };
+        /** @description Browser profile whose sign-in metadata this row describes. */
+        ConnectionProfile: "agent" | "user";
+        /** @description Evidence that originally established or refreshed the sign-in. */
+        ConnectionSource: "login" | "vault" | "takeover" | "otp" | "import" | "sweep" | "share";
+        /** @description Confidence and liveness; only an observed sign-in or probe establishes active status. */
+        ConnectionStatus: "candidate" | "unverified" | "active" | "expired" | "needs_login";
+        /** @description Agent use category carried by connection.used events. */
+        ConnectionUseMode: "open" | "fetch";
+        /**
+         * ConnectionsListArgs
+         * @description Metadata-only listing; denied rows are excluded for the calling agent.
+         */
+        ConnectionsListArgs: {
+            /** @description Optional registrable-domain filter. */
+            site?: string | null;
+        };
+        /**
          * ContentKind
          * @description Broad media class of one content part; the runtime maps it to model input types.
          */
         ContentKind: "text" | "image" | "audio" | "file";
+        /**
+         * CreateAccountSpaceRequest
+         * @description A person opts in to a separate persistent sign-in profile for this site.
+         */
+        CreateAccountSpaceRequest: {
+            /** @description Registrable site domain, without a URL path. */
+            site: string;
+        };
+        /**
+         * CreateAccountSpaceResult
+         * @description The new profile and its existing login continuation.
+         */
+        CreateAccountSpaceResult: {
+            /** @description Connection metadata created for this profile. */
+            connection_id?: string | null;
+            /** @description Silent completion or the existing human-step ticket. */
+            result: components["schemas"]["ReloginResult"];
+            /** @description Persistent profile identifier. */
+            space_id: string;
+        };
+        /**
+         * CreateHandoffRequest
+         * @description Person-initiated assignment still routes through the chief as sender.
+         */
+        CreateHandoffRequest: {
+            /** @description Existing open ownership of this key is a conflict, not another dispatch. */
+            dedupe_key: string;
+            /** @description Selects task, ownership or independent-review rules. */
+            kind: components["schemas"]["HandoffKind"];
+            /** @description Validated self-contained assignment; goal and acceptance must be nonblank. */
+            packet: components["schemas"]["HandoffPacket"];
+            /** @description Review subject; never authorizes the subject's author to review itself. */
+            subject_handoff_id?: string | null;
+        };
         /**
          * CreateMemoryRequest
          * @description `POST /v1/memory` body; creates a note.
@@ -4535,9 +8986,14 @@ export interface components {
         };
         /**
          * CreatePairingRequest
-         * @description Create a one-time pairing offer (Unix socket only).
+         * @description Create a one-time pairing offer from the local socket or a verified local person.
          */
         CreatePairingRequest: {
+            /**
+             * @description Establish an import authenticator for the extension through this local-person offer.
+             * @default false
+             */
+            import_delivery: boolean;
             /**
              * @description Operator-selected identity role, fixed in the offer and not chosen by its redeemer.
              * @default person_device
@@ -4566,6 +9022,16 @@ export interface components {
             title: string | null;
             /** @description http(s) URL. */
             url: string;
+        };
+        /**
+         * CreateProviderKeyRequest
+         * @description Secret creation input; never Debug/Serialize or error-quoted.
+         */
+        CreateProviderKeyRequest: {
+            /** @description Provider key from the private input body, never argv or response. */
+            key: string;
+            /** @description Non-control person-assigned label,1–80 characters. */
+            label: string;
         };
         /**
          * CreatePushSubscriptionRequest
@@ -4598,6 +9064,11 @@ export interface components {
          * @description Session creation request.
          */
         CreateSessionRequest: {
+            /**
+             * @description Existing active agent for a new non-home thread; cannot rebind an existing session.
+             * @default null
+             */
+            agent_id: string | null;
             /**
              * @description Browse in the shared managed profile (default) or an isolated space; immutable
              *     afterwards. Incognito sessions already have their own browser and refuse `isolated`.
@@ -4638,6 +9109,14 @@ export interface components {
             resources: components["schemas"]["SkillFile"][];
         };
         /**
+         * CreateSubscriptionAccountRequest
+         * @description Create an isolated private CLI home; the person runs its external login command.
+         */
+        CreateSubscriptionAccountRequest: {
+            /** @description Non-control person-assigned label,1–80 characters. */
+            label: string;
+        };
+        /**
          * CreateVaultItemRequest
          * @description `POST /v1/vault/items`: a login (password, optional username and authenticator) or an
          *     authenticator alone (`totp` without `password`). Values only travel to the daemon; the
@@ -4669,6 +9148,23 @@ export interface components {
              */
             username: string | null;
         };
+        /**
+         * DaemonStatus
+         * @description `GET /v1/daemon`: identity of the running daemon process.
+         */
+        DaemonStatus: {
+            /** @description Random id of this process; a different value after a restart. */
+            boot_id: string;
+            /** @description How `POST /v1/daemon/restart` would restart it. */
+            restart_method: components["schemas"]["RestartMethod"];
+            /**
+             * Format: date-time
+             * @description When this process started.
+             */
+            started_at: string;
+            /** @description Daemon version. */
+            version: string;
+        };
         /** @description A paired device (never its token). */
         Device: {
             /**
@@ -4698,10 +9194,55 @@ export interface components {
             /** @description Devices in pairing order. */
             devices: components["schemas"]["Device"][];
         };
+        /** @description One diagnostic finding. */
+        DoctorCheck: {
+            /** @description A fix the web app offers, when one exists. */
+            fix?: components["schemas"]["DoctorFix"] | null;
+            /** @description Stable check id such as `memory.embeddings`. */
+            id: string;
+            /** @description What to do about it in words; may mention a terminal command. */
+            next_step?: string | null;
+            /** @description Outcome. */
+            status: components["schemas"]["DoctorStatus"];
+            /** @description What was found, without secret values. */
+            summary: string;
+        };
+        /** @description A fix the web app can offer for a finding. */
+        DoctorFix: {
+            /** @description What the button does. */
+            action: components["schemas"]["DoctorFixAction"];
+            /** @description One sentence on what to expect. */
+            hint: string;
+            /** @description Button label. */
+            label: string;
+        };
+        /** @description Where in the web app a doctor finding can be fixed. */
+        DoctorFixAction: "download_memory_model" | "restart_daemon" | "open_models" | "open_vault" | "open_remote" | "open_configuration" | "open_agents" | "open_policy";
+        /** @description Findings of one area. */
+        DoctorGroup: {
+            /** @description Findings in this area; nothing is hidden, passing families are not folded. */
+            checks: components["schemas"]["DoctorCheck"][];
+            /** @description Area name, in display order across the report. */
+            name: string;
+        };
         /**
-         * DropReason
-         * @description Why a message was dropped (never silent).
+         * DoctorReport
+         * @description `GET /v1/doctor`: the same checks as `openside doctor`, grouped by area, run by the daemon.
          */
+        DoctorReport: {
+            /**
+             * Format: date-time
+             * @description When the checks ran.
+             */
+            generated_at: string;
+            /** @description Non-empty areas in display order. */
+            groups: components["schemas"]["DoctorGroup"][];
+            /** @description No check failed (warnings allowed). */
+            ok: boolean;
+        };
+        /** @description Outcome of one doctor check. */
+        DoctorStatus: "ok" | "warn" | "fail";
+        /** @description Why a message was dropped (never silent). */
         DropReason: "removed" | "session_reset";
         /**
          * EditMessageRequest
@@ -4711,10 +9252,7 @@ export interface components {
             /** @description Replacement text; only pending messages may be edited. */
             text: string;
         };
-        /**
-         * Event
-         * @description Immutable durable record, with a gapless per-session sequence starting at one.
-         */
+        /** @description Immutable durable record, with a gapless per-session sequence starting at one. */
         Event: {
             /** @description Runtime turn/run correlation, if applicable. */
             run_id?: string | null;
@@ -4733,6 +9271,16 @@ export interface components {
         } & ({
             /** @description Stored attachments, referenced by artifact path; bytes never enter the log. */
             attachments?: components["schemas"]["Attachment"][];
+            /**
+             * @description Caller-derived authority; historical logs fail closed for immediate hiring.
+             * @default internal
+             */
+            author_kind: components["schemas"]["MessageAuthorKind"];
+            /**
+             * @description Only daemon team deliveries may identify a team sender.
+             * @default null
+             */
+            from_agent: string | null;
             /** @constant */
             kind: "message.queued";
             /** @description Durable idempotency key. */
@@ -4837,6 +9385,8 @@ export interface components {
             /** @description Redacted progress payload. */
             update: unknown;
         } | {
+            /** @description Atomic presentation outcome for a resumed approval; ordinary calls omit it. */
+            card?: components["schemas"]["Card"] | null;
             /** @description Whether the invocation failed. */
             is_error: boolean;
             /** @constant */
@@ -4867,6 +9417,8 @@ export interface components {
             /** @description Full redacted ticket needed to rebuild pending state. */
             ticket: components["schemas"]["Ticket"];
         } | {
+            /** @description Same-row presentation committed with the authoritative transition. */
+            card?: components["schemas"]["Card"] | null;
             /** @constant */
             kind: "ticket.resolved";
             /** @description Redacted resolution; never a secret-input value. */
@@ -4874,6 +9426,8 @@ export interface components {
             /** @description Ticket identifier. */
             ticket_id: components["schemas"]["TicketId"];
         } | {
+            /** @description Value-free cancellation receipt committed with rejection. */
+            card?: components["schemas"]["Card"] | null;
             /** @constant */
             kind: "ticket.rejected";
             /** @description Sanitized rejection detail. */
@@ -4881,10 +9435,19 @@ export interface components {
             /** @description Ticket identifier. */
             ticket_id: components["schemas"]["TicketId"];
         } | {
+            /** @description Inactive receipt committed with expiry. */
+            card?: components["schemas"]["Card"] | null;
             /** @constant */
             kind: "ticket.expired";
             /** @description Ticket identifier. */
             ticket_id: components["schemas"]["TicketId"];
+        } | {
+            /** @description Daemon-normalized data with local raster references and no input values. */
+            card: components["schemas"]["Card"];
+            /** @constant */
+            kind: "card.presented";
+            /** @description Original tool invocation; its result contains only the card identity. */
+            tool_call_id: string;
         } | {
             /**
              * @description A Task started by the front agent's `task_start`: it runs in the background and
@@ -4951,6 +9514,11 @@ export interface components {
             /** @constant */
             kind: "session.driver_recorded";
         } | {
+            /**
+             * @description Immutable owner tag; historical creation events remain unassigned.
+             * @default null
+             */
+            agent_id: string | null;
             /** @description Browser space; historical events are shared. */
             browser_space?: components["schemas"]["BrowserSpace"];
             /** @description Private session; historical events are not private. */
@@ -4985,10 +9553,17 @@ export interface components {
             archived?: boolean | null;
             /** @constant */
             kind: "session.updated";
+            /** @description Daemon-approved replacement ceiling for an agent's home conversation. */
+            mode?: components["schemas"]["PolicyMode"] | null;
             /** @description New pinned flag. */
             pinned?: boolean | null;
             /** @description Replacement title. */
             title?: string | null;
+        } | {
+            /** @constant */
+            kind: "session.title_proposed";
+            /** @description Sanitized conversation title of at most six words, never a URL. */
+            title: string;
         } | {
             /** @constant */
             kind: "runtime.started";
@@ -5006,10 +9581,130 @@ export interface components {
             kind: "runtime.error";
             /** @description Redacted failure detail. */
             message: string;
+            /**
+             * @description Whether resubmitting the last user message is a useful next step.
+             * @default false
+             */
+            retryable: boolean;
+            /**
+             * @description Calm user-facing copy; `message` remains technical detail.
+             * @default
+             */
+            user_message: string;
         } | (components["schemas"]["BrowserState"] & {
             /** @constant */
             kind: "browser.state";
-        }));
+        }) | {
+            /** @description Opaque registry ID. */
+            connection_id: string;
+            /** @description Write-time-masked account label. */
+            identity?: string | null;
+            /** @constant */
+            kind: "connection.saved";
+            /** @description Registrable site, never a callback URL. */
+            site: string;
+        } | {
+            /** @description Opaque registry ID. */
+            connection_id: string;
+            /** @constant */
+            kind: "connection.used";
+            /** @description HTTP method for fetch, absent for page opening. */
+            method?: string | null;
+            /** @description Page opening or in-page fetch. */
+            mode: components["schemas"]["ConnectionUseMode"];
+            /** @description Registrable site. */
+            site: string;
+        } | {
+            /** @description Stable registry identity, independent of later renames. */
+            agent_id: string;
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @constant */
+            kind: "team.hired";
+            /** @description Display name at the time of hiring. */
+            name: string;
+            /** @description Authoritative person message permitting immediate hiring. */
+            request_message_id?: components["schemas"]["MessageId"] | null;
+            /** @description Approving ticket, absent for an immediate person-requested hire. */
+            ticket_id?: string | null;
+        } | {
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @description Caller-provided identity unique among open handoffs. */
+            dedupe_key: string;
+            /** @description Registry identity of the delegating chief. */
+            from_agent: string;
+            /** @description Human-readable goal from the accepted packet. */
+            goal: string;
+            /** @description Stable identity used for report and event deduplication. */
+            handoff_id: string;
+            /** @description Business purpose; `kind` remains the event discriminator. */
+            handoff_kind: components["schemas"]["HandoffKind"];
+            /** @constant */
+            kind: "team.handoff";
+            /** @description Registry identity accountable for the result. */
+            to_agent: string;
+        } | {
+            /** @description Common receipt replacing the active handoff card. */
+            card?: components["schemas"]["Card"] | null;
+            /** @description Correlates the receipt with the original handoff card. */
+            handoff_id: string;
+            /** @constant */
+            kind: "team.handoff_ended";
+            /** @description Terminal outcome; never `open`. */
+            status: components["schemas"]["HandoffStatus"];
+            /** @description Redacted outcome text, when available. */
+            summary?: string | null;
+        } | {
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @description Registry identity of the blocked teammate. */
+            from_agent: string;
+            /** @constant */
+            kind: "team.question";
+            /** @description Candidate answers supplied as context, not authority. */
+            options: string[];
+            /** @description Stable identity retained through answer delivery. */
+            question_id: string;
+            /** @description Decision question shown in the chief's home. */
+            text: string;
+        } | {
+            /** @description Inactive receipt for the answered question. */
+            card?: components["schemas"]["Card"] | null;
+            /** @constant */
+            kind: "team.answered";
+            /** @description Correlates with the original decision question. */
+            question_id: string;
+        } | {
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @description Previous accountable registry identity. */
+            from_agent: string;
+            /** @constant */
+            kind: "team.transferred";
+            /** @description Responsibility lines moved to the new owner. */
+            responsibilities: string[];
+            /** @description Routine identities retained across ownership changes. */
+            routine_ids: string[];
+            /** @description New accountable registry identity. */
+            to_agent: string;
+        } | {
+            /** @description Retained registry identity whose home is now archived. */
+            agent_id: string;
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @constant */
+            kind: "team.retired";
+            /** @description Explicit successor; no implicit channel fallback is authorized. */
+            successor?: string | null;
+        } | {
+            /** @description Existing registry identity, not a newly hired agent. */
+            agent_id: string;
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @constant */
+            kind: "team.restored";
+        });
         /**
          * EventKind
          * @description Public event payloads with stable `kind` identifiers, dotted except for `usage`.
@@ -5017,6 +9712,16 @@ export interface components {
         EventKind: {
             /** @description Stored attachments, referenced by artifact path; bytes never enter the log. */
             attachments?: components["schemas"]["Attachment"][];
+            /**
+             * @description Caller-derived authority; historical logs fail closed for immediate hiring.
+             * @default internal
+             */
+            author_kind: components["schemas"]["MessageAuthorKind"];
+            /**
+             * @description Only daemon team deliveries may identify a team sender.
+             * @default null
+             */
+            from_agent: string | null;
             /** @constant */
             kind: "message.queued";
             /** @description Durable idempotency key. */
@@ -5121,6 +9826,8 @@ export interface components {
             /** @description Redacted progress payload. */
             update: unknown;
         } | {
+            /** @description Atomic presentation outcome for a resumed approval; ordinary calls omit it. */
+            card?: components["schemas"]["Card"] | null;
             /** @description Whether the invocation failed. */
             is_error: boolean;
             /** @constant */
@@ -5151,6 +9858,8 @@ export interface components {
             /** @description Full redacted ticket needed to rebuild pending state. */
             ticket: components["schemas"]["Ticket"];
         } | {
+            /** @description Same-row presentation committed with the authoritative transition. */
+            card?: components["schemas"]["Card"] | null;
             /** @constant */
             kind: "ticket.resolved";
             /** @description Redacted resolution; never a secret-input value. */
@@ -5158,6 +9867,8 @@ export interface components {
             /** @description Ticket identifier. */
             ticket_id: components["schemas"]["TicketId"];
         } | {
+            /** @description Value-free cancellation receipt committed with rejection. */
+            card?: components["schemas"]["Card"] | null;
             /** @constant */
             kind: "ticket.rejected";
             /** @description Sanitized rejection detail. */
@@ -5165,10 +9876,19 @@ export interface components {
             /** @description Ticket identifier. */
             ticket_id: components["schemas"]["TicketId"];
         } | {
+            /** @description Inactive receipt committed with expiry. */
+            card?: components["schemas"]["Card"] | null;
             /** @constant */
             kind: "ticket.expired";
             /** @description Ticket identifier. */
             ticket_id: components["schemas"]["TicketId"];
+        } | {
+            /** @description Daemon-normalized data with local raster references and no input values. */
+            card: components["schemas"]["Card"];
+            /** @constant */
+            kind: "card.presented";
+            /** @description Original tool invocation; its result contains only the card identity. */
+            tool_call_id: string;
         } | {
             /**
              * @description A Task started by the front agent's `task_start`: it runs in the background and
@@ -5235,6 +9955,11 @@ export interface components {
             /** @constant */
             kind: "session.driver_recorded";
         } | {
+            /**
+             * @description Immutable owner tag; historical creation events remain unassigned.
+             * @default null
+             */
+            agent_id: string | null;
             /** @description Browser space; historical events are shared. */
             browser_space?: components["schemas"]["BrowserSpace"];
             /** @description Private session; historical events are not private. */
@@ -5269,10 +9994,17 @@ export interface components {
             archived?: boolean | null;
             /** @constant */
             kind: "session.updated";
+            /** @description Daemon-approved replacement ceiling for an agent's home conversation. */
+            mode?: components["schemas"]["PolicyMode"] | null;
             /** @description New pinned flag. */
             pinned?: boolean | null;
             /** @description Replacement title. */
             title?: string | null;
+        } | {
+            /** @constant */
+            kind: "session.title_proposed";
+            /** @description Sanitized conversation title of at most six words, never a URL. */
+            title: string;
         } | {
             /** @constant */
             kind: "runtime.started";
@@ -5290,10 +10022,143 @@ export interface components {
             kind: "runtime.error";
             /** @description Redacted failure detail. */
             message: string;
+            /**
+             * @description Whether resubmitting the last user message is a useful next step.
+             * @default false
+             */
+            retryable: boolean;
+            /**
+             * @description Calm user-facing copy; `message` remains technical detail.
+             * @default
+             */
+            user_message: string;
         } | (components["schemas"]["BrowserState"] & {
             /** @constant */
             kind: "browser.state";
-        });
+        }) | {
+            /** @description Opaque registry ID. */
+            connection_id: string;
+            /** @description Write-time-masked account label. */
+            identity?: string | null;
+            /** @constant */
+            kind: "connection.saved";
+            /** @description Registrable site, never a callback URL. */
+            site: string;
+        } | {
+            /** @description Opaque registry ID. */
+            connection_id: string;
+            /** @constant */
+            kind: "connection.used";
+            /** @description HTTP method for fetch, absent for page opening. */
+            method?: string | null;
+            /** @description Page opening or in-page fetch. */
+            mode: components["schemas"]["ConnectionUseMode"];
+            /** @description Registrable site. */
+            site: string;
+        } | {
+            /** @description Stable registry identity, independent of later renames. */
+            agent_id: string;
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @constant */
+            kind: "team.hired";
+            /** @description Display name at the time of hiring. */
+            name: string;
+            /** @description Authoritative person message permitting immediate hiring. */
+            request_message_id?: components["schemas"]["MessageId"] | null;
+            /** @description Approving ticket, absent for an immediate person-requested hire. */
+            ticket_id?: string | null;
+        } | {
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @description Caller-provided identity unique among open handoffs. */
+            dedupe_key: string;
+            /** @description Registry identity of the delegating chief. */
+            from_agent: string;
+            /** @description Human-readable goal from the accepted packet. */
+            goal: string;
+            /** @description Stable identity used for report and event deduplication. */
+            handoff_id: string;
+            /** @description Business purpose; `kind` remains the event discriminator. */
+            handoff_kind: components["schemas"]["HandoffKind"];
+            /** @constant */
+            kind: "team.handoff";
+            /** @description Registry identity accountable for the result. */
+            to_agent: string;
+        } | {
+            /** @description Common receipt replacing the active handoff card. */
+            card?: components["schemas"]["Card"] | null;
+            /** @description Correlates the receipt with the original handoff card. */
+            handoff_id: string;
+            /** @constant */
+            kind: "team.handoff_ended";
+            /** @description Terminal outcome; never `open`. */
+            status: components["schemas"]["HandoffStatus"];
+            /** @description Redacted outcome text, when available. */
+            summary?: string | null;
+        } | {
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @description Registry identity of the blocked teammate. */
+            from_agent: string;
+            /** @constant */
+            kind: "team.question";
+            /** @description Candidate answers supplied as context, not authority. */
+            options: string[];
+            /** @description Stable identity retained through answer delivery. */
+            question_id: string;
+            /** @description Decision question shown in the chief's home. */
+            text: string;
+        } | {
+            /** @description Inactive receipt for the answered question. */
+            card?: components["schemas"]["Card"] | null;
+            /** @constant */
+            kind: "team.answered";
+            /** @description Correlates with the original decision question. */
+            question_id: string;
+        } | {
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @description Previous accountable registry identity. */
+            from_agent: string;
+            /** @constant */
+            kind: "team.transferred";
+            /** @description Responsibility lines moved to the new owner. */
+            responsibilities: string[];
+            /** @description Routine identities retained across ownership changes. */
+            routine_ids: string[];
+            /** @description New accountable registry identity. */
+            to_agent: string;
+        } | {
+            /** @description Retained registry identity whose home is now archived. */
+            agent_id: string;
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @constant */
+            kind: "team.retired";
+            /** @description Explicit successor; no implicit channel fallback is authorized. */
+            successor?: string | null;
+        } | {
+            /** @description Existing registry identity, not a newly hired agent. */
+            agent_id: string;
+            /** @description Common card projection, absent in historical records. */
+            card?: components["schemas"]["Card"] | null;
+            /** @constant */
+            kind: "team.restored";
+        };
+        /**
+         * EventPoll
+         * @description A bounded durable event page for transports that buffer server-sent events.
+         */
+        EventPoll: {
+            /** @description Events in ascending per-session sequence order. */
+            events: components["schemas"]["Event"][];
+            /**
+             * Format: uint64
+             * @description Exclusive replay cursor, including filtered subagent events.
+             */
+            last_seq: number;
+        };
         /**
          * ExchangePairingRequest
          * @description Exchange a pairing code for a device token (no bearer token needed).
@@ -5304,6 +10169,12 @@ export interface components {
         };
         /** @description An agent CLI openside can install its browser skill for (`openside skills install`). */
         ExternalAgent: {
+            /**
+             * @description Added by the user rather than a preset: its folder can be changed or removed
+             *     (`PUT`/`DELETE /v1/external-agents/{id}`).
+             * @default false
+             */
+            custom: boolean;
             /** @description The agent's executable is on the daemon's `PATH` or its configuration directory exists. */
             detected: boolean;
             /** @description Preset name (`claude`, `codex`, `omp`) or an entry of `[skills.agents]`. */
@@ -5326,6 +10197,76 @@ export interface components {
             /** @description The three built-in presets first, then configured agents by name. */
             agents: components["schemas"]["ExternalAgent"][];
         };
+        /** @description Canonical FaviconRef wire contract; presentation never grants authority. */
+        FaviconRef: {
+            /** @description Exact canonical URL origin, including nondefault port. */
+            origin: string;
+            /** @constant */
+            type: "origin";
+        } | {
+            /** @description Validated static PNG, at most 32 pixels per side and 8 KiB. */
+            data_url: string;
+            /** @constant */
+            type: "data";
+        };
+        /** @description Canonical FieldAnswerEncoding wire contract; presentation never grants authority. */
+        FieldAnswerEncoding: "login" | "form" | "scalar";
+        /** @description Canonical FieldInitial wire contract; presentation never grants authority. */
+        FieldInitial: string | boolean;
+        /** @description Durable one-assignee handoff, independent of its timeline presentation. */
+        Handoff: {
+            /**
+             * Format: date-time
+             * @description Assignment creation time, preserved on status transitions.
+             */
+            created_at: string;
+            /** @description Unique among open handoffs, preventing concurrent duplicate assignments. */
+            dedupe_key: string;
+            /**
+             * Format: date-time
+             * @description Null until the handoff reaches a terminal state.
+             */
+            ended_at?: string | null;
+            /** @description Chief identity in the first version's chief-mediated delegation model. */
+            from_agent: string;
+            /** @description Stable identity used for receipts and report delivery deduplication. */
+            id: string;
+            /** @description Review additionally requires an independently authored subject. */
+            kind: components["schemas"]["HandoffKind"];
+            /** @description Queued assignee message used to correlate settling with report delivery. */
+            message_id: components["schemas"]["MessageId"];
+            /** @description Full packet, not reconstructed from a rendered card. */
+            packet: components["schemas"]["HandoffPacket"];
+            /** @description Terminal transitions release the open deduplication key. */
+            status: components["schemas"]["HandoffStatus"];
+            /** @description Required review subject when independent-review checks apply. */
+            subject_handoff_id?: string | null;
+            /** @description Exactly one active assignee when created. */
+            to_agent: string;
+        };
+        /** @description Why the chief is handing work to one assignee. */
+        HandoffKind: "task" | "ownership" | "review";
+        /**
+         * HandoffList
+         * @description History for profile and handoff navigation without polling model execution.
+         */
+        HandoffList: {
+            /** @description Durable handoff records rather than transient progress-only events. */
+            handoffs: components["schemas"]["Handoff"][];
+        };
+        /** @description Self-contained work context; assignees do not inherit the chief's conversation. */
+        HandoffPacket: {
+            /** @description Required nonblank evidence that makes completion observable. */
+            acceptance: string;
+            /** @description Boundaries for this assignment; cannot widen daemon policy. */
+            constraints: string;
+            /** @description Facts and prior results needed without reading another thread. */
+            context: string;
+            /** @description Required nonblank outcome the assignee should achieve. */
+            goal: string;
+        };
+        /** @description Durable handoff state used for deduplication and terminal receipts. */
+        HandoffStatus: "open" | "done" | "failed" | "cancelled";
         /**
          * Health
          * @description Health response without environment or credential details.
@@ -5336,109 +10277,504 @@ export interface components {
             /** @description Whether the daemon is ready to serve requests. */
             ok: boolean;
         };
-        /** @description Which categories a source profile has files for. */
-        ImportAvailability: {
-            /** @description A bookmarks file exists. */
-            bookmarks: boolean;
-            /** @description A cookie database exists. */
-            cookies: boolean;
-            /** @description A history database exists. */
-            history: boolean;
+        /**
+         * HireDecision
+         * @description Person-authored response to a proposed hire, not authority supplied by a model.
+         */
+        HireDecision: "hire" | "not_now" | "never";
+        /** @description Authoritative hire payload shared by manual creation and approval tickets. */
+        HireDraft: {
+            /** @description Null inherits provider membership; an empty list is rejected. */
+            account_pool?: components["schemas"]["ModelAccountRef"][] | null;
+            /** @description Validated against both channel settings and existing profile ownership. */
+            channel?: components["schemas"]["AgentChannelBinding"] | null;
+            /** @description Null selects a stable id-derived value from ACCENT_COLORS. */
+            color?: string | null;
+            /**
+             * @description Initial handoff context; never injected as permanent persona rules.
+             * @default
+             */
+            history_summary: string;
+            /** @description Null derives an initial from the supplied name. */
+            initials?: string | null;
+            /**
+             * @description Explicit memory transfers; unrelated notes remain with their current owners.
+             * @default []
+             */
+            memory_ids: string[];
+            /** @description Null inherits the current default, bounded by the chief's ceiling. */
+            mode?: components["schemas"]["PolicyMode"] | null;
+            /** @description Null inherits the current default; it does not embed a fallback model. */
+            model?: string | null;
+            /** @description Validated against all existing profiles, including retired teammates. */
+            name: string;
+            /** @description Durable role rules, not the initial assignment's conversation history. */
+            persona: components["schemas"]["AgentPersona"];
+            /** @description Stable topic key for proposal cooldowns, absent for a manual hire without a topic. */
+            proposal_key?: string | null;
+            /**
+             * @description Explicit ownership transfers recorded in the resumable hire saga.
+             * @default []
+             */
+            routine_ids: string[];
+            /** @description Null inherits enabled skills; transfers add grants to explicit allowlists. */
+            skills?: string[] | null;
         };
-        /** @description Browser family of an import source. */
-        ImportBrowser: "chrome" | "chromium" | "firefox";
-        /** @description A data category an import can carry over. */
-        ImportCategory: "history" | "bookmarks" | "cookies";
-        /** @description Outcome of one category. */
+        /** @description Known source-file presence; true does not guarantee successful decryption. */
+        ImportAvailability: {
+            /** @description An address/form source exists. */
+            autofill: boolean;
+            /** @description A bookmark source exists. */
+            bookmarks: boolean;
+            /** @description A cookie source exists. */
+            cookies: boolean;
+            /** @description An extension metadata source exists. */
+            extensions: boolean;
+            /** @description A history source exists. */
+            history: boolean;
+            /** @description A password record source exists. */
+            passwords: boolean;
+            /** @description A site preference source exists. */
+            permissions: boolean;
+            /** @description A provider metadata source exists. */
+            search_engines: boolean;
+            /** @description An open-session source exists. */
+            tabs: boolean;
+        };
+        /** @description Complete preview or final/partial summary; secret values are excluded. */
+        ImportBatchReport: {
+            /** @description True for a read-only preview. */
+            dry_run: boolean;
+            /** @description Extension names and official store links, never binaries. */
+            extensions: components["schemas"]["ImportedExtension"][];
+            /** @description Site-preference inventory. */
+            permissions: components["schemas"]["ImportedPermission"][];
+            /** @description Agent destination, always default. */
+            profile: string;
+            /** @description One outcome per selected source profile. */
+            profiles: components["schemas"]["ImportReport"][];
+            /** @description Current tabs for explicit user restoration. */
+            restore_tabs: components["schemas"]["ImportedRestoreTab"][];
+            /** @description Search-provider inventory. */
+            search_engines: components["schemas"]["ImportedSearchEngine"][];
+            /** @description Written/prospective counts summed by category. */
+            totals: {
+                [key: string]: number;
+            };
+            /** @description Selected passwords require unlocking Vault first. */
+            vault_locked: boolean;
+            /** @description Selected passwords require creating Vault first. */
+            vault_needed: boolean;
+            /** @description Safe per-kind and permission guidance. */
+            warnings: string[];
+        };
+        /** @description Parser family; UI brand identity is carried separately on each profile. */
+        ImportBrowser: "chrome" | "chromium" | "firefox" | "safari";
+        /** @description Independent import categories; unavailable/protected kinds do not stop other kinds. */
+        ImportCategory: "history" | "bookmarks" | "cookies" | "passwords" | "autofill" | "tabs" | "search_engines" | "permissions" | "extensions";
+        /** @description Per-kind outcome; credential preview counts source rows without decryption or key access. */
         ImportCategoryReport: {
             /**
              * Format: uint64
-             * @description Entries written (dry run: that would be written).
+             * @description Written records, or source candidates during preview (credentials are not verified).
              */
             imported: number;
-            /** @description Why the category was skipped entirely (its source file is missing). */
+            /** @description Safe unavailable/failed guidance, or preview guidance about explicit import-time access. */
             note?: string | null;
             /**
              * Format: uint64
-             * @description Entries read from the source (cookies: decrypted).
+             * @description Source records successfully read or counted.
              */
             read: number;
-            /** @description Cookies the target browser refused. */
+            /** @description Rejected-cookie labels with no values. */
             rejected: components["schemas"]["ImportRejectedCookie"][];
             /**
              * Format: uint64
-             * @description Entries left out: non-web URLs, bookmarklets, expired or partitioned cookies.
+             * @description Excluded invalid, duplicate, expired or unmappable records.
              */
             skipped: number;
         };
-        /** @description A browser profile the daemon found on its computer. */
-        ImportProfile: {
-            /** @description Files present in the profile. */
-            available: components["schemas"]["ImportAvailability"];
-            /** @description Browser family. */
-            browser: components["schemas"]["ImportBrowser"];
-            /** @description Opaque id for `POST /v1/import` (`<browser>:<directory name>`). */
+        /**
+         * ImportDeliveryAck
+         * @description Acknowledgement sent only after the destination applied the batch.
+         */
+        ImportDeliveryAck: {
+            /** @description Destination whose pending marker is cleared. */
+            target: components["schemas"]["ImportDeliveryTarget"];
+        };
+        /**
+         * ImportDeliveryBatch
+         * @description Native-delivery revision; cookie values exist only in the live local response.
+         */
+        ImportDeliveryBatch: {
+            /** @description Folder-aware web bookmarks. */
+            bookmarks: components["schemas"]["ImportDeliveryBookmark"][];
+            /** @description Live secret transport, excluded from the durable pending metadata. */
+            cookies: components["schemas"]["ImportDeliveryCookie"][];
+            /** @description Source visits for the native history API. */
+            history: components["schemas"]["ImportDeliveryVisit"][];
+            /** @description Opaque revision id, replayed until that target acknowledges it. */
             id: string;
-            /** @description Name the browser shows for the profile. */
+            /** @description Value-free source display metadata. */
+            source: components["schemas"]["ImportDeliverySource"];
+        };
+        /** @description Bookmark transported to the extension's supported native bookmarks API. */
+        ImportDeliveryBookmark: {
+            /**
+             * Format: int64
+             * @description Source creation time in Unix milliseconds when known.
+             */
+            added_at_ms?: number | null;
+            /** @description Folder names, outermost first. */
+            folder: string[];
+            /** @description Source display title. */
+            title: string;
+            /** @description HTTP(S), file or FTP URL, used with folder path for native dedupe. */
+            url: string;
+        };
+        /** @description Authenticated daemon-to-extension cookie transport; never persist, log or expose to pages. */
+        ImportDeliveryCookie: {
+            /** @description Domain scope; absent means host-only. */
+            domain?: string | null;
+            /**
+             * Format: double
+             * @description Unix seconds; absent means a session cookie.
+             */
+            expirationDate?: number | null;
+            /** @description Source HttpOnly attribute. */
+            httpOnly: boolean;
+            /** @description Source cookie name. */
             name: string;
+            /** @description Live native partition boundary; current source parsers skip unmappable partitions. */
+            partitionKey?: components["schemas"]["ImportDeliveryCookiePartitionKey"] | null;
+            /** @description Source cookie path. */
+            path: string;
+            /** @description Chrome API SameSite enum string when recorded. */
+            sameSite?: string | null;
+            /** @description Source Secure attribute. */
+            secure: boolean;
+            /** @description URL establishing the cookie's supported origin. */
+            url: string;
+            /** @description Secret value read live from the encrypted agent cookie store. */
+            value: string;
+        };
+        /** @description Chrome's partition boundary, preserved when supported rather than silently dropped. */
+        ImportDeliveryCookiePartitionKey: {
+            /** @description Chromium's cross-site-ancestor boundary when reported. */
+            hasCrossSiteAncestor?: boolean | null;
+            /** @description Schemeful top-level site owning the partition. */
+            topLevelSite: string;
+        };
+        /**
+         * ImportDeliveryList
+         * @description Value-free local-person delivery descriptors; the extension fetches the actual records.
+         */
+        ImportDeliveryList: {
+            /** @description Pending revision descriptors, containing no native cookie values. */
+            batches: components["schemas"]["ImportDeliveryPending"][];
+        };
+        /**
+         * ImportDeliveryPending
+         * @description A pending user-profile import revision with exact permission origins.
+         */
+        ImportDeliveryPending: {
+            /** @description Exact optional host patterns; no cookie values or source records. */
+            cookie_origins: string[];
+            /** @description Stable native-delivery revision identifier. */
+            id: string;
+        };
+        /**
+         * ImportDeliveryQuery
+         * @description Local-only delivery selector; it cannot name an arbitrary browser/profile path.
+         */
+        ImportDeliveryQuery: {
+            /**
+             * @description Omitted means the dedicated desktop user profile.
+             * @default user
+             */
+            target: components["schemas"]["ImportDeliveryTarget"];
+        };
+        /**
+         * ImportDeliverySigned
+         * @description Device-authenticated, HMAC-protected native import response.
+         */
+        ImportDeliverySigned: {
+            /** @description Native-delivery revision authenticated together with the payload. */
+            batch_id: string;
+            /** @description Exact UTF-8 JSON signed with HMAC-SHA256; never forwarded to a page. */
+            payload: string;
+            /** @description Lowercase hex HMAC-SHA256(ticket || batch_id || SHA256(payload) as hex). */
+            signature: string;
+            /** @description Exact single-use ticket consumed by this response. */
+            ticket: string;
+        };
+        /** @description Safe origin of a pending native-delivery batch. */
+        ImportDeliverySource: {
+            /** @description Stable source browser brand. */
+            brand: string;
+            /** @description Opaque discovered profile id. */
+            id: string;
+            /** @description Profile display label. */
+            name: string;
+        };
+        /** @description Independently acknowledged destinations for the same migration revision. */
+        ImportDeliveryTarget: "user" | "agent";
+        /**
+         * ImportDeliveryTicket
+         * @description Short-lived authorization redeemed only by the designated extension device.
+         */
+        ImportDeliveryTicket: {
+            /** @description Single-use, short-lived capability bound to the paired extension device and batch. */
+            ticket: string;
+        };
+        /**
+         * ImportDeliveryTicketRequest
+         * @description Local-person request to authorize one batch for a paired extension.
+         */
+        ImportDeliveryTicketRequest: {
+            /** @description Extension's revocation identifier from its verified pairing. */
+            device_id: string;
+        };
+        /** @description Visit transported to the extension's supported native history API. */
+        ImportDeliveryVisit: {
+            /** @description Source display title when known. */
+            title?: string | null;
+            /** @description Supported web URL used for native history dedupe. */
+            url: string;
+            /**
+             * Format: int64
+             * @description Source time in Unix milliseconds.
+             */
+            visited_at_ms: number;
+        };
+        /**
+         * ImportJob
+         * @description Pollable job status; never contains source credential values.
+         */
+        ImportJob: {
+            /**
+             * Format: uint64
+             * @description Fully processed source profiles.
+             */
+            completed_profiles: number;
+            /** @description Currently processed opaque source id. */
+            current_profile?: string | null;
+            /** @description Stable failure code, never exception text. */
+            error?: string | null;
+            /** @description Random opaque job id. */
+            id: string;
+            /** @description Current or terminal lifecycle state. */
+            state: components["schemas"]["ImportJobState"];
+            /** @description Final or partial safe report once processing ends. */
+            summary?: components["schemas"]["ImportBatchReport"] | null;
+            /**
+             * Format: uint64
+             * @description Selected source profiles at admission.
+             */
+            total_profiles: number;
+        };
+        /** @description Durable background job lifecycle. */
+        ImportJobState: "running" | "completed" | "failed";
+        /**
+         * ImportPasswordsRequest
+         * @description Local-person CSV upload parsed in memory directly into encrypted Vault.
+         */
+        ImportPasswordsRequest: {
+            /** @description User-selected UTF-8 export; never persist, log or echo this string. */
+            csv: string;
+        };
+        /** @description Safe local profile metadata; absolute source paths remain host-side. */
+        ImportProfile: {
+            /** @description Known source-file availability by category. */
+            available: components["schemas"]["ImportAvailability"];
+            /** @description Browser-local avatar identifier, never a remote image URL. */
+            avatar?: string | null;
+            /** @description Stable browser brand/icon identifier. */
+            brand: string;
+            /** @description Family selecting the host-side parsers. */
+            browser: components["schemas"]["ImportBrowser"];
+            /** @description Account label from Local State when present. */
+            email?: string | null;
+            /** @description Opaque, collision-safe selection identifier. */
+            id: string;
+            /** @description Browser-provided display name with a directory-name fallback. */
+            name: string;
+            /** @description Safe permission guidance, including Safari Full Disk Access. */
+            warnings: string[];
         };
         /**
          * ImportProfileList
-         * @description `GET /v1/import/profiles`.
+         * @description Local detection response; preview supplies actual per-kind record counts.
          */
         ImportProfileList: {
-            /**
-             * @description A Chromium-compatible browser is available to write imported cookies; without one
-             *     only history and bookmarks can be imported.
-             */
+            /** @description The target Chromium executable is available. */
             cookies_writable: boolean;
-            /** @description Profiles of installed browsers, Chrome first, then Chromium, then Firefox. */
+            /** @description Every profile found in the supported standard locations. */
             profiles: components["schemas"]["ImportProfile"][];
+            /** @description Detected password sources require unlocking the configured Vault. */
+            vault_locked: boolean;
+            /** @description Detected password sources require creating Vault first. */
+            vault_needed: boolean;
+            /** @description Safe whole-detection guidance, never filesystem paths. */
+            warnings: string[];
         };
-        /** @description A cookie the target browser refused (host and name only). */
+        /**
+         * ImportProgress
+         * @description Credential-free durable SSE job progress payload.
+         */
+        ImportProgress: {
+            /**
+             * Format: uint64
+             * @description Fully processed profiles.
+             */
+            completed_profiles: number;
+            /** @description Currently processed source id, not a directory path. */
+            current_profile?: string | null;
+            /** @description Job owning this progress record. */
+            job_id: string;
+            /** @description Lifecycle after this record was committed. */
+            state: components["schemas"]["ImportJobState"];
+            /**
+             * Format: uint64
+             * @description Profiles selected at job admission.
+             */
+            total_profiles: number;
+        };
+        /** @description Value-free label for a cookie the target browser rejected. */
         ImportRejectedCookie: {
-            /** @description Cookie host. */
+            /** @description Source host/domain, never the cookie value. */
             host: string;
-            /** @description Cookie name. */
+            /** @description Source cookie name. */
             name: string;
         };
         /**
          * ImportReport
-         * @description What an import read, or wrote.
+         * @description One selected profile's safe category reports.
          */
         ImportReport: {
-            /** @description Bookmarks outcome when requested. */
+            /** @description Selected address/form outcome. */
+            autofill?: components["schemas"]["ImportCategoryReport"] | null;
+            /** @description Selected bookmark outcome. */
             bookmarks?: components["schemas"]["ImportCategoryReport"] | null;
-            /** @description Cookies outcome when requested. */
+            /** @description Selected cookie outcome, never values. */
             cookies?: components["schemas"]["ImportCategoryReport"] | null;
-            /** @description Nothing was written. */
+            /** @description True if no target data was written. */
             dry_run: boolean;
-            /** @description History outcome when requested. */
+            /** @description Selected extension-inventory outcome. */
+            extensions?: components["schemas"]["ImportCategoryReport"] | null;
+            /** @description Selected history outcome. */
             history?: components["schemas"]["ImportCategoryReport"] | null;
-            /** @description openside browser profile written to. */
+            /** @description Opaque source profile id. */
+            id: string;
+            /** @description Selected Vault-password outcome, never values. */
+            passwords?: components["schemas"]["ImportCategoryReport"] | null;
+            /** @description Selected site-preference outcome. */
+            permissions?: components["schemas"]["ImportCategoryReport"] | null;
+            /** @description Agent destination profile, always default. */
             profile: string;
-            /** @description Source browser. */
-            source: components["schemas"]["ImportBrowser"];
+            /** @description Selected search-provider outcome. */
+            search_engines?: components["schemas"]["ImportCategoryReport"] | null;
+            /** @description Source browser brand. */
+            source: string;
+            /** @description Selected current-tab outcome. */
+            tabs?: components["schemas"]["ImportCategoryReport"] | null;
         };
         /**
          * ImportRequest
-         * @description `POST /v1/import` body. Always read-then-write: a dry run reads and decrypts everything
-         *     and writes nothing.
+         * @description Selection shared by preview and run; omitted/null means every profile/kind.
          */
         ImportRequest: {
             /**
-             * @description Report counts without writing anything.
-             * @default false
+             * @description Discovered opaque ids; an explicit empty array is invalid.
+             * @default null
              */
-            dry_run: boolean;
-            /** @description Profile `id` from `GET /v1/import/profiles`. */
-            profile: string;
+            profiles: string[] | null;
             /**
-             * @description Categories to import; absent means every category the source has.
+             * @description Category selection; an explicit empty array is invalid.
              * @default null
              */
             what: components["schemas"]["ImportCategory"][] | null;
         };
+        /** @description Imported extension inventory, not an installation request. */
+        ImportedExtension: {
+            /** @description Browser/store extension id. */
+            id: string;
+            /** @description Source human-readable label. */
+            name: string;
+            /** @description Source profile selector. */
+            profile_id: string;
+            /** @description Official store page when identifiable. */
+            store_url?: string | null;
+        };
+        /** @description Source site-preference metadata, not a grant to openside tools. */
+        ImportedPermission: {
+            /** @description Source origin or complete primary/secondary match pattern. */
+            origin: string;
+            /** @description Source capability label. */
+            permission: string;
+            /** @description Source profile selector. */
+            profile_id: string;
+            /** @description Source browser-specific allow/block/default value. */
+            setting: string;
+        };
+        /** @description A current tab offered as a restore link; it is never automatically opened. */
+        ImportedRestoreTab: {
+            /** @description Opaque profile that supplied the tab. */
+            profile_id: string;
+            /** @description Source tab display title. */
+            title: string;
+            /** @description Current supported web navigation. */
+            url: string;
+        };
+        /** @description Search-provider metadata shown without altering the browser's default. */
+        ImportedSearchEngine: {
+            /** @description Source omnibox shortcut. */
+            keyword: string;
+            /** @description Source provider display label. */
+            name: string;
+            /** @description Source profile selector. */
+            profile_id: string;
+            /** @description Provider substitution template. */
+            url: string;
+        };
+        /** @description Canonical InputField wire contract; presentation never grants authority. */
+        InputField: {
+            /** @description Standard browser autocomplete metadata, not executable rules. */
+            autocomplete?: string | null;
+            /** @description Daemon-owned payment semantic; every payment field is secret. */
+            card?: components["schemas"]["CardField"] | null;
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Nonsecret initial value; prohibited for secret, OTP, and payment fields. */
+            initial?: components["schemas"]["FieldInitial"] | null;
+            /** @description Semantic presentation family, not permission to act. */
+            kind: components["schemas"]["InputKind"];
+            /** @description Plain-text accessible label; never markup. */
+            label: string;
+            /**
+             * Format: uint16
+             * @description Maximum accepted characters, at most 4096 with tighter semantic limits.
+             */
+            max_length: number;
+            /** @description Requires secret handling and bounded site-channel validation. */
+            otp: boolean;
+            /** @description Nonsecret plain-text hint; never a saved answer. */
+            placeholder?: string | null;
+            /** @description Empty input is rejected only when this flag is true. */
+            required: boolean;
+            /** @description Transient answer must never reach model, transcript, or logs. */
+            secret: boolean;
+            /** @description Explicit nonsecret suggestions only, never derived from a transient answer. */
+            suggestions: string[];
+            /** @description Verified exact destination frame origin, not merely the merchant origin. */
+            target_origin?: string | null;
+            /** @description Fixed daemon validation vocabulary; no caller-defined regex. */
+            validation: components["schemas"]["InputValidation"];
+        };
+        /** @description Canonical InputKind wire contract; presentation never grants authority. */
+        InputKind: "text" | "email" | "tel" | "password" | "checkbox" | "textarea";
+        /** @description Canonical InputValidation wire contract; presentation never grants authority. */
+        InputValidation: "text" | "email" | "phone" | "otp" | "card_number" | "card_expiry" | "card_cvc" | "postal_code";
         /**
          * InstallAgentSkillRequest
          * @description `POST /v1/external-agents/{id}/browser-skill` body.
@@ -5467,12 +10803,68 @@ export interface components {
             /** @description Installed skill name (`openside-browser`). */
             skill: string;
         };
+        /** @description Canonical KvRow wire contract; presentation never grants authority. */
+        KvRow: {
+            /** @description Plain-text accessible label; never markup. */
+            label: string;
+            /** @description Typed display value, never a transient secret answer. */
+            value: components["schemas"]["CardValue"];
+        };
+        /** @description Canonical ListItem wire contract; presentation never grants authority. */
+        ListItem: {
+            /** @description At most eight plain-text facts per item. */
+            facts: string[];
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Daemon-materialized raster artifact in the current session. */
+            image?: components["schemas"]["MediaRef"] | null;
+            /** @description Safe fallback text independent of successful image loading. */
+            image_alt?: string | null;
+            /** @description Explicit navigation only; never background fetching. */
+            link?: components["schemas"]["CardLink"] | null;
+            /** @description Plain-text display name, not a verified identity claim. */
+            name: string;
+            /** @description Captured price; not an authorization to purchase. */
+            price?: components["schemas"]["Money"] | null;
+            /**
+             * Format: uint32
+             * @description Optional item count between 1 and 9999.
+             */
+            quantity?: number | null;
+            /** @description Bounded integer rating metadata. */
+            rating?: components["schemas"]["Rating"] | null;
+            /** @description Source attribution with an exact origin boundary. */
+            site?: components["schemas"]["CardSite"] | null;
+        };
+        /**
+         * LocalAccess
+         * @description Socket-only bootstrap for a desktop browser; never returned to TCP callers.
+         */
+        LocalAccess: {
+            /** @description Local person-device identifier. */
+            device_id: string;
+            /** @description Fixed person-device identity. */
+            kind: components["schemas"]["DeviceKind"];
+            /** @description Token scopes. */
+            scopes: components["schemas"]["CapabilityScope"][];
+            /** @description Per-boot locality proof; keep only in browser sessionStorage. */
+            secret: string;
+            /** @description Bearer token for the local person, distinct from the per-boot secret. */
+            token: string;
+            /** @description Loopback launch URL with credentials in its fragment, or null without a listener. */
+            url?: string | null;
+        };
         /** @description Kind of an alternative sign-in control on the page. */
         LoginAlternativeKind: "provider" | "passkey" | "qr" | "other";
         /** @description Kind of a field on a `login` ticket. */
         LoginFieldKind: "identifier" | "password" | "text" | "checkbox";
         /** @description Identity provider behind an alternative sign-in control. */
         LoginProvider: "google" | "apple" | "kakao" | "naver" | "facebook" | "github" | "microsoft";
+        /** @description Canonical MediaRef wire contract; presentation never grants authority. */
+        MediaRef: {
+            /** @description Session-relative raster artifact; remote URLs and traversal are forbidden. */
+            path: string;
+        };
         /** @description One stored memory. Content never contains a value matched by secret detection. */
         Memory: {
             /** @description Remembered text. */
@@ -5491,6 +10883,11 @@ export interface components {
             id: string;
             /** @description Memory origin. */
             kind: components["schemas"]["MemoryKind"];
+            /**
+             * @description Null means shared; otherwise this memory belongs to one teammate.
+             * @default null
+             */
+            owner: string | null;
             /** @description Retention policy. */
             retention: components["schemas"]["Retention"];
             /** @description Free-form labels. */
@@ -5555,6 +10952,67 @@ export interface components {
         MemoryKind: "note" | "history";
         /** @description Which index produced a search hit. */
         MemoryMatch: "lexical" | "vector" | "both" | "recent";
+        /** @description Where the embedding model comes from. */
+        MemoryModelSource: {
+            /** @description Model hub base URL. */
+            endpoint: string;
+            /** @description Repository, `owner/name`. */
+            repo: string;
+            /** @description Branch, tag or commit. */
+            revision: string;
+        };
+        /** @description Stage of the embedding model download. */
+        MemoryModelState: "idle" | "resolving" | "downloading" | "verifying" | "installing" | "installed" | "failed" | "cancelled";
+        /**
+         * MemoryModelStatus
+         * @description `GET /v1/memory/model`: the embedding model and the download job.
+         */
+        MemoryModelStatus: {
+            /**
+             * Format: uint64
+             * @description Bytes transferred so far.
+             */
+            bytes_done: number;
+            /**
+             * Format: uint64
+             * @description Bytes expected in total; zero until the source's file list is known.
+             */
+            bytes_total: number;
+            /** @description Why the last download failed or was cancelled (`code` such as `checksum_mismatch`). */
+            error?: components["schemas"]["ApiError"] | null;
+            /** @description File being transferred. */
+            file?: string | null;
+            /**
+             * Format: uint32
+             * @description Files fully transferred.
+             */
+            files_done: number;
+            /**
+             * Format: uint32
+             * @description Files the model needs.
+             */
+            files_total: number;
+            /**
+             * Format: date-time
+             * @description When the last download ended.
+             */
+            finished_at?: string | null;
+            /** @description Both model files are present in `model_dir`. */
+            installed: boolean;
+            /** @description Where the model lives (`memory.embedding.model_dir`). */
+            model_dir: string;
+            /** @description Id of the model the last download installed. */
+            model_id?: string | null;
+            /**
+             * @description A model was installed after the daemon loaded its memory store; vector search starts
+             *     after a restart.
+             */
+            restart_required: boolean;
+            /** @description What a download without arguments fetches. */
+            source: components["schemas"]["MemoryModelSource"];
+            /** @description Stage of the current or last download. */
+            state: components["schemas"]["MemoryModelState"];
+        };
         /** @description Change recorded in memory history. */
         MemoryOp: "create" | "update" | "delete" | "purge";
         /** @description Search strategy in effect. */
@@ -5600,6 +11058,16 @@ export interface components {
          * @description A message with durable lifecycle status.
          */
         Message: {
+            /**
+             * @description Preserves the durable caller authority rather than inferring it from message text.
+             * @default internal
+             */
+            author_kind: components["schemas"]["MessageAuthorKind"];
+            /**
+             * @description Present only for daemon-authored team deliveries.
+             * @default null
+             */
+            from_agent: string | null;
             /** @description Idempotency key, assigned by the client or daemon. */
             id: components["schemas"]["MessageId"];
             /** @description Pending or terminal disposition. */
@@ -5607,6 +11075,8 @@ export interface components {
             /** @description Latest text, including edits made before delivery. */
             text: string;
         };
+        /** @description Assigned by the daemon from authenticated ingress; historical messages fail closed. */
+        MessageAuthorKind: "person" | "agent_client" | "internal";
         /**
          * @description Identifies one user message. Assigned by the client or daemon and used for
          *     idempotent delivery.
@@ -5629,6 +11099,113 @@ export interface components {
             dropped: components["schemas"]["DropReason"];
         };
         /**
+         * ModelAccount
+         * @description A candidate account without token, email or upstream identity.
+         */
+        ModelAccount: {
+            /** @description Opaque source-local reference; no upstream account id. */
+            account_id: string;
+            /** @description Readiness after applying higher-priority fail-close barriers. */
+            available: boolean;
+            /**
+             * Format: double
+             * @description Latest applicable block expiry in Unix milliseconds, or unknown.
+             * @default null
+             */
+            blocked_until_ms: number | null;
+            /**
+             * @description Operator enablement, separate from credential readiness.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * @description Explicit provider-pool membership.
+             * @default false
+             */
+            in_pool: boolean;
+            /**
+             * @description Person-assigned display label or an opaque source ordinal.
+             * @default
+             */
+            label: string;
+            /**
+             * @description Local source readiness before pool membership/model blocks.
+             * @default false
+             */
+            ready: boolean;
+            /** @description Sanitized refusal or readiness explanation, never raw CLI output. */
+            reason: string;
+            /** @description Stable credential plugin name, distinct from provider namespace. */
+            source: string;
+            /**
+             * @description Per-account measured windows; unknown usage remains null.
+             * @default []
+             */
+            usage_windows: components["schemas"]["AccountUsageWindow"][];
+        };
+        /** @description Durable source-local account reference, without upstream identity or credential material. */
+        ModelAccountRef: {
+            /** @description Opaque durable id; reordering must never change the account it identifies. */
+            account_id: string;
+            /** @description Credential plugin namespace, not an upstream authentication scheme. */
+            source: string;
+        };
+        /**
+         * ModelCatalog
+         * @description Local credential readiness, never a guarantee of upstream model entitlement.
+         */
+        ModelCatalog: {
+            /**
+             * Format: uint32
+             * @description Maximum metadata cache lifetime; managed writes invalidate it immediately.
+             */
+            cached_for_ms: number;
+            /** @description Current default for new sessions and unoverridden Team homes on their next idle turn. */
+            default_model?: string | null;
+            /** @description Running model fallback chain, independent of credential-source order. */
+            fallback_models: string[];
+            /** @description Provider groups sorted by identifier, with deduplicated model ids. */
+            providers: components["schemas"]["ModelProvider"][];
+            /** @description An input or output metadata limit omitted entries. */
+            truncated: boolean;
+        };
+        /**
+         * ModelProvider
+         * @description Chat/tool-capable candidates for one Pydantic AI provider namespace.
+         */
+        ModelProvider: {
+            /** @description Configured, curated and account-reported candidates, deduplicated by id. */
+            models: components["schemas"]["CatalogModel"][];
+            /** @description Person-built ordered account membership; empty explicitly disables routing. */
+            pool: components["schemas"]["ProviderPool"];
+            /** @description SDK provider namespace, not an upstream account identifier. */
+            provider: string;
+        };
+        /**
+         * ModelSelection
+         * @description Result of a dedicated model-selection write, not raw config PUT semantics.
+         */
+        ModelSelection: {
+            /** @description The newly running default, after successful private-file persistence. */
+            default_model: string;
+            /** @description new_sessions_and_home_next_turn: ordinary sessions retain stored models; homes reopen idle. */
+            effective: string;
+            /** @description The newly running ordered fallback chain. */
+            fallback_models: string[];
+            /** @description Always false: dedicated selection applies without restarting the daemon. */
+            restart_required: boolean;
+        };
+        /** @description Canonical Money wire contract; presentation never grants authority. */
+        Money: {
+            /** @description Upper-case ISO currency code. */
+            currency: string;
+            /**
+             * Format: int64
+             * @description Signed integer amount in currency minor units, without floating point.
+             */
+            minor_units: number;
+        };
+        /**
          * MoveMessageRequest
          * @description Pending message reorder within its delivery lane.
          */
@@ -5640,6 +11217,40 @@ export interface components {
              */
             position: number;
         };
+        /**
+         * MyDevice
+         * @description The calling device's own record.
+         */
+        MyDevice: {
+            /** @description Revocation identifier. */
+            device_id: string;
+            /** @description Pairing-time trust role. */
+            kind: components["schemas"]["DeviceKind"];
+            /** @description Label given at pairing. */
+            name: string;
+            /** @description This device's pending request for more access, if one is open. */
+            request?: components["schemas"]["AccessRequest"] | null;
+            /** @description Scopes the token holds now. */
+            scopes: components["schemas"]["CapabilityScope"][];
+        };
+        /**
+         * NetworkPolicy
+         * @description `GET`/`PUT /v1/policy/network`: where the daemon and its agents may connect, beyond this
+         *     computer and the configured model and channel endpoints.
+         */
+        NetworkPolicy: {
+            /** @description Saved `network.allow` list. */
+            allow: string[];
+            /**
+             * @description Whether the saved list differs from the one the running daemon enforces; it applies
+             *     after a restart.
+             */
+            restart_required: boolean;
+        };
+        /** @description Canonical NoticePlacement wire contract; presentation never grants authority. */
+        NoticePlacement: "inline" | "bubble";
+        /** @description Canonical NoticeTone wire contract; presentation never grants authority. */
+        NoticeTone: "neutral" | "info" | "working" | "success" | "attention" | "danger";
         /**
          * @description Where the first-run guide stands. `pending` until a person finishes or skips it once;
          *     the flag lives on the daemon, so every device and browser agrees.
@@ -5733,6 +11344,8 @@ export interface components {
         PairDeviceResponse: {
             /** @description Stable revocation identifier. */
             device_id: string;
+            /** @description One-time extension import authenticator; never returned to a web page or logged. */
+            import_secret?: string | null;
             /**
              * @description Operator-selected trust role fixed when this token was paired.
              * @default person_device
@@ -5748,8 +11361,12 @@ export interface components {
          * @description `POST /v1/sync/pair`.
          */
         PairSyncRequest: {
-            /** @description Code printed by `openside sync setup` on the first device. */
+            /** @description Code shown by the first device's sync setup. */
             pairing_code: string;
+            /** @description Sync passphrase typed in the app; needs the computer's local access. */
+            passphrase?: string | null;
+            /** @description WebDAV password typed in the app; needs the computer's local access. */
+            webdav_password?: string | null;
         };
         /**
          * PairingOffer
@@ -5813,7 +11430,7 @@ export interface components {
          * @description What an action does; targets are absolute paths for `fs_*`/`exec`, URLs or origins
          *     otherwise.
          */
-        PolicyCapability: "fs_read" | "fs_write" | "exec" | "browse" | "fetch" | "vault_use" | "sensitive";
+        PolicyCapability: "fs_read" | "fs_write" | "exec" | "browse" | "fetch" | "vault_use" | "sensitive" | "privacy_read";
         /**
          * PolicyDecision
          * @description Result of a [`PolicyTestRequest`].
@@ -5829,12 +11446,23 @@ export interface components {
         };
         /** @description Rule or decision outcome, ordered `allow < ask < deny`. */
         PolicyEffect: "allow" | "ask" | "deny";
+        /** @description Where a list of a policy edit is wrong. */
+        PolicyList: "allow_origins" | "deny_origins" | "rules" | "network_allow";
         /** @description Public permission modes, mirroring `openside_policy::Mode`. */
         PolicyMode: "read-only" | "guard" | "full";
-        /**
-         * PolicyRule
-         * @description One Allow/Ask/Deny rule.
-         */
+        /** @description One validation problem, pointing at the entry to fix. */
+        PolicyProblem: {
+            /**
+             * Format: uint32
+             * @description Zero-based position within the list.
+             */
+            index: number;
+            /** @description List the entry belongs to. */
+            list: components["schemas"]["PolicyList"];
+            /** @description What is wrong, for the person editing. */
+            message: string;
+        };
+        /** @description One Allow/Ask/Deny rule. */
         PolicyRule: {
             /** @description Capability the rule applies to. */
             capability: components["schemas"]["PolicyCapability"];
@@ -5844,7 +11472,6 @@ export interface components {
             pattern: string;
         };
         /**
-         * PolicySettings
          * @description Live daemon policy: `GET`/`PUT /v1/policy`. A `PUT` replaces the whole document and
          *     applies to the next tool call of every session, including running ones.
          */
@@ -5882,6 +11509,44 @@ export interface components {
             target: string;
             /** @description Approved workspace root for Guard mode (absolute). */
             workspace?: string | null;
+        };
+        /**
+         * PolicyValidation
+         * @description Result of a [`ValidatePolicyRequest`].
+         */
+        PolicyValidation: {
+            /** @description Every problem found, in list order. */
+            problems: components["schemas"]["PolicyProblem"][];
+            /** @description No problems. */
+            valid: boolean;
+        };
+        /**
+         * PresentImage
+         * @description Canonical PresentImage wire contract; presentation never grants authority.
+         */
+        PresentImage: {
+            /** @description Unique image alias matching ASCII letters, digits, underscore, or hyphen. */
+            key: string;
+            /** @description Validated HTTP(S) navigation URL without credentials or secret material. */
+            url: string;
+        };
+        /**
+         * PresentRequest
+         * @description Canonical PresentRequest wire contract; presentation never grants authority.
+         */
+        PresentRequest: {
+            /** @description Daemon-owned payment semantic; every payment field is secret. */
+            card: components["schemas"]["Card"];
+            /** @description Transport-only image sources; never persisted as remote references. */
+            images: components["schemas"]["PresentImage"][];
+        };
+        /**
+         * PresentResult
+         * @description Canonical PresentResult wire contract; presentation never grants authority.
+         */
+        PresentResult: {
+            /** @description Daemon-assigned presentation identity returned without duplicating the card. */
+            card_id: string;
         };
         /**
          * PreviewEndReason
@@ -5936,6 +11601,52 @@ export interface components {
             reason: components["schemas"]["PreviewEndReason"];
             /** @constant */
             type: "ended";
+        };
+        /** @description The only provider-key metadata allowed in public responses. */
+        ProviderKeyInfo: {
+            /**
+             * Format: date-time
+             * @description UTC creation/replacement time, encoded as RFC 3339.
+             */
+            created_at: string;
+            /** @description Operator enablement, independent of quota/authentication status. */
+            enabled: boolean;
+            /** @description Durable opaque key account id, not upstream identity. */
+            key_id: string;
+            /** @description Person-assigned display label. */
+            label: string;
+            /** @description Exactly four trailing characters, never the complete key. */
+            last_four: string;
+            /** @description Managed API provider: anthropic, openai or google. */
+            provider: string;
+            /**
+             * Format: uint8
+             * @description Remaining measured usage protected from automatic selection.
+             */
+            reserve_percent: number;
+        };
+        /**
+         * ProviderKeyList
+         * @description Administrator-visible inventory; no credential values.
+         */
+        ProviderKeyList: {
+            /** @description Metadata only; unavailable Vaults fail rather than returning fake entries. */
+            keys: components["schemas"]["ProviderKeyInfo"][];
+        };
+        /** @description Ordered trust boundary for one SDK provider namespace. */
+        ProviderPool: {
+            /** @description Explicit person-built membership/order; empty disables routing. */
+            accounts: components["schemas"]["ModelAccountRef"][];
+            /** @description Exact SDK namespace; no implicit OpenAI/Codex aliasing. */
+            provider: string;
+        };
+        /**
+         * ProviderPoolList
+         * @description Public provider-pool inventory, without credential material.
+         */
+        ProviderPoolList: {
+            /** @description Provider-sorted trust boundaries. */
+            pools: components["schemas"]["ProviderPool"][];
         };
         /** @description Subscription keys as `PushSubscription.toJSON().keys` reports them. */
         PushKeys: {
@@ -5998,6 +11709,24 @@ export interface components {
         };
         /** @description How a message should be delivered while a turn is running. */
         QueueMode: "queue" | "steer";
+        /** @description Canonical Rating wire contract; presentation never grants authority. */
+        Rating: {
+            /**
+             * Format: uint32
+             * @description Optional public rating count.
+             */
+            count?: number | null;
+            /**
+             * Format: uint32
+             * @description Positive rating scale in thousandths, at most 10000.
+             */
+            milli_max: number;
+            /**
+             * Format: uint32
+             * @description Rating in thousandths, between zero and milli_max.
+             */
+            milli_value: number;
+        };
         /**
          * RejectTicketRequest
          * @description Explicit ticket rejection.
@@ -6020,12 +11749,44 @@ export interface components {
             daemon_id: string;
             /** @description Daemon X25519 public key (base64url) carried in relay pairing links. */
             daemon_key: string;
+            /** @description Noise encrypts every daemon/device stream end-to-end. */
+            e2ee: boolean;
             /** @description Latest failure, without secrets. */
             last_error?: string | null;
-            /** @description `connecting`, `connected` or `backoff`. */
+            /** @description `connecting`, `connected`, `backoff` or `failed` (local registration setup failed). */
             state: string;
             /** @description Relay origin. */
             url: string;
+        };
+        /**
+         * ReloginConnectionRequest
+         * @description Select an existing shared session, or the default sign-in session.
+         */
+        ReloginConnectionRequest: {
+            /** @description Omission selects the chief agent's durable home session. */
+            session_id?: components["schemas"]["SessionId"] | null;
+        };
+        /** @description Relogin can finish silently using the Vault or require the person. */
+        ReloginResult: {
+            /** @constant */
+            status: "signed_in";
+        } | {
+            /** @constant */
+            status: "needs_you";
+            /** @description Ticket location, not its secret-input contents. */
+            ticket: components["schemas"]["TicketRef"];
+        };
+        /**
+         * RemoteConfiguration
+         * @description Transport settings safe to inspect; no registration or tunnel token values.
+         */
+        RemoteConfiguration: {
+            /** @description Cloudflare settings. */
+            cloudflare: components["schemas"]["SetCloudflareRequest"];
+            /** @description Relay settings. */
+            relay: components["schemas"]["SetRelayRequest"];
+            /** @description Tailscale settings. */
+            tailscale: components["schemas"]["TailscaleConfiguration"];
         };
         /**
          * RemoteStatus
@@ -6034,12 +11795,22 @@ export interface components {
         RemoteStatus: {
             /** @description The supervised `cloudflared`, when enabled. */
             cloudflare?: components["schemas"]["CloudflareStatus"] | null;
+            /** @description Persisted transport settings, without secret values or executable overrides. */
+            configuration: components["schemas"]["RemoteConfiguration"];
+            /** @description This request proved local-person authority to change transport settings. */
+            configure_allowed: boolean;
             /** @description Enabled transports in pairing preference order. */
             modes: components["schemas"]["PairingTransport"][];
+            /** @description This request proved local-person authority to issue an offer. */
+            pairing_allowed: boolean;
             /** @description `remote.public_url`. */
             public_url?: string | null;
             /** @description The relay registration, when enabled. */
             relay?: components["schemas"]["RelayStatus"] | null;
+            /** @description A missing listener prevents a persisted transport from applying live. */
+            restart_required: boolean;
+            /** @description Tailscale installation and the openside Serve handler. */
+            tailscale: components["schemas"]["TailscaleStatus"];
         };
         /**
          * ReplRequest
@@ -6083,12 +11854,22 @@ export interface components {
         /** @description Outcome category of a [`ReplRequest`]. */
         ReplStatus: "done" | "deferred" | "denied" | "failed";
         /**
+         * RequestAccessRequest
+         * @description Ask for scopes the calling device does not hold yet.
+         */
+        RequestAccessRequest: {
+            /** @description Scopes wanted in addition to the ones the device holds; at least one. */
+            scopes: components["schemas"]["CapabilityScope"][];
+        };
+        /**
          * ResolveTicketRequest
          * @description Human response interpreted according to the ticket kind.
          *
          *     Secret-input values are daemon-only and must never be persisted or sent to the model.
          */
         ResolveTicketRequest: {
+            /** @description Optional complete edited proposal, accepted only for a hire decision. */
+            hire?: components["schemas"]["HireDraft"] | null;
             /**
              * @description Confirmation, non-secret information, or transient daemon-only secret input: a string,
              *     or `{"totp": "<otpauth:// URI or base32 key>"}` for a `secret_input` ticket whose
@@ -6099,8 +11880,57 @@ export interface components {
              */
             value: unknown;
         };
+        /**
+         * RestartDaemonResponse
+         * @description `POST /v1/daemon/restart` response: the restart has been requested, not finished.
+         */
+        RestartDaemonResponse: {
+            /**
+             * @description `boot_id` of the process being replaced; the restart is done when `GET /v1/daemon`
+             *     answers with another one.
+             */
+            boot_id: string;
+            /** @description How the restart is carried out. */
+            method: components["schemas"]["RestartMethod"];
+        };
+        /** @description How the daemon restarts itself. */
+        RestartMethod: "re_exec";
         /** @description How long a memory is kept after its last write. */
         Retention: "permanent" | "days_90" | "days_30";
+        /**
+         * RetireAgentRequest
+         * @description Retirement keeps history and records ownership movement for resumable recovery.
+         */
+        RetireAgentRequest: {
+            /**
+             * @description Pause owned schedules instead of silently dropping them.
+             * @default false
+             */
+            pause_routines: boolean;
+            /**
+             * @description Undo uses recorded pre-hire owners rather than guessing a successor.
+             * @default false
+             */
+            revert_hire: boolean;
+            /** @description New owner; omission selects the chief unless routines are explicitly paused. */
+            successor?: string | null;
+        };
+        /**
+         * RevokeConnectionRequest
+         * @description Forget is the default; stronger actions must be explicitly requested.
+         */
+        RevokeConnectionRequest: {
+            /**
+             * @description Also delete the linked saved login, if present.
+             * @default false
+             */
+            delete_vault_item: boolean;
+            /**
+             * @description Also clear every shared-profile account's site data.
+             * @default false
+             */
+            sign_out: boolean;
+        };
         /** @description A scheduled routine. */
         Routine: {
             /** @description Action performed on each run. */
@@ -6123,6 +11953,11 @@ export interface components {
              * @description Next scheduled occurrence; absent while the routine is not enabled.
              */
             next_run_at?: string | null;
+            /**
+             * @description Derived from the action; not a separately stored ownership record.
+             * @default null
+             */
+            owner_agent_id: string | null;
             /** @description Set when the daemon paused the routine on its own; cleared by resuming. */
             paused_reason?: components["schemas"]["RoutinePauseReason"] | null;
             /** @description Firing schedule. */
@@ -6140,6 +11975,13 @@ export interface components {
             type: "new_session";
             /** @description Absolute workspace path, canonicalized by the daemon when the run starts. */
             workspace?: string | null;
+        } | {
+            /** @description Registry identity resolved at dispatch, never a fallback session. */
+            agent_id: string;
+            /** @description Prompt queued only while the owner remains active. */
+            prompt: string;
+            /** @constant */
+            type: "agent";
         } | {
             /** @description Message text. */
             prompt: string;
@@ -6186,7 +12028,7 @@ export interface components {
          * RoutinePauseReason
          * @description Why a routine is not firing although the user did not disable it.
          */
-        RoutinePauseReason: "target_missing";
+        RoutinePauseReason: "target_missing" | "agent_retired";
         /** @description When a routine fires. */
         RoutineSchedule: {
             /** @description Cron expression; `@hourly`/`@daily`-style aliases are accepted. */
@@ -6258,6 +12100,16 @@ export interface components {
         /** @description Session metadata and pending queue, in delivery order. */
         Session: {
             /**
+             * @description Short, redacted description of the current work, rebuilt from session events.
+             * @default
+             */
+            activity: string;
+            /**
+             * @description Immutable owner tag; null keeps earlier conversations separate from agent homes.
+             * @default null
+             */
+            agent_id: string | null;
+            /**
              * @description Hidden from the default session list.
              * @default false
              */
@@ -6297,6 +12149,22 @@ export interface components {
             /** @description Canonical absolute workspace path used as the Guard root and file-tool cwd. */
             workspace?: string | null;
         };
+        /**
+         * SessionAccountSelection
+         * @description Account preference result, applied at the next request boundary.
+         */
+        SessionAccountSelection: {
+            /** @description Preferred authorized account, or cleared. */
+            account?: components["schemas"]["ModelAccountRef"] | null;
+            /** @description Always next_request; no daemon or sidecar restart required. */
+            effective: string;
+            /** @description Whether a person/request explicitly set this preference. */
+            explicit: boolean;
+            /** @description Provider namespace governed by the preference. */
+            provider: string;
+            /** @description Durable session whose preference changed. */
+            session_id: components["schemas"]["SessionId"];
+        };
         /** @description Identifies a session (one conversation / task). */
         SessionId: string;
         /**
@@ -6312,6 +12180,53 @@ export interface components {
          * @description Durable session lifecycle.
          */
         SessionStatus: "idle" | "running" | "waiting_human" | "stopped";
+        /**
+         * SetCloudflareRequest
+         * @description Configure the managed Cloudflare Tunnel; token values remain file/env-only.
+         */
+        SetCloudflareRequest: {
+            /** @description Whether the transport should run. */
+            enabled: boolean;
+            /** @description Named tunnel hostname. */
+            hostname?: string | null;
+            /** @description Local file containing the named tunnel's token, or null to use the environment. */
+            token_file?: string | null;
+            /** @description `quick` or `named`. */
+            tunnel: string;
+        };
+        /**
+         * SetExternalAgentRequest
+         * @description `PUT /v1/external-agents/{id}`: where another agent keeps its skills.
+         */
+        SetExternalAgentRequest: {
+            /**
+             * @description Absolute path of the agent's skills folder, or `~/…`; must lie inside the user's home,
+             *     config or data folders.
+             */
+            skills_dir: string;
+        };
+        /**
+         * SetProviderKeyRequest
+         * @description Secret input only: intentionally no Debug or Serialize implementation.
+         */
+        SetProviderKeyRequest: {
+            /** @description 8–8192 ASCII graphic bytes; never echoed or written to config. */
+            key: string;
+            /** @description Optional replacement label; absent preserves the existing account label. */
+            label?: string | null;
+        };
+        /**
+         * SetRelayRequest
+         * @description Configure a self-hosted relay; its registration token remains file/env-only.
+         */
+        SetRelayRequest: {
+            /** @description Whether the daemon should register with the relay. */
+            enabled: boolean;
+            /** @description Local registration-token file, or null to use the environment. */
+            token_file?: string | null;
+            /** @description Relay origin. */
+            url?: string | null;
+        };
         /**
          * Settings
          * @description Minimal daemon settings, with no credentials.
@@ -6336,11 +12251,14 @@ export interface components {
             config: unknown;
             /** @description Sections only editable in the file (`credentials`: opaque, may hold values). */
             file_only: string[];
-            /** @description Whether this caller is a paired device over TCP, i.e. limited to `remote_editable`. */
+            /** @description Whether this caller lacks local authority, i.e. is limited to `remote_editable`. */
             remote: boolean;
             /**
-             * @description Dotted keys a TCP (paired-device) caller may change; an entry ending in `.` covers
-             *     every key under that prefix. Everything else changes only over the local Unix socket.
+             * @description Dotted keys a paired person device may change without local authority; an entry
+             *     ending in `.` covers every key under that prefix. Every other key (executables, paths,
+             *     listeners, trust lists, sandbox, network, credentials, remote access) needs local
+             *     authority: the Unix socket, or a browser opened from the launcher on this computer.
+             *     Empty for an agent client that has no local authority.
              */
             remote_editable: string[];
             /**
@@ -6425,6 +12343,19 @@ export interface components {
             source: components["schemas"]["SkillSource"];
         };
         /**
+         * StartMemoryModelRequest
+         * @description `POST /v1/memory/model/download`. Without fields it fetches the default model from the
+         *     default source; naming another source needs the computer's local access.
+         */
+        StartMemoryModelRequest: {
+            /** @description Model hub base URL; https, or http on loopback. */
+            endpoint?: string | null;
+            /** @description Repository, `owner/name`. */
+            repo?: string | null;
+            /** @description Branch, tag or commit. */
+            revision?: string | null;
+        };
+        /**
          * SteerSubagentRequest
          * @description Steering text delivered at the child's next model-request boundary.
          */
@@ -6473,10 +12404,7 @@ export interface components {
             /** @description Every subagent the session started. */
             subagents: components["schemas"]["Subagent"][];
         };
-        /**
-         * SubagentStatus
-         * @description Subagent state as projected from the parent session's event log.
-         */
+        /** @description Subagent state as projected from the parent session's event log. */
         SubagentStatus: "running" | "waiting_human" | "completed" | "failed" | "cancelled";
         /**
          * SubmitMessageRequest
@@ -6495,6 +12423,76 @@ export interface components {
             /** @description User-authored text. */
             text: string;
         };
+        /** @description Administrator-visible external CLI account, never an OAuth value. */
+        SubscriptionAccount: {
+            /** @description Durable source-local account id. */
+            account_id: string;
+            /** @description Current local credential and account-policy readiness. */
+            available: boolean;
+            /**
+             * Format: date-time
+             * @description Registry creation time, RFC3339 UTC.
+             */
+            created_at: string;
+            /** @description Operator-controlled enablement. */
+            enabled: boolean;
+            /** @description CLI executable discovery, without running login. */
+            installed: boolean;
+            /** @description Person-assigned display label. */
+            label: string;
+            /** @description Detected usable external login, without public identity/token. */
+            logged_in: boolean;
+            /** @description Exact external home/environment command, never credentials. */
+            login_command: string;
+            /** @description True only for an openside-managed isolated CLI home. */
+            managed: boolean;
+            /** @description Exact SDK provider namespace. */
+            provider: string;
+            /** @description Sanitized status/recovery guidance. */
+            reason: string;
+            /**
+             * Format: uint8
+             * @description Remaining measured usage protected from automatic selection.
+             */
+            reserve_percent: number;
+            /** @description CLI source: claude-code or codex-cli. */
+            source: string;
+        };
+        /**
+         * SubscriptionList
+         * @description Administrator-visible subscription source groups.
+         */
+        SubscriptionList: {
+            /** @description Sources in stable CLI-name order. */
+            sources: components["schemas"]["SubscriptionSource"][];
+        };
+        /** @description Installed CLI source with independently managed labelled accounts. */
+        SubscriptionSource: {
+            /** @description Includes the read-only default-home account unless hidden by the person. */
+            accounts: components["schemas"]["SubscriptionAccount"][];
+            /** @description Executable discovery, not an OAuth request. */
+            installed: boolean;
+            /** @description Exact SDK namespace. */
+            provider: string;
+            /** @description CLI plugin name. */
+            source: string;
+        };
+        /** @description A topic the person explicitly turned off; clearing it allows new proposals. */
+        SuppressedProposal: {
+            /**
+             * Format: date-time
+             * @description Time the person made the decision.
+             */
+            decided_at: string;
+            /** @description Stable proposal identity used by the clear endpoint. */
+            key: string;
+            /** @description Human-readable role captured at the decision; absent on legacy records. */
+            label?: string | null;
+            /** @description Persisted suppression decision, currently `never`. */
+            status: string;
+        };
+        /** Array_of_SuppressedProposal */
+        SuppressedProposalList: components["schemas"]["SuppressedProposal"][];
         /** @description Configured sync backend. */
         SyncBackendKind: "webdav" | "dir";
         /**
@@ -6537,6 +12535,22 @@ export interface components {
             vault_available: boolean;
         };
         /**
+         * SyncSecretSource
+         * @description How a sync secret reaches the daemon.
+         */
+        SyncSecretSource: "command" | "entered";
+        /**
+         * SyncSecrets
+         * @description Secrets typed in the app for `setup`, `pair` and `unlock`. They stay in daemon memory,
+         *     are never written to disk or returned, and need the computer's local access.
+         */
+        SyncSecrets: {
+            /** @description Sync passphrase; used instead of `sync.passphrase_cmd` when given. */
+            passphrase?: string | null;
+            /** @description WebDAV password; used instead of `sync.webdav_password_cmd` when given. */
+            webdav_password?: string | null;
+        };
+        /**
          * SyncSetupResponse
          * @description `POST /v1/sync/setup`: a new account. Give `pairing_code` (and the same passphrase)
          *     to the other device.
@@ -6564,10 +12578,35 @@ export interface components {
              */
             exhausted: boolean;
             /**
+             * @description Counts of the last run since the daemon started, conflicts included.
+             * @default null
+             */
+            last_run: components["schemas"]["SyncReport"] | null;
+            /**
              * Format: date-time
              * @description Last completed sync.
              */
             last_sync?: string | null;
+            /**
+             * @description Shared directory or WebDAV URL of the configured backend; never credentials.
+             * @default null
+             */
+            location: string | null;
+            /**
+             * @description Memories with any of these tags are synced.
+             * @default []
+             */
+            memory_tags: string[];
+            /**
+             * @description Where the sync passphrase comes from.
+             * @default entered
+             */
+            passphrase_source: components["schemas"]["SyncSecretSource"];
+            /**
+             * @description Where the WebDAV password comes from; absent without a WebDAV username.
+             * @default null
+             */
+            password_source: components["schemas"]["SyncSecretSource"] | null;
             /**
              * Format: uint64
              * @description Local changes not yet stored on the backend.
@@ -6580,8 +12619,48 @@ export interface components {
             records: number;
             /** @description Whether this device joined an account (`setup` or `pair`). */
             set_up: boolean;
+            /**
+             * @description Whether the live policy document is synced.
+             * @default false
+             */
+            settings: boolean;
             /** @description Whether the sync key is derived and held in memory. */
             unlocked: boolean;
+            /**
+             * @description WebDAV username, when the share needs one.
+             * @default null
+             */
+            webdav_username: string | null;
+        };
+        /** @description Canonical TableColumn wire contract; presentation never grants authority. */
+        TableColumn: {
+            /** @description Stable identity within its card namespace; never an authorization token. */
+            id: string;
+            /** @description Plain-text accessible label; never markup. */
+            label: string;
+        };
+        /** @description Canonical TableLayout wire contract; presentation never grants authority. */
+        TableLayout: "grid" | "scroll";
+        /** @description Tailscale configuration presented to the web setup screen. */
+        TailscaleConfiguration: {
+            /** @description Whether Tailscale is configured. */
+            enabled: boolean;
+            /** @description Persisted direct pairing origin. */
+            public_url?: string | null;
+        };
+        /**
+         * TailscaleStatus
+         * @description Tailscale Serve state for the openside handler, not unrelated services.
+         */
+        TailscaleStatus: {
+            /** @description Whether tailscale is available on PATH. */
+            installed: boolean;
+            /** @description Latest failure, without command output or secrets. */
+            last_error?: string | null;
+            /** @description `unavailable`, `stopped`, `running` or `failed`. */
+            state: string;
+            /** @description HTTPS origin of the active openside handler. */
+            url?: string | null;
         };
         /**
          * TakeoverEndReason
@@ -6723,6 +12802,8 @@ export interface components {
             /** @constant */
             type: "ended";
         };
+        /** @description Canonical TeamCardCommand wire contract; presentation never grants authority. */
+        TeamCardCommand: "undo_hire" | "retire";
         /** @description Durable human-intervention ticket correlated with the same deferred tool call. */
         Ticket: {
             /**
@@ -6730,6 +12811,8 @@ export interface components {
              *     (`wait_for_approval`).
              */
             approval?: components["schemas"]["TicketApproval"] | null;
+            /** @description Daemon projection; absence in historical logs is hydrated without rewriting them. */
+            card?: components["schemas"]["Card"] | null;
             /** @description Set on `choice` tickets. */
             choice?: components["schemas"]["TicketChoice"] | null;
             /**
@@ -6744,6 +12827,10 @@ export interface components {
              * @description Deadline in RFC 3339 UTC.
              */
             expires_at: string;
+            /** @description Bound page-field metadata for fill-only requests; never contains entered values. */
+            form?: components["schemas"]["TicketForm"] | null;
+            /** @description Authoritative teammate proposal; card text alone cannot authorize a hire. */
+            hire?: components["schemas"]["HireDraft"] | null;
             /** @description Stable ticket identifier. */
             id: components["schemas"]["TicketId"];
             /** @description Optional redacted instructions for completing the action. */
@@ -6779,6 +12866,63 @@ export interface components {
             tool?: components["schemas"]["TicketTool"] | null;
             /** @description Stable model tool-call identifier preserved during resumption. */
             tool_call_id: string;
+        };
+        /** @description Canonical TicketAnswer wire contract; presentation never grants authority. */
+        TicketAnswer: {
+            /** @description Decision on the exact captured operation, not a success claim. */
+            approved: boolean;
+            /** @constant */
+            type: "confirm";
+        } | {
+            /** @description Reference to an allowed field in this card. */
+            field_id: string;
+            /** @constant */
+            type: "information";
+        } | {
+            /** @description Reference to an allowed choice block in this card. */
+            block_id: string;
+            /** @description Existing authoritative ticket wire encoding. */
+            encoding: components["schemas"]["ChoiceAnswerEncoding"];
+            /** @constant */
+            type: "selected_choice";
+        } | {
+            /** @description References to allowed field blocks in this card. */
+            block_ids: string[];
+            /** @description Existing authoritative ticket wire encoding. */
+            encoding: components["schemas"]["FieldAnswerEncoding"];
+            /** @description Optional explicit save-consent checkbox identity. */
+            save_field_id?: string | null;
+            /** @constant */
+            type: "fields";
+        } | {
+            /** @description Vault account identity already offered by the ticket. */
+            item_id: string;
+            /** @constant */
+            type: "login_account";
+        } | {
+            /** @description Pinned page alternative already offered by the ticket. */
+            alternative_id: string;
+            /** @constant */
+            type: "login_alternative";
+        } | {
+            /** @description Reference to an allowed field in this card. */
+            field_id: string;
+            /** @constant */
+            type: "otp_code";
+        } | {
+            /** @description Reference to an allowed field in this card. */
+            field_id: string;
+            /** @description Optional explicit save-consent checkbox identity. */
+            save_field_id: string;
+            /** @constant */
+            type: "otp_authenticator";
+        } | {
+            /** @description Team decision literal: hire, not_now, or never. */
+            decision: string;
+            /** @description Optional nonsecret edit block governed by the team contract. */
+            edited_block_id?: string | null;
+            /** @constant */
+            type: "hire";
         };
         /**
          * @description What a `device_approval` ticket opened by `wait_for_approval` shows: the site asks the
@@ -6827,13 +12971,38 @@ export interface components {
         };
         /** @description Resumption semantics for the suspended tool call. */
         TicketDeferral: "approval" | "external";
+        /** @description Verified page form metadata; values are transient and never part of this record. */
+        TicketForm: {
+            /**
+             * @description Metadata in page order, with exact destination origins for embedded frames.
+             *     Input metadata only; transient answers are never serialized here.
+             */
+            fields: components["schemas"]["InputField"][];
+            /**
+             * @description Exact verified top-document origin, not a registrable domain.
+             *     Exact canonical URL origin, including nondefault port.
+             */
+            origin: string;
+            /**
+             * @description Requires recognized card autocomplete fields and secret handling for every value.
+             *     Value-free metadata governed by the containing contract.
+             */
+            payment: boolean;
+            /**
+             * @description Untrusted page display name; not an identity attestation.
+             *     Value-free metadata governed by the containing contract.
+             */
+            site_name: string;
+            /**
+             * @description Daemon-owned fill-only action label; never authorizes submission.
+             *     Value-free metadata governed by the containing contract.
+             */
+            submit_label: string;
+        };
         /** @description Identifies a durable human-intervention ticket. */
         TicketId: string;
-        /**
-         * TicketKind
-         * @description Human action required to resolve a suspended tool call.
-         */
-        TicketKind: "confirm" | "secret_input" | "device_approval" | "info" | "takeover" | "login" | "choice";
+        /** @description Human action required to resolve a suspended tool call. */
+        TicketKind: "confirm" | "secret_input" | "device_approval" | "info" | "takeover" | "login" | "choice" | "hire";
         /**
          * TicketList
          * @description Ticket list, optionally filtered by status.
@@ -6916,21 +13085,17 @@ export interface components {
             placeholder?: string | null;
             /** @description Whether the page requires a value. */
             required: boolean;
+            /** @description Imported non-secret address values offered only when the person chooses one. */
+            suggestions?: string[];
         };
-        /**
-         * TicketOption
-         * @description One selectable non-secret response.
-         */
+        /** @description One selectable non-secret response. */
         TicketOption: {
             /** @description Human-facing label. */
             label: string;
             /** @description Stable machine-facing answer value. */
             value: string;
         };
-        /**
-         * TicketOrigin
-         * @description Identity of the agent that requested human intervention.
-         */
+        /** @description Identity of the agent that requested human intervention. */
         TicketOrigin: {
             /** @description Device behind a direct API tool call; `local` identifies the Unix socket. */
             device_id?: string | null;
@@ -6966,15 +13131,16 @@ export interface components {
             /** @description Exact page origin the authenticator will be bound to. */
             origin: string;
         };
-        /**
-         * TicketStatus
-         * @description Durable ticket lifecycle; only pending tickets accept a terminal transition.
-         */
+        /** @description Link into the existing human-step ticket UI. */
+        TicketRef: {
+            /** @description Session containing the ticket. */
+            session_id: components["schemas"]["SessionId"];
+            /** @description Stable ticket ID. */
+            ticket_id: components["schemas"]["TicketId"];
+        };
+        /** @description Durable ticket lifecycle; only pending tickets accept a terminal transition. */
         TicketStatus: "pending" | "resolved" | "rejected" | "expired" | "needs_desktop";
-        /**
-         * TicketTarget
-         * @description Browser destination for human intervention and origin validation.
-         */
+        /** @description Browser destination for human intervention and origin validation. */
         TicketTarget: {
             /** @description Snapshot field reference receiving daemon-only input. */
             field_ref?: string | null;
@@ -6983,10 +13149,7 @@ export interface components {
             /** @description Browser target identifier. */
             tab_id?: string | null;
         };
-        /**
-         * TicketTool
-         * @description Redacted invocation displayed for an approval deferral.
-         */
+        /** @description Redacted invocation displayed for an approval deferral. */
         TicketTool: {
             /** @description Invocation arguments with secrets already removed. */
             args: unknown;
@@ -7015,8 +13178,8 @@ export interface components {
          */
         ToolCallResponse: {
             /**
-             * @description Artifact paths the call saved (a screenshot's PNG), readable through
-             *     `GET /v1/sessions/{id}/artifacts/{path}`.
+             * @description Delivered artifact paths, readable through `GET /v1/sessions/{id}/artifacts/{path}`.
+             *     Observation screenshots have no artifact; browser_screenshot needs output=true to save one.
              */
             artifacts?: string[];
             /** @description How the pending ticket resumes the call when `status` is `deferred`. */
@@ -7059,6 +13222,103 @@ export interface components {
             scope: components["schemas"]["CapabilityScope"];
         };
         /**
+         * TransferRequest
+         * @description Explicit cross-store ownership transaction, persisted as a recoverable saga.
+         */
+        TransferRequest: {
+            /**
+             * @description Only the selected notes change ownership.
+             * @default []
+             */
+            memory_ids: string[];
+            /**
+             * @description Existing responsibility lines to remove from the source and add to the destination.
+             * @default []
+             */
+            responsibilities: string[];
+            /**
+             * @description Only the selected schedules change ownership.
+             * @default []
+             */
+            routine_ids: string[];
+            /**
+             * @description Allowlist grants; installed skill files never move between agents.
+             * @default []
+             */
+            skills: string[];
+            /** @description Exactly one active destination agent. */
+            to: string;
+        };
+        /**
+         * UpdateAgentRequest
+         * @description Partial profile edit; nullable overrides distinguish omission from explicit inheritance.
+         */
+        UpdateAgentRequest: {
+            /** @description Explicit null inherits, a nonempty list restricts, omission preserves membership. */
+            account_pool?: components["schemas"]["ModelAccountRef"][] | null;
+            /** @description Explicit null clears the binding, never historical session tags. */
+            channel?: components["schemas"]["AgentChannelBinding"] | null;
+            /** @description Only the shipped avatar palette is accepted. */
+            color?: string | null;
+            /** @description Sidebar visibility only, without pausing scheduled work. */
+            hidden?: boolean | null;
+            /** @description Explicit override; omission preserves existing initials when renaming. */
+            initials?: string | null;
+            /** @description Widening additionally needs Admin/person authority and cannot exceed policy. */
+            mode?: components["schemas"]["PolicyMode"] | null;
+            /** @description Explicit null returns to the default model; omission leaves the override unchanged. */
+            model?: string | null;
+            /** @description Renaming preserves stable identity and the home conversation. */
+            name?: string | null;
+            /** @description Replaces the complete persona, not individual responsibility lines. */
+            persona?: components["schemas"]["AgentPersona"] | null;
+            /** @description Changes roster priority, not conversation content or authority. */
+            pinned?: boolean | null;
+            /** @description Explicit null returns to enabled defaults; changes require Admin and a person. */
+            skills?: string[] | null;
+        };
+        /**
+         * UpdateChannelAccountRequest
+         * @description Partial account change; credential replacement rotates only this identity.
+         */
+        UpdateChannelAccountRequest: {
+            /**
+             * @description Empty string removes the assignment; omitted leaves it unchanged.
+             * @default null
+             */
+            agent_id: string | null;
+            /**
+             * @description Replace this identity's credentials, stopping old tasks before persistence.
+             * @default null
+             */
+            credentials: components["schemas"]["ChannelCredentials"] | null;
+            /**
+             * @description Omitted keeps existing desired enablement.
+             * @default null
+             */
+            enabled: boolean | null;
+            /**
+             * @description Omitted keeps the existing label.
+             * @default null
+             */
+            label: string | null;
+            /**
+             * @description Replace the complete non-secret options object when present.
+             * @default null
+             */
+            options: components["schemas"]["ChannelAccountOptions"] | null;
+        };
+        /**
+         * UpdateConnectionRequest
+         * @description Admin metadata patch; omitted fields remain unchanged.
+         */
+        UpdateConnectionRequest: {
+            /** @description Upsert these grants without replacing unrelated agents. */
+            grants?: components["schemas"]["ConnectionGrant"][] | null;
+            /** @description New HTTP(S) home URL, restricted to the connection's site. */
+            home_url?: string | null;
+        };
+        /**
          * UpdateMemoryRequest
          * @description `PATCH /v1/memory/{id}` body; absent fields are unchanged.
          */
@@ -7071,6 +13331,27 @@ export interface components {
             tags?: string[] | null;
         };
         /**
+         * UpdateModelsRequest
+         * @description Persist available catalog ids for new sessions and the next idle turn of Team homes.
+         */
+        UpdateModelsRequest: {
+            /** @description Available provider-qualified catalog id; must not be a fallback duplicate. */
+            default_model: string;
+            /** @description At most 16 distinct available catalog ids in fallback order. */
+            fallback_models: string[];
+        };
+        /**
+         * UpdateNetworkPolicyRequest
+         * @description `PUT /v1/policy/network`.
+         */
+        UpdateNetworkPolicyRequest: {
+            /**
+             * @description Replacement `network.allow` list: `host`, `*.domain`, `host:port` or
+             *     `scheme://host[:port]`.
+             */
+            allow: string[];
+        };
+        /**
          * UpdateOnboardingRequest
          * @description `PUT /v1/onboarding`: record how the guide ended. Only `completed` and `skipped` are
          *     accepted; reopening the guide from Settings does not reset the flag.
@@ -7078,6 +13359,29 @@ export interface components {
         UpdateOnboardingRequest: {
             /** @description `completed` or `skipped`. */
             state: components["schemas"]["OnboardingState"];
+        };
+        /**
+         * UpdateProviderKeyRequest
+         * @description Account metadata change, preserving the encrypted key.
+         */
+        UpdateProviderKeyRequest: {
+            /** @description New operator enablement; missing keeps the current setting. */
+            enabled?: boolean | null;
+            /** @description New person-assigned label; missing keeps the current label. */
+            label?: string | null;
+            /**
+             * Format: uint8
+             * @description Protected remaining percentage0–99; missing keeps the current threshold.
+             */
+            reserve_percent?: number | null;
+        };
+        /**
+         * UpdateProviderPoolRequest
+         * @description Replace the provider's explicit trust boundary; new sources are never implicit.
+         */
+        UpdateProviderPoolRequest: {
+            /** @description Known compatible opaque accounts, ordered without duplicates. */
+            accounts: components["schemas"]["ModelAccountRef"][];
         };
         /**
          * UpdateRoutineRequest
@@ -7094,6 +13398,14 @@ export interface components {
             name?: string | null;
             /** @description New schedule; the next run is recomputed from now. */
             schedule?: components["schemas"]["RoutineSchedule"] | null;
+        };
+        /**
+         * UpdateSessionAccountRequest
+         * @description Select/clear a preferred sticky account within the already authorized effective pool.
+         */
+        UpdateSessionAccountRequest: {
+            /** @description Null clears preference; never adds or enables an account. */
+            account?: components["schemas"]["ModelAccountRef"] | null;
         };
         /**
          * UpdateSessionRequest
@@ -7130,12 +13442,61 @@ export interface components {
             enabled?: boolean | null;
         };
         /**
+         * UpdateSubscriptionAccountRequest
+         * @description Mutate registry metadata without modifying a default user's credential home.
+         */
+        UpdateSubscriptionAccountRequest: {
+            /** @description New enablement; missing keeps the current value. */
+            enabled?: boolean | null;
+            /** @description New label; missing keeps the current value. */
+            label?: string | null;
+            /**
+             * Format: uint8
+             * @description Protected remaining percentage0–99; missing keeps the current threshold.
+             */
+            reserve_percent?: number | null;
+        };
+        /**
+         * UpdateSyncConfigRequest
+         * @description `PUT /v1/sync/config`: choose where synced data is stored. Exactly one of `dir` and
+         *     `webdav_url`, or neither to turn sync off. The backend of a device that already joined
+         *     an account cannot change; `settings` and `memory_tags` always can.
+         */
+        UpdateSyncConfigRequest: {
+            /** @description Shared directory synced by other means. */
+            dir?: string | null;
+            /**
+             * @description Memories with any of these tags are synced.
+             * @default []
+             */
+            memory_tags: string[];
+            /**
+             * @description Sync the live policy document.
+             * @default false
+             */
+            settings: boolean;
+            /** @description WebDAV collection URL; https, or http on loopback. */
+            webdav_url?: string | null;
+            /** @description WebDAV username; its password is typed on unlock or read from `webdav_password_cmd`. */
+            webdav_username?: string | null;
+        };
+        /**
          * UpdateVaultItemRequest
          * @description `PATCH /v1/vault/items/{id}`.
          */
         UpdateVaultItemRequest: {
             /** @description New override. */
             policy: components["schemas"]["VaultPolicyOverride"];
+        };
+        /**
+         * ValidatePolicyRequest
+         * @description `POST /v1/policy/validate`: check an edit without saving it.
+         */
+        ValidatePolicyRequest: {
+            /** @description Outbound network allow-list to check. */
+            network_allow?: string[] | null;
+            /** @description Live policy document to check. */
+            policy?: components["schemas"]["PolicySettings"] | null;
         };
         /**
          * VapidPublicKey

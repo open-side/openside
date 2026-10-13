@@ -1,0 +1,150 @@
+#!/bin/bash
+# Open openside in the patched browser: a dedicated user profile (not the daemon's
+# agent profile, not any other browser profile) with the openside extension loaded
+# and the new-tab page pointing at the daemon web UI.
+#
+#   openside-browser          open the local-person web UI
+#   openside-browser --pair   reopen with current local authority (e.g. after signing out)
+#   openside-browser URL...   extra arguments are passed to the browser
+#
+# OPENSIDE_BROWSER_THEME=light|dark|off picks the tab-strip theme (default: follow the desktop colour scheme).
+set -euo pipefail
+
+config=${XDG_CONFIG_HOME:-$HOME/.config}/openside/config.toml
+data=${XDG_DATA_HOME:-$HOME/.local/share}/openside
+# <data>/browser-profile belongs to the daemon's agent browser; keep the user's apart.
+profile=$data/user-browser-profile
+extension=$data/extension
+# Launchers may not have ~/.local/bin on PATH; use the CLI installed beside this script.
+cli=${BASH_SOURCE[0]%/*}/openside
+
+fail() {
+  echo "openside-browser: $*" >&2
+  command -v notify-send >/dev/null && notify-send -a openside "openside" "$*" || true
+  exit 1
+}
+
+# The same values the daemon reads; this script only needs these two keys.
+toml_value() {
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$config" | head -n1
+}
+
+[[ -r $config ]] || fail "missing $config"
+browser=$(toml_value executable)
+listen=$(toml_value listen)
+[[ -x $browser ]] || fail "browser.executable is not set to an executable in $config"
+[[ -n $listen ]] || fail "daemon.listen is not set in $config"
+ui=http://$listen/
+
+if ! curl -fsS -o /dev/null --max-time 2 "$ui"; then
+  systemctl --user start openside.service || true
+  for _ in {1..20}; do
+    curl -fsS -o /dev/null --max-time 1 "$ui" && break
+    sleep 0.25
+  done
+  curl -fsS -o /dev/null --max-time 2 "$ui" || fail "daemon web UI is not reachable at $ui (journalctl --user -u openside)"
+fi
+
+if [[ ${1:-} == --pair ]]; then
+  shift
+fi
+
+# A fresh owner bootstrap upgrades legacy browser sign-ins without trusting display names as provenance.
+legacy=$("$cli" --json device list | jq -sr \
+  '.[0].devices[] | select(.name == "openside-browser" and (.scopes | index("admin") | not)) | .device_id')
+# The socket proves local possession; the per-boot secret is handed off only in a fragment.
+# Never use a QR offer for this profile: QR redemption deliberately lacks local authority.
+access=$("$cli" --json remote local-access) || fail "could not bootstrap local browser access"
+open=$(jq -ser '.[0].url // empty' <<<"$access") || fail "daemon has no loopback launch URL"
+[[ -n $open ]] || fail "daemon has no loopback launch URL"
+if [[ -n $legacy ]]; then
+  echo "openside-browser: local owner sign-in now includes admin permissions" >&2
+fi
+
+# The patched build turns vertical tabs on by default, which puts a second left column next to the
+# web UI's own conversation sidebar. Start this profile with horizontal tabs. Saved tab groups are
+# also kept out of the bookmarks bar: the extension's Agent Tabs group would otherwise appear twice,
+# once in the tab strip and once as a pinned chip. A key that already exists (the user changed it in
+# the browser) is never overwritten. A running browser rewrites Preferences from memory, so an open
+# profile is left alone and picks this up after a restart.
+seed_profile_defaults() {
+  local prefs=$profile/Default/Preferences pid seeded
+  if [[ -L $profile/SingletonLock ]]; then
+    pid=$(readlink "$profile/SingletonLock")
+    kill -0 "${pid##*-}" 2>/dev/null && return 0
+  fi
+  mkdir -p "$profile/Default"
+  [[ -s $prefs ]] || printf '{}\n' >"$prefs"
+  seeded=$(jq -c '
+    def seed($path; $value): if getpath($path) == null then setpath($path; $value) else . end;
+    seed(["vertical_tabs", "enabled"]; false)
+    | seed(["auto_pin_new_tab_groups"]; false)
+    | seed(["bookmark_bar", "show_tab_groups"]; false)' "$prefs") || return 1
+  (umask 077 && printf '%s\n' "$seeded" >"$prefs.tmp") && mv "$prefs.tmp" "$prefs"
+}
+
+# Tab strip colours cannot be themed from an extension page and the browser has no setting for them,
+# so a tiny unpacked theme paints the web UI's backdrop gradient behind the tab strip. The scheme
+# follows the desktop (OPENSIDE_BROWSER_THEME=light|dark|off overrides it). The gradient is a 1x1440
+# PNG: Chromium neither stretches nor tiles a frame image vertically, so the frame colour is its
+# bottom colour and anything taller than the image continues seamlessly.
+write_theme() {
+  local scheme=${OPENSIDE_BROWSER_THEME:-auto} dir name image colors
+  if [[ $scheme == auto ]]; then
+    scheme=light
+    [[ $(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null) == *dark* ]] && scheme=dark
+  fi
+  case $scheme in
+    off) return 0 ;;
+    dark)
+      name="openside evening"
+      image=iVBORw0KGgoAAAANSUhEUgAAAAEAAAWgCAIAAAAQD74yAAABTklEQVRYw+2XURKCMAxE8ziH/x7F+59I/0CgSTZQBB0/nGHGTTe7TZPWbvfHYGbBj/h/pm+2xO/hXvB78RzFHfLn8ezlbvLv8dsGTuSO4kn5j+OO9HMW96h/HVur977ctXrf4Rv9+kq9P5D0nT5+cyK3F0/z3H+G2+872R52Pp8F/aV+2pnb063Vu5O3zF/XjRIr8fe9c1Di38aN2M/GeiLDveWCiEvPVyPHCnaBT2cnhbowG0DEzfIQsGbpvJnlmPqdY1c4x+9wpiKu6fodY9V5vp4ZSV+qYEe82OtKdyYEv9tY6W5PDau+F/wZ7dx7Emzbw2TNBOtqQcQtsOlMQ30LTj1TxSLOhNjvCavNG4Q3URWL4LeAm9W2ONeE+YfLIeKDvQrXEHuAt2+ofNS0eHrSNQQ92FPW4u3NdbT8Tt38vT7K6+dltUhef2fdvACLLA7xlcO5nAAAAABJRU5ErkJggg==
+      colors='{"frame":[155,127,152],"frame_inactive":[90,98,150],"toolbar":[29,29,31],"tab_text":[245,245,247],"tab_background_text":[245,245,247],"bookmark_text":[245,245,247],"toolbar_button_icon":[245,245,247],"omnibox_background":[48,48,54],"omnibox_text":[245,245,247],"button_background":[29,29,31,0.5],"background_tab":[29,29,31,0.3]}'
+      ;;
+    light)
+      name="openside sky"
+      image=iVBORw0KGgoAAAANSUhEUgAAAAEAAAWgCAIAAAAQD74yAAAArUlEQVRYw+2W0RGAMAhDSfdfySUcwyVwAPWkFEp61w8+myYPispxXk1EwgsJmvbCHJ+Yl6mWZ4ZPe482z7q5s/ZpaZ6kRfeWMOpzFZ5176jeJyHPwX3X57Puu1Td9+j73Xope0Z5887SC/5vYM77rqU53hxcmdnR6CHLX+4uoGC398D8XeDkyslPHVr6yQPWM6Zsnt5p62aE/7uiZgsBmR5+4PeGwTx7fvb8GM7cfdQn7WXaJ9MAAAAASUVORK5CYII=
+      colors='{"frame":[246,226,214],"frame_inactive":[236,226,232],"toolbar":[246,249,253],"tab_text":[29,29,31],"tab_background_text":[29,29,31],"bookmark_text":[29,29,31],"toolbar_button_icon":[29,29,31],"omnibox_background":[226,235,247],"omnibox_text":[29,29,31],"button_background":[255,255,255,0.5],"background_tab":[255,255,255,0.3]}'
+      ;;
+    *) return 0 ;;
+  esac
+  dir=$data/browser-theme-$scheme
+  mkdir -p "$dir"
+  base64 -d <<<"$image" >"$dir/frame.png"
+  jq -n --arg name "$name" --argjson colors "$colors" \
+    '{manifest_version: 3, name: $name, version: "1.0", theme: {images: {theme_frame: "frame.png"}, colors: $colors, properties: {frame_tiling: "repeat-x"}}}' >"$dir/manifest.json"
+  theme=$dir
+}
+
+mkdir -p "$profile"
+chmod 700 "$profile"
+seed_profile_defaults || echo "openside-browser: could not seed profile defaults; leaving the profile as is" >&2
+theme=
+write_theme || echo "openside-browser: could not write the browser theme; continuing without it" >&2
+
+# Credentials must not appear in process argv, even when an existing browser opens the tab.
+runtime_mode=
+if [[ -n ${XDG_RUNTIME_DIR:-} && -d $XDG_RUNTIME_DIR && -O $XDG_RUNTIME_DIR ]]; then
+  runtime_mode=$(stat -c %a "$XDG_RUNTIME_DIR" 2>/dev/null || stat -f %Lp "$XDG_RUNTIME_DIR" 2>/dev/null || true)
+fi
+if [[ $runtime_mode == 700 ]]; then
+  handoff_dir=$(umask 077; mktemp -d "$XDG_RUNTIME_DIR/openside-browser.XXXXXX")
+else
+  handoff_dir=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/openside-browser.XXXXXX")
+fi
+chmod 700 "$handoff_dir"
+handoff=$handoff_dir/launch.html
+escaped=$(jq -sr '.[0].url | @html' <<<"$access")
+(umask 077; printf '<!doctype html><meta http-equiv="refresh" content="0;url=%s">\n' "$escaped" >"$handoff")
+trap 'rm -f "$handoff"; rmdir "$handoff_dir" 2>/dev/null || true' EXIT
+open=file://$handoff
+# Leave enough time for a cold launch to read the file, then remove the credential-bearing handoff.
+(sleep 30; rm -f "$handoff"; rmdir "$handoff_dir" 2>/dev/null || true) </dev/null >/dev/null 2>&1 &
+exec "$browser" \
+  --user-data-dir="$profile" \
+  --class=openside \
+  --no-first-run \
+  --no-default-browser-check \
+  --load-extension="$extension${theme:+,$theme}" \
+  --openside-daemon-ui-url="$ui" \
+  "$open" "$@"

@@ -1,9 +1,8 @@
 """Claude Code OAuth shaping; never applied to ordinary Anthropic API keys.
 
-The default, identity, and required-version pattern follow upstream
-packages/ai/src/providers/claude-code-fingerprint.ts at commit
- eec114a9226da698ebc015fd8996a8ca3bc4625c. The three headers were verified
-by docs/08-pydantic-ai-pivot.md §B; live compatibility remains unverified.
+The daemon owns retry decisions; this adapter only applies the configured
+subscription request identity. The three headers were verified by
+docs/08-pydantic-ai-pivot.md §B; live compatibility remains unverified.
 """
 
 import json
@@ -19,7 +18,6 @@ from .config import section
 DEFAULT_CLAUDE_CODE_VERSION = "2.1.280"
 CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
-REQUIRED_VERSION = re.compile(r"version (\d+\.\d+\.\d+) or newer is required", re.I)
 
 
 class ClaudeCodeShaping:
@@ -64,18 +62,3 @@ class ClaudeCodeShaping:
             content=json.dumps(payload).encode(),
             extensions=request.extensions,
         )
-
-    def adopt_required_version(self, response: httpx2.Response) -> bool:
-        text = response.text
-        if "claude_code_version_too_old" not in text:
-            return False
-        match = REQUIRED_VERSION.search(text)
-        if match is None:
-            return False
-        required = match[1]
-        if tuple(map(int, required.split("."))) <= tuple(
-            map(int, self.version.split("."))
-        ):
-            return False
-        self.version = required
-        return True

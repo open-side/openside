@@ -17,17 +17,21 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod account_spaces;
 mod browser;
 mod cdp;
 mod gateway;
 mod snapshot;
 mod snapshot_view;
 
+pub use browser::{browser_shutdown_crashes, ProfileWriteGuard};
 pub use browser::{
-    ActOutcome, Action, Browser, BrowserConfig, BrowserEndpoint, BrowserEvent, DownloadStatus,
-    NavigationCheck, NavigationGuard, NodeHandle, OpenedBy, OwnerNavigationCheck, PointHit,
-    PointLabel, PointerAction, Screencast, ScreencastFrame, TabInfo, PAGE_COMMANDS, VIEWPORT,
+    ActOutcome, Action, Browser, BrowserConfig, BrowserEndpoint, BrowserEvent, DocumentCheck,
+    DocumentPermission, DocumentRequest, DownloadStatus, NavigationCheck, NavigationGuard,
+    NodeHandle, OpenedBy, OwnerNavigationCheck, PointHit, PointLabel, PointerAction, Screencast,
+    ScreencastFrame, TabInfo, PAGE_COMMANDS, VIEWPORT,
 };
+pub use browser::{CookieBaseline, CookieKey};
 pub use browser::{
     DialogClaim, DialogInfo, DownloadInfo, FileChooserInfo, PageEvent, ScreenshotArea,
     ScreenshotClip,
@@ -36,7 +40,7 @@ pub use browser::{
     DocumentResponse, DocumentWait, LoadState, LoadWait, NetworkEvent, NetworkEventKind,
     NetworkEvents, WaitUntil,
 };
-pub use browser::{FrameHit, FrameInfo};
+pub use browser::{FormFieldBinding, FrameHit, FrameInfo};
 pub use gateway::{
     FocusDecision, Gateway, GatewayConfig, GatewayEvent, GatewayEventError, GatewayOwner,
     GatewayScreenshot, GatewayTab, GatewayTabs, EVENT_BUFFER as GATEWAY_EVENT_BUFFER,
@@ -70,6 +74,9 @@ pub enum BrowserError {
     /// The browser transport closed.
     #[error("browser disconnected")]
     Disconnected,
+    /// The owned Chromium process exited unsuccessfully without a completed, quiescent shutdown.
+    #[error("Chromium exited unsuccessfully: {0}")]
+    ProcessExit(std::process::ExitStatus),
     /// A response did not contain a required field.
     #[error("invalid CDP response: {0}")]
     InvalidResponse(&'static str),
@@ -101,6 +108,19 @@ pub enum BrowserError {
     /// A navigation was rejected by Chromium.
     #[error("browser navigation failed")]
     NavigationFailed,
+    /// A connection grant or retired agent blocked document admission.
+    #[error("connection_denied")]
+    ConnectionDenied,
+    /// A blocked navigation can be retried only after a person grants this tab access.
+    #[error("connection_grant_required:{connection_id}; waiting for the person to allow access to {site}; retry navigation in tab {tab_id}")]
+    ConnectionGrantRequired {
+        /// Stable registry id, never an account label.
+        connection_id: String,
+        /// Registrable destination site.
+        site: String,
+        /// Owned tab whose next document navigation may consume the once grant.
+        tab_id: String,
+    },
     /// A saved browser process/profile/endpoint no longer identifies the same live browser.
     #[error("invalid browser endpoint: {0}")]
     InvalidEndpoint(&'static str),

@@ -32,83 +32,26 @@ OPENSIDE_DOCTOR_CONFIG='{"credentials":{},"models":{}}' uv run --project agent p
 
 ## 프로바이더 인증 소스 우선순위
 
-인증 소스는 모델 인스턴스 빌드 시점(`build_model`)에 `credentials.order.<provider>` 설정 순서에 따라 결정된다. openside는 자격 증명을 디스크에 별도로 저장하지 않는다.
+데몬이 계정 선택, 명시적 풀 신뢰, 스티키 어피니티, 사용량·차단 상태, 관리 토큰 갱신을 전담한다. 사이드카는 외부 요청 시도마다 비공개 접근 자격 증명을 1개만 발급받아 사용하고 정제된 결과만 보고하며, 자격 증명 홈 디렉터리, 브로커 스냅샷, 리프레시 토큰은 일절 읽지 않는다. 관리 대상 로컬 OAuth 상태는 암호화된 Vault 및 비공개 CLI 홈에 정식 보관하며, 이는 메모리 재사용만을 허용하던 기존 방식을 의도적으로 대체한다. 기본 사용자 홈은 계속 외부 읽기 전용 상태를 유지한다. 자세한 내용은 `../docs/specs/models-accounts.md`를 참고한다.
 
-### 기본 탐색 순서
+### Request credentials
 
-- `anthropic`: `["omp-broker", "env", "command"]`
-- `openai-codex`: `["omp-broker", "codex-cli"]`
-- 기타 프로바이더: `["env", "command"]`
+비공개 데몬 리스는 `providers/credential_rpc.py`, `request_model.py`, `request_auth.py`에 구현되어 있다. 외부 요청을 시도할 때마다 `credential_request`를 전송하고, 전달받은 `auth`를 해당 프로바이더 원격 오리진에서만 사용한 뒤 `credential_report`를 전송한다. 계정 선택, 스티키 어피니티, 리비전 관리, 갱신, 사용 자격 판정은 데몬이 전담하며, Python 측에는 소스 캐스케이드, 브로커 클라이언트, 자격 증명 홈 리더, 사이드카 핀 저장소가 없다.
 
-### omp-broker 설정 및 우선순위
+구체적인 통신 규격은 [`sidecar-protocol.md` §6.1](../docs/specs/sidecar-protocol.md)에 정의되어 있다. 시도 횟수는 0부터 63까지 0 기반 번호로 매긴다. 분류 결과는 `success`, `auth`, `rate_limit`, `quota`, `policy`, `transient`, `cancelled`이며, 데몬은 이에 대해 `complete`, `refresh`, `rotate`, `stop` 중 하나로 응답한다. 자격 증명을 다시 획득하기 전에 실패 확인 응답이 먼저 완료되어야 한다. 스트림이 노출된 이후에는 요청을 재실행하지 않으며, 취소 보고는 단방향 전송만 수행하므로 종료 처리가 중단된 디스패처를 기다리지 않는다.
 
-omp([oh-my-pi](https://github.com/can1357/oh-my-pi))는 별개의 오픈소스 코딩 에이전트 CLI이다. 이 프로젝트의 인증 브로커는 로컬의 다른 프로그램에 모델 OAuth 인증 정보를 제공한다. `omp-broker` 자격 증명 소스는 선택 사항이며, 이미 해당 브로커를 쓰고 있을 때만 유용하다. openside는 브로커 없이도 정상 동작하므로 브로커 소스 코드를 따로 받을 필요는 없다.
+기본 fail-closed 정책은 암묵적인 소스 다운그레이드를 금지한다. G-2 규칙은 사람이 명시적으로 구성한 프로바이더 풀 내부에서만 여러 소스 간 교차 전환을 허용한다. 명시적 모델 폴백은 이와 별도로 유지되며, `AuthUnavailable`은 결코 `FallbackModel`의 폴백 조건으로 쓰이지 않는다. 계정 풀 구성과 계정별 외부 로그인 명령 관리는 데몬의 소관이다. [`models-accounts.md`](../docs/specs/models-accounts.md)를 참고한다.
 
-기본 엔드포인트(`http://127.0.0.1:8765`)와 토큰 파일 경로(`~/.omp/auth-broker.token`, `Path.home()` 기준)는 omp 사용자를 위한 선택적 후보 경로일 뿐이며, 필수 사항이 아니다. 토큰 파일이 없으면 브로커 소스는 오류 없이 조용히 비활성화된다.
+### SDK authentication
 
-설정값은 다음 우선순위로 적용된다.
+지속형 SDK 클라이언트는 자리표시자 키만 보관한다. 요청 범위 컨텍스트가 임시 API 키와 접근 토큰을 HTTP 인증 단계에 공급하며, 필요할 때는 Codex용 비공개 업스트림 계정 ID도 함께 전달한다. `openai_client=` 주입은 Codex SDK 자체의 자격 증명 파일 읽기 및 갱신 수명주기를 비활성화한다. SDK 차원의 자격 증명 재시도는 꺼져 있다. Claude Code 셰이핑은 Anthropic API 키가 아닌 `claude_code` 리스에만 적용되며, 버전은 `OPENSIDE_CLAUDE_CODE_VERSION` 또는 `credentials.anthropic.claude_code_version`으로 설정할 수 있다.
 
-- **브로커 URL**: `OPENSIDE_BROKER_URL` > `credentials.omp_broker.url` > 선택적 기본 후보(`http://127.0.0.1:8765`)
-- **브로커 토큰**: `OPENSIDE_BROKER_TOKEN` > `credentials.omp_broker.token_env`에 지정된 환경 변수 > `credentials.omp_broker.token_file` > 기본 후보 파일(`~/.omp/auth-broker.token`, 선택적) 순으로 적용된다. 빈 값이면 다음 순서로 넘어간다.
+자체 소유한 가변 JSONL 및 토큰 버퍼는 요청 시도가 끝날 때 초기화(wipe)하며 주입된 헤더도 제거한다. `StreamWriter.write()`에는 불변 사본을 전달하는데, `drain()`은 낮은 워터마크에 도달할 때까지만 대기할 뿐 완전한 플러시 확인을 보장하지 않기 때문이다. CPython, JSON, SDK, 전송 계층의 불변 사본은 신뢰성 있게 지울 수 없으므로, 프로세스 메모리가 완전히 지워진다고 보장하지는 않는다. 토큰, 프로바이더 원문 응답 본문, 예외 텍스트는 보고서, 상태 스냅샷, 공개 진단 출력, 로그에 결코 남기지 않는다.
 
-#### 브로커 장애 및 다운그레이드 방지 정책
+### Credential-free diagnostics
 
-- 브로커 토큰이 설정되어 있으나 브로커에 접근할 수 없거나, 해당 프로바이더의 OAuth 계정이 모두 차단된 상태라면 즉시 `AuthUnavailable` 예외를 발생시킨다. 로컬 인증 소스(`env`, `command`)로 자동 다운그레이드하지 않는다.
-- 브로커 스냅샷에 해당 프로바이더 자체가 없을 때만 빌드 시점의 다음 소스(`env` 등)로 넘어간다.
-- 실행 도중 선택된 브로커 연결이 끊어지더라도 런타임 중간에 로컬 소스로 다운그레이드되지 않으며, `AuthUnavailable`은 `FallbackModel`의 대체 예외 대상에서 제외된다.
+`python -m openside_agent models --json`은 선별된 SDK 색인 `{providers:[{provider,models:[{id,label}]}]}`만 반환한다. 설정값과 계정에서 보고된 모델을 병합하고 계정 가용성, 풀, 사용량을 덧붙이는 작업은 Rust가 수행한다. `accounts`와 `doctor`는 데몬이 제공하는 정제된 `credentials._diagnostics.accounts` 메타데이터를 활용할 수 있다. 단독 진단 도구는 CLI 설치 여부만 감지하며 로그인 준비 상태는 알 수 없음으로 둔다. CLI 인증 파일, 브로커 스냅샷, 환경변수 키 값, 자격 증명 명령 출력은 읽지 않는다.
 
-#### 브로커 동작 방식
-
-- **스냅샷 캐시**: 메모리에 캐시하며 기본 TTL은 15초다(`credentials.omp_broker.snapshot_ttl_seconds`). SSE 실시간 스트림(`credentials.omp_broker.sse=true`)을 지원하며, 요청 타임아웃 기본값은 10초다(`credentials.omp_broker.timeout_seconds`).
-- **토큰 갱신 전담**: OAuth 토큰 갱신은 전적으로 브로커가 처리한다. 사이드카는 만료 토큰이나 401 응답을 받으면 스냅샷을 다시 읽을 뿐, 갱신 엔드포인트나 OAuth 서버를 직접 호출하지 않는다.
-- **계정 선택 정책**: 활성 OAuth 계정 중 만료되지 않은 차단 계정을 제외하고, 사용량 통계 추적이 가능하면 잔여 쿼터 최솟값이 가장 큰 계정을 선택한다. 세션 핀(`session pins`)은 유지되며, Anthropic 핀은 1시간 동안 유휴 상태가 이어지면 해제된다.
-- **핀 직렬화**: `CredentialPins.to_json()` 및 `from_json()`은 프로바이더/세션 키, 크리덴셜 ID, 요청 시각만 포함하며 토큰, 계정 식별자, 이메일 정보는 다루지 않는다.
-- **요청 제한(429) 처리**: 429 또는 `rate_limit` 발생 시 `BrokerClient.block`을 호출하여 해당 계정을 차단한 뒤 다른 계정으로 재시도한다. (테스트 환경에서는 가상 브로커를 상대로만 차단을 호출한다.)
-- **고정 vs 쿼터**: 다른 계정에 잔여 쿼터가 더 많더라도 기존 세션에 고정(pin)된 계정이 차단되거나 사용할 수 없게 되기 전까지는 기존 고정을 유지한다.
-- **전체 차단**: 해당 프로바이더의 모든 계정이 차단되면 `AuthUnavailable`을 반환하며, `env`로 다운그레이드하지 않는다.
-- **브로커 쓰기 작업**: 허용된 유일한 쓰기 작업은 범위 한정 차단뿐이다. 사이드카는 자격 증명을 업로드, 갱신, 비활성화, 삭제하지 않는다.
-
-브로커 게이트웨이 사양 및 타입 정의는 [oh-my-pi auth-broker-gateway 문서](https://github.com/can1357/oh-my-pi/blob/eec114a9226da698ebc015fd8996a8ca3bc4625c/docs/auth-broker-gateway.md) (§auth-broker Endpoints) 및 `packages/ai/src/auth-broker/types.ts`를 참고한다.
-지원 라우트:
-- `GET /v1/snapshot`
-- `GET /v1/snapshot/stream`
-- `GET /v1/usage`
-- `POST /v1/credential/:id/block`
-
-openside가 소비하는 통신 필드는 `docs/specs/omp-broker-wire.schema.json`에 고정되어 있으며 `tests/providers/test_broker_wire.py`로 검증한다. omp 업그레이드 뒤 GET 요청만 보내 확인하는 선택형 점검 명령어는 `uv run pytest -q -m live_broker`이다 (`docs/CONFIGURATION.md` "broker wire 계약 점검" 참고).
-
-### Anthropic Claude Code 셰이핑
-
-Anthropic 전송 계층(`anthropic.py`)에 Claude Code 요청 형태를 격리하여 구현했다.
-
-- 3개의 고유 헤더와 첫 시스템 프롬프트 문장으로 아이덴티티를 구성한다.
-- 기본 버전(`DEFAULT_CLAUDE_CODE_VERSION`)은 `2.1.280`이며, `OPENSIDE_CLAUDE_CODE_VERSION` 또는 `credentials.anthropic.claude_code_version`으로 재정의할 수 있다.
-- 버전 만료(version-too-old) 응답 수신 시 요구된 상위 버전을 적용하여 요청당 1회에 한해 재시도한다.
-- 구독 약관 및 프로바이더 정책은 변경될 수 있으며, 실제 서비스 호출 동작은 검증되지 않았다(`unverified`).
-
-### 기타 인증 소스
-
-- **환경변수 (`env`)**: 기본 변수로 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY` / `GEMINI_API_KEY`를 참조한다. `credentials.env.<provider>`로 변수 이름을 변경할 수 있다.
-- **외부 명령어 (`command`)**: `credentials.command.<provider>`에 셸 없이 실행할 argv 배열을 지정한다. 기본 타임아웃은 10초(`credentials.command.timeout_seconds`)이며 최대 상한은 60초이다. 표준 출력(stdout)은 16 KiB로 제한되고 키는 메모리에서만 쓰며 표준 오류(stderr)는 버리고 결과는 로그에 남기지 않는다. 전용 Unix 프로세스 그룹에서 실행되며 출력 초과, 타임아웃, 취소 시 그룹 전체를 즉시 강제 종료하고 정리한다.
-- **codex-cli**: Pydantic AI의 `CODEX_HOME/auth.json` 또는 `~/.codex/auth.json` 위임 처리를 사용한다.
-- **내장 소스 (`builtin`)**: `credentials.order`에 명시된 경우 다른 프로바이더의 Pydantic AI 기본 동작에 위임한다.
-- **GitHub Copilot**: `github-copilot` 네임스페이스를 통해 동작한다.
-
-## 설정 예시
-
-```json
-{
-  "order": {
-    "anthropic": ["env", "command"]
-  },
-  "env": {
-    "anthropic": "ANTHROPIC_API_KEY"
-  },
-  "command": {
-    "anthropic": ["pass", "show", "services/anthropic"]
-  }
-}
-```
 
 ## 핵심 파이썬 API
 
@@ -120,8 +63,8 @@ async def build_model(
     fallback: list[str],
     credentials: Mapping[str, Any],
     *,
-    session_id: str,
-    pins: CredentialPins | None = None,
+    credential_rpc: CredentialRpc,
+    subagent: str | None = None,
 ) -> Model: ...
 
 
@@ -131,11 +74,24 @@ def doctor_report(
 ) -> dict: ...
 ```
 
-- 세션이 유지되는 동안 Model 및 Agent 컨텍스트를 유지해야 하며, 세션이 종료될 때 이를 닫아야(close) 한다. 브로커 클라이언트는 모델 인스턴스가 소유한다.
-- `doctor_report`의 최상위 보고서 키는 `credentials`와 `models`이며, 각 행은 `provider`, `source`, `available`(bool), `reason`, `next_step` 필드를 포함한다.
-- `command` 소스를 진단할 때는 바이너리 파일의 실행 가능 여부만 확인할 뿐 명령어를 실행하지 않으므로 실제 실행 결과는 검증되지 않는다(`unverified`).
-- `builtin` 소스를 진단할 때는 관련 환경변수나 파일의 단순 존재 여부만 탐지할 뿐 설정의 유효성은 검증되지 않는다(`unverified`).
-- doctor 실행 중 브로커 상태 점검은 읽기 전용 `GET` 요청으로 스냅샷만 조회하며 모델 요청을 보내지 않는다.
+`Model`과 `Agent` 컨텍스트는 세션 동안 열어 두고 세션이 종료될 때 닫는다. 모델 인스턴스가 자체 HTTP 클라이언트를 소유한다. 런타임의 `Session.credential_exchange`는 모델에 노출되는 도구 호출과 별개로 자격 증명 응답을 다중화한다. 요청 간에 자격 증명 스냅샷을 캐시하지 않으며, 사이드카 상태로 직렬화되는 자격 증명 어피니티도 없다. `pins` 키가 포함된 과거 상태는 해당 키를 버리고 디코딩한다.
+
+## Structured results with `present`
+
+`present`는 데몬이 제공하는 카탈로그와 기존 리버스 RPC 프록시를 통해서만 노출되며, Python Card 스키마, 새 ToolCall 변형, 와이어 프로토콜 버전 변경은 추가되지 않는다. 런타임 지침은 허용 카탈로그에 `present`가 포함되어 있을 때 단일, 프론트, chief, teammate, 위임 에이전트에 적용되며, 기존 팀 역할, 페르소나, 로스터 지침은 그대로 유지된다.
+
+상품·장소 목록, 비교표, 주문·결제 요약, 양식 요약, 연결 의도에는 한정된 비대화형 카드를 사용한다. 카탈로그 스키마와 [`cards.md`](../docs/specs/cards.md)의 제한 기준을 준수한다. 도구는 `{card_id}`만 반환하며, 실제 카드를 화면에 표시하는 작업은 데몬이 맡는다. 카드 전체 내용이나 Markdown 표를 중복 출력하지 말고 짧은 말풍선으로 안전한 문맥만 제시한다.
+
+예를 들어 비교 결과는 문자열 및 통화 타입 셀이 들어간 `table`로 제시한 뒤 “Here is the option I found.”라고 안내한다. 주문 요약은 `kv_rows`와 정수 통화 최소 단위를 담은 `order_summary`로 제시한 뒤 “Review the total; no order has been placed.”라고 안내한다. 런타임 지침에 포함된 실행 가능한 비교 예제는 `tests/test_present.py`에서 생성된 데몬 카탈로그를 기준으로 검증한다.
+
+로그인, OTP, 페이지 양식 입력 요청에는 `request_login`, `request_otp`, `request_form`을 사용하며 임의로 꾸며낸 대화형 카드 표현은 사용하지 않는다. 자격 증명과 결제 필드 값은 데몬의 검증된 페이지로 직접 전달해야 하며, `present`나 일반 텍스트에 넣어서는 안 된다. 보안 처리 결과에는 민감한 비밀값 대신 안전한 상태 메타데이터만 담긴다. 데몬의 거절 응답은 기존 모델 재시도로 전달되며, 초안을 수정하더라도 티켓 권한을 임의로 생성할 수는 없다.
+
+```bash
+uv run --project agent pytest agent/tests -q
+/tmp/openside-heavy-run cargo test -p openside-e2e --test cards cards_present_scripted_roundtrip -j 2 -- --test-threads=1
+```
+
+Python 테스트는 독립적이고 격리된 환경을 유지한다. 생성된 `docs/specs/profiles/*.open.json` 카탈로그 스냅샷을 불러오고, 스크립트 기반 모델과 가짜 JSONL 데몬을 사용한다. 카탈로그와 스키마 노출 여부, card-id 전용 반환값, 잘못된 형식이나 권한 초과 거절에 따른 재시도, 보안 상태 전용 반환값, 와이어 및 상태 버전 불변성을 검증한다. 별도의 Rust `cards_present_scripted_roundtrip` 테스트는 기존 스크립트 프로바이더 하네스를 사용해 실제 데몬과 Python 사이드카를 구동하며, 브라우저나 프로바이더 요청 없이 실제 등록 거절과 수정된 카드 표시 과정을 검증한다.
 
 ## 테스트 및 검증 명령어
 
@@ -145,9 +101,7 @@ def doctor_report(
 uv run ruff check src/openside_agent/providers tests/providers
 uv run ruff format --check src/openside_agent/providers tests/providers
 uv run pyright src/openside_agent/providers
-uv run pytest tests/providers -m 'not live' -q
+uv run pytest tests/providers tests/test_credential_rpc.py tests/test_protocol.py -q
 ```
 
-결정론적 단위 테스트는 임시 `HOME`, `XDG`, `CODEX_HOME`을 설정하고 `OPENSIDE_*` 및 프로바이더 API 키를 비운 격리(hermetic) 환경에서 로컬 가상 브로커와 `MockTransport`만을 대상으로 실행된다.
-
-실제 프로바이더를 호출하는 라이브 테스트(`@pytest.mark.live`)는 별도로 분리되어 있으며 `OPENSIDE_LIVE_MODEL` 환경변수를 통해 명시적으로 참여(opt-in)하지 않는 한 건너뛴다. 라이브 테스트 실행 시에만 격리 환경의 예외로 실제 `HOME` 및 환경변수를 참조하며, 자격 증명 JSON은 `OPENSIDE_LIVE_CREDENTIALS`로 전달된다.
+결정론적 테스트는 임시 `HOME`, `XDG`, CLI 홈 디렉터리를 두고 프로바이더 자격 증명을 비운 상태에서 가짜 데몬과 가짜 HTTP 전송 계층만 사용한다. 429 Retry-After 로테이션, 401 무효화, 턴 간 어피니티 유지, 64회 시도 상한, 타입화된 자원 소진, 단방향 취소, 부분 스트림 재전송 금지, 카나리 토큰 마스킹, 느린 수신자 환경의 대용량(>64 KiB) JSONL 프레임 처리를 테스트한다. 실제 프로바이더 호출 및 브로커 토큰 스모크 테스트는 더 이상 사이드카 진단 경로에 포함되지 않는다.

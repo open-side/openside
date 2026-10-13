@@ -127,6 +127,25 @@ const POLICY: &str = r#"<!doctype html><title>policy</title>
 <button id=danger onclick="hit('danger')">Delete everything</button>
 "#;
 
+const SELECT: &str = r#"<!doctype html><title>select</title>
+<select id=choice aria-label=Choice><option value=keep>Keep</option><option value=rename>Rename</option><option value=archive>Archive</option></select>
+<select id=unicode aria-label=Unicode><option value=keep>Keep</option><option value=accented>Éclair</option></select>
+<select id=duplicate aria-label=Duplicate><option value=one>Same</option><option value=two>Same</option></select>
+<select id=blank aria-label=Blank><option value=keep>Keep</option><option value=blank></option></select>
+<select id=revert aria-label=Revert onchange="this.value='keep'"><option value=keep>Keep</option><option value=rename>Rename</option></select>
+<select id=risky aria-label=Risky><option value=keep>Keep</option><option value=rename selected>Rename</option><option value=other>Remove Delete account</option></select>
+<pre id=log></pre>
+<script>
+ for (const element of document.querySelectorAll('select')) {
+   for (const type of ['input', 'change']) {
+     element.addEventListener(type, event => {
+       document.querySelector('#log').textContent += `${element.id}:${type}:${element.value}:${event.isTrusted}\n`;
+     });
+   }
+ }
+</script>
+"#;
+
 struct Allow;
 
 impl Guard for Allow {
@@ -189,6 +208,7 @@ impl Fixture {
             ("/fill", FILL),
             ("/ime", IME),
             ("/policy", POLICY),
+            ("/select", SELECT),
         ] {
             app = app.route(path, get(move || async move { Html(html) }));
         }
@@ -630,6 +650,104 @@ async fn korean_text_is_composed_with_real_composition_events() {
     assert_eq!(
         f.value("await page.getByLabel('Rich').textContent()").await,
         json!("안녕하세요 닭 abc 123")
+    );
+    f.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn select_option_commits_and_reports_only_trusted_input_and_change_events() {
+    fixture!(f);
+    assert_eq!(
+        f.value("await page.goto(BASE + '/select'); const picked = await page.locator('#choice').selectOption('rename'); [picked, await page.locator('#choice').inputValue()]").await,
+        json!([["rename"], "rename"]),
+    );
+    assert_eq!(
+        f.value("const picked = await page.locator('#choice').selectOption('keep'); [picked, await page.locator('#choice').inputValue()]").await,
+        json!([["keep"], "keep"]),
+    );
+    assert_eq!(
+        f.value("const picked = await page.locator('#unicode').selectOption('accented'); [picked, await page.locator('#unicode').inputValue()]").await,
+        json!([["accented"], "accented"]),
+    );
+    let log = f.value("await page.locator('#log').textContent()").await;
+    let log = log.as_str().unwrap();
+    assert!(log.contains("choice:input:rename:true"), "{log}");
+    assert!(log.contains("choice:change:rename:true"), "{log}");
+    assert!(log.contains("unicode:input:accented:true"), "{log}");
+    assert!(!log.contains(":false"), "{log}");
+    f.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn select_option_reports_takeover_when_the_page_reverts_the_committed_choice() {
+    fixture!(f);
+    let result = f.value(
+        "await page.goto(BASE + '/select'); const result = await (async () => { try { await page.locator('#revert').selectOption('rename'); return ['unexpected']; } catch (error) { return [error.name, error.message]; } })(); result"
+    ).await;
+    assert_eq!(result[0], "select_needs_takeover");
+    assert!(
+        result[1].as_str().unwrap().contains("did not commit"),
+        "{result}"
+    );
+    assert_eq!(
+        f.value("await page.locator('#revert').inputValue()").await,
+        json!("keep")
+    );
+    f.stop().await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn select_option_mac_ambiguous_or_empty_labels_need_takeover_before_input() {
+    fixture!(f);
+    f.value("await page.goto(BASE + '/select'); 1").await;
+    for (selector, value) in [("#duplicate", "two"), ("#blank", "blank")] {
+        let result = f.value(&format!(
+            "const result = await (async () => {{ try {{ await page.locator({selector:?}).selectOption({value:?}); return 'unexpected'; }} catch (error) {{ return error.name; }} }})(); result"
+        )).await;
+        assert_eq!(result, "select_needs_takeover");
+    }
+    assert_eq!(
+        f.value("await page.locator('#duplicate').inputValue()")
+            .await,
+        json!("one")
+    );
+    assert_eq!(
+        f.value("await page.locator('#blank').inputValue()").await,
+        json!("keep")
+    );
+    assert_eq!(
+        f.value("await page.locator('#log').textContent()").await,
+        json!("")
+    );
+    f.stop().await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn select_option_mac_authorizes_all_typeahead_candidates_before_input() {
+    fixture!(f);
+    f.value("await page.goto(BASE + '/select'); 1").await;
+    let result = f
+        .run_with(
+            "await page.locator('#risky').selectOption('rename')",
+            Arc::new(AskDelete),
+        )
+        .await;
+    assert!(
+        result
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("approval required") && error.contains("Delete")),
+        "{result:?}"
+    );
+    assert_eq!(
+        f.value("await page.locator('#risky').inputValue()").await,
+        json!("rename")
+    );
+    assert_eq!(
+        f.value("await page.locator('#log').textContent()").await,
+        json!("")
     );
     f.stop().await;
 }

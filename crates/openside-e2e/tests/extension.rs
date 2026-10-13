@@ -104,7 +104,13 @@ impl Cdp {
         Some(result["result"]["value"].clone())
     }
     async fn click(&mut self, session: &str, selector: &str) {
-        let position = self.evaluate(session, &format!("(() => {{ const r = document.querySelector({}).getBoundingClientRect(); return {{x:r.x+r.width/2,y:r.y+r.height/2}}; }})()", json!(selector))).await;
+        // Native viewport geometry can lag a device-metrics change by one rendered frame.
+        let position = self.evaluate(session, &format!("(async () => {{ await new Promise(resolve => requestAnimationFrame(resolve)); const element = document.querySelector({}); element.scrollIntoView({{block:'center',inline:'center',behavior:'instant'}}); await new Promise(resolve => requestAnimationFrame(resolve)); const r = element.getBoundingClientRect(); const x = r.x+r.width/2; const y = r.y+r.height/2; return {{x,y,hit:element.contains(document.elementFromPoint(x,y))}}; }})()", json!(selector))).await;
+        assert_eq!(
+            position["hit"],
+            json!(true),
+            "fixture click target is not visible: {selector}: {position}"
+        );
         for kind in ["mousePressed", "mouseReleased"] {
             self.call(Some(session), "Input.dispatchMouseEvent", json!({"type":kind,"x":position["x"],"y":position["y"],"button":"left","clickCount":1})).await;
         }
@@ -348,7 +354,6 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
         "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
     )
     .await;
-    // Later clicks use unscrolled coordinates in the default viewport.
     cdp.call(
         Some(&options),
         "Emulation.clearDeviceMetricsOverride",
@@ -440,9 +445,19 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
     }
     let listed = harness.request("GET", "/v1/sessions", None).await;
     let sessions = listed.body["sessions"].as_array().unwrap();
-    assert_eq!(sessions.len(), 3);
+    assert_eq!(sessions.len(), 4);
+    assert_eq!(
+        sessions
+            .iter()
+            .filter(|session| session["agent_id"] == "chief")
+            .count(),
+        1
+    );
     let mut queued = Vec::new();
-    for session in sessions.iter().filter(|session| session["id"] != owner_id) {
+    for session in sessions
+        .iter()
+        .filter(|session| session["id"] != owner_id && session["agent_id"].is_null())
+    {
         let id = session["id"].as_str().unwrap();
         let events = harness.events(id, 0).await.settled().await;
         queued.extend(events.into_iter().filter_map(|event| match event.kind {
@@ -462,7 +477,7 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
     let panel = cdp.page(&format!("{extension_origin}panel.html")).await;
     cdp.evaluate(&panel, &format!("document.querySelector('#message').value = {}; document.querySelector('#compose').requestSubmit(); true", json!(format!("Question from Ask {long_url} {long_korean}")))).await;
     cdp.wait_for(&panel, "document.querySelector('#transcript').textContent.includes('Message received by openside.')").await;
-    let no_sideways_scroll = "(() => { const root = document.documentElement; return root.scrollWidth <= root.clientWidth && [...document.querySelectorAll('.scroll, .bar, .bubble, .ticket, .composer')].every(e => e.scrollWidth <= e.clientWidth); })()";
+    let no_sideways_scroll = "(() => { const root = document.documentElement; return root.scrollWidth <= root.clientWidth && [...document.querySelectorAll('.scroll, .bar, .bubble, .oc-card, .composer')].every(e => e.scrollWidth <= e.clientWidth); })()";
     for width in [320, 400, 480] {
         cdp.call(
             Some(&panel),
@@ -477,7 +492,7 @@ async fn gmail_and_slack_handle_with_create_context_sessions_and_ask_streams_rep
             .as_array()
             .unwrap()
             .len(),
-        4
+        5
     );
     let ledger = harness
         .tcp_request("GET", "/v1/browser/tabs", Some(token), None)

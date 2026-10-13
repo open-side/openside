@@ -343,7 +343,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
         .iter()
         .map(|s| s["name"].as_str().unwrap())
         .collect();
-    assert_eq!(shortcuts, ["New chat", "Needs you"]);
+    assert_eq!(shortcuts, ["Message your assistant", "Needs you"]);
     let theme_colors = ui
         .eval("Array.from(document.querySelectorAll('meta[name=theme-color]')).map((m) => m.media)")
         .await;
@@ -362,47 +362,50 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
     )
     .await;
     ui.wait(
-        "the shared draft in the new-chat composer",
-        "location.pathname === '/' && location.search === '' && (() => { const t = document.querySelector('.composer textarea'); \
+        "the shared draft in the assistant's composer",
+        "location.pathname === '/agents/chief' && location.search === '' && (() => { const t = document.querySelector('.composer textarea'); \
            return !!t && t.value === 'Cool article\\nWorth a read\\nhttps://example.com/cool' \
              && !!document.querySelector('.attachment-chip .attachment-thumb'); })()",
     )
     .await;
     ui.capture(&mut cdp, "share-draft-390x844").await;
-    ui.eval("document.querySelector('.composer-send').click(); true")
+    ui.eval("document.querySelector('.composer-send[type=submit]').click(); true")
         .await;
     ui.wait(
-        "the shared message in a new conversation",
-        "location.pathname.startsWith('/sessions/') && document.body.innerText.includes('https://example.com/cool') \
+        "the shared message in the assistant's thread",
+        "location.pathname === '/agents/chief' && document.body.innerText.includes('https://example.com/cool') \
            && document.body.innerText.includes('Got it, thanks.')",
     )
     .await;
     ui.capture(&mut cdp, "share-sent-390x844").await;
-    let sessions = harness.request("GET", "/v1/sessions", None).await;
-    let shared = sessions.body["sessions"]
+    // Shares land in the assistant's one continuous thread, not in a new conversation.
+    let agents = harness.request("GET", "/v1/agents", None).await;
+    let home = agents.body["agents"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|s| s["title"] == "Cool article")
-        .unwrap_or_else(|| {
-            panic!(
-                "no conversation named after the shared title: {}",
-                sessions.body
-            )
-        })
-        .clone();
+        .find(|a| a["id"] == "chief")
+        .unwrap_or_else(|| panic!("no assistant: {}", agents.body))["home_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let attachments = |body: &Value| -> Vec<Value> {
+        body["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["source"] == "attachment")
+            .cloned()
+            .collect()
+    };
     let artifacts = harness
-        .request(
-            "GET",
-            &format!("/v1/sessions/{}/artifacts", shared["id"].as_str().unwrap()),
-            None,
-        )
+        .request("GET", &format!("/v1/sessions/{home}/artifacts"), None)
         .await;
-    assert_eq!(
-        artifacts.body["artifacts"][0]["source"], "attachment",
-        "{}",
-        artifacts.body
-    );
+    assert_eq!(attachments(&artifacts.body).len(), 1, "{}", artifacts.body);
+    let sessions_before = harness.request("GET", "/v1/sessions", None).await.body["sessions"]
+        .as_array()
+        .unwrap()
+        .len();
 
     // 2. A photo over the 2 MiB budget is re-encoded to fit and still sends.
     ui.goto("/").await;
@@ -414,38 +417,40 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
            && document.body.innerText.includes('IMG_2041.jpg')",
     )
     .await;
-    ui.eval("document.querySelector('.composer-send').click(); true")
+    ui.eval("document.querySelector('.composer-send[type=submit]').click(); true")
         .await;
-    ui.wait("the photo conversation", "location.pathname.startsWith('/sessions/') && document.body.innerText.includes('Got it, thanks.')")
-        .await;
-    let sessions = harness.request("GET", "/v1/sessions", None).await;
-    let photo = sessions.body["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["title"] == "IMG_2041.jpg")
-        .unwrap_or_else(|| panic!("no photo conversation: {}", sessions.body))
-        .clone();
-    let artifacts = harness
-        .request(
-            "GET",
-            &format!("/v1/sessions/{}/artifacts", photo["id"].as_str().unwrap()),
-            None,
-        )
-        .await;
-    let size = artifacts.body["artifacts"][0]["size"].as_u64().unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+    let photo = loop {
+        let artifacts = harness
+            .request("GET", &format!("/v1/sessions/{home}/artifacts"), None)
+            .await;
+        let list = attachments(&artifacts.body);
+        if list.len() == 2 {
+            break list
+                .into_iter()
+                .find(|a| a["path"].as_str().is_some_and(|p| p.contains("IMG_2041")))
+                .unwrap_or_else(|| panic!("no photo attachment: {}", artifacts.body));
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the photo never reached the assistant's thread: {}",
+            artifacts.body
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let size = photo["size"].as_u64().unwrap();
     assert!(
         size > 10_000 && size <= MAX_ATTACHMENT_BYTES,
-        "attachment is {size} bytes: {}",
-        artifacts.body
+        "attachment is {size} bytes: {photo}"
     );
 
-    // 3. Offline: the message is queued in IndexedDB; the conversation exists only once the daemon is back.
+    // 3. Offline: the message is queued in IndexedDB and reaches the thread once the daemon is back.
     ui.goto("/").await;
-    let before = harness.request("GET", "/v1/sessions", None).await.body["sessions"]
-        .as_array()
-        .unwrap()
-        .len();
+    ui.wait(
+        "the assistant's thread",
+        "location.pathname === '/agents/chief' && !!document.querySelector('.composer textarea')",
+    )
+    .await;
     cdp.offline(true).await;
     ui.eval(
         "(() => { const el = document.querySelector('.composer textarea'); \
@@ -453,7 +458,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
            el.dispatchEvent(new Event('input', { bubbles: true })); return true })()",
     )
     .await;
-    ui.eval("document.querySelector('.composer-send').click(); true")
+    ui.eval("document.querySelector('.composer-send[type=submit]').click(); true")
         .await;
     ui.wait("the queued-message notice", "!!document.querySelector('.outbox-notice') && document.querySelector('.composer textarea').value === ''")
         .await;
@@ -466,37 +471,24 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
         .await;
     assert_eq!(queued.as_array().unwrap().len(), 1, "{queued}");
     assert_eq!(queued[0]["text"], "Written in a tunnel");
-    assert!(queued[0]["session"].is_null());
+    assert_eq!(queued[0]["session"], home.as_str());
     ui.capture(&mut cdp, "outbox-queued-390x844").await;
+
+    cdp.offline(false).await;
+    ui.wait(
+        "the queued message to be delivered in the assistant's thread",
+        "location.pathname === '/agents/chief' && document.body.innerText.includes('Written in a tunnel') \
+           && !document.querySelector('.outbox-notice')",
+    )
+    .await;
+    ui.capture(&mut cdp, "outbox-delivered-390x844").await;
     assert_eq!(
         harness.request("GET", "/v1/sessions", None).await.body["sessions"]
             .as_array()
             .unwrap()
             .len(),
-        before,
-        "nothing reached the daemon while offline"
-    );
-
-    cdp.offline(false).await;
-    ui.wait(
-        "the queued message to be delivered and its chat opened",
-        "location.pathname.startsWith('/sessions/') && document.body.innerText.includes('Written in a tunnel') \
-           && document.body.innerText.includes('Got it, thanks.') && !document.querySelector('.outbox-notice')",
-    )
-    .await;
-    ui.capture(&mut cdp, "outbox-delivered-390x844").await;
-    let sessions = harness.request("GET", "/v1/sessions", None).await;
-    let tunnel: Vec<_> = sessions.body["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|s| s["title"] == "Written in a tunnel")
-        .collect();
-    assert_eq!(
-        tunnel.len(),
-        1,
-        "exactly one conversation: {}",
-        sessions.body
+        sessions_before,
+        "messages to the assistant never create another conversation"
     );
 
     // 4. The install banner appears on a phone once the browser offers installation.
@@ -514,7 +506,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
     .await;
     ui.capture(&mut cdp, "install-banner-390x844").await;
 
-    // 5. Swipe from the left edge opens the conversation drawer.
+    // 5. Swipe from the left edge opens the team drawer.
     ui.eval("document.querySelector('.install-banner button[aria-label=Dismiss]').click(); true")
         .await;
     cdp.page(
@@ -557,7 +549,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
         padding["drawerLeft"].as_f64().unwrap() >= 44.0,
         "drawer ignores the left inset: {padding}"
     );
-    ui.eval("document.querySelector('button[aria-label=\"Close conversations\"]').click(); true")
+    ui.eval("document.querySelector('button[aria-label=\"Close menu\"]').click(); true")
         .await;
     ui.wait(
         "the drawer to close",

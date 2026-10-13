@@ -58,13 +58,19 @@ JS
 openside browser open "$S" url=https://example.org          # prints the tab_id
 openside browser snapshot "$S" tab_id=T1 scope=viewport
 openside browser act "$S" tab_id=T1 target=e12 action=click
-openside browser screenshot "$S" tab_id=T1                  # prints the artifact path
+openside browser screenshot "$S" tab_id=T1 output=true      # delivers the PNG to the user
 openside browser login "$S" tab_id=T1        # the user signs in on their device; waits
 openside browser human-step "$S" '{"tab_id":"T1","kind":"takeover","summary":"Solve the CAPTCHA"}'
 ```
 
 When a step needs approval or a person, the command prints the ticket and waits until the user
 answers in the openside app (approvals rerun the step). `--no-wait` returns the ticket instead.
+
+`browser_screenshot` is an internal observation by default: the openside agent sees its image,
+but it is not saved as a file or shown among user outputs. Set `output=true` when the user asks
+for a screenshot or you deliberately share one. `openside browser screenshot --out shot.png`
+also opts into delivery and saves a local copy. Use ordinary observations for checking a page;
+do not turn intermediate browsing screenshots into user outputs.
 
 ## Tickets
 

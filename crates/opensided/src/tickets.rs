@@ -21,8 +21,99 @@ pub(crate) fn lifetime(kind: TicketKind, config: &openside_config::TicketsConfig
         }
         TicketKind::DeviceApproval => config.device_approval_ttl_secs,
         TicketKind::Takeover => config.takeover_ttl_secs,
-        TicketKind::Info => config.info_ttl_secs,
+        TicketKind::Info | TicketKind::Hire => config.info_ttl_secs,
     }))
+}
+
+pub(crate) fn proposal_key(draft: &openside_proto::HireDraft) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let normalized: String = draft
+        .persona
+        .role
+        .nfkc()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    let mut words = normalized.split_whitespace().peekable();
+    if words
+        .peek()
+        .is_some_and(|word| matches!(*word, "a" | "an" | "the"))
+    {
+        words.next();
+    }
+    words.collect::<Vec<_>>().join(" ")
+}
+
+pub(crate) async fn propose_hire(
+    ctx: &crate::tools::ToolEnv,
+    draft: openside_proto::HireDraft,
+) -> crate::tools::ToolExec {
+    if ctx.agent_id.as_deref() != Some("chief") || ctx.subagent.is_some() {
+        return crate::tools::ToolExec::Denied {
+            reason: "chief_only".into(),
+            hint: None,
+        };
+    }
+    crate::tools::ToolExec::Defer(Box::new(TicketRequest {
+        kind: TicketKind::Hire,
+        summary: format!("Hire {}", draft.name),
+        instructions: None,
+        options: vec![],
+        target: None,
+        resume_when: None,
+        otp: None,
+        otp_register: None,
+        login: None,
+        choice: None,
+        approval: None,
+        form: None,
+        hire: Some(draft),
+        pins: vec![],
+    }))
+}
+
+pub(crate) async fn resolve_hire(
+    shared: &Shared,
+    ticket: &Ticket,
+    value: Value,
+    edited: Option<openside_proto::HireDraft>,
+) -> std::result::Result<Value, crate::api::HttpError> {
+    use crate::api::HttpError;
+    use axum::http::StatusCode;
+    let original = ticket
+        .hire
+        .as_ref()
+        .ok_or(HttpError(StatusCode::BAD_REQUEST, "invalid_ticket"))?;
+    let decision: openside_proto::HireDecision = serde_json::from_value(value)
+        .map_err(|_| HttpError(StatusCode::BAD_REQUEST, "invalid_value"))?;
+    let key = proposal_key(original);
+    let result = match decision {
+        openside_proto::HireDecision::Hire => {
+            let mut draft = edited.unwrap_or_else(|| original.clone());
+            draft.proposal_key = original.proposal_key.clone();
+            let agent = crate::team::hire(shared, &draft, ticket.id.as_str()).await?;
+            json!({"status":"hired","agent_id":agent.id,"name":agent.name,"role":agent.persona.role})
+        }
+        openside_proto::HireDecision::NotNow | openside_proto::HireDecision::Never => {
+            if edited.is_some() {
+                return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_value"));
+            }
+            json!({"status":if decision == openside_proto::HireDecision::Never { "declined" } else { "later" }})
+        }
+    };
+    let status = match decision {
+        openside_proto::HireDecision::Hire => "hire",
+        openside_proto::HireDecision::NotNow => "not_now",
+        openside_proto::HireDecision::Never => "never",
+    };
+    if decision == openside_proto::HireDecision::Never {
+        shared
+            .agents
+            .suppress_proposal(&key, &original.persona.role, Utc::now())?;
+    } else {
+        shared.agents.put_proposal(&key, status, Utc::now())?;
+    }
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -63,6 +154,34 @@ pub(crate) async fn open(
         }
         return Ok(ticket.id.clone());
     }
+    if request.kind == TicketKind::Hire {
+        let draft = request.hire.as_ref().ok_or("missing_hire_draft")?;
+        let chief = shared.agents.get("chief")?.ok_or("chief_missing")?;
+        if chief.home_session_id != *session || call.subagent.is_some() {
+            return Err("chief_only".into());
+        }
+        let mut preview = chief.clone();
+        preview.kind = openside_proto::AgentKind::Teammate;
+        preview.name = draft.name.clone();
+        preview.initials = draft
+            .initials
+            .clone()
+            .unwrap_or_else(|| draft.name.chars().take(2).collect());
+        preview.color = draft
+            .color
+            .clone()
+            .unwrap_or_else(|| openside_proto::ACCENT_COLORS[0].into());
+        preview.persona = draft.persona.clone();
+        crate::agents::validate(&preview)?;
+        if shared
+            .tickets()
+            .await?
+            .iter()
+            .any(|ticket| ticket.kind == TicketKind::Hire && ticket.status == TicketStatus::Pending)
+        {
+            return Err("proposal_pending".into());
+        }
+    }
     if request.kind == TicketKind::SecretInput
         && state
             .tickets
@@ -91,6 +210,7 @@ pub(crate) async fn open(
     };
     let now = Utc::now();
     let mut ticket = Ticket {
+        hire: request.hire,
         id: id.clone(),
         session_id: session.clone(),
         tool_call_id: call.tool_call_id.clone(),
@@ -116,10 +236,15 @@ pub(crate) async fn open(
         login: request.login,
         choice: request.choice,
         approval: request.approval,
+        card: None,
+        form: request.form,
     };
     // Target strings are kept verbatim only when the daemon checked them against the live
     // browser; a caller-supplied tab id, origin or field ref is redacted like any other text.
     let mut keep = crate::tools::TICKET_KEEP.to_vec();
+    if crate::tools::connections::is_grant_ticket(&ticket) {
+        keep.extend_from_slice(crate::tools::connections::GRANT_KEEP);
+    }
     let [tab_id, origin, field_ref] = crate::tools::TICKET_TARGET_KEEP;
     keep.extend(
         [
@@ -135,6 +260,70 @@ pub(crate) async fn open(
             .registry
             .redact_except(serde_json::to_value(ticket)?, &keep)?,
     )?;
+    if let Some(draft) = &ticket.hire {
+        let key = proposal_key(draft);
+        let aliases: Vec<_> = state
+            .tickets
+            .values()
+            .filter_map(|ticket| ticket.hire.as_ref())
+            .map(|old| {
+                let legacy = old
+                    .proposal_key
+                    .as_deref()
+                    .filter(|key| !key.trim().is_empty())
+                    .unwrap_or(&old.persona.role)
+                    .trim()
+                    .to_lowercase();
+                (legacy, proposal_key(old))
+            })
+            .collect();
+        shared.agents.migrate_proposal_keys(&aliases)?;
+        let stored = shared.agents.get_proposal(&key)?;
+        let person_fallback = if call.name == "team_hire" {
+            let args: Value = serde_json::from_str(&call.arguments_json)?;
+            let message = args["request_message_id"].as_str().ok_or("not_requested")?;
+            crate::team::hire_tainted(shared, session, message)
+                .await
+                .map_err(|error| error.1)?
+        } else {
+            false
+        };
+        if !person_fallback {
+            if stored.as_ref().is_some_and(|(status, _)| status == "never") {
+                return Err("proposal_suppressed".into());
+            }
+            if shared
+                .agents
+                .latest_proposal_decline()?
+                .is_some_and(|at| Utc::now() < at + Duration::days(7))
+            {
+                return Err("proposal_global_cooldown".into());
+            }
+        }
+        let previous_ticket = state
+            .tickets
+            .values()
+            .filter(|ticket| {
+                ticket.kind == TicketKind::Hire
+                    && ticket
+                        .hire
+                        .as_ref()
+                        .is_some_and(|old| proposal_key(old) == key)
+            })
+            .map(|ticket| ticket.created_at)
+            .max();
+        let last_proposal = match stored {
+            Some((status, cleared_at)) if status == "cleared" => {
+                previous_ticket.filter(|at| *at > cleared_at)
+            }
+            Some((_, at)) => Some(at),
+            None => previous_ticket,
+        };
+        if !person_fallback && last_proposal.is_some_and(|at| Utc::now() < at + Duration::days(30))
+        {
+            return Err("proposal_cooldown".into());
+        }
+    }
     if let Some(binding) = approval_binding {
         let session = session.clone();
         let id = id.clone();
@@ -217,11 +406,10 @@ pub(crate) async fn delivery_resolution(
         .emit(
             &ticket.session_id,
             None,
-            EventKind::RuntimeError {
-                code: "interrupted".into(),
-                message: "The previous resumption was interrupted; verify state before retrying."
-                    .into(),
-            },
+            EventKind::runtime_error(
+                "interrupted",
+                "The previous resumption was interrupted; verify state before retrying.",
+            ),
         )
         .await?;
     Ok(if ticket.deferral == TicketDeferral::Approval {
@@ -302,16 +490,19 @@ pub(crate) async fn close_unanswered(
         Some(resolution) => {
             decision = "resolved";
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: ticket.id.clone(),
                 resolution,
             }
         }
         None => match rejected {
             Some(reason) => EventKind::TicketRejected {
+                card: None,
                 ticket_id: ticket.id.clone(),
                 reason: reason.into(),
             },
             None => EventKind::TicketExpired {
+                card: None,
                 ticket_id: ticket.id.clone(),
             },
         },

@@ -268,7 +268,7 @@ async fn cancel_waiting_child_rejects_its_ticket_and_returns_to_parent() {
         |kind| matches!(kind, EventKind::AssistantFinal { text } if text == "parent done"),
     )
     .await;
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketRejected { ticket_id, reason } if *ticket_id == ticket.id && reason == "subagent_cancelled")));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketRejected { ticket_id, reason, .. } if *ticket_id == ticket.id && reason == "subagent_cancelled")));
     assert_eq!(ended(&events, &subagent), Some(SubagentStatus::Cancelled));
     stream.settled().await;
     assert!(harness.snapshot(&id)["messages"]
@@ -394,7 +394,7 @@ async fn child_model_is_session_default_or_configured_fallback_and_sse_can_opt_o
     let (subagent, model, _) = started(&events);
     assert_eq!(model, "script-fallback");
     assert_eq!(ended(&events, &subagent), Some(SubagentStatus::Completed));
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, result, is_error: true } if tool_call_id == "unknown-call" && result["reason"] == "model_not_allowed")));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, result, is_error: true, .. } if tool_call_id == "unknown-call" && result["reason"] == "model_not_allowed")));
     let children = subagents(&harness, &id).await;
     assert_eq!(children.len(), 1, "a refused delegate starts no child");
     assert_eq!(children[0]["model"], "script-fallback");

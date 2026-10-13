@@ -8,7 +8,7 @@
 //! a running daemon.
 
 use axum::{extract::State, http::StatusCode, Extension, Json};
-use openside_proto::{SettingsDocument, UpdateSettingsRequest};
+use openside_proto::{DeviceKind, SettingsDocument, UpdateSettingsRequest};
 use serde_json::Value;
 
 use crate::{api::HttpError, engine::Shared};
@@ -16,14 +16,14 @@ use crate::{api::HttpError, engine::Shared};
 /// Sections the API neither returns nor writes.
 pub(crate) const FILE_ONLY: &[&str] = &["credentials"];
 
-static WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn path(s: &Shared) -> std::path::PathBuf {
     s.config.loaded.paths.config_file.clone()
 }
 
 /// The stored document: the file when present, else defaults.
-async fn stored(s: &Shared) -> Result<openside_config::Config, HttpError> {
+pub(crate) async fn stored(s: &Shared) -> Result<openside_config::Config, HttpError> {
     let path = path(s);
     match tokio::fs::read_to_string(&path).await {
         Ok(text) => openside_config::parse_document(&path, &text)
@@ -45,34 +45,59 @@ fn public(config: &openside_config::Config) -> Result<Value, HttpError> {
     Ok(value)
 }
 
-async fn document(s: &Shared, caller: &crate::api::Caller) -> Result<SettingsDocument, HttpError> {
+/// The configuration the running daemon uses, including the parts that change live.
+fn running(s: &Shared) -> Result<Value, HttpError> {
+    let mut running = s.config.loaded.config.clone();
+    running.remote = crate::remote::effective(s);
+    running.models = s.models.models();
+    running.channels = s.channels.config();
+    running.skills.agents = s.ops.agents.read().clone();
+    running.sync = crate::sync::effective(s);
+    public(&running)
+}
+
+pub(crate) async fn restart_required(s: &Shared) -> Result<bool, HttpError> {
+    Ok(public(&stored(s).await?)? != running(s)?)
+}
+
+async fn document(
+    s: &Shared,
+    caller: &crate::api::Caller,
+    local: crate::remote::LocalAuthority,
+) -> Result<SettingsDocument, HttpError> {
     let config = public(&stored(s).await?)?;
-    let loaded = public(&s.config.loaded.config)?;
     Ok(SettingsDocument {
-        restart_required: config != loaded,
+        restart_required: config != running(s)?,
         config,
         file_only: FILE_ONLY
             .iter()
             .map(|section| (*section).to_owned())
             .collect(),
         schema: openside_config::config_schema(),
-        remote_editable: REMOTE_EDITABLE
-            .iter()
-            .map(|key| (*key).to_owned())
-            .collect(),
-        remote: caller.0.is_some(),
+        // An agent client without local authority cannot write at all, so it is told nothing
+        // is editable.
+        remote_editable: if local.0 || caller.1 == DeviceKind::PersonDevice {
+            REMOTE_EDITABLE
+                .iter()
+                .map(|key| (*key).to_owned())
+                .collect()
+        } else {
+            Vec::new()
+        },
+        remote: !local.0,
     })
 }
 
 pub(crate) async fn get(
     State(s): State<Shared>,
     Extension(caller): Extension<crate::api::Caller>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
 ) -> Result<Json<SettingsDocument>, HttpError> {
-    Ok(Json(document(&s, &caller).await?))
+    Ok(Json(document(&s, &caller, local).await?))
 }
 
 /// TOML has no null: an unset optional key is simply absent.
-fn strip_nulls(value: &mut Value) {
+pub(crate) fn strip_nulls(value: &mut Value) {
     match value {
         Value::Object(object) => {
             object.retain(|_, child| !child.is_null());
@@ -83,13 +108,30 @@ fn strip_nulls(value: &mut Value) {
     }
 }
 
+/// Caller holds WRITE through file replacement and any live application of the change.
+pub(crate) async fn persist(s: &Shared, mut config: Value) -> Result<(), HttpError> {
+    strip_nulls(&mut config);
+    let invalid = || HttpError(StatusCode::BAD_REQUEST, "invalid_config");
+    let text = toml::Value::try_from(&config)
+        .ok()
+        .and_then(|value| toml::to_string(&value).ok())
+        .ok_or_else(invalid)?;
+    let path = path(s);
+    openside_config::parse_document(&path, &text).map_err(|_| invalid())?;
+    tokio::task::spawn_blocking(move || crate::persistence::write_private(&path, text.as_bytes()))
+        .await
+        .map_err(|_| HttpError::internal())?
+        .map_err(|error| HttpError::write_failed(&error))
+}
+
 pub(crate) async fn put(
     State(s): State<Shared>,
     Extension(caller): Extension<crate::api::Caller>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
     Json(request): Json<UpdateSettingsRequest>,
 ) -> Result<Json<SettingsDocument>, HttpError> {
     // Local callers also need cancellation-safe serialization through rename and audit.
-    tokio::spawn(put_owned(s, caller, request))
+    tokio::spawn(put_owned(s, caller, local, request))
         .await
         .map_err(|_| HttpError::internal())?
 }
@@ -97,6 +139,7 @@ pub(crate) async fn put(
 async fn put_owned(
     s: Shared,
     caller: crate::api::Caller,
+    local: crate::remote::LocalAuthority,
     request: UpdateSettingsRequest,
 ) -> Result<Json<SettingsDocument>, HttpError> {
     let invalid = || HttpError(StatusCode::BAD_REQUEST, "invalid_config");
@@ -118,11 +161,15 @@ async fn put_owned(
     {
         return Err(HttpError(StatusCode::UNAUTHORIZED, "unauthorized"));
     }
+    if !local.0 && caller.1 != DeviceKind::PersonDevice {
+        return Err(HttpError(StatusCode::FORBIDDEN, "forbidden"));
+    }
     let current = stored(&s).await?;
-    // Over TCP only reviewed, behaviour-only keys may change; anything that
-    // names an executable, path, listener, trust list or policy stays local-socket-only,
-    // so a leaked remote admin token cannot turn into code execution after a restart.
-    if caller.0.is_some() {
+    // Without local authority (the Unix socket, or a browser opened from the launcher on this
+    // computer) only reviewed, behaviour-only keys may change; anything that names an
+    // executable, path, listener, trust list or policy needs it, so a leaked remote admin
+    // token cannot turn into code execution after a restart.
+    if !local.0 {
         let mut before = Vec::new();
         leaves(&public(&current)?, "", &mut before);
         let mut after = Vec::new();
@@ -144,7 +191,7 @@ async fn put_owned(
                 serde_json::json!({"device_id": caller.0, "keys": restricted}),
             )
             .await;
-            return Err(HttpError(StatusCode::FORBIDDEN, "local_socket_required"));
+            return Err(HttpError(StatusCode::FORBIDDEN, "local_access_required"));
         }
     }
     for section in FILE_ONLY {
@@ -156,37 +203,34 @@ async fn put_owned(
             object.insert((*section).to_owned(), kept);
         }
     }
-    strip_nulls(&mut config);
-    let text = toml::Value::try_from(&config)
-        .ok()
-        .and_then(|value| toml::to_string(&value).ok())
-        .ok_or_else(invalid)?;
-    let path = path(&s);
-    if let Err(error) = openside_config::parse_document(&path, &text) {
-        // The key names the offending setting; values never appear in config errors.
-        crate::diag!(
-            "opensided: settings update refused: {}: {}",
-            error.key,
-            error.message
-        );
-        return Err(invalid());
-    }
-    tokio::task::spawn_blocking(move || crate::persistence::write_private(&path, text.as_bytes()))
-        .await
-        .map_err(|_| HttpError::internal())?
-        .map_err(|_| HttpError::internal())?;
-    crate::pairing::audit(&s, "settings", "written", serde_json::json!({})).await;
-    Ok(Json(document(&s, &caller).await?))
+    persist(&s, config).await?;
+    crate::pairing::audit(
+        &s,
+        "settings",
+        "written",
+        serde_json::json!({"device_id": caller.0, "local": local.0}),
+    )
+    .await;
+    Ok(Json(document(&s, &caller, local).await?))
 }
 
-/// Keys a paired device may change: ticket lifetimes, model choice and memory
-/// retention. Everything else is local-socket-only.
+/// Keys a paired person device without local authority may change: ticket lifetimes, model
+/// choice, agent tuning, memory retention and sleep inhibition. Each is plain behaviour and
+/// names no executable, path, listener, credential or trust list; everything else needs local
+/// authority.
 pub(crate) const REMOTE_EDITABLE: &[&str] = &[
     "tickets.",
     "models.default",
     "models.fallback",
+    "models.front",
     "memory.default_retention",
     "memory.history",
+    "agent.startup_timeout_ms",
+    "agent.tool_retries",
+    "agent.compaction_max_messages",
+    "agent.compaction_keep_messages",
+    "agent.orchestration",
+    "service.inhibit_sleep",
 ];
 
 pub(crate) fn remote_editable(path: &str) -> bool {

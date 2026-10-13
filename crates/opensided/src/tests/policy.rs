@@ -48,6 +48,15 @@ fn concrete(path: &str) -> String {
         .replace("{name}", "skill")
         .replace("{path}", "transcript.jsonl")
         .replace("{thumbnail_id}", "thumbnail")
+        .replace("{provider}", "anthropic")
+        .replace("{source}", "claude-code")
+        .replace("{kind}", "telegram")
+        .replace("{account_id}", "work")
+        .replace("{key}", "proposal")
+        .replace("{key_id}", "key")
+        .replace("{ticket}", "ticket")
+        .replace("{origin}", "invalid-origin")
+        .replace("{space_id}", "space")
         .replace("{id}", "session");
     assert!(!out.contains('{'), "unsubstituted path parameter in {out}");
     out
@@ -116,7 +125,11 @@ async fn every_route_rejects_tokens_lacking_its_scope() {
             &router,
             method,
             &path,
-            json!({}),
+            if route.path == "/v1/memory/model/download" {
+                json!({"unknown":true})
+            } else {
+                json!({})
+            },
             Some(&tokens[&route.scope]),
         )
         .await;
@@ -125,6 +138,26 @@ async fn every_route_rejects_tokens_lacking_its_scope() {
                 (status, body["code"].as_str()),
                 (StatusCode::FORBIDDEN, Some("local_socket_required")),
                 "{method} {path} must refuse every TCP token"
+            );
+            continue;
+        }
+        if api::LOCAL_REQUIRED.contains(&(method, route.path))
+            || route.path == "/v1/pairing"
+            || route.path == "/v1/access-requests/{id}/approve"
+            || route.path.starts_with("/v1/import")
+            || method == "PUT" && route.path.starts_with("/v1/remote/")
+        {
+            assert_eq!(
+                (status, body["code"].as_str()),
+                (StatusCode::FORBIDDEN, Some("local_access_required")),
+                "{method} {path}"
+            );
+            continue;
+        }
+        if route.path == "/v1/extension/import/{ticket}" {
+            assert_eq!(
+                (status, body["code"].as_str()),
+                (StatusCode::FORBIDDEN, Some("invalid_import_ticket"))
             );
             continue;
         }
@@ -391,7 +424,14 @@ async fn approval_ticket_is_an_api_object_person_devices_can_answer() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(object["id"], ticket.as_str());
     assert_eq!(object["kind"], "confirm");
-    assert_eq!(object["summary"], "Approve write");
+    assert_eq!(
+        object["summary"],
+        format!(
+            "Allow openside to save {} outside the workspace?",
+            target.file_name().unwrap().to_str().unwrap()
+        )
+    );
+    assert_eq!(object["tool_call_id"], "outside-write");
     assert_eq!(object["tool"]["name"], "write");
     assert!(object["expires_at"].as_str().is_some());
     assert!(object["target"].is_null(), "file actions have no origin");

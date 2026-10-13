@@ -27,6 +27,8 @@ PYTHON_LICENSE_TEXT = {"Apache 2.0": "Apache-2.0", "Apache License, Version 2.0"
 PYTHON_REVIEWED = {"nodeenv": "BSD-3-Clause", "pyasn1-modules": "BSD-2-Clause"}
 # Locked behind platform markers (win32, emscripten), so a Linux sync never installs them; licence from PyPI metadata.
 PYTHON_OTHER_PLATFORM = {"colorama": "BSD-3-Clause", "httpx2-jsfetch": "BSD-3-Clause"}
+# These upstream packages keep required notices in source headers, not root license files.
+RUST_EMBEDDED_NOTICES = {"jpeg-encoder": "src/fdct.rs"}
 
 
 # Copied into the repository rather than installed from a registry: (what, source, license, text).
@@ -99,6 +101,22 @@ def license_files(directory: Path) -> list[tuple[str, str]]:
         if path.is_file() and (name.startswith(("LICENSE", "LICENCE", "COPYING")) or name == "NOTICE"):
             found.append((path.name, path.read_text(errors="replace").strip()))
     return found
+
+
+def rust_license_files(package: dict) -> list[tuple[str, str]]:
+    directory = Path(package["manifest_path"]).parent
+    files = license_files(directory)
+    if not files and package.get("license_file"):
+        path = directory / package["license_file"]
+        files = [(path.name, path.read_text(errors="replace").strip())]
+    if source := RUST_EMBEDDED_NOTICES.get(package["name"]):
+        text = (directory / source).read_text()
+        header = re.match(r"/\*.*?\*/", text, re.DOTALL)
+        if header is None or "Independent JPEG Group" not in header[0]:
+            raise ValueError(f"{package['name']} is missing its embedded IJG notice")
+        files.append((f"IJG ({source})",
+                      "This software is based in part on the work of the Independent JPEG Group.\n\n" + header[0]))
+    return files
 
 
 def npm_inventory(root: Path) -> list[dict]:
@@ -205,10 +223,7 @@ def notice(root: Path) -> str:
               "License expressions retain upstream choices; r-efi is used under MIT, not LGPL. option-ext, certifi and hypothesis retain MPL-2.0 file-level obligations; they are used unmodified and their source is available from crates.io and PyPI."]
     for package in rust:
         chunks.append(f"\nRust: {package['name']} {package['version']}\nLicense: {package['license'] or 'SEE LICENSE FILE'}")
-        files = license_files(Path(package["manifest_path"]).parent)
-        if not files and package.get("license_file"):
-            path = Path(package["manifest_path"]).parent / package["license_file"]
-            files = [(path.name, path.read_text(errors="replace").strip())]
+        files = rust_license_files(package)
         chunks.extend(f"--- {name} ---\n{text}" for name, text in files)
     for package in npm_inventory(root):
         chunks.append(f"\nnpm ({package['component']}): {package['name']} {', '.join(package['versions'])}\nLicense: {package['license']}")

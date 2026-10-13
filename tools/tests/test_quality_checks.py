@@ -70,6 +70,30 @@ def test_license_expressions_fail_closed_and_respect_and_or():
         assert not LICENSES.allowed_expression(expression, allowed)
 
 
+def test_rust_embedded_ijg_notice_keeps_copyright_and_binary_acknowledgment(tmp_path):
+    (tmp_path / 'LICENSE-MIT').write_text('MIT license fixture')
+    source = tmp_path / 'src/fdct.rs'
+    source.parent.mkdir()
+    header = '/*\n * Independent JPEG Group\n * Copyright (C) fixture author\n * NO WARRANTY\n */'
+    source.write_text(header + '\nfn unrelated_implementation() {}')
+    package = {'name': 'jpeg-encoder', 'manifest_path': str(tmp_path / 'Cargo.toml')}
+    files = dict(LICENSES.rust_license_files(package))
+    assert files['LICENSE-MIT'] == 'MIT license fixture'
+    assert files['IJG (src/fdct.rs)'] == (
+        'This software is based in part on the work of the Independent JPEG Group.\n\n' + header
+    )
+
+
+def test_rust_embedded_ijg_notice_fails_closed_if_upstream_header_disappears(tmp_path):
+    import pytest
+    source = tmp_path / 'src/fdct.rs'
+    source.parent.mkdir()
+    source.write_text('/* An unrelated implementation comment. */\nfn transform() {}')
+    package = {'name': 'jpeg-encoder', 'manifest_path': str(tmp_path / 'Cargo.toml')}
+    with pytest.raises(ValueError, match='missing its embedded IJG notice'):
+        LICENSES.rust_license_files(package)
+
+
 def test_npm_license_inventory_rejects_unknown_license_and_keeps_notice_text(tmp_path, monkeypatch):
     package = tmp_path / 'vendor'
     package.mkdir()

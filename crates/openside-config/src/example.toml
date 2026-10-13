@@ -39,9 +39,14 @@ profile = "full"                  # full | browser-agent | ultrabrowse (docs/spe
 # default = "provider:your-model"               # OPENSIDE_MODEL
 fallback = []
 
-# This table is passed unchanged to Python; Rust does not interpret its keys.
-# Configure source priority and source-specific settings here, never secret values.
+# Credential order remains explicit; a configured broker failure cannot downgrade to local keys.
+# Provider API-key values belong only in the Vault, never in this table.
 [credentials]
+
+[credentials.subscriptions]
+# Login/refresh stay with the external CLI; disabling also blocks builtin Codex delegation.
+claude-code = false
+codex-cli = true
 
 [browser]
 # executable = "./browser/chrome" # Overrides OPENSIDE_BROWSER and discovery
@@ -88,8 +93,8 @@ project = true                    # also offer <workspace>/.openside/skills (rea
 # example-agent = "./example-agent/skills"
 
 [channels]
-# Chat adapters run as `openside-channels`; each is a client of the public daemon API.
-# Secrets are env var NAMES or command argv (no shell, stdout is the value), never values.
+# Managed accounts are added in the GUI; only their Vault references belong in this file.
+# Legacy env/command tables below remain accepted by the standalone runner.
 # api_url = "http://127.0.0.1:8080"             # OPENSIDE_API_URL; default http://<daemon.listen>
 # token_file = "./channels.token"               # daemon bearer token (scopes read, steer, approve)
 token_env = "OPENSIDE_TOKEN"                    # used when token_file is unset
@@ -98,6 +103,16 @@ stt_timeout_secs = 120
 max_audio_bytes = 26214400
 edit_interval_ms = 1000           # minimum delay between edits of a streaming reply (>= 200)
 # state_dir = "./channels-state"  # thread->session map; default <data_dir>/channels
+
+# [[channels.accounts]]
+# id = "work"
+# kind = "telegram"
+# label = "Work bot"
+# enabled = false
+# secret_id = "channel:telegram:work"
+# agent_id = "chief"
+# [channels.accounts.options]
+# allowed_chats = ["100"]
 
 [channels.telegram]
 enabled = false

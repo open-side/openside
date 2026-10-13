@@ -694,5 +694,10 @@ async fn fresh_launch_and_verified_death_sweep_private_downloads() {
         !downloads.exists(),
         "explicit verified termination also sweeps downloads"
     );
-    browser.shutdown().await.unwrap();
+    assert!(matches!(
+        browser.shutdown().await,
+        Err(BrowserError::ProcessExit(status))
+            if std::os::unix::process::ExitStatusExt::signal(&status)
+                == Some(nix::sys::signal::Signal::SIGKILL as i32)
+    ));
 }

@@ -66,6 +66,8 @@ pub enum PolicyCapability {
     VaultUse,
     /// Payment, purchase, posting or sending a message.
     Sensitive,
+    /// Access private imported records subject to an explicit session person grant.
+    PrivacyRead,
 }
 
 /// `POST /v1/policy/test`: evaluate one action against the live policy without running it.
@@ -124,6 +126,7 @@ impl From<PolicyCapability> for openside_policy::Capability {
             PolicyCapability::Fetch => Self::Fetch,
             PolicyCapability::VaultUse => Self::VaultUse,
             PolicyCapability::Sensitive => Self::Sensitive,
+            PolicyCapability::PrivacyRead => Self::PrivacyRead,
         }
     }
 }

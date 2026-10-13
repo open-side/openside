@@ -115,6 +115,71 @@ fn tree(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     files
 }
 
+#[cfg(not(any(unix, windows)))]
+#[tokio::test]
+async fn unsupported_safe_import_never_reads_into_the_target_or_changes_the_source() {
+    let home = tempfile::tempdir().unwrap();
+    for kind in [BrowserKind::Chrome, BrowserKind::Firefox] {
+        let source = home.path().join(kind.label());
+        match kind {
+            BrowserKind::Chrome => chrome(Encryption::Plain).write(&source),
+            BrowserKind::Firefox => FirefoxProfile {
+                history: history(),
+                bookmarks: bookmarks(),
+                cookies: cookies(),
+                ..FirefoxProfile::default()
+            }
+            .write(&source),
+            _ => unreachable!(),
+        }
+        let original = tree(&source);
+        for dry_run in [false, true] {
+            let data = home.path().join("target");
+            let target = ProfileLayout::new(&data, "t").unwrap();
+            let mut opts = options(
+                Source {
+                    kind,
+                    dir: source.clone(),
+                },
+                target,
+            );
+            opts.dry_run = dry_run;
+            let error = import(opts).await.unwrap_err();
+            assert!(
+                matches!(&error, ImportError::Unreadable { reason, .. }
+                    if reason == "Symlink-safe profile import is unsupported on this platform"),
+                "{error}"
+            );
+            assert!(!data.exists());
+            assert_eq!(tree(&source), original);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_reads_synthetic_browser_sqlite_without_changing_source() {
+    let home = tempfile::tempdir().unwrap();
+    let source = home.path().join("chrome");
+    chrome(Encryption::Plain).write(&source);
+    let before = tree(&source);
+    assert_eq!(decrypted(&source, KeyringSource::None).unwrap().len(), 3);
+    let item = crate::db::Item {
+        browser: BrowserKind::Chrome,
+        what: "history",
+        path: source.join("History"),
+    };
+    let mut visits = Vec::new();
+    crate::chromium::read_history(&item, &mut |visit| {
+        visits.push(visit);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(visits.len(), 3);
+    assert_eq!(tree(&source), before);
+}
+
+#[cfg(unix)]
 #[test]
 fn chrome_v10_cookies_decrypt_in_both_schema_generations_and_locations() {
     let home = tempfile::tempdir().unwrap();
@@ -138,6 +203,7 @@ fn chrome_v10_cookies_decrypt_in_both_schema_generations_and_locations() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn chrome_plaintext_value_column_is_used_when_nothing_is_encrypted() {
     let home = tempfile::tempdir().unwrap();
@@ -147,6 +213,7 @@ fn chrome_plaintext_value_column_is_used_when_nothing_is_encrypted() {
     assert_eq!(read[0].value, "abc123");
 }
 
+#[cfg(unix)]
 #[test]
 fn v11_cookies_need_the_keyring_password_and_reject_a_wrong_one() {
     let home = tempfile::tempdir().unwrap();
@@ -179,6 +246,7 @@ fn v11_cookies_need_the_keyring_password_and_reject_a_wrong_one() {
     assert!(matches!(failing, ImportError::KeyringCommand(_)));
 }
 
+#[cfg(unix)]
 #[test]
 fn unknown_cookie_versions_and_corrupt_values_are_reported_by_cookie() {
     let home = tempfile::tempdir().unwrap();
@@ -207,6 +275,7 @@ fn unknown_cookie_versions_and_corrupt_values_are_reported_by_cookie() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn partitioned_chrome_cookies_are_left_out_and_counted() {
     let home = tempfile::tempdir().unwrap();
@@ -225,6 +294,7 @@ fn partitioned_chrome_cookies_are_left_out_and_counted() {
     assert_eq!((read.len(), partitioned), (2, 1));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn chrome_history_and_bookmarks_land_in_the_profile_store() {
     let home = tempfile::tempdir().unwrap();
@@ -270,6 +340,7 @@ async fn chrome_history_and_bookmarks_land_in_the_profile_store() {
     assert_eq!(saved[1]["url"], "https://docs.rs/");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn firefox_history_bookmarks_and_cookies_are_read() {
     let home = tempfile::tempdir().unwrap();
@@ -324,6 +395,7 @@ async fn firefox_history_bookmarks_and_cookies_are_read() {
     assert_eq!(dry.cookies.unwrap().read, 4);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn dry_run_reads_everything_and_writes_nothing() {
     let home = tempfile::tempdir().unwrap();
@@ -352,6 +424,7 @@ async fn dry_run_reads_everything_and_writes_nothing() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn import_never_modifies_the_source_and_reimport_does_not_duplicate() {
     let home = tempfile::tempdir().unwrap();
@@ -381,6 +454,7 @@ async fn import_never_modifies_the_source_and_reimport_does_not_duplicate() {
     assert_eq!(entries.len(), 2, "no temp files left behind: {entries:?}");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn importing_into_one_profile_leaves_another_untouched() {
     let home = tempfile::tempdir().unwrap();
@@ -404,6 +478,7 @@ async fn importing_into_one_profile_leaves_another_untouched() {
     assert_ne!(a.browser_dir, b.browser_dir);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn missing_corrupt_and_unsupported_sources_fail_with_specific_messages() {
     let home = tempfile::tempdir().unwrap();
@@ -510,6 +585,7 @@ async fn missing_corrupt_and_unsupported_sources_fail_with_specific_messages() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn failed_cookie_decryption_leaves_the_target_profile_untouched() {
     let home = tempfile::tempdir().unwrap();
@@ -556,6 +632,7 @@ async fn cookie_import_without_a_browser_is_a_specific_error() {
     assert!(matches!(error, ImportError::BrowserRequired(_)), "{error}");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn omitted_categories_skip_absent_files_but_explicit_ones_fail() {
     let home = tempfile::tempdir().unwrap();
@@ -678,6 +755,8 @@ fn cookie_debug_never_prints_the_value() {
         secure: false,
         http_only: false,
         same_site: None,
+        last_accessed_at_ms: None,
+        created_at_ms: None,
     };
     assert!(!format!("{cookie:?}").contains("super-secret-value"));
 }
@@ -691,6 +770,7 @@ fn set_encrypted(profile: &Path, name: &str, blob: &[u8]) {
     .unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn damaged_v11_cookies_are_corrupt_not_a_wrong_password() {
     let home = tempfile::tempdir().unwrap();
@@ -730,6 +810,7 @@ fn damaged_v11_cookies_are_corrupt_not_a_wrong_password() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn cookie_schema_version_stored_as_an_integer_is_still_read() {
     let home = tempfile::tempdir().unwrap();
@@ -749,6 +830,7 @@ fn cookie_schema_version_stored_as_an_integer_is_still_read() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn firefox_rows_with_null_urls_or_dates_do_not_abort_the_import() {
     let home = tempfile::tempdir().unwrap();
@@ -782,6 +864,7 @@ async fn firefox_rows_with_null_urls_or_dates_do_not_abort_the_import() {
     assert_eq!(import(opts).await.unwrap().history.unwrap().imported, 3);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn visits_still_in_an_uncheckpointed_wal_are_imported() {
     let home = tempfile::tempdir().unwrap();
@@ -913,6 +996,7 @@ async fn an_unreadable_profile_directory_is_reported_as_unreadable_not_missing()
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn nothing_is_created_when_a_later_category_fails() {
     let home = tempfile::tempdir().unwrap();
@@ -1068,14 +1152,14 @@ fn discovery_lists_standard_profiles_by_id_with_their_available_data() {
     let found = discover(&env);
     let summary: Vec<_> = found
         .iter()
-        .map(|profile| (profile.id.as_str(), profile.name.as_str()))
+        .map(|profile| (profile.brand.as_str(), profile.name.as_str()))
         .collect();
     assert_eq!(
         summary,
         [
-            ("chrome:Default", "Default"),
-            ("chrome:Profile 2", "Work"),
-            ("firefox:abcd.default-release", "default-release"),
+            ("chrome", "Default"),
+            ("chrome", "Work"),
+            ("firefox", "default-release"),
         ]
     );
     let flags = |profile: &DiscoveredProfile| {

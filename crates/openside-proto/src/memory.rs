@@ -61,6 +61,9 @@ impl Retention {
 pub struct Memory {
     /// Opaque memory identifier.
     pub id: String,
+    /// Null means shared; otherwise this memory belongs to one teammate.
+    #[serde(default)]
+    pub owner: Option<String>,
     /// Memory origin.
     pub kind: MemoryKind,
     /// Remembered text.

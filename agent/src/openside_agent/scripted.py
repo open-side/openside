@@ -51,6 +51,7 @@ class ScriptResponse(BaseModel):
 class Script(BaseModel):
     responses: list[ScriptResponse]
     delay_ms: Annotated[int, Field(ge=0)] = 0
+    title: str = "Discuss the request"
     # Child turns keyed by the parent's `delegate` tool_call id, which is stable
     # across restarts, unlike creation order of concurrently delegated children.
     subagents: dict[str, list[ScriptResponse]] = Field(
@@ -64,6 +65,7 @@ class ScriptedModel:
         self.steer_received = steer_received
         self.cursor = cursor
         self.model = FunctionModel(self.respond, stream_function=self.stream)
+        self.title_model = FunctionModel(self.respond_title)
 
     @classmethod
     def from_file(
@@ -103,6 +105,11 @@ class ScriptedModel:
         elif delay:
             await asyncio.sleep(delay)
         return response
+
+    async def respond_title(
+        self, messages: list[ModelMessage], info: AgentInfo
+    ) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(self.script.title)])
 
     async def respond(
         self, messages: list[ModelMessage], info: AgentInfo

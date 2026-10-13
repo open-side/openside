@@ -1,7 +1,7 @@
 //! PP-20: a client in another user namespace (uid 12345) cannot reach the private socket and
 //! can do exactly what its scoped token allows over loopback TCP.
 
-#![cfg(unix)]
+#![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::{path::Path, process::Output};

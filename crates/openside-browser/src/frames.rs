@@ -190,7 +190,7 @@ impl Browser {
     }
 
     /// The session that addresses nodes of `host` (None: the tab's page session).
-    async fn host_session(
+    pub(super) async fn host_session(
         &self,
         owner: &str,
         tab_id: &str,

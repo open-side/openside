@@ -1,12 +1,12 @@
-import { ArrowUp, Eye, FileText, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Eye, FileText, Hand, Plus, Square, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ApiError } from "../api/client";
-import type { AttachmentUpload, BrowserSpace, SkillSummary } from "../api/types";
+import type { AttachmentUpload, SkillSummary } from "../api/types";
 import { mayUse } from "../auth";
 import { newMessageId, useClient } from "../context";
 import { OutboxNotice } from "../pwa/OutboxNotice";
 import { outbox } from "../pwa/outbox";
 import type { ShareDraft } from "../pwa/share";
+import { outgoing } from "../state/outgoing";
 import { ICON_STROKE, IconButton } from "../ui";
 
 // Same rules as the sidecar (agent/src/openside_agent/skills.py `_MENTION`): a mention starts
@@ -50,29 +50,35 @@ export function mentionedSkills(text: string, known: ReadonlySet<string>): strin
 }
 
 export interface ComposerProps {
-  /** `null` on the new-chat screen: the first send creates the conversation. */
-  sessionId: string | null;
+  sessionId: string;
   /** While a run is active, Send becomes Queue and an empty composer offers Stop. */
   running?: boolean;
   /** The run is paused on a ticket: messages queue behind it, but there is nothing to stop. */
   waiting?: boolean;
   onStop?: () => void;
-  /** New chat only: model for the conversation the first message creates (empty = default). */
-  model?: string;
-  /** New chat only: where the created conversation browses (omitted = shared profile). */
-  browserSpace?: BrowserSpace;
-  /** New chat only: called with the created conversation id after the first message is sent. */
-  onCreated?: (sessionId: string) => void;
+  /** The conversation's live connection is down; typing still works (the outbox holds messages). */
+  reconnecting?: boolean;
+  /** A request needs the person; shown as a button inside the message row, never a second row. */
+  onShowPending?: () => void;
   /** Called after every accepted message (the transcript scrolls back to the latest turn). */
   onSent?: () => void;
   /** Compact controls in the composer's bottom bar, after Add files (model picker, browser preview). */
   tools?: ReactNode;
-  /** New chat only: content shared to the app (share target); applied once, then `onDraftApplied` fires. */
+  /** Content shared to the app (share target) or a picked starter; applied once, then `onDraftApplied` fires. */
   draft?: ShareDraft | null;
   onDraftApplied?: () => void;
+  /** Who reads the message: "Message Juno". */
+  addressee?: string;
 }
 
-export function Composer({ sessionId, running = false, waiting = false, onStop, model, browserSpace, onCreated, onSent, tools, draft, onDraftApplied }: ComposerProps) {
+export function Composer({ sessionId, running = false, waiting = false, reconnecting = false, onStop, onShowPending, onSent, tools, draft, onDraftApplied, addressee }: ComposerProps) {
+  const placeholder = reconnecting
+    ? "Reconnecting… you can keep typing"
+    : waiting
+      ? "Answer above, or type a reply"
+      : running
+        ? "Add to the task…"
+        : `Message ${addressee ?? "openside"}`;
   const queueing = running || waiting;
   const client = useClient();
   const warmed = useRef({ key: "", at: -Infinity });
@@ -98,8 +104,7 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
   }, [draft?.id]);
 
   useEffect(() => {
-    // Skill search is scoped to a session; a new chat has none until the first send.
-    if (query === null || sessionId === null) return;
+    if (query === null) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       client
@@ -201,52 +206,36 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
     setError(null);
     // One id per send: a retry from the outbox after a lost response is deduplicated by the daemon.
     const messageId = newMessageId();
-    let created: string | null = null;
-    let target = sessionId;
-    let attachments: AttachmentUpload[] = [];
-    const newChat = {
-      model: model?.trim() || null,
-      ...(browserSpace === "isolated" ? { browser_space: browserSpace } : {}),
-    };
+    let attachments: AttachmentUpload[];
     try {
       attachments = await Promise.all(
         files.map(async (pending) => ({ name: pending.file.name, data_base64: await base64(pending.file) })),
       );
-      if (target === null) {
-        const session = await client.createSession(newChat);
-        target = created = session.id;
-      }
-      // An idle session starts a run with any mode; a running one gets the message after the
-      // current run (steering is offered per queued message).
-      await client.submitMessage(target, {
-        message_id: messageId,
-        text: body,
-        mode: "queue",
-        ...(attachments.length ? { attachments } : {}),
-      });
-      clearInput();
-      onSent?.();
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.status === 0) {
-        // Unreachable daemon: keep the message (and the chat it creates) for the outbox to deliver.
-        try {
-          await outbox.enqueue({
-            message_id: messageId,
-            session_id: target,
-            ...(target === null ? { create: newChat } : {}),
-            text: body,
-            attachments,
-            queued_at: Date.now(),
-          });
-          clearInput();
-        } catch {
-          setError(cause.message);
-        }
-      } else setError(cause instanceof ApiError ? cause.message : "Request failed");
-    } finally {
+    } catch {
       setBusy(false);
+      setError("A file could not be read. Remove it and try again.");
+      return;
     }
-    if (created !== null) onCreated?.(created);
+    // The conversation shows this message's delivery itself: Sending, Sent, or Not sent with Retry.
+    clearInput();
+    onSent?.();
+    setBusy(false);
+    const failure = await outgoing.submit(client, { message_id: messageId, session_id: sessionId, text: body, attachments });
+    if (failure?.status === 0) {
+      // Unreachable daemon: the outbox delivers it later, and its notice replaces the bubble.
+      try {
+        await outbox.enqueue({
+          message_id: messageId,
+          session_id: sessionId,
+          text: body,
+          attachments,
+          queued_at: Date.now(),
+        });
+        outgoing.forget(messageId);
+      } catch {
+        // Storage is unavailable too; the Not sent bubble stays and offers Retry.
+      }
+    }
   }
 
   function clearInput() {
@@ -258,12 +247,10 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
   // Focus means a message is coming: start the agent process and browser now instead of
   // after Send. Best effort, at most once per session per half minute.
   function prewarm() {
-    const key = sessionId ?? "";
     const now = Date.now();
-    if (warmed.current.key === key && now - warmed.current.at < PREWARM_EVERY_MS) return;
-    warmed.current = { key, at: now };
-    const request = sessionId === null ? client.prewarmBrowser() : client.prewarmSession(sessionId);
-    request.catch(() => undefined);
+    if (warmed.current.key === sessionId && now - warmed.current.at < PREWARM_EVERY_MS) return;
+    warmed.current = { key: sessionId, at: now };
+    client.prewarmSession(sessionId).catch(() => undefined);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -364,7 +351,7 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
             onKeyDown={onKeyDown}
             onFocus={prewarm}
             rows={1}
-            placeholder={queueing ? "Follow up" : "Message openside"}
+            placeholder={placeholder}
             aria-autocomplete="list"
             aria-controls={open ? "skill-mentions" : undefined}
             aria-activedescendant={open && candidates[active] ? `skill-mention-${candidates[active].name}` : undefined}
@@ -388,8 +375,13 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
           </IconButton>
           <div className="composer-tools">{tools}</div>
           <div className="composer-actions">
+            {onShowPending ? (
+              <IconButton label="Show the request waiting for you" className="composer-needs" onClick={onShowPending}>
+                <Hand size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              </IconButton>
+            ) : null}
             {running && onStop ? (
-              <button type="button" className="composer-send composer-stop" onClick={onStop}>
+              <button type="button" className="composer-send composer-stop" title="Stop the task" onClick={onStop}>
                 <Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" />
                 <span className="sr-only">Stop</span>
               </button>
@@ -403,7 +395,7 @@ export function Composer({ sessionId, running = false, waiting = false, onStop, 
           </div>
         </div>
         {open ? (
-          <ul id="skill-mentions" className="mention-list" role="listbox" aria-label="Skills">
+          <ul id="skill-mentions" className="mention-list glass-float" role="listbox" aria-label="Skills">
             {candidates.map((skill, index) => (
               <li
                 key={skill.name}

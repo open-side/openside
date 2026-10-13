@@ -32,14 +32,14 @@ openside 설정은 TOML 파일 하나다. 아래 표는 2026-10-11 에 `cargo ru
 2. 환경변수가 파일 값을 덮어쓴다(아래 표의 `env` 열). 빈 문자열 환경변수는 설정되지 않은 것으로 본다.
 3. 예외: `OPENSIDE_BROWSER` 는 설정이 아니라 브라우저 탐색 단계에만 쓰이며, `browser.executable` 이 있으면 그 값이 먼저다.
 4. `opensided` 플래그 `--data-dir`, `--socket`, `--listen` 은 파일과 환경변수보다 우선한다.
-5. 알 수 없는 섹션이나 키는 오류다. `[credentials]` 안쪽만 예외로, Rust 는 내용을 해석하지 않는다.
+5. 알 수 없는 최상위 섹션이나 키는 오류로 처리한다. `credentials`는 플러그인 메타데이터 호환성을 유지하며, 데몬의 자격 증명 소유자만 해석하고 Debug 형식으로 절대 출력하지 않는다.
 6. 오류 메시지는 파일과 키 경로만 알려 주고 입력값은 보여 주지 않는다.
 
 값 검증: argv 키(`agent.command`, `vault.passphrase_cmd`)는 비어 있지 않은 실행 파일과 NUL 없는 인자여야 한다. 경로 키는 빈 문자열일 수 없다. `agent.startup_timeout_ms` 는 0 보다 커야 한다. `agent.compaction_keep_messages` 는 `agent.compaction_max_messages` 보다 작아야 한다. `models.default`, `models.fallback` 항목은 빈 문자열일 수 없다. 티켓 TTL 은 1 이상이다.
 
-설정 화면(웹 UI·API)은 `GET`/`PUT /v1/settings/config`(admin)로 이 문서의 모든 키를 JSON 으로 읽고 쓴다. `PUT` 은 파일과 같은 파서로 검증한 뒤(알 수 없는 키·타입·범위 오류는 400 `invalid_config`) 설정 파일을 0600 으로 원자적으로 바꿔 쓴다. 새 값은 데몬을 다시 시작해야 반영되며, 응답의 `restart_required` 가 이를 알려 준다(실행 중에 바뀌는 것은 `/v1/policy` 의 라이브 정책뿐이다). `[credentials]` 는 파일에서만 고친다: 응답에 넣지 않고, `PUT` 에 넣으면 400 `file_only_section` 이며, 쓰기 때 파일에 있던 값을 그대로 둔다.
+`GET`/`PUT /v1/settings/config`(admin)는 파일과 동일한 유효성 검사 및 원자적 0600 저장으로 JSON 설정을 읽고 쓴다. `credentials`는 파일 전용으로 유지되어 응답에서 제외되고, PUT 시 거부되며, 디스크의 기존 내용이 보존된다. `restart_required`는 저장된 설정과 실행 중인 설정을 비교하며, 여기에는 실시간 원격, models, channels, sync, 외부 에이전트 폴더 오버레이가 포함된다. 전용 엔드포인트는 해당 오버레이를 즉시 반영하며, 설정 파일 직접 편집은 재시작 시 적용된다.
 
-TCP 통신 환경(원격 관리자 토큰 포함)에서 `PUT /v1/settings/config`로 바꿀 수 있는 설정은 `tickets.*`, `models.default`, `models.fallback`, `memory.default_retention`, `memory.history`뿐이다. 그 밖의 키를 수정하려고 하면 403 `local_socket_required`를 반환하고 설정 파일은 건드리지 않으며, 거부 사실을 `refused_remote`로 기록한다. 실행 파일, 경로, 리스너, 허용 목록, 정책 등을 가리키는 설정은 로컬 소켓(CLI)을 통해서만 바꿀 수 있어, 원격 토큰이 유출되더라도 재시작 후 임의 코드가 실행되는 위험을 막는다.
+로컬 권한(local authority)은 비공개 Unix 소켓이나 소켓에서 발급한 person/admin 토큰 및 로컬 시크릿을 갖춘 검증된 루프백 런처를 뜻한다. 로컬 권한은 파일 전용이 아닌 모든 키를 편집할 수 있다. 원격 person/admin 토큰은 `tickets.*`, `models.default/fallback/front`, `memory.default_retention/history`, `agent.startup_timeout_ms/tool_retries/compaction_max_messages/compaction_keep_messages/orchestration`, `service.inhibit_sleep`만 편집할 수 있으며, 허용되지 않은 변경은 `local_access_required`를 반환하고 감사에 기록된다. TCP 에이전트 클라이언트는 설정을 쓸 수 없다(`forbidden`). `POST /v1/daemon/restart`는 로컬 권한이 필요하며, 정상 종료(graceful shutdown) 후 동일한 PID로 re-exec한다. 만료되는 비공개 일회용 요청 바인딩 핸드오프는 이 제어된 exec 동안에만 런처 시크릿을 보존하며, 일반적인 부팅 시에는 보존하지 않는다.
 
 ## 키
 
@@ -99,15 +99,18 @@ TCP 통신 환경(원격 관리자 토큰 포함)에서 `PUT /v1/settings/config
 
 ### `[credentials]`
 
-Rust 에는 불투명한 테이블이다. 그대로 사이드카에 넘기고 Debug 출력에도 넣지 않는다. 비밀 값이 아니라 소스 순서와 소스별 설정만 둔다. 아래 키는 `agent/src/openside_agent/providers/config.py`, `sources.py`, `broker.py`, `anthropic.py` 와 `agent/README.md` 에서 읽었다.
+데몬은 소스 설정과 사람이 구성한 프로바이더 풀을 해석한다. 여기에는 소스 순서, 환경 변수 이름, command argv, 브로커 경로, 계정 참조만 저장하며, API 키나 OAuth 값은 절대 넣지 않는다. 암호화된 Vault 항목과 명시적 풀은 전용 Models & accounts 엔드포인트에서 관리한다. 사이드카에는 요청당 액세스 리스와 검증된 요청 셰이핑 메타데이터만 전달된다. 출처: `crates/opensided/src/model_accounts.rs`, `model_broker.rs`, `managed_subscriptions.rs`, `docs/specs/models-accounts.md`.
 
 | 키 | 타입 | 기본값 | env | 설명 |
 |---|---|---|---|---|
-| `order.<provider>` | string[] | `anthropic`: `["omp-broker","env","command"]`, `openai-codex`: `["omp-broker","codex-cli"]`, 그 밖: `["env","command"]` | — | 자격 증명 소스 시도 순서. 소스 이름: `omp-broker`, `env`, `command`, `codex-cli`, `builtin`. 모델 fallback 순서와는 별개 |
+| `order.<provider>` | string[] | `anthropic`: `["omp-broker","claude-code","vault","env","command"]`, `openai-codex`: `["omp-broker","codex-cli"]`, other: `["vault","env","command"]` | — | 자격 증명 우선순위이며 모델 fallback과는 독립적이다. 명시적으로 활성화하지 않으면 Claude Code는 건너뛴다. 명시적 순서 설정이 기본값을 덮어쓴다. |
+| `pools.<provider>` | `{source,account_id}[]` | 선택한 소스에서만 마이그레이션됨 | — | 순서가 지정된 명시적 신뢰 경계이며, 비어 있으면 라우팅을 비활성화한다. 다른 소스에서 호환되는 계정을 추가하는 작업은 사람만 수행할 수 있다. |
+| `subscriptions.claude-code` | bool | `false` | — | 기존 Claude Code 구독 로그인의 재사용을 허용한다. 로그인은 외부 명령(`claude auth login`)으로 유지된다. |
+| `subscriptions.codex-cli` | bool | `true` | — | 기존 Codex CLI 구독 로그인의 재사용을 허용한다. 로그인은 외부 명령(`codex login`)으로 유지된다. |
 | `env.<provider>` | string 또는 string[] | 공급자별 기본 변수(아래) | — | `env` 소스가 읽을 환경변수 이름 |
 | `command.<provider>` | argv | — | — | `command` 소스. 셸 없이 실행하고 stdout 을 키로 쓴다. stderr 는 버리고 결과는 로그에 남기지 않는다 |
 | `command.timeout_seconds` | number | `10` | — | `command` 실행 제한 시간 |
-| `omp_broker.url` | string | 선택적 omp 기본 후보 | `OPENSIDE_BROKER_URL`(우선) | auth broker URL |
+| `omp_broker.url` | string | 선택적 omp 기본 후보 | `OPENSIDE_BROKER_URL`(우선) | 인증 브로커 URL |
 | `omp_broker.token_file` | path | omp 기본 토큰 파일 후보 (선택적) | `OPENSIDE_BROKER_TOKEN` (토큰 값, 최우선) | 브로커 토큰 파일 경로. 토큰 우선순위는 `OPENSIDE_BROKER_TOKEN` > `omp_broker.token_env` > `omp_broker.token_file` > omp 기본 토큰 파일 후보 순이며, 앞선 환경 변수 값이 비어 있으면 다음 순서로 넘어간다. 유효한 토큰이 없으면 해당 자격 증명 소스는 조용히 비활성화된다 |
 | `omp_broker.token_env` | string | — | `OPENSIDE_BROKER_TOKEN` 우선 | 브로커 토큰이 들어 있는 환경 변수의 이름. ASCII 문자 환경 변수 이름만 지원. 설정 파일 안에 토큰 값을 직접 넣지 않는다 |
 | `omp_broker.snapshot_ttl_seconds` | number | `15` | — | 스냅샷 메모리 캐시 TTL |
@@ -115,11 +118,11 @@ Rust 에는 불투명한 테이블이다. 그대로 사이드카에 넘기고 De
 | `omp_broker.sse` | bool | `false` | — | 스냅샷 SSE 스트림 사용 |
 | `anthropic.claude_code_version` | semver string | `2.1.280` | `OPENSIDE_CLAUDE_CODE_VERSION`(우선) | Anthropic 요청 형태에 쓰는 버전. semver 가 아니면 기본값 |
 
-omp broker 기본 후보(omp 사용자용, 필수 아님): omp 가 쓰는 기본 loopback 주소와 홈 디렉터리 아래 broker 토큰 파일이다. 정확한 값은 `agent/src/openside_agent/providers/broker.py` 의 상수에 있다.
+선택적 브로커 후보는 `http://127.0.0.1:8765`와 `~/.omp/auth-broker.token`으로 유지되며, 필수가 아니다. 자격 증명 URL 및 토큰 확인은 Python broker.py 상수가 아니라 데몬이 전적으로 담당한다. 브로커 시크릿 스냅샷은 명시적 프로바이더 풀 신뢰 경계 안에서 데몬만이 가져온다.
 
 `env` 기본 변수 이름: `anthropic` → `ANTHROPIC_API_KEY`; `openai`, `openai-chat`, `openai-responses` → `OPENAI_API_KEY`; `openrouter` → `OPENROUTER_API_KEY`; `google` → `GOOGLE_API_KEY`, `GEMINI_API_KEY`; `github-copilot` → `GITHUB_COPILOT_API_KEY`, `GITHUB_COPILOT_API_TOKEN`, `COPILOT_GITHUB_TOKEN`; 그 밖은 `<PROVIDER>_API_KEY`(대문자, `-` → `_`).
 
-`codex-cli` 는 `CODEX_HOME/auth.json` 또는 `~/.codex/auth.json` 을, `builtin` 은 Pydantic AI 기본 동작을 쓰며 별도 키가 없다. broker 장애 시 다운그레이드하지 않는 정책은 `agent/README.md` 를 본다.
+Models & accounts는 라벨이 지정된 N개의 프로바이더 키와 격리된 외부 CLI 홈을 관리하며, 계정별 활성화와 순서가 지정된 명시적 프로바이더 풀을 제공한다. 관리형 API 및 OAuth 상태의 정본은 Vault에 보관한다. 데몬 전용 갱신은 리비전과 mtime을 기준으로 비공개 관리형 CLI 파일을 생성하거나 반영하며, 계정 삭제 시 이를 완전히 지운다. 기본 사용자 홈은 읽기 전용 상태를 유지한다. 사이드카는 외부 요청 시도마다 새로운 액세스 자격 증명만 받으며, 리프레시 토큰은 절대 전달되지 않는다. 브로커 장애가 발생해도 목록에 없는 소스로 넘어가지 않으며, 여러 소스가 혼합된 풀은 사람의 승인이 필요하다. `docs/specs/models-accounts.md`를 참고한다.
 
 ```toml
 [credentials.order]
@@ -137,15 +140,15 @@ timeout_seconds = 10
 
 `openside accounts`는 각 자격 증명 소스별 가용 상태, 마스킹된 식별용 계정 라벨, 설정된 프로바이더 모델 목록, 브로커 사용량 비율, 차단 만료 시각을 보여준다. `openside accounts --json`은 `GET /v1/accounts` (`read` 권한)와 동일한 데이터를 JSON으로 출력하며, 웹 UI의 Accounts 페이지에도 같은 정보가 표시된다.
 
-자격 증명 원문 값, 업스트림 계정 ID, 이메일 주소는 일절 반환하지 않는다. 출력되는 모델 목록은 현재 설정된 모델 목록이며, 브로커 전체 모델 카탈로그가 아니다.
+자격 증명 값, 업스트림 계정 ID, 이메일은 절대 반환되지 않는다. 계정 진단 정보에는 브로커가 보고한 모델 목록이 제공될 경우 이를 포함한다. `openside models`와 GET `/v1/settings/models`는 설정된 모델, 소스 계정, 대화 및 도구 사용이 가능한 선별된 프로바이더 목록을 준비 상태 사유와 함께 병합하여 제공한다.
 
-제한 사항: 데몬은 5초 동안 유효한 단일 플라이트(single-flight) 인메모리 캐시를 유지한다. 수집 작업은 설정된 `agent.command`에 `accounts --json`을 붙여 실행하며, 타임아웃은 10초, 표준 출력(stdout) 상한은 1 MiB이다. 최대 32개 소스, 소스당 최대 128개 계정, 최대 64개 설정 모델, 계정당 최대 16개 사용량 윈도우까지 처리한다.
+계정 진단 정보는 데몬이 집계하며, 세대(generation) 무효화와 single-flight 갱신을 통해 최대 5초 동안 캐시한다. 진단 시 자격 증명 명령을 실행하지 않는다. Python `models --json` 자식 프로세스는 최대 1 MiB로 제한된 stdout으로 자격 증명이 없는 SDK 인덱스만 출력하며, 자격 증명이 포함된 설정이나 환경 변수는 일절 상속받지 않는다.
 
 `command` 소스는 실행 파일이 존재하는지만 확인하며, `accounts`나 `doctor` 실행 시 명령어를 실제로 실행하지 않는다. 수집에 실패하면 API는 HTTP 503 `account_sources_unavailable`을 반환한다.
 
 #### 자격 증명 파일 보호
 
-- `FullAccess`를 포함한 모든 정책 모드에서 보호 대상: 어떤 소스에 속하든 설정된 모든 `token_file` 경로, 선택적 브로커 기본 토큰 파일 후보 경로, Codex CLI의 `CODEX_HOME/auth.json`(또는 홈 디렉터리 기준 기본 경로; 빈 `CODEX_HOME`은 미지정으로 처리). 데몬은 경로 메타데이터만 사용하며 해당 파일의 내용을 절대 읽지 않는다.
+- 모든 정책 모드는 설정된 token_file 경로, 브로커 기본 경로, 읽기 전용 Claude/Codex 자격 증명 파일, 관리형 구독 홈을 보호하며, 하드링크나 연결 해제(unlinked)된 별칭을 가리키는 보존 파일 디스크립터까지 포함한다. 보호 메커니즘은 메타데이터만 추적한다. 신뢰할 수 있는 분리된 데몬 자격 증명 소유자만 이들 파일을 읽을 수 있으며, 모델 도구, 아티팩트 수집기, 샌드박스 내부의 bash는 절대 읽을 수 없다.
 - 파일 도구(read, write, edit)와 아티팩트 수집기는 읽기나 쓰기를 수행하기 전에 실제 연 파일 디스크립터의 디바이스/아이노드(inode) 식별자를 대조한다. 따라서 직접 경로뿐 아니라 심볼릭 링크, `..` 경로 별칭, 하드링크, 바인드 마운트 별칭을 통한 접근을 모두 거부한다. `read` 디렉터리 목록에서도 보호 대상 항목은 제외된다. 확인된 식별자는 메타데이터 전용 CLOEXEC 디스크립터로 유지하므로 이름 바꾸기(rename)나 삭제(unlink)로 검사를 우회할 수 없다. 식별자는 최대 256개까지 추적하며, 추적에 실패하면 즉시 접근을 차단(fail-closed)하고 데몬을 재시작해야 한다.
 - Linux 환경에서는 연 디스크립터에 `fstatfs`를 호출하여 procfs, sysfs 등 프로세스/커널 가상 파일시스템을 판별하고, 다른 이름으로 바인드 마운트된 경우를 포함해 파일 도구 및 아티팩트 수집기의 접근을 거부한다. 이를 통해 `/proc/self/environ`이나 `/proc/<daemon pid>/environ`을 거쳐 상속된 환경 변수 자격 증명을 읽는 경로를 차단한다. Linux 이외의 플랫폼에서는 호스트 파일 차단 검사가 fail-closed 방식으로 즉시 실패한다.
 - bash가 bubblewrap 안에서 실행될 때: 보호 파일에 추가 하드링크가 있거나 바인드 별칭으로 노출된 경우(제한된 크기의 `mountinfo`와 해당 파일의 마운트 ID로 확인) 샌드박스 시작을 거부한다. 그 외에 노출된 자격 증명 경로는 빈 읽기 전용 파일로 마스킹한다. 샌드박스를 구성할 수 없으면 명령 실행 자체를 거부하며, 샌드박스 없이 재시도하지 않는다. 셸 환경 변수는 완전히 비우므로 자격 증명 소스의 환경 변수 값은 샌드박스로 상속되지 않는다.
@@ -203,7 +206,7 @@ timeout_seconds = 10
 |---|---|---|---|---|
 | `default_retention` | `permanent` \| `days_90` \| `days_30` | `permanent` | — | 보존 기간을 지정하지 않은 메모의 기본값. 브라우징 기록은 이 값과 관계없이 항상 `days_30` |
 | `history` | bool | `true` | — | `false` 면 `browser_open_tab`·`browser_navigate`·`browser_snapshot` 으로 본 페이지를 기억에 저장하지 않는다 |
-| `embedding.model_dir` | path | `<data_dir>/memory/model` | — | 로컬 임베딩 모델(`tokenizer.json`, `model.safetensors`) 디렉터리. 파일이 없으면 검색은 lexical-only 로 동작한다. 데몬은 모델을 내려받지 않는다. `openside memory model fetch <owner/name>` 으로 받는다 |
+| `embedding.model_dir` | path | `<data_dir>/memory/model` | — | 로컬 정적 임베딩 모델 폴더(`tokenizer.json`, `model.safetensors`). 파일이 없으면 어휘 전용 검색만 수행한다. Memory 페이지(`POST /v1/memory/model/download`)나 `openside memory model fetch`로 명시적으로 다운로드한다. 암묵적 다운로드는 수행하지 않으며, 데몬이 진행 상황, 취소, 체크섬, 재시작 필요 여부를 보고한다. |
 
 ### `[skills]`
 
@@ -217,7 +220,7 @@ timeout_seconds = 10
 
 ### `[channels]`
 
-채팅 어댑터(`openside-channels`)용이다. 어댑터는 데몬 공개 API 의 클라이언트이며 자세한 내용은 [`docs/specs/channels.md`](specs/channels.md) 에 있다. 비밀 값은 키에 직접 쓰지 않고 환경변수 **이름**(`*_env`)이나 argv(`*_cmd`, 셸 없이 실행하고 stdout 이 값)로만 지정한다.
+관리형 Telegram, Slack, Discord 계정은 Settings → Channels 또는 `/v1/settings/channels`를 통해서만 설정한다. 각 서비스는 라벨이 지정된 여러 ID를 지원하며, 독립적인 활성화, teammate 할당, 상태 조회가 가능하다. 시크릿 값은 타입화된 `channel_secret` Vault 항목으로 암호화되어 저장되며, 메타데이터로 반환되거나 config/argv/logs에 저장되거나 동기화되거나 브라우저 자동 완성으로 노출되지 않는다. 기존 env/command 테이블은 독립 실행형(standalone) 러너에서 서비스당 1개의 레거시 계정으로 계속 허용된다.
 
 | 키 | 타입 | 기본값 | env | 설명 |
 |---|---|---|---|---|
@@ -229,8 +232,13 @@ timeout_seconds = 10
 | `max_audio_bytes` | int | `26214400` | — | 받아 줄 오디오 최대 크기. 0 이면 거부 |
 | `edit_interval_ms` | int | `1000` | — | 스트리밍 답글을 고쳐 쓰는 최소 간격. 200 미만이면 거부 |
 | `state_dir` | path | `<data_dir>/channels` | — | 스레드-세션 매핑 저장 위치(디렉터리 0700, 파일 0600) |
+| `accounts` | object[] | `[]` | — | `id`, `kind`, `label`, `enabled`, `agent_id`, `secret_id`, `options`를 가진 독립 계정 목록. id는 kind별로 1~40자의 소문자·숫자·밑줄·하이픈만 허용되며, label은 제어 문자가 없는 1~128바이트 문자열이다. `secret_id`는 Vault의 `channel:{kind}:{id}`를 참조하며 자격 증명 값을 직접 포함하지 않는다. |
 
-`[channels.telegram]`, `[channels.slack]`, `[channels.discord]` 는 모두 `enabled = false` 가 기본이다. 켜려면 허용 목록(`allowed_*`) 중 하나 이상을 채워야 하며, 비어 있으면 설정을 읽을 때 거부한다. ID 는 문자열이나 정수로 쓴다.
+`[[channels.accounts]]`는 내부 및 파일의 정본 표현이다. 보안 폼을 통해 라벨, 활성화 여부, teammate, 허용 목록, 플랫폼 필드를 수정하며, 마스킹된 자격 증명을 교체하면 해당 계정의 시크릿만 로테이션된다. 원격 GUI 작성 시 표준 서비스 API 목적지는 고정되어 있으며, 커스텀 목적지는 로컬 소켓을 거쳐야 한다. 관리형 Slack/Discord 리스너는 기본적으로 임시 루프백 포트를 사용하며 실제 콜백 주소를 메타데이터로 반환한다. 계정 변경 사항은 데몬 TCP 감독 하에 실시간으로 적용되며, 그렇지 않으면 `restart_required`가 true가 된다. 에이전트가 지정되지 않은 새 채널 스레드는 chief에게 배정되고, 기존 스레드는 담당 에이전트를 유지한다. `openside channels list|add|rm|test` 명령을 사용하며, add는 숨김 처리된 표준 입력(stdin)으로만 값을 읽는다(Slack은 봇 토큰과 signing secret을 별도의 줄로 입력받는다).
+
+관리형 Slack/Discord 계정에서 webhook_url은 플랫폼에 등록해야 하는 정확한 공개 `/v1/hooks/{kind}/{account_id}` URL이다. 현재 주소가 루프백이면 GUI의 원격 접속 설정을 사용해야 한다. receiver_address는 호환 리스너 진단 정보일 뿐이며 관리형 콜백 주소가 아니다. effective_agent_id는 실제 라우팅 대상을 나타내는 읽기 전용 값이며, agent_id는 수정 가능한 재정의(override) 필드로 유지된다. API나 UI를 통한 명시적 Vault 잠금은 관리형 봇을 중지시키지만, OS 키링이나 화면 유휴(idle) 상태는 봇을 중지시키지 않는다.
+
+레거시 `[channels.telegram]`, `[channels.slack]`, `[channels.discord]` 테이블은 각각 `legacy-telegram`, `legacy-slack`, `legacy-discord`로 정규화된다. 기본값은 비활성화 상태이며, 활성화된 계정에는 최소 하나 이상의 관련 허용 목록이 여전히 필요하다. TOML에서는 숫자 ID도 계속 허용된다. 레거시 소스 참조는 파일 전용으로 유지되며 채널 메타데이터에서는 제외된다. 보안 계정 폼을 통해 자격 증명을 교체하면 기존 스레드 매핑을 변경하지 않고도 동일한 ID를 Vault 관리로 마이그레이션할 수 있다. 다음 표는 호환용 입력 형식만 설명하며, 새 계정은 `accounts[].options`를 사용한다.
 
 | 표 | 키 | 기본값 | 설명 |
 |---|---|---|---|
@@ -301,6 +309,6 @@ SMS·메일 전달 앱이 `POST /v1/otp`(`otp_ingest` 범위 토큰)로 보낸 �
 | `OPENSIDE_BROWSER` | 브라우저 탐색 | 위 `[browser]` 참고 |
 | `OPENSIDE_SIDECAR_SOCKET`, `OPENSIDE_SIDECAR_NONCE` | 사이드카 | 데몬이 주입한다. 직접 설정하지 않는다 |
 | `OPENSIDE_DOCTOR_CONFIG` | 사이드카 `doctor` | doctor 가 `credentials`, `models` JSON 을 넘길 때 쓴다 |
-| `OPENSIDE_HF_ENDPOINT` | CLI `memory model fetch` | 모델 저장소 주소(기본 `https://huggingface.co`). 테스트 서버용 loopback 외에는 https 만 허용 |
+| `OPENSIDE_HF_ENDPOINT` | CLI `memory model fetch` | CLI 모델 허브 엔드포인트(기본값 `https://huggingface.co`). 데몬의 요청은 로컬 권한이 필요한 명시적 엔드포인트 재정의를 사용한다. 루프백 테스트 서버를 제외하고 HTTPS여야 한다. |
 | `OPENSIDE_AGENT_SCRIPT` | 사이드카 | 테스트용 스크립트 모델 경로(`openside-e2e`) |
 | `OPENSIDE_LIVE_MODEL`, `OPENSIDE_LIVE_CREDENTIALS` | `agent/tests` | live 테스트 opt-in |

@@ -388,3 +388,38 @@ async fn authentication_failure_at_open_wins_over_a_simultaneous_child_exit() {
         matches!(result, Err(RuntimeError::AuthUnavailable(message)) if message == "configure credentials")
     );
 }
+
+#[tokio::test]
+async fn sidecar_children_disable_core_dumps_without_changing_parent_limits() {
+    use nix::sys::resource::{getrlimit, Resource};
+    let parent = getrlimit(Resource::RLIMIT_CORE).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let limits = temp.path().join("core-limits");
+    let mut settings = config(temp.path(), "printf '%s\\n%s\\n' \"$(ulimit -S -c)\" \"$(ulimit -H -c)\" > \"$CORE_LIMITS.tmp\" && mv \"$CORE_LIMITS.tmp\" \"$CORE_LIMITS\"; exec sleep 30");
+    settings
+        .env
+        .push(("CORE_LIMITS".into(), limits.to_string_lossy().into_owned()));
+    let (_listener, mut process, _nonce) = spawn(&settings).unwrap();
+    let observed = wait_file(&limits).await;
+    process.finish().await;
+    assert_eq!(observed, "0\n0\n");
+    assert_eq!(getrlimit(Resource::RLIMIT_CORE).unwrap(), parent);
+}
+
+#[tokio::test]
+async fn sidecar_child_never_inherits_a_daemon_credential_environment_variable() {
+    const NAME: &str = "OPENSIDE_TEST_DAEMON_PROVIDER_KEY";
+    std::env::set_var(NAME, "daemon-credential-env-canary-8461");
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("child-environment");
+    let mut settings = config(temp.path(), "printf '%s\\n' \"${OPENSIDE_TEST_DAEMON_PROVIDER_KEY-unset}\" > \"$ENV_RESULT\"; exec sleep 30");
+    settings
+        .env
+        .push(("ENV_RESULT".into(), output.to_string_lossy().into_owned()));
+    let result = spawn(&settings);
+    std::env::remove_var(NAME);
+    let (_listener, mut process, _nonce) = result.unwrap();
+    let actual = wait_file(&output).await;
+    process.finish().await;
+    assert_eq!(actual, "unset\n");
+}

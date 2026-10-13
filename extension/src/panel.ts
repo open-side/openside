@@ -1,13 +1,19 @@
-import type { AuthButton } from "../../web/src/otp/authCard";
-import { isApprovalTicket, isChoiceTicket, isLoginTicket, mountApprovalCard, mountChoiceForm, mountLoginForm } from "../../web/src/otp/loginForm";
-import { isOtpTicket, mountOtpForm, otpRegistrationOf, registrationNote, registrationQuestion } from "../../web/src/otp/otpForm";
-import { KIND_LABEL, siteNote, TAKEOVER_NOTE } from "../../web/src/otp/ticketCopy";
-import { client, openSessionStream, type Client, type Ticket } from "./api";
+import { askerOf, isAttentionTicket } from "../../web/src/cards/attention";
+import { mountCard, type MountedCard } from "../../web/src/cards/render";
+import type { Action } from "../../web/src/api/types";
+import { client, openSessionStream, type Client } from "./api";
 import { hasContextMention, withContext, type TabContext } from "./context";
 import { renderMarkdown } from "./markdown";
 import { pairing, tabSessions } from "./storage";
+import { createPicker } from "./picker";
 import { bindStatus, icon, mountIcons, type IconName } from "./ui";
-const select = document.querySelector<HTMLSelectElement>("#sessions")!;
+import { installScrollReveal } from "../../web/src/ui/scrollReveal";
+import { outcomeNote } from "../../web/src/components/toolStatus";
+installScrollReveal();
+const sessionsRoot = document.querySelector<HTMLElement>("#sessions")!;
+const NEW_CHAT = { value: "", label: "New chat" };
+const picker = createPicker(sessionsRoot, "Conversation for this tab", () => { void watch().catch(fail); });
+picker.setItems([NEW_CHAT], "");
 const composer = document.querySelector<HTMLTextAreaElement>("#message")!;
 const status = document.querySelector<HTMLElement>("#status")!;
 const transcript = document.querySelector<HTMLElement>("#transcript")!;
@@ -32,6 +38,38 @@ function bubble(role: "user" | "assistant"): HTMLElement {
   element.className = `bubble ${role}`;
   return element;
 }
+type DeliveryState = "sent" | "read" | "failed" | "note";
+// Same classes and wording as the web timeline (components/Timeline.tsx); web/src/styles.css styles both.
+function deliveryNote(state: DeliveryState, text?: string): HTMLElement {
+  const element = document.createElement("p");
+  element.className = state === "failed" ? "receipt receipt-failed" : "receipt";
+  element.dataset.state = state;
+  if (state === "sent" || state === "read") { element.textContent = state === "sent" ? "Sent" : "Read"; return element; }
+  const label = document.createElement("span");
+  label.textContent = text ?? "";
+  if (state === "failed") element.append(icon("circle-alert", 14));
+  element.append(label);
+  return element;
+}
+function typingRow(): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "typing-row";
+  const dots = document.createElement("p");
+  dots.className = "typing";
+  dots.setAttribute("role", "status");
+  const label = document.createElement("span");
+  label.className = "sr-only";
+  label.textContent = "Agent is working";
+  dots.append(label);
+  for (let dot = 0; dot < 3; dot += 1) {
+    const span = document.createElement("span");
+    span.className = "typing-dot";
+    span.setAttribute("aria-hidden", "true");
+    dots.append(span);
+  }
+  row.append(dots);
+  return row;
+}
 async function currentContext(sourceTab = tabId): Promise<TabContext> {
   if (sourceTab === undefined) throw new Error("No current tab");
   const tab = await chrome.tabs.get(sourceTab);
@@ -47,117 +85,101 @@ async function attach(): Promise<void> {
   chip.textContent = `Attached: ${context.title} · ${context.url}`;
   chip.title = chip.textContent;
 }
-function button(parent: HTMLElement, label: string, variant: "primary" | "secondary" | "ghost", action: () => Promise<unknown>): void {
-  const element = document.createElement("button");
-  element.type = "button";
-  element.className = `button compact${variant === "secondary" ? "" : ` ${variant}`}`;
-  element.textContent = label;
-  element.addEventListener("click", () => { element.disabled = true; void action().then(refreshTickets).catch(fail).finally(() => { element.disabled = false; }); });
-  parent.append(element);
+// Request cards are the shared renderer (web/src/cards). The panel can answer, reject, finish and
+// open links; targets that need the web app (remote screen, in-app navigation) are not offered.
+const PANEL_TARGETS: readonly Action["target"]["type"][] = ["ticket_resolve", "ticket_reject", "ticket_done", "link"];
+const supports = (action: Action): boolean => PANEL_TARGETS.includes(action.target.type);
+interface PanelCard { host: HTMLElement; mounted: MountedCard; anywhere: boolean }
+const ticketCards = new Map<string, PanelCard>();
+const presentedCards: MountedCard[] = [];
+function cardHost(extra = ""): HTMLElement {
+  const host = document.createElement("div");
+  host.className = `panel-card${extra}`;
+  return host;
 }
-// Labels and notes come from web/src/otp/ticketCopy.ts; only the icon set is the panel's own.
-const ticketIcons: Record<Ticket["kind"], IconName> = {
-  confirm: "shield-check",
-  info: "message-circle-question",
-  secret_input: "key-round",
-  device_approval: "monitor-smartphone",
-  takeover: "hand",
-  // Pending logins and choices render as the shared cards; these name them elsewhere.
-  login: "key-round",
-  choice: "message-circle-question",
-};
-const authButtons: Record<AuthButton, string> = { primary: "button compact primary", secondary: "button compact", ghost: "button compact ghost" };
-function paragraph(parent: HTMLElement, className: string, text: string): void {
-  if (!text) return;
-  const element = document.createElement("p"); element.className = className; element.textContent = text; parent.append(element);
-}
-function renderTicket(ticket: Ticket, api: Client): HTMLElement {
-  const card = document.createElement("article");
-  card.className = "ticket";
-  card.dataset.ticket = ticket.id;
-  // The shared web cards: autofill-friendly inputs, values emptied before anything is sent.
-  const shared = { client: api, buttonClass: (variant: AuthButton) => authButtons[variant], onSubmitted: () => { void refreshTickets().catch(fail); } };
-  if (isOtpTicket(ticket) || isLoginTicket(ticket) || isChoiceTicket(ticket) || isApprovalTicket(ticket)) {
-    // Same markup as web Timeline: the chip sits above the card while the person has to act.
-    card.classList.add("ticket-otp", "ticket-auth", "ticket-anywhere", "ticket-row");
-    const chip = document.createElement("span"); chip.className = "action-chip"; chip.dataset.tone = "warn";
-    const dot = document.createElement("span"); dot.className = "action-chip-dot"; dot.setAttribute("aria-hidden", "true");
-    chip.append(dot, "Action needed"); card.append(chip);
-    if (isLoginTicket(ticket)) mountLoginForm(card, { ...shared, ticket });
-    else if (isChoiceTicket(ticket)) mountChoiceForm(card, { ...shared, ticket });
-    else if (isApprovalTicket(ticket)) mountApprovalCard(card, { ...shared, ticket });
-    else mountOtpForm(card, { ...shared, ticket });
-    return card;
-  }
-  const registration = otpRegistrationOf(ticket);
-  const [kindIcon, kindLabel] = registration ? ["key-round" as const, "Save authenticator"] : [ticketIcons[ticket.kind], KIND_LABEL[ticket.kind]];
-  const head = document.createElement("div"); head.className = "ticket-head";
-  const kind = document.createElement("span"); kind.className = "ticket-kind"; kind.textContent = kindLabel;
-  const kindGlyph = icon(kindIcon, 16); kindGlyph.classList.add("ticket-icon");
-  head.append(kindGlyph, kind); card.append(head);
-  card.setAttribute("aria-label", kindLabel);
-  const summary = document.createElement("strong"); summary.className = "ticket-summary"; summary.textContent = registration ? registrationQuestion(registration) : ticket.summary;
-  card.append(summary);
-  const actions = document.createElement("div"); actions.className = "ticket-actions";
-  if (registration) {
-    card.classList.add("ticket-anywhere");
-    paragraph(card, "ticket-note", registrationNote(registration));
-    button(actions, "Save to vault", "primary", () => api.resolveTicket(ticket.id, true));
-    button(actions, "Not now", "secondary", () => api.resolveTicket(ticket.id, false));
-    card.append(actions);
-    return card;
-  }
-  paragraph(card, "ticket-note", ticket.instructions ?? "");
-  paragraph(card, "ticket-site", ticket.target?.origin ? siteNote(ticket.target.origin) : "");
-  if (ticket.kind === "confirm") button(actions, "Approve", "primary", () => api.resolveTicket(ticket.id, true));
-  else if (ticket.kind === "info" && ticket.options.length) for (const option of ticket.options) button(actions, option.label, "secondary", () => api.resolveTicket(ticket.id, option.value));
-  else if (ticket.kind === "info" || ticket.kind === "secret_input") {
-    const input = document.createElement("input"); input.type = ticket.kind === "secret_input" ? "password" : "text"; input.autocomplete = "off"; input.placeholder = ticket.kind === "secret_input" ? "Secret value" : "Answer"; input.setAttribute("aria-label", ticket.kind === "secret_input" ? "Secret" : "Answer"); card.append(input);
-    button(actions, ticket.kind === "secret_input" ? "Submit" : "Send", "primary", async () => { const value = input.value; input.value = ""; return api.resolveTicket(ticket.id, value); });
-  } else {
-    if (ticket.kind === "takeover" && !ticket.instructions) paragraph(card, "ticket-note", TAKEOVER_NOTE);
-    button(actions, "Done", "primary", () => api.ticketDone(ticket.id));
-  }
-  button(actions, ticket.kind === "info" ? "Dismiss" : "Reject", "ghost", () => api.rejectTicket(ticket.id));
-  card.append(actions);
-  return card;
-}
-// Code requests from any conversation show here, not only this tab's: the person types the code
-// where they already are. Cards are kept by ticket id so a refresh never drops a half-typed code.
+// Requests that need a human step show here from any conversation, not only this tab's: the person
+// answers where they already are. A card stays mounted by ticket id so a refresh never drops a
+// half-typed code, and the shared renderer empties its fields itself when the request settles.
 async function refreshTickets(): Promise<void> {
-  const selected = select.value;
+  const selected = picker.value;
   const api = client(await pairing());
   const result = await api.listTickets("pending");
-  if (selected !== select.value) return;
-  const shown = result.tickets.filter(ticket => ticket.session_id === selected || isOtpTicket(ticket) || otpRegistrationOf(ticket) || isLoginTicket(ticket) || isChoiceTicket(ticket) || isApprovalTicket(ticket));
-  const existing = new Map([...ticketBox.querySelectorAll<HTMLElement>(":scope > .ticket")].map(card => [card.dataset.ticket, card]));
-  ticketBox.replaceChildren(...shown.map(ticket => existing.get(ticket.id) ?? renderTicket(ticket, api)));
+  if (selected !== picker.value) return;
+  const shown = result.tickets.filter(ticket => ticket.card && (ticket.session_id === selected || isAttentionTicket(ticket)));
+  const keep = new Set(shown.map(ticket => ticket.id));
+  for (const [id, entry] of ticketCards) if (!keep.has(id)) { entry.mounted.dispose(); entry.host.remove(); ticketCards.delete(id); }
+  let cursor = ticketBox.firstElementChild;
+  for (const ticket of shown) {
+    let entry = ticketCards.get(ticket.id);
+    if (entry) entry.mounted.update(ticket.card!);
+    else {
+      const host = cardHost();
+      // The person opened the panel to answer, so a waiting request starts open.
+      const mounted = mountCard(host, ticket.card!, { port: api, sessionId: ticket.session_id, supports, focus: "none", defaultOpen: true, asker: askerOf(ticket), onSettled: () => { void refreshTickets().catch(fail); } });
+      entry = { host, mounted, anywhere: isAttentionTicket(ticket) };
+      ticketCards.set(ticket.id, entry);
+    }
+    if (entry.host === cursor) cursor = cursor.nextElementSibling;
+    else ticketBox.insertBefore(entry.host, cursor);
+  }
 }
 async function watch(): Promise<void> {
   const epoch = ++generation;
   stream?.close(); transcript.replaceChildren(); connection.textContent = "";
-  for (const card of ticketBox.querySelectorAll(":scope > .ticket:not(.ticket-anywhere)")) card.remove();
-  const id = select.value;
-  select.title = select.selectedOptions[0]?.text ?? "";
+  for (const [id, entry] of ticketCards) if (!entry.anywhere) { entry.mounted.dispose(); entry.host.remove(); ticketCards.delete(id); }
+  for (const mounted of presentedCards.splice(0)) mounted.dispose();
+  const id = picker.value;
+  sessionsRoot.title = picker.label;
   if (!id) { await refreshTickets(); return; }
   const api = client(await pairing());
   if (epoch !== generation) return;
   let reply: HTMLElement | undefined;
   let replyText = "";
-  const startReply = () => { reply = bubble("assistant"); reply.classList.add("streaming"); replyText = ""; transcript.append(reply); return reply; };
+  // Only the newest message carries a delivery note, like the web timeline.
+  let lastBubble: HTMLElement | undefined;
+  let lastId = "";
+  let note: HTMLElement | undefined;
+  let typing: HTMLElement | undefined;
+  const startReply = () => { reply = bubble("assistant"); replyText = ""; transcript.append(reply); return reply; };
+  const setNote = (state?: DeliveryState, text?: string) => { note?.remove(); note = state && lastBubble ? deliveryNote(state, text) : undefined; if (note) lastBubble!.after(note); };
+  const setTyping = (on: boolean) => { if (on && !typing) { typing = typingRow(); transcript.append(typing); } else if (!on) { typing?.remove(); typing = undefined; } };
+  // Sent and Read go away once the agent answers; a failure or stop note stays until the next message.
+  const settleNote = () => { if (note?.dataset.state === "sent" || note?.dataset.state === "read") setNote(); };
   const connectionNotes: Partial<Record<string, string>> = { connecting: "Connecting…", reconnecting: "Reconnecting…" };
   // A replaced stream still reports "closed" after watch() moved on, so only the current one writes.
   stream = openSessionStream({ client: api, sessionId: id, onError: fail, onStatus: value => { if (epoch === generation) connection.textContent = connectionNotes[value] ?? ""; }, onEvent: event => {
-    if (event.kind === "message.queued") followLatest(() => { const item = bubble("user"); item.textContent = event.text; transcript.append(item); });
-    if (event.kind === "turn.started") followLatest(startReply);
-    if (event.kind === "turn.ended") reply?.classList.remove("streaming");
+    if (event.kind === "message.queued") followLatest(() => {
+      const item = bubble("user");
+      item.textContent = event.text;
+      item.dataset.authorKind = event.author_kind ?? "internal";
+      if (event.from_agent) item.dataset.fromAgent = event.from_agent;
+      transcript.append(item);
+      if (event.author_kind === "person") {
+        lastBubble = item;
+        lastId = event.message_id;
+        setNote("sent");
+      }
+    });
+    if (event.kind === "message.injected" && event.message_id === lastId) setNote("read");
+    if (event.kind === "message.completed" && event.message_id === lastId) followLatest(() => {
+      setTyping(false);
+      if (event.outcome === "completed" || event.outcome === "deferred") setNote();
+      else setNote(event.outcome === "failed" ? "failed" : "note", outcomeNote(event.outcome, event.reason ?? undefined));
+    });
+    if (event.kind === "turn.started") followLatest(() => { reply = undefined; replyText = ""; if (note?.dataset.state === "sent") setNote("read"); setTyping(true); });
+    if (event.kind === "tool.started") followLatest(() => setTyping(true));
+    if (event.kind === "turn.ended" || event.kind === "session.settled" || event.kind === "session.stopped") followLatest(() => { setTyping(false); settleNote(); });
     if (event.kind === "assistant.delta" || event.kind === "assistant.final") followLatest(() => {
+      setTyping(false);
+      settleNote();
       const target = reply ?? startReply();
       replyText = event.kind === "assistant.final" ? event.text : replyText + event.text;
       renderMarkdown(target, replyText);
-      if (event.kind === "assistant.final") target.classList.remove("streaming");
     });
+    if (event.kind === "card.presented") followLatest(() => { const host = cardHost(" transcript-card"); transcript.append(host); presentedCards.push(mountCard(host, event.card, { port: api, sessionId: id, supports, focus: "none" })); });
     if (event.kind.startsWith("ticket.")) void refreshTickets().catch(fail);
+    // The model names a new conversation after its first reply; rename the picker entry without waiting for a tab switch.
+    if (event.kind === "session.updated" || event.kind.startsWith("session.title")) void refreshSessions().catch(fail);
   } });
   await refreshTickets();
 }
@@ -165,15 +187,13 @@ async function refreshSessions(): Promise<void> {
   if (tabId === undefined) return;
   const currentTab = tabId;
   const ids = new Set(await tabSessions(currentTab));
-  const selected = select.value;
+  const selected = picker.value;
   const sessions = (await client(await pairing()).listSessions()).sessions.filter(session => ids.has(session.id));
   if (currentTab !== tabId) return;
-  select.replaceChildren(new Option("New chat", ""), ...sessions.map(session => new Option(session.title, session.id)));
-  select.value = ids.has(selected) ? selected : "";
+  picker.setItems([NEW_CHAT, ...sessions.map(session => ({ value: session.id, label: session.title }))], ids.has(selected) ? selected : "");
   // The picker truncates long titles with an ellipsis; the tooltip carries the full one.
-  select.title = select.selectedOptions[0]?.text ?? "";
+  sessionsRoot.title = picker.label;
 }
-select.addEventListener("change", () => { void watch().catch(fail); });
 document.querySelector("#attach")!.addEventListener("click", () => { void attach().catch(fail); });
 composer.addEventListener("input", () => { if (hasContextMention(composer.value)) void attach().catch(fail); });
 for (const pair of document.querySelectorAll("#pair, #pair-start")) pair.addEventListener("click", () => { void chrome.runtime.openOptionsPage(); });
@@ -183,7 +203,7 @@ document.querySelector<HTMLFormElement>("#compose")!.addEventListener("submit", 
   const text = composer.value;
   const explicitContext = attached;
   const sourceTab = tabId;
-  const chosen = select.value;
+  const chosen = picker.value;
   const submit = document.querySelector<HTMLButtonElement>('button[type="submit"]')!; submit.disabled = true;
   void (async () => {
     const context = explicitContext ?? (hasContextMention(text) ? await currentContext(sourceTab) : undefined);
@@ -191,7 +211,7 @@ document.querySelector<HTMLFormElement>("#compose")!.addEventListener("submit", 
     else {
       const result = await chrome.runtime.sendMessage({ type: "start", tabId: sourceTab, text, context });
       if (result.error) throw new Error(result.error);
-      await refreshSessions(); select.value = result.id; await watch();
+      await refreshSessions(); picker.value = result.id; await watch();
     }
     composer.value = ""; attached = undefined; document.querySelector("#context")!.textContent = "";
   })().catch(fail).finally(() => { submit.disabled = false; });
@@ -203,7 +223,7 @@ async function initialize(): Promise<void> {
   if (!paired) {
     generation += 1;
     stream?.close(); transcript.replaceChildren(); ticketBox.replaceChildren(); connection.textContent = "";
-    select.replaceChildren(new Option("New chat", ""));
+    picker.setItems([NEW_CHAT], "");
     return;
   }
   const active = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
@@ -214,11 +234,11 @@ async function initialize(): Promise<void> {
     stream?.close(); transcript.replaceChildren();
     for (const card of ticketBox.querySelectorAll(":scope > .ticket:not(.ticket-anywhere)")) card.remove();
     attached = undefined; document.querySelector("#context")!.textContent = "";
-    select.value = "";
+    picker.value = "";
   }
   await refreshSessions();
   const ids = tabId === undefined ? [] : await tabSessions(tabId);
-  if (!select.value && ids.length) { select.value = ids[0]; await watch(); } else if (!select.value) await refreshTickets();
+  if (!picker.value && ids.length) { picker.value = ids[0]; await watch(); } else if (!picker.value) await refreshTickets();
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && (changes.pairing || (tabId !== undefined && changes[`sessions:${tabId}`]))) void initialize().catch(fail);

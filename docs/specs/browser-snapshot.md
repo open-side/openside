@@ -90,5 +90,3 @@ cargo test -p openside-browser --test snapshot_bench viewport_snapshot -- --noca
 - 접근성 트리가 메인 프레임 기준이므로 레이아웃 정보도 메인 문서의 것만 읽는다.
 - 페이지 상태와 캡처 시점이 완벽하게 동결되지 않는다. 접근성 트리를 가져온 직후 뷰포트 좌표를 읽기 때문에, 두 호출 사이에 페이지가 스크롤되거나 레이아웃이 바뀌면 불일치가 발생할 수 있다. 이 경우 캡처를 다시 수행해야 한다.
 - `overflow: hidden`이나 `opacity: 0`을 기준으로 별도 클리핑하지 않는다. 숨겨진 노드는 이미 접근성 트리 단계에서 걸러진다.
-
-[You have received this identical output 3 times. Re-reading 'agent://SnapViewport.SnapSpecKo/piece1' will not change it — use a narrower selector (path:A-B), or proceed with the edit.]

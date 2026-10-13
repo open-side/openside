@@ -14,15 +14,22 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod content;
+pub mod credentials;
 pub mod ids;
 pub mod queue;
 pub mod runtime;
 
 pub use content::{ContentKind, ContentPart};
+pub use credentials::{
+    CredentialAction, CredentialAuth, CredentialAuthKind, CredentialError, CredentialErrorCode,
+    CredentialOutcome, CredentialReport, CredentialReportAck, CredentialRequest, CredentialScope,
+    CredentialSnapshot, CredentialUsage, CredentialUsageWindow, ModelAccountRef,
+    MAX_CREDENTIAL_ATTEMPTS,
+};
 pub use ids::{MessageId, SessionId, TicketId};
 pub use queue::{DropReason, MessageQueue, MessageStatus, QueueError, QueueMode, SubmitOutcome};
 pub use runtime::{
     AgentRuntime, AgentSession, AgentState, ApprovalTier, DeferKind, DeferredCall, HostToolHandler,
-    RunOutcome, RuntimeError, RuntimeEvent, SessionInfo, SessionSpec, SubagentControl,
-    TicketResolution, ToolCall, ToolOutcome, ToolSpec,
+    RunOutcome, RuntimeError, RuntimeEvent, SessionInfo, SessionSpec, SubagentControl, TeamContext,
+    TeamRole, TicketResolution, ToolCall, ToolOutcome, ToolSpec,
 };

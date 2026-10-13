@@ -30,7 +30,6 @@ pub struct TelegramMessenger {
 struct Envelope<T> {
     ok: bool,
     result: Option<T>,
-    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -78,10 +77,8 @@ impl TelegramMessenger {
         match (envelope.ok, envelope.result) {
             (true, Some(result)) => Ok(result),
             _ => Err(ChannelError::Platform(format!(
-                "{method}: {}",
-                envelope
-                    .description
-                    .unwrap_or_else(|| format!("HTTP {}", status.as_u16()))
+                "{method}: request refused (HTTP {})",
+                status.as_u16()
             ))),
         }
     }

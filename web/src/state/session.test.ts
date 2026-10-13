@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Event, Ticket } from "../api/types";
+import type { Card, Event, Ticket } from "../api/types";
 import { emptySessionView, pendingTickets, reduceSession, replaySession } from "./session";
 
 type Payload = { kind: string } & Record<string, unknown>;
@@ -13,6 +13,20 @@ function log(payloads: Payload[]): Event[] {
     ...payload,
   })) as Event[];
 }
+
+const pendingCard: Card = {
+  id: "ticket:k1",
+  kind: "form",
+  site: { origin: "https://shop.example", name: "shop.example", favicon_ref: null },
+  title: "Pick a color",
+  subtitle: null,
+  status: "pending",
+  interaction: "ask",
+  ticket_id: "k1",
+  collapsed_summary: "Pick a color",
+  blocks: [],
+  actions: [],
+};
 
 const ticket: Ticket = {
   id: "k1",
@@ -34,6 +48,7 @@ const ticket: Ticket = {
   expires_at: "2026-01-02T00:00:00Z",
   status: "pending",
   resolution: null,
+  card: pendingCard,
 };
 
 const events = log([
@@ -57,12 +72,28 @@ const events = log([
   { kind: "session.settled" },
   { kind: "message.promoted", message_id: "m4" },
   { kind: "session.updated", pinned: true, title: "Renamed" },
-  { kind: "ticket.resolved", ticket_id: "k1", resolution: { answer: "blue" } },
+  { kind: "ticket.resolved", ticket_id: "k1", resolution: { answer: "blue" }, card: { ...pendingCard, status: "done", interaction: "ask", collapsed_summary: "Answered", actions: [], blocks: [] } },
   { kind: "assistant.final", text: "blue it is" },
   { kind: "some.future.kind", data: 1 },
 ]);
 
 describe("session view reducer", () => {
+  it("retains daemon authors through edits and delivery and defaults old events to internal", () => {
+    const view = replaySession(log([
+      { kind: "message.queued", message_id: "person", text: "hello", mode: "queue", author_kind: "person" },
+      { kind: "message.queued", message_id: "api", text: "api", mode: "queue", author_kind: "agent_client" },
+      { kind: "message.queued", message_id: "team", text: "team", mode: "queue", author_kind: "internal", from_agent: "chief" },
+      { kind: "message.queued", message_id: "old", text: "old", mode: "queue" },
+      { kind: "message.edited", message_id: "team", text: "edited" },
+      { kind: "message.promoted", message_id: "team" },
+      { kind: "message.injected", message_id: "team" },
+    ]));
+    expect(view.queue.map((message) => [message.id, message.author_kind, message.from_agent])).toEqual([
+      ["person", "person", null], ["api", "agent_client", null], ["old", "internal", null],
+    ]);
+    expect(view.items[0]).toMatchObject({ type: "user", text: "edited", author_kind: "internal", from_agent: "chief" });
+  });
+
   it("replays private-session metadata used to hide browser preview", () => {
     const events = log([{ kind: "session.created", title: "Private", model: "provider:model", incognito: true }]);
     expect(replaySession(events).incognito).toBe(true);
@@ -82,11 +113,11 @@ describe("session view reducer", () => {
       thinking: false,
     });
     expect(view.queue).toEqual([
-      { id: "m4", text: "urgent", mode: "steer" },
-      { id: "m2", text: "later, edited", mode: "queue" },
+      { id: "m4", text: "urgent", mode: "steer", author_kind: "internal", from_agent: null },
+      { id: "m2", text: "later, edited", mode: "queue", author_kind: "internal", from_agent: null },
     ]);
     expect(view.items).toEqual([
-      { type: "user", id: "m1", text: "hello", outcome: "deferred", reason: undefined },
+      { type: "user", id: "m1", text: "hello", outcome: "deferred", reason: undefined, author_kind: "internal", from_agent: null },
       { type: "assistant", id: "a11", text: "Hello", final: true },
       {
         type: "tool",
@@ -98,7 +129,7 @@ describe("session view reducer", () => {
         isError: false,
         done: true,
       },
-      { type: "ticket", id: "k1" },
+      { type: "card", id: "ticket:k1" },
       { type: "assistant", id: "a22", text: "blue it is", final: true, finalSeq: 22 },
     ]);
     expect(view.tickets.k1).toMatchObject({ status: "resolved", resolution: { answer: "blue" } });
@@ -206,7 +237,7 @@ describe("subagents, artifacts and attachments", () => {
     ]);
     expect(replaySession(childLog.slice(0, 7)).subagents[0]?.status).toBe("waiting_human");
     expect(view.artifacts).toEqual([{ path: "out/report.md", mime: "text/markdown", size: 20, tool: "edit" }]);
-    expect(view.items[0]).toEqual({ type: "user", id: "m1", text: "look", attachments: [attachment] });
+    expect(view.items[0]).toEqual({ type: "user", id: "m1", text: "look", attachments: [attachment], author_kind: "internal", from_agent: null });
     expect(view.items.at(-1)).toMatchObject({ type: "assistant", final: true, finalSeq: 13 });
   });
 });
@@ -280,5 +311,91 @@ describe("user-task lifecycle across model requests", () => {
     expect(pendingTickets(waiting).map((pending) => pending.id)).toEqual([ticket.id]);
     expect(replaySession(task.slice(0, 8)).status).toBe("running");
     expect(replaySession(task).status).toBe("idle");
+  });
+});
+
+describe("conversation metadata", () => {
+  it("uses one proposed title and never replaces a user rename", () => {
+    const proposals = log([
+      { kind: "session.created", title: "New session", model: "script" },
+      { kind: "session.title_proposed", title: "Compare Acme plans" },
+      { kind: "session.title_proposed", title: "A second proposed title" },
+      { kind: "session.updated", title: "My plans" },
+      { kind: "session.title_proposed", title: "Ignore the rename" },
+    ]);
+    expect(replaySession(proposals.slice(0, 3)).title).toBe("Compare Acme plans");
+    expect(replaySession(proposals).title).toBe("My plans");
+  });
+
+  it("keeps a page favicon during its next action and drops it on navigation", () => {
+    const page = {
+      kind: "browser.state", tab_id: "tab", url: "https://example.test/plans",
+      host: "example.test", title: "Plans", phase: "reading", page_kind: "article", facts: {},
+    };
+    const events = log([
+      { ...page, favicon: "data:image/png;base64,icon" },
+      { ...page, phase: "acting" },
+      { ...page, url: "https://other.test/", host: "other.test", title: "Other" },
+    ]);
+    expect(replaySession(events.slice(0, 2)).browserStates["front:tab"]!.favicon).toBe("data:image/png;base64,icon");
+    expect(replaySession(events).browserStates["front:tab"]!.favicon).toBeUndefined();
+  });
+
+  it("preserves calm error copy separately from technical diagnostics", () => {
+    const view = replaySession(log([{
+      kind: "runtime.error", code: "interrupted", message: "process EOF",
+      user_message: "The agent stopped. Try again.", retryable: true,
+    }]));
+    expect(view.items[0]).toMatchObject({
+      type: "error", message: "process EOF", userMessage: "The agent stopped. Try again.", retryable: true,
+    });
+  });
+});
+
+describe("conversation cards in the thread", () => {
+  const info = (id: string, over: Partial<Card> = {}): Card => ({ ...pendingCard, id, ticket_id: null, interaction: "none", status: "done", ...over });
+
+  it("places a card where its event lands and keeps its first position when it updates in place", () => {
+    const view = replaySession(
+      log([
+        { kind: "assistant.final", text: "one" },
+        { kind: "card.presented", card: info("present:p1", { title: "A" }) },
+        { kind: "assistant.final", text: "two" },
+        { kind: "card.presented", card: info("present:p1", { title: "B" }) },
+      ]),
+    );
+    expect(view.items.map((item) => (item.type === "card" ? item.id : item.type))).toEqual(["assistant", "present:p1", "assistant"]);
+    expect(view.cards["present:p1"]).toMatchObject({ firstSeq: 2, card: { title: "B" } });
+  });
+
+  it("a pending request never adds its own timeline row; its card is one", () => {
+    const view = replaySession(log([{ kind: "ticket.opened", ticket }]));
+    expect(view.items).toEqual([{ type: "card", id: "ticket:k1" }]);
+    expect(view.cards["ticket:k1"]!.card.status).toBe("pending");
+    expect(pendingTickets(view).map((pending) => pending.id)).toEqual(["k1"]);
+  });
+
+  it("a settled request's card moves to where it settled, and replays to the same state", () => {
+    const settled = { ...pendingCard, status: "failed" as const, actions: [] };
+    const events = log([
+      { kind: "ticket.opened", ticket },
+      { kind: "assistant.final", text: "waiting" },
+      { kind: "ticket.rejected", ticket_id: "k1", card: settled },
+    ]);
+    const view = replaySession(events);
+    expect(view.items.map((item) => (item.type === "card" ? item.id : item.type))).toEqual(["assistant", "ticket:k1"]);
+    expect(view.cards["ticket:k1"]!.card.status).toBe("failed");
+    expect(replaySession(events.slice(2), replaySession(events.slice(0, 2)))).toEqual(view);
+  });
+
+  it("a tool result patches a card by id instead of adding a second one", () => {
+    const view = replaySession(
+      log([
+        { kind: "ticket.opened", ticket },
+        { kind: "tool.ended", tool_call_id: "c9", result: { ok: true }, is_error: false, card: { ...pendingCard, status: "done", collapsed_summary: "Paid" } },
+      ]),
+    );
+    expect(view.items.filter((item) => item.type === "card")).toHaveLength(1);
+    expect(view.cards["ticket:k1"]!.card).toMatchObject({ status: "done", collapsed_summary: "Paid" });
   });
 });

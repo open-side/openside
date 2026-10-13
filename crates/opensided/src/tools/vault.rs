@@ -719,7 +719,12 @@ async fn vault_actions(
     tab_id: &str,
     submit_ref: Option<&str>,
 ) -> std::result::Result<Vec<Action>, ToolError> {
-    let browser = ctx.shared.registry.browser.get(&ctx.shared).await?;
+    let browser = ctx
+        .shared
+        .registry
+        .browser
+        .for_tab(&ctx.shared, &ctx.session, tab_id)
+        .await?;
     let origin = Controller::origin(&browser, &ctx.session, tab_id).await?;
     let mut actions = vec![Action::new(Capability::VaultUse, &origin)];
     if let Some(reference) = submit_ref {
@@ -769,15 +774,19 @@ impl DaemonTool for Login {
             let result = async {
                 let args: LoginArgs = parse(&args)?;
                 let controller = &ctx.shared.registry.browser;
-                let browser = controller.get(&ctx.shared).await?;
+                let browser = controller.for_tab(&ctx.shared, &ctx.session, &args.tab_id).await?;
                 let origin = Controller::origin(&browser, &ctx.session, &args.tab_id).await?;
                 check_origin(ctx, &origin)?;
-                let mut vault = ctx.shared.registry.vault.vault.lock().await;
-                let vault = vault.as_mut().ok_or_else(|| ToolError("Vault is unavailable".into()))?;
+                let _ = crate::connections::begin_login(&ctx.shared, &browser, &ctx.session, &args.tab_id, &origin).await;
+                let document = browser.document_lifetime_id(&args.tab_id).await.ok();
+                let browser = &browser;
+                let args = &args;
+                let mut guard = ctx.shared.registry.vault.vault.lock().await;
+                let vault = guard.as_mut().ok_or_else(|| ToolError("Vault is unavailable".into()))?;
                 let origin_check = origin.clone();
                 let audit = audit_ctx(ctx);
                 let outcome = vault.vault_login_async(&audit, AuditAction::Fill, &args.site, &origin, |secrets| Box::pin(async move {
-                    controller.mark_secret(&ctx.shared, &browser, &args.tab_id).await?;
+                    controller.mark_secret(&ctx.shared, browser, &args.tab_id).await?;
                     if browser.origin(&args.tab_id).await.map_err(|_| ())? != origin_check { return Err(()); }
                     if let Some(gateway) = browser.gateway() {
                         let username = browser.resolve_ref(ctx.session.as_str(), &args.tab_id, &args.username_ref).await.map_err(|_| ())?;
@@ -792,7 +801,14 @@ impl DaemonTool for Login {
                     if let Some(reference) = &args.submit_ref { browser.act(ctx.session.as_str(), &args.tab_id, reference, BrowserAction::Click).await.map_err(|_| ())?; }
                     Ok(())
                 })).await.map_err(|_| ToolError("Vault fill or audit failed".into()))?;
+                drop(guard);
                 controller.persist(&ctx.shared).await.map_err(|_| ToolError("Browser state could not be saved".into()))?;
+                if outcome == LoginOutcome::Filled {
+                    crate::connections::remember_login_item(&ctx.shared, &ctx.session, &args.tab_id, &args.site).await;
+                }
+                if outcome == LoginOutcome::Filled && args.submit_ref.is_some() {
+                    super::login::complete_vault_login(&ctx.shared, browser, &ctx.session, &args.tab_id, document.as_deref(), &args.site).await;
+                }
                 Ok(denied(outcome).unwrap_or_else(|| done(json!({"status":if outcome == LoginOutcome::Filled { "filled" } else { "fill_failed" }}))))
             }.await;
             result.unwrap_or_else(|_: ToolError| done(json!({"status":"fill_failed"})))
@@ -867,7 +883,9 @@ pub(super) async fn fill_saved_totp(
     site: Option<&str>,
 ) -> std::result::Result<SavedTotp, ToolError> {
     let controller = &ctx.shared.registry.browser;
-    let browser = controller.get(&ctx.shared).await?;
+    let browser = controller
+        .for_tab(&ctx.shared, &ctx.session, tab_id)
+        .await?;
     let origin = Controller::origin(&browser, &ctx.session, tab_id).await?;
     check_origin(ctx, &origin)?;
     let mut vault = ctx.shared.registry.vault.vault.lock().await;
@@ -907,6 +925,8 @@ pub(super) async fn fill_saved_totp(
     let fill_controller = controller.clone();
     let origin_check = origin.clone();
     let audit = audit_ctx(ctx);
+    let _ =
+        crate::connections::begin_login(&ctx.shared, &browser, &ctx.session, tab_id, &origin).await;
     let outcome = vault
         .vault_login_async(&audit, AuditAction::Otp, &site, &origin, |secrets| {
             Box::pin(async move {
@@ -978,7 +998,11 @@ pub(super) async fn fill_saved_totp(
         return Ok(SavedTotp::Used(Box::new(refusal)));
     }
     match outcome {
-        LoginOutcome::Filled => Ok(SavedTotp::Used(Box::new(done(json!({"status":"filled"}))))),
+        LoginOutcome::Filled => {
+            crate::connections::remember_login_item(&ctx.shared, &ctx.session, tab_id, &site).await;
+            super::otp::mark_filled(&ctx.session, tab_id, &origin);
+            Ok(SavedTotp::Used(Box::new(done(json!({"status":"filled"})))))
+        }
         _ => Err(ToolError("OTP fill failed".into())),
     }
 }
@@ -1015,7 +1039,9 @@ impl DaemonTool for Passkey {
             let result = async {
                 let args: PasskeyArgs = parse(&args)?;
                 let controller = &ctx.shared.registry.browser;
-                let browser = controller.get(&ctx.shared).await?;
+                let browser = controller
+                    .for_tab(&ctx.shared, &ctx.session, &args.tab_id)
+                    .await?;
                 let origin = Controller::origin(&browser, &ctx.session, &args.tab_id).await?;
                 check_origin(ctx, &origin)?;
                 // The ceremony runs in a tab of its own that loads this page again, and finds
@@ -1043,6 +1069,16 @@ impl DaemonTool for Passkey {
                     ));
                 }
                 let (submit_role, submit_name) = (node.role.clone(), node.name.clone());
+                if args.action == PasskeyAction::Login {
+                    let _ = crate::connections::begin_login(
+                        &ctx.shared,
+                        &browser,
+                        &ctx.session,
+                        &args.tab_id,
+                        &origin,
+                    )
+                    .await;
+                }
                 let mut guard = ctx.shared.registry.vault.vault.lock().await;
                 let vault = guard
                     .as_mut()
@@ -1112,6 +1148,24 @@ impl DaemonTool for Passkey {
                     .map_err(|_| ToolError("Browser state could not be saved".into()))?;
                 if let Some(refusal) = denied(outcome) {
                     return Ok(refusal);
+                }
+                if outcome == LoginOutcome::Filled && args.action == PasskeyAction::Login {
+                    crate::connections::remember_login_item(
+                        &ctx.shared,
+                        &ctx.session,
+                        &args.tab_id,
+                        &args.site,
+                    )
+                    .await;
+                    let _ = crate::connections::complete_login(
+                        &ctx.shared,
+                        &browser,
+                        &ctx.session,
+                        &args.tab_id,
+                        openside_proto::ConnectionSource::Vault,
+                        Some(&args.site),
+                    )
+                    .await;
                 }
                 Ok(done(json!({"status": match (outcome, args.action) {
                     (LoginOutcome::Filled, PasskeyAction::Register) => "registered",

@@ -1,14 +1,14 @@
 //! Sidecar compatibility pin checked on every `hello` (`docs/specs/sidecar-protocol.md` §2).
 //!
 //! The wire protocol number guards message shapes; the `openside_agent` package range guards
-//! behavior the daemon relies on beyond shapes (tool gate, snapshot format, deferred resume).
+//! behavior beyond shapes, including the tool gate, deferred resume and daemon credential leases.
 
 use openside_core::RuntimeError;
 
 /// The only `hello.protocol` value this daemon speaks.
 pub const PROTOCOL_VERSION: u8 = 1;
 /// Lowest supported `hello.versions.openside_agent`, inclusive.
-pub const MIN_AGENT_VERSION: (u64, u64, u64) = (0, 1, 0);
+pub const MIN_AGENT_VERSION: (u64, u64, u64) = (0, 1, 1);
 /// First unsupported `hello.versions.openside_agent`; 0.x minors may break behavior.
 pub const MAX_AGENT_VERSION_EXCLUSIVE: (u64, u64, u64) = (0, 2, 0);
 
@@ -20,7 +20,7 @@ pub fn supported_agent_versions() -> String {
     format!(">={a}.{b}.{c},<{x}.{y}.{z}")
 }
 
-/// `major.minor.patch` of a version such as `0.1.0`, `0.1.0.dev1` or `0.1.0+local`: the
+/// `major.minor.patch` of a version such as `0.1.1`, `0.1.1.dev1` or `0.1.1+local`: the
 /// part before any `+`/`-` suffix must be three numbers, optionally followed by PEP 440
 /// segments that start with a letter (`dev1`, `post2`).
 fn parse(version: &str) -> Option<(u64, u64, u64)> {
@@ -71,18 +71,29 @@ mod tests {
 
     #[test]
     fn agent_version_range_is_half_open_and_tolerates_local_suffixes() {
-        for ok in ["0.1.0", "0.1.9", "0.1.0.dev1", "0.1.3+local"] {
+        for ok in ["0.1.1", "0.1.9", "0.1.1.dev1", "0.1.3+local"] {
             assert!(check_agent_version(ok).is_ok(), "{ok}");
         }
         for bad in [
-            "0.0.9", "0.2.0", "1.0.0", "test", "", "0.1", "0+1-0", "0.1+0.0", "0.1.0.5",
+            "0.0.9",
+            "0.1.0",
+            "0.1.0+local",
+            "0.1.0.dev1",
+            "0.2.0",
+            "1.0.0",
+            "test",
+            "",
+            "0.1",
+            "0+1-0",
+            "0.1+0.0",
+            "0.1.0.5",
         ] {
             assert!(
                 matches!(check_agent_version(bad), Err(RuntimeError::Unavailable(_))),
                 "{bad}"
             );
         }
-        assert_eq!(supported_agent_versions(), ">=0.1.0,<0.2.0");
+        assert_eq!(supported_agent_versions(), ">=0.1.1,<0.2.0");
     }
 
     #[test]

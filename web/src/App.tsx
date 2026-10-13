@@ -1,21 +1,27 @@
+import { AccessRequestDock } from "./access/AccessRequestDock";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { BrowserRouter, Link, Outlet, Route, Routes, useLocation, type Location } from "react-router";
 import { createClient } from "./api/client";
 import { relayTransport, type RelayTransport } from "./api/relay/transport";
-import { clearToken, loadToken, loadTransport, saveToken } from "./auth";
+import { clearLocalSecret, clearToken, loadLocalSecret, loadToken, loadTransport, saveToken } from "./auth";
 import { AppHeader } from "./components/AppHeader";
-import { OtpDock } from "./components/OtpDock";
+import { CardAttention } from "./components/CardAttention";
 import { Sidebar } from "./components/Sidebar";
+import { TeamActionsProvider } from "./components/TeamActions";
 import { TokenEntry } from "./components/TokenEntry";
 import { ClientContext, useClient } from "./context";
+import { AgentsContext, CHIEF_ID, useAgents } from "./hooks/useAgents";
 import { useSessionList } from "./hooks/useSessionList";
-import { OnboardingGate } from "./onboarding/OnboardingGate";
+import { useDeliverPending } from "./import/delivery";
+import { Landing, OnboardingGate } from "./onboarding/OnboardingGate";
 import { OnboardingPage } from "./onboarding/OnboardingPage";
+import { AgentPage } from "./pages/AgentPage";
+import { HistoryPage } from "./pages/HistoryPage";
 import { ManageDialogs } from "./pages/ManageDialogs";
 import { backgroundOf, manageTarget } from "./pages/manageRoutes";
-import { NewChatPage } from "./pages/NewChatPage";
 import { PairPage } from "./pages/PairPage";
 import { SessionPage } from "./pages/SessionPage";
+import { useDesktopResync } from "./desktopNotify";
 import { usePushPresence } from "./push";
 import { PwaRuntime } from "./pwa/PwaRuntime";
 import { ShellContext, type Shell } from "./shell";
@@ -40,46 +46,71 @@ function useVisualViewportHeight(root: RefObject<HTMLDivElement | null>) {
 function Layout({ onSignOut, location }: { onSignOut: () => void; location: Location }) {
   const client = useClient();
   usePushPresence(client);
+  useDesktopResync(client);
+  // Every conversation, for requests that float over another screen; the sidebar shows people.
   const list = useSessionList(client);
+  const team = useAgents(client);
   const [drawer, setDrawer] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   // The real location: inside a dialog route, the routes below render the background one.
   const { pathname } = location;
   useVisualViewportHeight(root);
 
-  useEffect(() => setDrawer(false), [pathname]);
+  // Picking a person in the phone drawer can keep the same pathname; any navigation closes it.
+  useEffect(() => setDrawer(false), [location.key]);
 
   const { refresh } = list;
-  const shell = useMemo<Shell>(() => ({ openDrawer: () => setDrawer(true), refreshSessions: refresh }), [refresh]);
+  const { refresh: refreshTeam } = team;
+  // Batches left over from an import whose delivery to this browser was interrupted.
+  useDeliverPending(client);
+  const shell = useMemo<Shell>(
+    () => ({
+      openDrawer: () => setDrawer(true),
+      refreshSessions: () => {
+        refresh();
+        refreshTeam();
+      },
+    }),
+    [refresh, refreshTeam],
+  );
+  const openAgent = /^\/agents\/([^/]+)/.exec(pathname)?.[1];
+  const visibleSession = manageTarget(pathname)
+    ? null
+    : openAgent
+      ? (team.agents?.find((agent) => agent.id === decodeURIComponent(openAgent))?.home_session_id ?? null)
+      : (/^\/sessions\/([^/]+)/.exec(pathname)?.[1] ?? null);
 
   return (
     <ToastProvider>
       <ShellContext.Provider value={shell}>
-        <div className="shell" ref={root} data-focus={pathname === "/welcome" || undefined}>
-          <aside className="shell-sidebar" aria-label="Conversation sidebar">
-            <Sidebar list={list} />
-          </aside>
-          <div className="shell-content">
-            <Outlet />
-            {list.offline ? (
-              <p className="connection-banner" role="status">
-                <Spinner size={14} />
-                Can’t reach openside. Reconnecting…
-              </p>
-            ) : null}
-            <PwaRuntime />
-            <OnboardingGate />
-          </div>
-          <Drawer open={drawer} onClose={() => setDrawer(false)} label="Conversations menu">
-            <Sidebar list={list} onClose={() => setDrawer(false)} />
-          </Drawer>
-          <ManageDialogs location={location} onSignOut={onSignOut} />
-          {/* A conversation under a Settings or Workspace dialog is not visible, so its code request floats too. */}
-          <OtpDock
-            visibleSession={manageTarget(pathname) ? null : (/^\/sessions\/([^/]+)/.exec(pathname)?.[1] ?? null)}
-            sessions={list.sessions}
-          />
-        </div>
+        <AgentsContext.Provider value={team}>
+          <TeamActionsProvider>
+            <div className="shell" ref={root} data-focus={pathname === "/welcome" || undefined}>
+              <aside className="shell-sidebar" aria-label="Team sidebar">
+                <Sidebar team={team} />
+              </aside>
+              <div className="shell-content">
+                <OnboardingGate>
+                  <Outlet />
+                </OnboardingGate>
+                {list.offline || team.offline ? (
+                  <p className="connection-banner" role="status">
+                    <Spinner size={14} />
+                    Can’t reach openside. Reconnecting…
+                  </p>
+                ) : null}
+                <PwaRuntime />
+                <AccessRequestDock />
+              </div>
+              <Drawer open={drawer} onClose={() => setDrawer(false)} label="Team menu">
+                <Sidebar team={team} onClose={() => setDrawer(false)} />
+              </Drawer>
+              <ManageDialogs location={location} onSignOut={onSignOut} />
+              {/* A conversation under a Settings or Workspace dialog is not visible, so its code request floats too. */}
+              <CardAttention visibleSession={visibleSession} sessions={list.sessions} />
+            </div>
+          </TeamActionsProvider>
+        </AgentsContext.Provider>
       </ShellContext.Provider>
     </ToastProvider>
   );
@@ -92,7 +123,7 @@ function NotFound() {
       <main className="not-found">
         <p>Page not found.</p>
         <Link to="/" className="action-link">
-          Start a new chat
+          Back to your assistant
         </Link>
       </main>
     </div>
@@ -100,7 +131,7 @@ function NotFound() {
 }
 
 /** Stands in underneath a deep-linked dialog route that has no screen to return to. */
-const HOME: Location = { pathname: "/", search: "", hash: "", state: null, key: "home" };
+const HOME: Location = { pathname: `/agents/${CHIEF_ID}`, search: "", hash: "", state: null, key: "home" };
 
 /** Screens are added here; every screen talks to the daemon only through the API client. */
 function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
@@ -109,8 +140,10 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
   return (
     <Routes location={screen}>
       <Route element={<Layout onSignOut={onSignOut} location={location} />}>
-        <Route index element={<NewChatPage />} />
+        <Route index element={<Landing onRoot={location.pathname === "/"} />} />
         <Route path="welcome" element={<OnboardingPage />} />
+        <Route path="agents/:id" element={<AgentPage />} />
+        <Route path="history" element={<HistoryPage />} />
         <Route path="sessions/:id" element={<SessionPage />} />
         <Route path="*" element={<NotFound />} />
       </Route>
@@ -145,10 +178,14 @@ export function App() {
         token: () => token,
         fetch: transport?.fetch,
         relay: transport !== null,
+        localSecret: loadLocalSecret,
         webSocket: transport?.webSocket,
         onUnauthorized: () => {
-          clearToken();
-          setReason(transport ? "The saved token was rejected. Pair this device again using a new QR code." : "The saved token was rejected. Paste a valid device token.");
+          const localOwner = loadLocalSecret() !== null;
+          // Another launcher tab may already have stored the newly rotated owner token.
+          if (loadToken() === token) clearToken();
+          else clearLocalSecret();
+          setReason(localOwner ? "This local browser session ended. Reopen openside-browser." : transport ? "The saved token was rejected. Pair this device again using a new QR code." : "The saved token was rejected. Paste a valid device token.");
           setToken(null);
         },
       }),

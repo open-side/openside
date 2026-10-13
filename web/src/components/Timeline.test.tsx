@@ -79,6 +79,8 @@ describe("Timeline attachments (PP-14)", () => {
           message_id: "m1",
           text: "what is this?",
           mode: "steer",
+          author_kind: "person",
+          from_agent: null,
           attachments: [
             { path: "attachments/m1/cat.png", kind: "image", mime: "image/png", name: "cat.png", size: 3, sha256: "0" },
             { path: "attachments/m1/doc.pdf", kind: "file", mime: "application/pdf", name: "doc.pdf", size: 3, sha256: "1" },
@@ -125,18 +127,22 @@ describe("Timeline tool activity", () => {
     const groups = document.querySelectorAll("details.activity");
     expect(groups).toHaveLength(1);
     const summary = groups[0]!.querySelector("summary")!;
-    expect(summary).toHaveTextContent("Browsed example.com");
+    expect(summary).toHaveTextContent("Browsed example.com · 2 steps");
     expect(summary).toHaveTextContent("1 failed");
     await user.click(summary);
-    const actions = within(groups[0] as HTMLElement).getAllByRole("listitem");
-    // Each call names what it acted on; only unusual states are spelled out.
-    expect(actions.map((li) => li.querySelector(".tool-line")?.textContent)).toEqual([
-      "Browser navigatehttps://example.com",
-      "Browser actFailed",
-    ]);
-    await user.click(actions[1]!.querySelector("summary")!);
-    expect(actions[1]).toHaveTextContent('"click": "#buy"');
-    expect(actions[1]).toHaveTextContent("Error");
+    // Each call is a sentence about what the agent did; the page's steps hang under the page.
+    const lines = [...groups[0]!.querySelectorAll(".tool-line")];
+    expect(lines.map((line) => line.textContent)).toEqual(["Opened example.com", "Interacted with the pageFailed"]);
+    expect(groups[0]).not.toHaveTextContent(/browser_|Browser navigate/);
+    expect([...groups[0]!.querySelectorAll("h4")].every((heading) => heading.closest("details.tool-tech"))).toBe(true);
+    const failed = groups[0]!.querySelector<HTMLElement>("li.tool-failed")!;
+    await user.click(failed.querySelector("summary")!);
+    // JSON stays behind a closed disclosure.
+    const tech = failed.querySelector("details.tool-tech")!;
+    expect(tech).not.toHaveAttribute("open");
+    expect(tech.querySelector("summary")).toHaveTextContent("Technical details");
+    expect(failed).toHaveTextContent('"click": "#buy"');
+    expect(failed).toHaveTextContent("Error");
   });
 
   it("turns the trailing calls of a live run into a status line that opens onto them", async () => {
@@ -154,17 +160,69 @@ describe("Timeline tool activity", () => {
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Clicking on nid.naver.com");
     await user.click(status.querySelector("summary")!);
-    expect(within(status).getAllByRole("listitem")).toHaveLength(2);
+    expect(status.querySelectorAll("li.tool")).toHaveLength(2);
+    expect(status.querySelector("li.tool-running")).toHaveTextContent("Clicking on the page");
   });
 
-  it("says the agent is thinking when a live run has nothing on screen yet", () => {
+  it("reads one reply as one bubble, with the calls between its words as an inline chip", () => {
     const view = replaySession(
       events([
-        { kind: "message.queued", message_id: "m1", text: "Hi", mode: "queue" },
+        { kind: "message.queued", message_id: "m1", text: "Check the repo", mode: "queue", author_kind: "person", from_agent: null },
         { kind: "message.injected", message_id: "m1" },
+        { kind: "turn.started" },
+        { kind: "tool.started", tool_call_id: "t0", name: "read", args: { path: "a.md" } },
+        { kind: "tool.ended", tool_call_id: "t0", result: "x", is_error: false },
+        { kind: "assistant.delta", text: "Seven crates have updates" },
+        { kind: "tool.started", tool_call_id: "t1", name: "read", args: { path: "Cargo.lock" } },
+        { kind: "tool.ended", tool_call_id: "t1", result: "x", is_error: false },
+        { kind: "assistant.final", text: "this week. I checked the lockfile." },
+        { kind: "session.settled" },
       ]),
     );
     setup(view);
-    expect(screen.getByRole("status")).toHaveTextContent("Thinking");
+    const bubbles = document.querySelectorAll(".bubble.assistant");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toHaveTextContent("Seven crates have updates");
+    expect(bubbles[0]).toHaveTextContent("this week. I checked the lockfile.");
+    // The chip between the segments is inside the bubble; the call before the first words is not.
+    expect(bubbles[0]!.querySelectorAll(".reply-activity details.activity")).toHaveLength(1);
+    expect(bubbles[0]!.querySelector(".activity-label")).toHaveTextContent("Read Cargo.lock");
+    expect(document.querySelectorAll("li.activity-row")).toHaveLength(1);
+  });
+
+  it("puts the browser card right under the message that started the browsing", () => {
+    const view = replaySession(
+      events([
+        { kind: "message.queued", message_id: "m1", text: "Earlier question", mode: "queue", author_kind: "person", from_agent: null },
+        { kind: "message.injected", message_id: "m1" },
+        { kind: "assistant.final", text: "Earlier answer." },
+        { kind: "message.queued", message_id: "m2", text: "Sign in to Acme", mode: "queue", author_kind: "person", from_agent: null },
+        { kind: "message.injected", message_id: "m2" },
+        { kind: "tool.started", tool_call_id: "t1", name: "browser_open_tab", args: { url: "https://acme.test" } },
+      ]),
+    );
+    const daemon = fakeClient(() => new Response("{}", { status: 200 }));
+    render(
+      <ClientContext.Provider value={daemon.client}>
+        <Timeline view={view} sessionId="s1" browserCard={{ anchorItemId: "m2", node: <section aria-label="Live browser" /> }} />
+      </ClientContext.Provider>,
+    );
+    const rows = [...document.querySelectorAll("ol.timeline > li")];
+    const user = rows.findIndex((row) => row.getAttribute("data-message") === "m2");
+    expect(rows[user + 1]).toHaveClass("browser-row");
+    expect(rows.filter((row) => row.classList.contains("browser-row"))).toHaveLength(1);
+  });
+
+  it("shows the typing dots, not a text status, once the agent has started on a message", () => {
+    const view = replaySession(
+      events([
+        { kind: "message.queued", message_id: "m1", text: "Hi", mode: "queue", author_kind: "person", from_agent: null },
+        { kind: "message.injected", message_id: "m1" },
+        { kind: "turn.started" },
+      ]),
+    );
+    setup(view);
+    expect(screen.getByRole("status")).toHaveTextContent("Agent is working");
+    expect(document.querySelectorAll(".typing-dot")).toHaveLength(3);
   });
 });

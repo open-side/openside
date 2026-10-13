@@ -127,3 +127,41 @@ async def test_received_fatal_error_closes_without_more_output(tmp_path, monkeyp
             "error", code="internal", message="Daemon stopped", fatal=True
         )
         assert await asyncio.wait_for(daemon.reader.read(), 5) == b""
+
+
+async def test_large_snapshot_survives_slow_pipe_reader():
+    import socket
+
+    from openside_agent.protocol import AgentState, JsonLineConnection, StateSnapshot
+
+    left, right = socket.socketpair()
+    left.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    reader, writer = await asyncio.open_connection(sock=left, limit=5 * 1024 * 1024)
+    peer_reader, peer_writer = await asyncio.open_connection(
+        sock=right, limit=5 * 1024 * 1024
+    )
+    connection = JsonLineConnection(reader, writer)
+    data = "synthetic-snapshot-canary-" * 12000
+    expected = StateSnapshot(state=AgentState(data=data))
+    received = bytearray()
+
+    async def slow_read():
+        while not received.endswith(b"\n"):
+            chunk = await peer_reader.read(1024)
+            assert chunk
+            received.extend(chunk)
+            await asyncio.sleep(0.001)
+
+    consumer = asyncio.create_task(slow_read())
+    try:
+        await connection.send(expected)
+        await asyncio.wait_for(consumer, 10)
+        assert len(received) > 65536
+        assert b"\x00" not in received
+        assert json.loads(received)["state"]["data"] == data
+    finally:
+        consumer.cancel()
+        await asyncio.gather(consumer, return_exceptions=True)
+        await connection.close()
+        peer_writer.close()
+        await peer_writer.wait_closed()

@@ -187,8 +187,16 @@ async fn heartbeat_follows_up_an_existing_session_and_deleting_it_pauses_the_rou
                 message_id,
                 text,
                 mode,
+                author_kind,
+                from_agent,
                 ..
-            } => queued.push((message_id.to_string(), text.clone(), format!("{mode:?}"))),
+            } => {
+                if message_id.as_str().starts_with("routine-") {
+                    assert_eq!(*author_kind, openside_proto::MessageAuthorKind::Internal);
+                    assert_eq!(*from_agent, None);
+                }
+                queued.push((message_id.to_string(), text.clone(), format!("{mode:?}")));
+            }
             EventKind::AssistantFinal { text } => finals.push(text.clone()),
             EventKind::SessionSettled {} if finals.len() == 2 => break event.seq,
             _ => {}

@@ -22,7 +22,11 @@ impl PreparedImport {
     /// [`Error::InvalidEntry`] or a specific validation error.
     pub fn parse(expected_site: &str, bytes: &[u8]) -> Result<Self, Error> {
         let item: ReadEntry = serde_json::from_slice(bytes).map_err(|_| Error::Format)?;
-        if item.site != expected_site {
+        if item.site != expected_site
+            || item.provider_key.is_some()
+            || item.channel_secret.is_some()
+            || item.subscription.is_some()
+        {
             return Err(Error::InvalidEntry);
         }
         let origins = item
@@ -68,6 +72,11 @@ impl<L: PlatformLock> Vault<L> {
         Ok(state
             .entries
             .iter()
+            .filter(|entry| {
+                entry.provider_key.is_none()
+                    && entry.channel_secret.is_none()
+                    && entry.subscription.is_none()
+            })
             .map(|entry| entry.site.clone())
             .collect())
     }
@@ -83,7 +92,12 @@ impl<L: PlatformLock> Vault<L> {
         let entry = state
             .entries
             .iter()
-            .find(|entry| entry.site == site)
+            .find(|entry| {
+                entry.site == site
+                    && entry.provider_key.is_none()
+                    && entry.channel_secret.is_none()
+                    && entry.subscription.is_none()
+            })
             .ok_or(Error::UnknownItem)?;
         self.audit(
             ctx,
@@ -122,6 +136,12 @@ impl<L: PlatformLock> Vault<L> {
         // this item; a synced replacement (e.g. a policy change on another device) must not
         // erase it. It is never taken from the payload, which `parse` builds without one.
         let mut entry = prepared.entry;
+        if self.is_provider_key(&site)
+            || self.is_channel_secret(&site)
+            || self.is_subscription(&site)
+        {
+            return Err(Error::InvalidEntry);
+        }
         entry.registration = self
             .state
             .as_ref()
@@ -144,7 +164,12 @@ impl<L: PlatformLock> Vault<L> {
     /// Deleting an unknown id succeeds without writing.
     pub fn remove_item(&mut self, ctx: &AuditContext<'_>, site: &str) -> Result<(), Error> {
         let state = self.state.as_mut().ok_or(Error::Locked)?;
-        let Some(index) = state.entries.iter().position(|entry| entry.site == site) else {
+        let Some(index) = state.entries.iter().position(|entry| {
+            entry.site == site
+                && entry.provider_key.is_none()
+                && entry.channel_secret.is_none()
+                && entry.subscription.is_none()
+        }) else {
             return Ok(());
         };
         self.audit(

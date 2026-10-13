@@ -5,7 +5,9 @@ type Seen = Arc<Mutex<Vec<(String, String, Value)>>>;
 fn status() -> Value {
     json!({"configured":true,"backend":"webdav","set_up":true,"unlocked":true,
         "account_id":"00112233445566778899aabbccddeeff","device_id":"0a0b0c0d0e0f1011",
-        "last_sync":null,"records":2,"pending":1,"exhausted":true})
+        "last_sync":null,"records":2,"pending":1,"exhausted":true,
+        "location":null,"webdav_username":null,"settings":false,"memory_tags":[],
+        "passphrase_source":"entered","password_source":null,"last_run":null})
 }
 
 /// Fake daemon on a Unix socket answering `/v1/sync/*`.

@@ -2,8 +2,8 @@
 //!
 //! Layout under `<data_dir>/artifacts/<session>/` (directories 0700, files 0600):
 //! `attachments/<message>/<n>-<name>` user uploads, `files/<workspace path>` copies of files
-//! tools created or modified, `<tool_call_id>.png` screenshots, `visuals/<seq>-<n>.<ext>`
-//! visual blocks and `transcript.jsonl` (the redacted event log, rewritten on every read).
+//! tools created or modified, `screenshots/<tool_call_id>.png` explicit screenshot outputs,
+//! `visuals/<seq>-<n>.<ext>` visual blocks and `transcript.jsonl` (rewritten on every read).
 //! The event log is the index: `message.queued` carries attachments, `artifact.saved` tool
 //! files, `assistant.final` visual blocks. Bytes never enter the log.
 //!
@@ -41,8 +41,8 @@ use hmac::{Hmac, Mac};
 use openside_core::{ContentKind, ContentPart, MessageId, SessionId};
 use openside_policy::Capability;
 use openside_proto::{
-    Artifact, ArtifactList, ArtifactSource, Attachment, AttachmentUpload, EventKind, Visual,
-    VisualKind, VisualList, MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES,
+    Artifact, ArtifactList, ArtifactPurpose, ArtifactSource, Attachment, AttachmentUpload,
+    EventKind, Visual, VisualKind, VisualList, MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -1120,6 +1120,10 @@ pub(crate) async fn list(
         .iter()
         .filter_map(|path| {
             let entry = index.entries.remove(path)?;
+            let purpose = ArtifactPurpose::classify(path, entry.tool.as_deref());
+            if purpose == ArtifactPurpose::Working {
+                return None;
+            }
             let created = entry.created?;
             Some(Artifact {
                 preview_url: preview_kind(&entry.mime).map(|_| preview_url(&id, path)),
@@ -1127,6 +1131,7 @@ pub(crate) async fn list(
                 size: entry.size,
                 mime: entry.mime,
                 source: entry.source?,
+                purpose,
                 created_at: created,
                 modified_at: entry.modified.unwrap_or(created),
                 tool_call_id: entry.tool_call_id,
@@ -1135,6 +1140,29 @@ pub(crate) async fn list(
         })
         .collect();
     Ok(Json(ArtifactList { artifacts }))
+}
+
+/// Cards may reuse delivered images, never a legacy working screenshot or an unindexed file.
+pub(crate) async fn card_image(
+    shared: &Shared,
+    session: &SessionId,
+    path: &str,
+    max: u64,
+) -> Result<(Vec<u8>, String), HttpError> {
+    let (_, _gate) = gated(shared, session.as_str().to_owned()).await?;
+    relative(path).ok_or_else(HttpError::not_found)?;
+    let mut index = index(shared, session).await?;
+    let entry = index
+        .entries
+        .remove(path)
+        .ok_or_else(HttpError::not_found)?;
+    if ArtifactPurpose::classify(path, entry.tool.as_deref()) == ArtifactPurpose::Working {
+        return Err(HttpError::not_found());
+    }
+    let bytes = load(shared, session, path, max)
+        .await
+        .map_err(|_| HttpError::not_found())?;
+    Ok((bytes, entry.mime))
 }
 
 pub(crate) async fn visuals(

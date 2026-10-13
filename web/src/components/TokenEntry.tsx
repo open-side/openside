@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ApiError, createClient } from "../api/client";
+import { CliHint } from "../pages/CliHint";
 import "../pages/pages.css";
 import { BrandMark, Button } from "../ui";
 
@@ -41,8 +42,9 @@ export function TokenEntry({ onToken, reason, pairingRequired = false }: { onTok
           <>
           {error ? <p role="alert" className="error-note">{error}</p> : null}
           <p className="token-help">
-            On that computer, run <code>openside pair --via relay</code>, then scan the QR code or open the full pairing link on this device.
+            On that computer, open openside and go to Settings → Remote access → Connect a phone, then scan the QR code or open the full pairing link on this device.
           </p>
+          <CliHint command="openside pair --via relay" />
           </>
         ) : <form onSubmit={submit}>
           <label className="field">
@@ -68,9 +70,12 @@ export function TokenEntry({ onToken, reason, pairingRequired = false }: { onTok
             {busy ? "Connecting…" : "Connect"}
           </Button>
         </form>}
-        {!relay ? <p className="token-help">
-          No token yet? Run <code>openside pair</code> on that computer and scan the QR code with this device.
-        </p> : null}
+        {!relay ? <>
+          <p className="token-help">
+            No token yet? On that computer, open openside and go to Settings → Remote access → Connect a phone, then scan the QR code with this device.
+          </p>
+          <CliHint command="openside pair" />
+        </> : null}
       </div>
     </main>
   );

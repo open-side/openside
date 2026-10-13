@@ -152,6 +152,7 @@ fn result<'a>(events: &'a [Event], call: &str) -> &'a Value {
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,
@@ -380,7 +381,7 @@ async fn totp_registered_once_through_the_cli_then_filled_from_the_vault_without
         );
     }
     let events = stream.settled().await;
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution } if ticket_id == &ticket.id && *resolution == json!({"status":"filled","registered":true}))));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &ticket.id && *resolution == json!({"status":"filled","registered":true}))));
     assert!(final_text(&events, "signed in"), "{events:?}");
     all.extend(events);
     site.accepted(1).await;
@@ -572,7 +573,7 @@ async fn emailed_code_entered_through_the_cli_fills_split_boxes_and_reaches_no_s
         );
     }
     let events = stream.settled().await;
-    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution } if ticket_id == &ticket.id && *resolution == json!({"status":"filled"}))));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &ticket.id && *resolution == json!({"status":"filled"}))));
     assert!(final_text(&events, "signed in"), "{events:?}");
     assert!(!result(&events, "after-fill")
         .to_string()

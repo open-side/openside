@@ -33,6 +33,7 @@ const ACTING_TOOLS: &[&str] = &[
     "browser_repl",
     "browser_close_tab",
     "browser_type",
+    "connection_fetch",
     "vault_login",
     "vault_otp",
     "vault_passkey",
@@ -164,10 +165,12 @@ pub(crate) async fn release_ended(shared: &Shared, session: &SessionId, tasks: &
         let stamp = finish(shared, session, &task.id).await;
         let _ = shared.registry.browser.persist(shared).await;
         for tab in released {
-            let Some(browser) = shared.registry.browser.session_browser(session).await else {
+            let Some(browser) = shared.registry.browser.tab_browser(session, &tab).await else {
                 continue;
             };
-            if let Some(state) = observe(&browser, &tab, Some(task.id.clone())).await {
+            if let Some(state) =
+                observe(shared, &browser, session, &tab, Some(task.id.clone())).await
+            {
                 emit_current(
                     shared,
                     session,
@@ -261,7 +264,7 @@ pub(crate) async fn before(
     let Some(tab) = tab else {
         return Some(stamp);
     };
-    let Some(browser) = shared.registry.browser.session_browser(session).await else {
+    let Some(browser) = shared.registry.browser.tab_browser(session, tab).await else {
         return Some(stamp);
     };
     let Some(mut state) = current(&browser, tab, owner).await else {
@@ -351,10 +354,10 @@ pub(crate) fn after(
             if !shared.registry.browser.available() {
                 return;
             }
-            let Some(browser) = shared.registry.browser.session_browser(&session).await else {
+            let Some(browser) = shared.registry.browser.tab_browser(&session, &tab).await else {
                 return;
             };
-            let Some(state) = observe(&browser, &tab, task).await else {
+            let Some(state) = observe(&shared, &browser, &session, &tab, task).await else {
                 return;
             };
             state
@@ -448,6 +451,7 @@ async fn current(browser: &Arc<Browser>, tab: &str, task: Option<String>) -> Opt
         host: host(&url),
         url,
         title: clip(&info.title, MAX_LABEL_CHARS),
+        favicon: None,
         phase: BrowserPhase::Reading,
         action: None,
         page_kind: PageKind::Other,
@@ -457,12 +461,28 @@ async fn current(browser: &Arc<Browser>, tab: &str, task: Option<String>) -> Opt
 }
 
 /// URL, title and the classified accessibility tree.
-async fn observe(browser: &Arc<Browser>, tab: &str, task: Option<String>) -> Option<BrowserState> {
+async fn observe(
+    shared: &Shared,
+    browser: &Arc<Browser>,
+    session: &SessionId,
+    tab: &str,
+    task: Option<String>,
+) -> Option<BrowserState> {
     let mut state = current(browser, tab, task).await?;
+    if let Ok(url) = url::Url::parse(&state.url) {
+        state.favicon = crate::favicons::for_tab(
+            browser,
+            session.as_str(),
+            tab,
+            &url.origin().ascii_serialization(),
+        )
+        .await;
+    }
     if let Ok(snapshot) = browser.snapshot(tab).await {
         let (kind, facts) = classify(&snapshot.nodes, &state.url, &state.title);
         state.page_kind = kind;
         state.facts = facts;
+        crate::tools::otp::observed(shared, browser, session, tab, &state.url, kind).await;
     }
     Some(state)
 }

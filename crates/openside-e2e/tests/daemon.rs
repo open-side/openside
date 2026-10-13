@@ -103,7 +103,7 @@ async fn scripted_read_executes_daemon_tool_and_streams_started_ended() {
     submit(&harness, &id, "read-message", "now").await;
     let events = stream.settled().await;
     let started = events.iter().position(|event| matches!(&event.kind, EventKind::ToolStarted { tool_call_id, name, .. } if tool_call_id == "read-call" && name == "read")).expect("read tool.started");
-    let ended = events.iter().position(|event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, result, is_error: false } if tool_call_id == "read-call" && result["content"] == "workspace fixture\n")).expect("read tool.ended with actual file contents");
+    let ended = events.iter().position(|event| matches!(&event.kind, EventKind::ToolEnded { tool_call_id, result, is_error: false, .. } if tool_call_id == "read-call" && result["content"] == "workspace fixture\n")).expect("read tool.ended with actual file contents");
     assert!(started < ended);
     assert_final(&events, "read complete");
     harness.kill().await;
@@ -148,7 +148,7 @@ async fn ask_user_ticket_resolved_by_cli_resumes_same_tool_call() {
     );
     let resumed = stream.settled().await;
     assert_final(&resumed, "blue selected");
-    assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution } if ticket_id == &ticket.id && resolution["answer"] == "blue")));
+    assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &ticket.id && resolution["answer"] == "blue")));
     let snapshot = harness.snapshot(&id);
     assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
     let returns: Vec<_> = snapshot["messages"]

@@ -27,7 +27,122 @@ fn submit(id: MessageId, text: String, mode: QueueMode) -> EventKind {
         text,
         mode,
         attachments: Vec::new(),
+        author_kind: openside_proto::MessageAuthorKind::Person,
+        from_agent: None,
     }
+}
+
+#[test]
+fn message_authority_survives_edits_delivery_retries_and_replay() {
+    use openside_proto::MessageAuthorKind;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .create_session(sid(), "Authority", "mock", PolicyMode::Guard, None)
+        .unwrap();
+    for (number, kind, sender) in [
+        (1, MessageAuthorKind::Person, None),
+        (2, MessageAuthorKind::AgentClient, None),
+        (3, MessageAuthorKind::Internal, Some("chief".to_owned())),
+    ] {
+        store
+            .append(
+                &sid(),
+                None,
+                EventKind::MessageQueued {
+                    message_id: mid(number),
+                    text: "hello".into(),
+                    mode: QueueMode::Queue,
+                    attachments: Vec::new(),
+                    author_kind: kind,
+                    from_agent: sender,
+                },
+            )
+            .unwrap();
+    }
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::MessageEdited {
+                message_id: mid(3),
+                text: "edited".into(),
+            },
+        )
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::MessagePromoted { message_id: mid(3) },
+        )
+        .unwrap();
+    let pending = &store.session(&sid()).unwrap().session().queue[0];
+    assert_eq!(pending.author_kind, MessageAuthorKind::Internal);
+    assert_eq!(pending.from_agent.as_deref(), Some("chief"));
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::MessageInjected { message_id: mid(3) },
+        )
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            submit(mid(3), "forged retry".into(), QueueMode::Queue),
+        )
+        .unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    let state = store.session(&sid()).unwrap();
+    assert_eq!(state.message_authors[&mid(1)], MessageAuthorKind::Person);
+    assert_eq!(
+        state.message_authors[&mid(2)],
+        MessageAuthorKind::AgentClient
+    );
+    assert_eq!(state.message_authors[&mid(3)], MessageAuthorKind::Internal);
+    assert_eq!(state.message_senders[&mid(3)], "chief");
+    assert_eq!(state.queue.text(&mid(3)), Some("edited"));
+    let messages = store.queued_messages(10).unwrap();
+    assert_eq!(messages[2].author_kind, MessageAuthorKind::Internal);
+    assert_eq!(messages[2].from_agent.as_deref(), Some("chief"));
+}
+
+#[test]
+fn legacy_queued_log_replays_with_internal_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .create_session(sid(), "Old", "mock", PolicyMode::Guard, None)
+        .unwrap();
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection.execute(
+        "INSERT INTO events(session_id,seq,ts,run_id,payload,submission_id) VALUES(?1,2,?2,NULL,?3,?4)",
+        params![sid().as_str(), Utc::now().to_rfc3339(), json!({
+            "kind":"message.queued","message_id":mid(1),"text":"hire someone","mode":"queue"
+        }).to_string(), mid(1).as_str()],
+    ).unwrap();
+    drop(connection);
+    let store = Store::open(&path).unwrap();
+    let state = store.session(&sid()).unwrap();
+    assert_eq!(
+        state.message_authors[&mid(1)],
+        openside_proto::MessageAuthorKind::Internal
+    );
+    assert!(state.message_senders.is_empty());
+    assert_eq!(
+        state.session().queue[0].author_kind,
+        openside_proto::MessageAuthorKind::Internal
+    );
+    assert_eq!(
+        store.queued_messages(1).unwrap()[0].author_kind,
+        openside_proto::MessageAuthorKind::Internal
+    );
 }
 
 proptest! {
@@ -366,6 +481,7 @@ fn delivered_and_dropped_submission_ids_remain_idempotent_after_restart() {
 
 fn ticket(number: u8, deferral: TicketDeferral) -> Ticket {
     Ticket {
+        hire: None,
         id: TicketId::new(format!("ticket-{number}")),
         session_id: sid(),
         tool_call_id: format!("call-{number}"),
@@ -398,6 +514,8 @@ fn ticket(number: u8, deferral: TicketDeferral) -> Ticket {
         login: None,
         choice: None,
         approval: None,
+        card: None,
+        form: None,
     }
 }
 
@@ -430,6 +548,7 @@ fn replay_restores_metadata_mode_status_and_all_ticket_lifecycles() {
             &sid(),
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: TicketId::new("ticket-1"),
                 resolution: json!("answer"),
             },
@@ -440,6 +559,7 @@ fn replay_restores_metadata_mode_status_and_all_ticket_lifecycles() {
             &sid(),
             None,
             EventKind::TicketExpired {
+                card: None,
                 ticket_id: TicketId::new("ticket-2"),
             },
         )
@@ -449,6 +569,7 @@ fn replay_restores_metadata_mode_status_and_all_ticket_lifecycles() {
             &sid(),
             None,
             EventKind::TicketRejected {
+                card: None,
                 ticket_id: TicketId::new("ticket-4"),
                 reason: "stopped".into(),
             },
@@ -812,6 +933,7 @@ fn resolving_a_ticket_is_terminal_and_clears_waiting_human() {
         SessionStatus::WaitingHuman
     );
     let resolution = EventKind::TicketResolved {
+        card: None,
         ticket_id: ticket.id.clone(),
         resolution: json!("answer"),
     };
@@ -826,6 +948,7 @@ fn resolving_a_ticket_is_terminal_and_clears_waiting_human() {
             &sid(),
             None,
             EventKind::TicketRejected {
+                card: None,
                 ticket_id: ticket.id.clone(),
                 reason: "late".into(),
             }
@@ -836,6 +959,7 @@ fn resolving_a_ticket_is_terminal_and_clears_waiting_human() {
             &sid(),
             None,
             EventKind::TicketExpired {
+                card: None,
                 ticket_id: ticket.id
             }
         )
@@ -867,6 +991,7 @@ fn rejection_and_expiration_only_apply_to_pending_tickets() {
             &sid(),
             None,
             EventKind::TicketRejected {
+                card: None,
                 ticket_id: rejected_id.clone(),
                 reason: "declined".into(),
             },
@@ -877,6 +1002,7 @@ fn rejection_and_expiration_only_apply_to_pending_tickets() {
             &sid(),
             None,
             EventKind::TicketExpired {
+                card: None,
                 ticket_id: expired_id.clone(),
             },
         )
@@ -888,14 +1014,19 @@ fn rejection_and_expiration_only_apply_to_pending_tickets() {
     for id in [rejected_id, expired_id, TicketId::new("unknown")] {
         for event in [
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: id.clone(),
                 resolution: json!(true),
             },
             EventKind::TicketRejected {
+                card: None,
                 ticket_id: id.clone(),
                 reason: "late".into(),
             },
-            EventKind::TicketExpired { ticket_id: id },
+            EventKind::TicketExpired {
+                card: None,
+                ticket_id: id,
+            },
         ] {
             assert!(store.append(&sid(), None, event).is_err());
             assert_eq!(store.session(&sid()).unwrap(), &state);
@@ -1069,6 +1200,7 @@ fn historical_session_creation_defaults_mode_and_workspace() {
     let session = store.session(&sid()).unwrap().session();
     assert_eq!(session.mode, PolicyMode::Guard);
     assert_eq!(session.workspace, None);
+    assert_eq!(session.agent_id, None);
 }
 
 #[test]
@@ -1110,6 +1242,7 @@ fn approval_claims_and_resolution_deliveries_are_durable_and_atomic() {
             &sid(),
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: approval.id.clone(),
                 resolution: json!({"approved": true}),
             },
@@ -1227,6 +1360,7 @@ fn approval_claim_is_bound_to_parent_or_exact_child_origin() {
                 &sid(),
                 None,
                 EventKind::TicketResolved {
+                    card: None,
                     ticket_id: approval.id.clone(),
                     resolution: json!({"approved": true}),
                 },
@@ -1281,6 +1415,7 @@ fn legacy_approved_ticket_without_private_binding_fails_closed() {
             &sid(),
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: ticket.id.clone(),
                 resolution: json!({"approved": true}),
             },
@@ -1321,6 +1456,7 @@ fn replay_keeps_an_injected_task_running_across_model_and_tool_boundaries() {
             args: json!({}),
         },
         EventKind::ToolEnded {
+            card: None,
             tool_call_id: "first".into(),
             result: json!("read"),
             is_error: false,
@@ -1430,6 +1566,7 @@ fn task_status_waits_for_all_injected_messages_and_deferral_keeps_human_waiting_
             &sid(),
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: TicketId::new("ticket-1"),
                 resolution: json!("answer"),
             },
@@ -1454,4 +1591,381 @@ fn task_status_waits_for_all_injected_messages_and_deferral_keeps_human_waiting_
         )
         .unwrap();
     assert_eq!(store.session(&sid()).unwrap().status, SessionStatus::Idle);
+}
+
+#[test]
+fn conversation_titles_are_short_non_url_and_user_renames_win_on_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("events.db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .create_session(
+            sid(),
+            openside_proto::DEFAULT_SESSION_TITLE,
+            "script",
+            PolicyMode::Guard,
+            None,
+        )
+        .unwrap();
+    for title in [
+        "https://shop.example/order?token=secret",
+        "one two three four five six seven",
+    ] {
+        store
+            .append(
+                &sid(),
+                None,
+                EventKind::SessionTitleProposed {
+                    title: title.into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            store.session(&sid()).unwrap().title,
+            openside_proto::DEFAULT_SESSION_TITLE
+        );
+    }
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::SessionTitleProposed {
+                title: "Compare Acme plans".into(),
+            },
+        )
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::SessionTitleProposed {
+                title: "Ignore the first title".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().title, "Compare Acme plans");
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::SessionUpdated {
+                mode: None,
+                title: Some("My plans".into()),
+                pinned: None,
+                archived: None,
+            },
+        )
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::SessionTitleProposed {
+                title: "Ignore the user rename".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().title, "My plans");
+    let expected = store.session(&sid()).unwrap().clone();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.session(&sid()).unwrap(), &expected);
+}
+
+#[test]
+fn conversation_activity_tracks_work_browsing_and_terminal_states() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = Store::open(root.path().join("events.db")).unwrap();
+    store
+        .create_session(sid(), "Task", "script", PolicyMode::Guard, None)
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().session().activity, "");
+    store
+        .append(&sid(), None, EventKind::TurnStarted {})
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().session().activity, "Working");
+    let browser = openside_proto::BrowserState {
+        task_id: None,
+        tab_id: "tab".into(),
+        url: "https://naver.com/private".into(),
+        host: "naver.com".into(),
+        title: "Inbox".into(),
+        favicon: None,
+        phase: openside_proto::BrowserPhase::Reading,
+        action: None,
+        page_kind: openside_proto::PageKind::Other,
+        facts: Default::default(),
+        thumbnail: None,
+    };
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::BrowserState(Box::new(browser.clone())),
+        )
+        .unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().activity,
+        "Browsing naver.com"
+    );
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::TicketOpened {
+                ticket: Box::new(ticket(30, TicketDeferral::External)),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().activity,
+        "Waiting for you"
+    );
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::TicketResolved {
+                card: None,
+                ticket_id: TicketId::new("ticket-30"),
+                resolution: json!("Team"),
+            },
+        )
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().session().activity, "Working");
+    store
+        .append(&sid(), None, EventKind::SessionSettled {})
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().session().activity, "Done");
+    store
+        .append(&sid(), None, EventKind::BrowserState(Box::new(browser)))
+        .unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().activity,
+        "Done",
+        "a late probe cannot revive completed work"
+    );
+    store
+        .append(&sid(), None, EventKind::SessionStopped {})
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().session().activity, "Stopped");
+}
+
+#[test]
+fn conversation_activity_includes_background_browsing_after_front_reply() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = Store::open(root.path().join("events.db")).unwrap();
+    store
+        .create_session(sid(), "Task", "script", PolicyMode::Guard, None)
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            submit(mid(1), "Find invoices".into(), QueueMode::Queue),
+        )
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::MessageInjected { message_id: mid(1) },
+        )
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::SubagentStarted {
+                subagent_id: "child".into(),
+                parent_tool_call_id: "start".into(),
+                task: "Find invoices".into(),
+                model: "script".into(),
+                tools: vec![],
+                background: true,
+            },
+        )
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::MessageCompleted {
+                message_id: mid(1),
+                outcome: openside_proto::MessageOutcome::Completed,
+                reason: None,
+            },
+        )
+        .unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::BrowserState(Box::new(openside_proto::BrowserState {
+                task_id: Some("child".into()),
+                tab_id: "tab".into(),
+                url: "https://naver.com".into(),
+                host: "naver.com".into(),
+                title: "Inbox".into(),
+                favicon: None,
+                phase: openside_proto::BrowserPhase::Reading,
+                action: None,
+                page_kind: openside_proto::PageKind::Other,
+                facts: Default::default(),
+                thumbnail: None,
+            })),
+        )
+        .unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().activity,
+        "Browsing naver.com"
+    );
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::SubagentEnded {
+                subagent_id: "child".into(),
+                status: openside_proto::SubagentStatus::Completed,
+                reason: None,
+                output: Some("Found invoices".into()),
+            },
+        )
+        .unwrap();
+    store
+        .append(&sid(), None, EventKind::SessionSettled {})
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().session().activity, "Done");
+}
+
+#[test]
+fn conversation_activity_finishes_a_standalone_api_ticket_without_a_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = Store::open(root.path().join("events.db")).unwrap();
+    store
+        .create_session(sid(), "Task", "script", PolicyMode::Guard, None)
+        .unwrap();
+    let mut request = ticket(31, TicketDeferral::External);
+    request.tool_call_id = "api-standalone".into();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::TicketOpened {
+                ticket: Box::new(request),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        store.session(&sid()).unwrap().session().activity,
+        "Waiting for you"
+    );
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::TicketResolved {
+                card: None,
+                ticket_id: TicketId::new("ticket-31"),
+                resolution: json!("Done"),
+            },
+        )
+        .unwrap();
+    assert_eq!(store.session(&sid()).unwrap().session().activity, "Done");
+}
+
+#[test]
+fn agent_identity_and_updated_home_ceiling_survive_replay() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.db");
+    let mut store = Store::open(&path).unwrap();
+    let event: EventKind = serde_json::from_str(
+        r#"{"kind":"session.created","agent_id":"chief","title":"Juno","model":"","mode":"guard"}"#,
+    )
+    .unwrap();
+    store.append(&sid(), None, event).unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::SessionUpdated {
+                mode: Some(PolicyMode::Full),
+                title: None,
+                pinned: None,
+                archived: None,
+            },
+        )
+        .unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    let session = store.session(&sid()).unwrap().session();
+    assert_eq!(session.agent_id.as_deref(), Some("chief"));
+    assert_eq!(session.mode, PolicyMode::Full);
+}
+
+#[test]
+fn connection_once_grants_are_bound_consumed_and_restart_safe() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .create_session(sid(), "Connection grant", "model", PolicyMode::Full, None)
+        .unwrap();
+    let mut grant = ticket(1, TicketDeferral::External);
+    grant.kind = TicketKind::Confirm;
+    grant.tool = Some(TicketTool {
+        name: "connection_open".into(),
+        args: json!({"grant":true,"connection_id":"c_1","agent_id":"mina","requesting_origin":"https://page.example"}),
+    });
+    store.bind_approval(&sid(), &grant.id, &[7; 32]).unwrap();
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::TicketOpened {
+                ticket: Box::new(grant.clone()),
+            },
+        )
+        .unwrap();
+    assert!(!store
+        .connection_grant_available(&sid(), &grant.id, Some("child"), &[7; 32])
+        .unwrap());
+    store
+        .append(
+            &sid(),
+            None,
+            EventKind::TicketResolved {
+                card: None,
+                ticket_id: grant.id.clone(),
+                resolution: json!({"approved":true,"access":"once"}),
+            },
+        )
+        .unwrap();
+    assert!(!store
+        .connection_grant_available(&sid(), &grant.id, None, &[7; 32])
+        .unwrap());
+    assert!(!store
+        .connection_grant_available(&sid(), &grant.id, Some("other"), &[7; 32])
+        .unwrap());
+    assert!(!store
+        .connection_grant_available(&sid(), &grant.id, Some("child"), &[8; 32])
+        .unwrap());
+    drop(store);
+    let mut first = Store::open(&path).unwrap();
+    let mut second = Store::open(&path).unwrap();
+    assert!(first
+        .connection_grant_available(&sid(), &grant.id, Some("child"), &[7; 32])
+        .unwrap());
+    assert!(first
+        .claim_connection_grant(&sid(), &grant.id, Some("child"), &[7; 32])
+        .unwrap());
+    assert!(!second
+        .claim_connection_grant(&sid(), &grant.id, Some("child"), &[7; 32])
+        .unwrap());
+    drop(first);
+    drop(second);
+    assert!(!Store::open(&path)
+        .unwrap()
+        .connection_grant_available(&sid(), &grant.id, Some("child"), &[7; 32])
+        .unwrap());
 }

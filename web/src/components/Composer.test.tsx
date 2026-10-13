@@ -202,6 +202,12 @@ describe("Composer run states", () => {
     return daemon;
   }
 
+  it("tells an idle field apart from one that adds to a running task, and names Stop", () => {
+    renderRunning(() => undefined);
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute("placeholder", "Add to the task…");
+    expect(screen.getByRole("button", { name: "Stop" })).toHaveAttribute("title", "Stop the task");
+  });
+
   it("offers Stop while a run is active and the composer is empty", async () => {
     const user = userEvent.setup();
     let stopped = 0;
@@ -236,7 +242,7 @@ describe("Composer run states", () => {
       </ClientContext.Provider>,
     );
     const field = screen.getByRole("textbox", { name: "Message" });
-    expect(field).toHaveAttribute("placeholder", "Follow up");
+    expect(field).toHaveAttribute("placeholder", "Answer above, or type a reply");
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     await user.type(field, "after that, summarize");

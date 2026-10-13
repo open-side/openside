@@ -1,6 +1,6 @@
 [project]
 name = "openside-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Pydantic AI sidecar for openside's daemon-owned agent sessions and tools"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
@@ -28,10 +28,6 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-markers = [
-    "live: explicitly opt-in real provider smoke test",
-    "live_broker: explicitly configured GET-only broker wire upgrade check",
-]
 testpaths = ["tests"]
 
 [tool.ruff]

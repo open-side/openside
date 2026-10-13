@@ -1,8 +1,10 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import type { VaultAuditRecord, VaultItem, VaultStatus } from "../api/types";
 import { ClientContext } from "../context";
+import { chooseOption } from "../test/select";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
 import { VaultPage } from "./VaultPage";
 
@@ -75,9 +77,11 @@ function daemon(initial: Partial<VaultStatus> = {}, forbidden = false) {
 function setup(status: Partial<VaultStatus> = {}, forbidden = false) {
   const fake = daemon(status, forbidden);
   render(
-    <ClientContext.Provider value={fake.client}>
-      <VaultPage />
-    </ClientContext.Provider>,
+    <MemoryRouter>
+      <ClientContext.Provider value={fake.client}>
+        <VaultPage />
+      </ClientContext.Provider>
+    </MemoryRouter>,
   );
   return fake;
 }
@@ -90,12 +94,10 @@ describe("VaultPage", () => {
     const bank = within(items).getByText("bank").closest("article") as HTMLElement;
     expect(bank).toHaveAttribute("data-item", "bank");
     expect(within(bank).getByText("one-time codes")).toBeInTheDocument();
-    expect(within(bank).getByRole("option", { name: "Default (while unlocked)" })).toBeInTheDocument();
+    expect(within(bank).getByRole("combobox")).toHaveTextContent("Default (while unlocked)");
     expect(within(bank).queryByText(/enforced:/)).toBeNull();
-    expect(within(bank).getByRole("combobox")).toHaveValue("default");
-
-    await user.selectOptions(within(bank).getByLabelText("Use policy for bank"), "never");
-    await vi.waitFor(() => expect(within(bank).getByLabelText("Use policy for bank")).toHaveValue("never"));
+    await chooseOption(user, within(bank).getByLabelText("Use policy for bank"), "Never");
+    await vi.waitFor(() => expect(within(bank).getByLabelText("Use policy for bank")).toHaveTextContent("Never"));
     expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/v1/vault/items/bank", body: { policy: "never" } });
   });
 
@@ -207,8 +209,17 @@ describe("VaultPage", () => {
     expect(screen.queryByRole("button", { name: "Login" })).toBeNull();
   });
 
-  it("tells a device without the admin scope how to get it", async () => {
+  it("sends an unavailable vault to Configuration instead of a terminal command", async () => {
+    setup({ state: "unavailable", backend: null, reason: "unsupported_platform" });
+    expect(await screen.findByText(/Choose the passphrase unlock method in Configuration/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Configuration" })).toHaveAttribute("href", "/config");
+    expect(screen.getByText("openside doctor").closest("p")).toHaveTextContent("To check this computer from a terminal:");
+    expect(screen.queryByText(/vault\.unlock/)).toBeNull();
+  });
+
+  it("lets a device without the admin scope ask for it", async () => {
     setup({}, true);
-    expect(await screen.findAllByText(/needs the admin scope/)).not.toHaveLength(0);
+    expect((await screen.findAllByRole("button", { name: "Ask for access" })).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/needs the admin scope/)).toBeNull();
   });
 });

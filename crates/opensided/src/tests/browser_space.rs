@@ -4,6 +4,7 @@
 //! browser that did not survive a daemon restart reports `browser_space_reset` once.
 //! Real Chromium, loopback fixtures and temporary directories only.
 
+use super::browser_tabs::alive;
 use super::*;
 use axum::{response::Html, routing::get, Router};
 use openside_browser::Browser;
@@ -92,15 +93,6 @@ async fn isolated_session(daemon: &Daemon) -> SessionId {
 
 async fn cookie(browser: &Browser, tab: &str) -> Value {
     browser.evaluate(tab, "document.cookie").await.unwrap()
-}
-
-fn alive(pid: u32) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(stat) => stat
-            .rsplit_once(") ")
-            .is_some_and(|(_, rest)| !rest.starts_with('Z')),
-        Err(_) => false,
-    }
 }
 
 struct Kill(Vec<u32>);
@@ -543,6 +535,7 @@ async fn prewarm_waiting_for_the_lifecycle_gate_cannot_create_an_archived_or_del
             EventKind::SessionDeleted {}
         } else {
             EventKind::SessionUpdated {
+                mode: None,
                 title: None,
                 pinned: None,
                 archived: Some(true),

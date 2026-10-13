@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::db::{sqlite_text, Item};
 use crate::error::Result;
 use crate::model::{is_web_url, Bookmark, Cookie, SameSite, Visit};
-use crate::BrowserKind;
+use crate::{sanitize_import_url, BrowserKind};
 
 const MAX_DEPTH: usize = 64;
 const TAGS_ROOT: &str = "tags________";
@@ -56,10 +56,15 @@ pub(crate) fn read_history(
     let (mut emitted, mut skipped) = (0, 0);
     for row in rows {
         let (url, title, micros) = row.map_err(|error| item.sqlite(&error))?;
-        if micros > 0 && is_web_url(&url) {
+        if let Some(clean) = (micros > 0 && is_web_url(&url))
+            .then(|| sanitize_import_url(&url))
+            .flatten()
+        {
+            let title =
+                sqlite_text(title).map(|title| if title == url { clean.clone() } else { title });
             sink(Visit {
-                url,
-                title: sqlite_text(title),
+                url: clean,
+                title,
                 visited_at_ms: micros / 1000,
             })?;
             emitted += 1;
@@ -127,8 +132,19 @@ pub(crate) fn read_bookmarks(item: &Item) -> Result<(Vec<Bookmark>, u64)> {
     let mut links = Vec::new();
     let mut skipped = 0;
     for row in rows {
-        let (id, kind, parent, title, added, guid, url) =
+        let (id, kind, parent, mut title, added, guid, url) =
             row.map_err(|error| item.sqlite(&error))?;
+        let url = if kind == 1 {
+            url.and_then(|raw| {
+                let clean = sanitize_import_url(&raw)?;
+                if title.as_deref() == Some(raw.as_str()) {
+                    title = Some(clean.clone());
+                }
+                Some(clean)
+            })
+        } else {
+            url
+        };
         nodes.insert(
             id,
             Node {
@@ -138,13 +154,8 @@ pub(crate) fn read_bookmarks(item: &Item) -> Result<(Vec<Bookmark>, u64)> {
             },
         );
         match (kind, url) {
-            (1, Some(url))
-                if !url.starts_with("place:")
-                    && !url.to_ascii_lowercase().starts_with("javascript:") =>
-            {
-                links.push((id, url, added));
-            }
-            (1, _) => skipped += 1,
+            (1, Some(url)) => links.push((id, url, added)),
+            (1, None) => skipped += 1,
             _ => {}
         }
     }
@@ -209,13 +220,15 @@ pub(crate) fn read_cookies(item: &Item) -> Result<(Vec<Cookie>, u64)> {
     )?;
     let has = |name: &str| columns.iter().any(|column| column == name);
     let select = format!(
-        "SELECT host, name, value, path, expiry, isSecure, isHttpOnly, {}, {} FROM moz_cookies",
+        "SELECT host, name, value, path, expiry, isSecure, isHttpOnly, {}, {}, {}, {} FROM moz_cookies",
         if has("sameSite") { "sameSite" } else { "NULL" },
         if has("originAttributes") {
             "originAttributes"
         } else {
             "NULL"
         },
+        if has("lastAccessed") { "lastAccessed" } else { "NULL" },
+        if has("creationTime") { "creationTime" } else { "NULL" },
     );
     let mut statement = db
         .conn
@@ -233,13 +246,26 @@ pub(crate) fn read_cookies(item: &Item) -> Result<(Vec<Cookie>, u64)> {
                 row.get::<_, i64>(6)? != 0,
                 row.get::<_, Option<i64>>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
             ))
         })
         .map_err(|error| item.sqlite(&error))?;
     let (mut cookies, mut isolated) = (Vec::new(), 0);
     for row in rows {
-        let (host, name, value, path, expiry, secure, http_only, same_site, origin) =
-            row.map_err(|error| item.sqlite(&error))?;
+        let (
+            host,
+            name,
+            value,
+            path,
+            expiry,
+            secure,
+            http_only,
+            same_site,
+            origin,
+            last_accessed,
+            created,
+        ) = row.map_err(|error| item.sqlite(&error))?;
         if origin.is_some_and(|attributes| !attributes.is_empty()) {
             isolated += 1;
             continue;
@@ -263,7 +289,59 @@ pub(crate) fn read_cookies(item: &Item) -> Result<(Vec<Cookie>, u64)> {
                 Some(2) => Some(SameSite::Strict),
                 _ => None,
             },
+            last_accessed_at_ms: last_accessed
+                .filter(|micros| *micros > 0)
+                .map(|micros| micros / 1000),
+            created_at_ms: created
+                .filter(|micros| *micros > 0)
+                .map(|micros| micros / 1000),
         });
     }
     Ok((cookies, isolated))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cookie_recency_converts_microseconds_and_handles_optional_columns() {
+        for recency_columns in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let input = cookies_item(dir.path());
+            let db = rusqlite::Connection::open(&input.path).unwrap();
+            let optional = if recency_columns {
+                ",lastAccessed INTEGER,creationTime INTEGER"
+            } else {
+                ""
+            };
+            db.execute_batch(&format!(
+                "CREATE TABLE moz_cookies(name TEXT,value TEXT,host TEXT,path TEXT,expiry INTEGER,isSecure INTEGER,isHttpOnly INTEGER{optional});
+                 INSERT INTO moz_cookies(name,value,host,path,expiry,isSecure,isHttpOnly) VALUES('fixture','synthetic','fixture.test','/',0,1,1),('unset','synthetic','fixture.test','/',0,0,0);"
+            )).unwrap();
+            if recency_columns {
+                db.execute_batch("UPDATE moz_cookies SET lastAccessed=1700000001234567,creationTime=1600000001234567 WHERE name='fixture'; UPDATE moz_cookies SET lastAccessed=0,creationTime=0 WHERE name='unset';").unwrap();
+            }
+            let (cookies, isolated) = read_cookies(&input).unwrap();
+            assert_eq!(isolated, 0);
+            let cookie = cookies
+                .iter()
+                .find(|cookie| cookie.name == "fixture")
+                .unwrap();
+            assert_eq!(
+                cookie.last_accessed_at_ms,
+                recency_columns.then_some(1_700_000_001_234)
+            );
+            assert_eq!(
+                cookie.created_at_ms,
+                recency_columns.then_some(1_600_000_001_234)
+            );
+            let unset = cookies
+                .iter()
+                .find(|cookie| cookie.name == "unset")
+                .unwrap();
+            assert_eq!(unset.last_accessed_at_ms, None);
+            assert_eq!(unset.created_at_ms, None);
+        }
+    }
 }

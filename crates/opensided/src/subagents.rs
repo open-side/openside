@@ -71,7 +71,7 @@ pub(crate) fn admit(
             hint: Some("Describe the subtask the subagent should complete".into()),
         };
     }
-    let models = &ctx.shared.config.loaded.config.models;
+    let models = ctx.shared.models.models();
     let model = model.unwrap_or_else(|| session_model.clone());
     if model != session_model
         && models.default.as_deref() != Some(model.as_str())
@@ -143,12 +143,9 @@ pub(crate) async fn record_start(
 }
 
 pub(crate) async fn session_model(ctx: &ToolEnv) -> Option<String> {
-    ctx.shared
-        .db
-        .state(&ctx.session)
-        .await
-        .ok()
-        .map(|state| state.model)
+    let state = ctx.shared.db.state(&ctx.session).await.ok()?;
+    let agent = crate::agents::for_session(&ctx.shared, &state).ok()?;
+    crate::engine::session_model(&ctx.shared, &state, agent.as_ref())
 }
 
 impl DaemonTool for Delegate {
@@ -165,7 +162,7 @@ impl DaemonTool for Delegate {
     }
     fn visible(&self, ctx: &ToolEnv) -> bool {
         // The front agent starts Tasks instead; Tasks never delegate.
-        !crate::tasks::front(&ctx.shared)
+        ctx.agent_id.is_none() && !crate::tasks::front(&ctx.shared, None)
     }
     fn actions<'a>(
         &'a self,
@@ -450,7 +447,7 @@ pub(crate) async fn continuation_finished(
             match &event.kind {
                 EventKind::TicketResolved { ticket_id, .. }
                 | EventKind::TicketRejected { ticket_id, .. }
-                | EventKind::TicketExpired { ticket_id } => {
+                | EventKind::TicketExpired { ticket_id, .. } => {
                     closed.insert(ticket_id.clone(), event.seq);
                 }
                 EventKind::AssistantFinal { .. } => last_final = event.seq,

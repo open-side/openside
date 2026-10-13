@@ -36,7 +36,10 @@ pub use daemon::{check_public, DaemonClient, EventStream};
 pub use error::{ChannelError, Result};
 pub use messenger::Messenger;
 pub use model::{AudioRef, Button, Inbound, MsgRef, Press, ThreadKey};
-pub use runner::{check, daemon_client, pair, process_env, start, state_dir, EnvFn, Running};
+pub use runner::{
+    check, daemon_client, legacy_secrets, pair, process_env, start, start_account, state_dir,
+    test_account, AccountSecrets, EnvFn, Running,
+};
 pub use secret::{resolve as resolve_secret, Secret};
 pub use store::{Card, Store, ThreadState};
 pub use stt::Stt;

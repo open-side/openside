@@ -296,6 +296,14 @@ async fn heartbeat_appends_a_follow_up_to_the_existing_session_and_skips_overlap
         })
         .collect();
     assert_eq!(queued.len(), 1);
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        EventKind::MessageQueued {
+            author_kind: MessageAuthorKind::Internal,
+            from_agent: None,
+            ..
+        }
+    )));
     assert_eq!(
         (queued[0].1.as_str(), queued[0].2),
         ("status check", QueueMode::Queue),
@@ -368,7 +376,16 @@ async fn deleting_a_session_tombstones_it_rejects_tickets_and_pauses_heartbeats(
         .iter()
         .map(|s| s["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, ["keeper"]);
+    let chief_home = daemon
+        .shared
+        .agents
+        .get("chief")
+        .unwrap()
+        .unwrap()
+        .home_session_id;
+    assert_eq!(ids.len(), 2);
+    assert!(ids.iter().any(|id| id == "keeper"));
+    assert!(ids.iter().any(|id| id == chief_home.as_str()));
     for (method, path) in [
         ("GET", "/v1/sessions/doomed"),
         ("GET", "/v1/sessions/doomed/events"),
@@ -466,7 +483,7 @@ async fn suggestions_come_from_repeated_user_messages_and_create_nothing() {
         insert(
             day + 1,
             &format!("2026-09-{day:02}T09:00:00+00:00"),
-            json!({"kind":"message.queued","message_id":format!("u{day}"),"text":format!("Check the build dashboard for failures ({day})"),"mode":"queue"}),
+            json!({"kind":"message.queued","message_id":format!("u{day}"),"text":format!("Check the build dashboard for failures ({day})"),"mode":"queue","author_kind":"person","from_agent":null}),
         );
     }
     // A stopped session is skipped by startup delivery, so these messages stay untouched.
@@ -898,7 +915,7 @@ async fn a_remote_admin_cannot_widen_the_agent_through_policy_or_routines() {
     let policy = json!({"default_mode":"full","allow_origins":[],"deny_origins":[],"rules":[]});
     let (status, error) = call("PUT", "/v1/policy".into(), policy).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["code"], "local_socket_required");
+    assert_eq!(error["code"], "local_access_required");
     let (_, live) = send(&unix, "GET", "/v1/policy", json!({})).await;
     assert_ne!(live["default_mode"], "full", "the live policy is untouched");
     let guard = json!({"default_mode":"guard","allow_origins":[],"deny_origins":[],"rules":[]});

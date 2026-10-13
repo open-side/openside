@@ -10,8 +10,9 @@ const chromeStub = {
 };
 vi.stubGlobal("chrome", chromeStub);
 
-const code = { id: "k1", session_id: "s", kind: "secret_input", summary: "Code", instructions: null, options: [], origin: {}, target: { origin: "https://shop.example", tab_id: "t", field_ref: "e1" }, otp: { channel: "email", can_register: false }, status: "pending" } as unknown as Ticket;
-const question = { id: "k2", session_id: "s", kind: "info", summary: "Pick one", instructions: null, options: [], origin: {}, target: null, otp: null, status: "pending" } as unknown as Ticket;
+// The announcement text is the card's own safe summary; only the fields the notifier reads are given.
+const code = { id: "k1", session_id: "s", kind: "secret_input", summary: "Code", instructions: null, options: [], origin: {}, target: { origin: "https://shop.example", tab_id: "t", field_ref: "e1" }, otp: { channel: "email", can_register: false }, status: "pending", card: { id: "ticket:k1", collapsed_summary: "Code from your email for shop.example" } } as unknown as Ticket;
+const question = { id: "k2", session_id: "s", kind: "info", summary: "Pick one", instructions: null, options: [], origin: {}, target: null, otp: null, status: "pending", card: { id: "ticket:k2", collapsed_summary: "Pick one" } } as unknown as Ticket;
 
 beforeEach(() => {
   vi.clearAllMocks();

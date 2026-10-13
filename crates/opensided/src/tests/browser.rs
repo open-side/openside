@@ -284,14 +284,33 @@ async fn browser_tools_sensitive_expiry_vault_secret_device_and_readonly() {
         )
         .await,
     );
-    assert_eq!(screenshot["saved"], true);
+    assert_eq!(screenshot["saved"], false);
+    assert_eq!(screenshot["purpose"], "working");
+    assert!(!daemon
+        .shared
+        .config
+        .data_dir
+        .join("artifacts/browser-session/shot.png")
+        .exists());
+    let delivered = model(
+        tool(
+            &daemon,
+            &session,
+            "browser_screenshot",
+            json!({"tab_id":tab,"output":true}),
+            "shared-shot",
+        )
+        .await,
+    );
+    assert_eq!(delivered["saved"], true);
+    assert_eq!(delivered["purpose"], "output");
     assert!(screenshot["width"].as_u64().unwrap() > 0);
     assert!(screenshot.get("path").is_none());
     let path = daemon
         .shared
         .config
         .data_dir
-        .join("artifacts/browser-session/shot.png");
+        .join("artifacts/browser-session/screenshots/shared-shot.png");
     assert!(path.is_file());
     #[cfg(unix)]
     {
@@ -348,7 +367,7 @@ async fn browser_tools_sensitive_expiry_vault_secret_device_and_readonly() {
     wait_event(
         &daemon,
         &session,
-        |kind| matches!(kind, EventKind::TicketExpired { ticket_id } if ticket_id == &payment),
+        |kind| matches!(kind, EventKind::TicketExpired { ticket_id, .. } if ticket_id == &payment),
     )
     .await;
     assert_eq!(
@@ -586,9 +605,9 @@ async fn browser_tools_sensitive_expiry_vault_secret_device_and_readonly() {
         )
         .await,
     );
-    wait_event(&daemon, &session, |kind| matches!(kind, EventKind::TicketResolved { ticket_id, resolution } if ticket_id == &device && resolution["status"] == "done")).await;
+    wait_event(&daemon, &session, |kind| matches!(kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &device && resolution["status"] == "done")).await;
     for ticket in [&selector, &text] {
-        wait_event(&daemon, &session, |kind| matches!(kind, EventKind::TicketResolved { ticket_id, resolution } if ticket_id == ticket && resolution["status"] == "done")).await;
+        wait_event(&daemon, &session, |kind| matches!(kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == ticket && resolution["status"] == "done")).await;
     }
     let manual = human(&daemon, &session, json!({"kind":"device_approval","summary":"Manual approval","tab_id":tab,"resume_when":{"manual":true}}), "manual").await;
     daemon
@@ -1411,4 +1430,58 @@ async fn one_ticket_per_split_box_with_one_character_values_completes_without_le
     assert_private(&daemon, &runtime, &session, CODE).await;
     daemon.shutdown().await;
     fixture.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_profile_ownership_accepts_configuration_ancestor_aliases() {
+    let root = tempfile::tempdir().unwrap();
+    let links = tempfile::tempdir().unwrap();
+    let alias = links.path().join("data-root");
+    std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+    let config = resolved_config(&alias);
+    let profile = root.path().join("data/browser-profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    let profile = std::fs::canonicalize(profile).unwrap();
+    let state = config.data_dir.join("browser-state.json");
+    std::fs::write(
+        &state,
+        serde_json::to_vec(&json!({
+            "endpoint":{"pid":0,"ws_url":"ws://127.0.0.1:1","profile_dir":profile},
+            "tabs":[],"nodes":[],"secret_documents":{}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    assert!(
+        !state.exists(),
+        "the stale owned endpoint should be discarded"
+    );
+    daemon.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_profile_ownership_still_refuses_an_outside_profile() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let config = resolved_config(root.path());
+    std::fs::create_dir_all(&config.data_dir).unwrap();
+    let outside_root = std::fs::canonicalize(outside.path()).unwrap();
+    std::os::unix::fs::symlink(&outside_root, config.data_dir.join("browser-profile")).unwrap();
+    std::fs::write(
+        config.data_dir.join("browser-state.json"),
+        serde_json::to_vec(&json!({
+            "endpoint":{"pid":0,"ws_url":"ws://127.0.0.1:1","profile_dir":outside_root},
+            "tabs":[],"nodes":[],"secret_documents":{}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let result = Daemon::open_runtime(config, TestRuntime::default()).await;
+    assert!(result
+        .is_err_and(|error| error.to_string() == "Browser state references an unmanaged profile"));
 }

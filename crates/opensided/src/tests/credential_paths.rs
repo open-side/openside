@@ -302,3 +302,24 @@ async fn bind_mount_aliases_are_denied_by_descriptor_and_sandbox_preflight() {
         CANARY
     );
 }
+
+#[tokio::test]
+async fn managed_subscription_files_and_hardlink_aliases_are_protected() {
+    let root = tempfile::tempdir().unwrap();
+    let config = resolved_config(root.path());
+    let home = config
+        .data_dir
+        .join("managed-subscriptions/codex-cli/fake-account");
+    std::fs::create_dir_all(&home).unwrap();
+    let secret = home.join("auth.json");
+    std::fs::write(&secret, CANARY).unwrap();
+    let alias = root.path().join("credential-alias");
+    std::fs::hard_link(&secret, &alias).unwrap();
+    let protected = ProtectedPaths::from_config(&config);
+    assert!(protected.is_protected(&secret));
+    assert!(protected.is_protected(&alias));
+    let file = std::fs::File::open(&alias).unwrap();
+    assert!(protected.check_fd(&file).is_err());
+    std::fs::remove_file(&secret).unwrap();
+    assert!(protected.check_fd(&file).is_err());
+}

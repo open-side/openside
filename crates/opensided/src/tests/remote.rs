@@ -114,7 +114,7 @@ async fn pairing_code_expires_at_three_minutes_is_single_use_scoped_and_audited(
         serde_json::from_value(offer["expires_at"].clone()).unwrap();
     assert_eq!(expires - t0, chrono::Duration::seconds(180));
 
-    // Issuing needs the local socket, even for an admin token.
+    // A QR-paired admin token never has local credential-issuer authority.
     let (_, admin) = daemon
         .shared
         .db
@@ -131,7 +131,7 @@ async fn pairing_code_expires_at_three_minutes_is_single_use_scoped_and_audited(
     .await;
     assert_eq!(
         (status, body["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("local_socket_required"))
+        (StatusCode::FORBIDDEN, Some("local_access_required"))
     );
     let (status, _) = call(
         &unix,
@@ -738,6 +738,18 @@ fn pointer(path: &str) -> String {
 /// A valid value different from `current` for one key; explicit samples for keys whose
 /// strings have a format the schema cannot express.
 fn changed_value(path: &str, schema: &Value, current: &Value) -> Value {
+    if path == "channels.accounts" {
+        return json!([openside_config::ChannelAccountConfig {
+            id: "fixture-account".into(),
+            kind: openside_config::ChannelKind::Telegram,
+            label: "Fixture account".into(),
+            enabled: false,
+            agent_id: None,
+            secret_id: None,
+            options: openside_config::ChannelOptions::default(),
+            legacy_secret: None,
+        }]);
+    }
     let samples: BTreeMap<&str, Value> = BTreeMap::from([
         ("daemon.listen", json!("127.0.0.1:9")),
         ("remote.public_url", json!("https://desk.example.test")),
@@ -867,6 +879,7 @@ async fn every_config_schema_key_is_readable_and_writable_through_the_settings_a
     let mut file_only = 0;
     let extension = root.path().join("test-extension");
     std::fs::create_dir(&extension).unwrap();
+    let extension = std::fs::canonicalize(extension).unwrap();
     for (path, key_schema) in &keys {
         if crate::settings_api::FILE_ONLY
             .iter()
@@ -1126,6 +1139,7 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn alive(pid: i32) -> bool {
     // A reaped or never-started child has no /proc entry; a zombie counts as gone.
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
@@ -1140,6 +1154,7 @@ fn alive(pid: i32) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "linux")]
 async fn inhibitor_pid(file: &std::path::Path, want_alive: bool) -> Option<i32> {
     for _ in 0..200 {
         if let Some(pid) = std::fs::read_to_string(file)
@@ -1436,7 +1451,7 @@ async fn remote_admin_can_change_only_behaviour_settings() {
     .await;
     assert_eq!(
         (status, body["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("local_socket_required"))
+        (StatusCode::FORBIDDEN, Some("local_access_required"))
     );
     let (_, after) = call(&unix, "GET", "/v1/settings/config", Value::Null, None).await;
     assert_eq!(

@@ -30,9 +30,9 @@ impl Bot {
 }
 
 async fn launch(dir: &Path, extra: &str, env: &[(&str, &str)]) -> Result<Bot, String> {
+    let state_dir = serde_json::to_string(&dir.join("state")).unwrap();
     let config = format!(
-        "[channels]\napi_url = \"{UNREACHABLE}\"\nstate_dir = \"{}\"\nedit_interval_ms = 200\n{extra}",
-        dir.join("state").display()
+        "[channels]\napi_url = \"{UNREACHABLE}\"\nstate_dir = {state_dir}\nedit_interval_ms = 200\n{extra}"
     );
     let path = dir.join("config.toml");
     std::fs::write(&path, config).unwrap();

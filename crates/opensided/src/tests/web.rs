@@ -43,6 +43,8 @@ async fn session_metadata_is_durable_and_drives_list_search_pin_and_archive() {
                 text: "Find the Quarterly REPORT".into(),
                 mode: QueueMode::Queue,
                 attachments: Vec::new(),
+                author_kind: MessageAuthorKind::Person,
+                from_agent: None,
             },
         )
         .await
@@ -161,6 +163,7 @@ async fn session_metadata_is_durable_and_drives_list_search_pin_and_archive() {
     assert!(events.iter().any(|event| matches!(
         &event.kind,
         EventKind::SessionUpdated {
+            mode: None,
             pinned: Some(true),
             title: None,
             archived: None
@@ -190,6 +193,8 @@ async fn queue_text(daemon: &Daemon, id: &str, message: &str, text: &str) {
                 text: text.into(),
                 mode: QueueMode::Queue,
                 attachments: Vec::new(),
+                author_kind: MessageAuthorKind::Person,
+                from_agent: None,
             },
         )
         .await
@@ -244,7 +249,7 @@ async fn session_list_is_ordered_by_recent_activity_with_pinned_first_across_res
 }
 
 #[tokio::test]
-async fn titles_are_single_line_and_untitled_sessions_take_their_first_message() {
+async fn titles_are_single_line_and_model_proposals_cannot_replace_user_names() {
     let root = tempfile::tempdir().unwrap();
     let daemon = daemon(root.path(), &TestRuntime::default()).await;
     let router = api::router(daemon.shared.clone(), true);
@@ -268,7 +273,13 @@ async fn titles_are_single_line_and_untitled_sessions_take_their_first_message()
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(created["title"], "New session");
         let id = created["id"].as_str().unwrap();
-        queue_text(&daemon, id, "m1", "\n  Plan the trip\nto Busan ").await;
+        queue_text(
+            &daemon,
+            id,
+            "m1",
+            "https://example.test/private?token=secret",
+        )
+        .await;
         let mut live = daemon.shared.events.subscribe();
         queue_text(&daemon, id, "m1b", "second message must not retitle").await;
         assert!(live
@@ -276,8 +287,19 @@ async fn titles_are_single_line_and_untitled_sessions_take_their_first_message()
             .is_ok_and(|event| matches!(event.kind, EventKind::MessageQueued { .. })));
         assert!(
             live.try_recv().is_err(),
-            "only the first message names the session"
+            "queueing a message does not derive a title from its contents"
         );
+        daemon
+            .shared
+            .emit(
+                &SessionId::new(id),
+                None,
+                EventKind::SessionTitleProposed {
+                    title: "Plan the trip".into(),
+                },
+            )
+            .await
+            .unwrap();
         let (_, session) = send(&router, "GET", &format!("/v1/sessions/{id}"), json!({})).await;
         assert_eq!(session["title"], "Plan the trip");
         // Clients see the title as an event, not by deriving it themselves.
@@ -289,7 +311,7 @@ async fn titles_are_single_line_and_untitled_sessions_take_their_first_message()
             .unwrap()
             .into_iter()
             .filter_map(|event| match event.kind {
-                EventKind::SessionUpdated { title, .. } => title,
+                EventKind::SessionTitleProposed { title } => Some(title),
                 _ => None,
             })
             .collect();
@@ -298,6 +320,17 @@ async fn titles_are_single_line_and_untitled_sessions_take_their_first_message()
     // An explicit title is never replaced by the first message.
     let id = created["id"].as_str().unwrap();
     queue_text(&daemon, id, "m2", "something else").await;
+    daemon
+        .shared
+        .emit(
+            &SessionId::new(id),
+            None,
+            EventKind::SessionTitleProposed {
+                title: "Ignore the user name".into(),
+            },
+        )
+        .await
+        .unwrap();
     let (_, session) = send(&router, "GET", &format!("/v1/sessions/{id}"), json!({})).await;
     assert_eq!(session["title"], "two lines");
     for title in ["x".repeat(201), "\u{202e}\u{0}".into()] {
@@ -318,6 +351,19 @@ async fn titles_are_single_line_and_untitled_sessions_take_their_first_message()
         json!({"title":"a\tb\0c"}),
     )
     .await;
+    assert_eq!(session["title"], "a b c");
+    daemon
+        .shared
+        .emit(
+            &SessionId::new(id),
+            None,
+            EventKind::SessionTitleProposed {
+                title: "A later model name".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let (_, session) = send(&router, "GET", &format!("/v1/sessions/{id}"), json!({})).await;
     assert_eq!(session["title"], "a b c");
     daemon.shutdown().await;
 }
@@ -741,5 +787,95 @@ async fn ui_routes_are_absent_without_configuration() {
     let (status, headers, _) = raw(&router, "GET", "/").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(!headers.contains_key("content-security-policy"));
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn conversation_browser_metadata_and_error_details_are_redacted() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&daemon, "Metadata", PolicyMode::Guard, None).await;
+    let secret = openside_vault::Secret::new("metadata-canary-secret".into());
+    daemon
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(openside_vault::Redactor::new([&secret]));
+    daemon
+        .shared
+        .emit(
+            &session,
+            None,
+            EventKind::BrowserState(Box::new(openside_proto::BrowserState {
+                task_id: None,
+                tab_id: "tab".into(),
+                url: "https://example.test/metadata-canary-secret".into(),
+                host: "example.test".into(),
+                title: "metadata-canary-secret inbox".into(),
+                favicon: Some("data:image/png;base64,metadata-canary-secret".into()),
+                phase: openside_proto::BrowserPhase::Reading,
+                action: None,
+                page_kind: openside_proto::PageKind::Other,
+                facts: Default::default(),
+                thumbnail: None,
+            })),
+        )
+        .await
+        .unwrap();
+    daemon
+        .shared
+        .emit(
+            &session,
+            None,
+            EventKind::runtime_error("interrupted", "EOF metadata-canary-secret"),
+        )
+        .await
+        .unwrap();
+    let events = daemon.shared.db.events(&session, 0).await.unwrap();
+    assert!(!serde_json::to_string(&events)
+        .unwrap()
+        .contains("metadata-canary-secret"));
+    assert!(events.iter().any(|event| matches!(&event.kind, EventKind::RuntimeError { user_message, retryable: true, .. } if user_message == "The agent stopped. Try again.")));
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn conversation_rename_of_the_default_title_claims_it_before_a_model_proposal() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon(root.path(), &TestRuntime::default()).await;
+    let router = api::router(daemon.shared.clone(), true);
+    for explicit in [false, true] {
+        let request = if explicit {
+            json!({"title":"New session","model":"m"})
+        } else {
+            json!({"model":"m"})
+        };
+        let (_, created) = send(&router, "POST", "/v1/sessions", request).await;
+        let id = created["id"].as_str().unwrap();
+        if !explicit {
+            let (status, _) = send(
+                &router,
+                "PATCH",
+                &format!("/v1/sessions/{id}"),
+                json!({"title":"New session"}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        daemon
+            .shared
+            .emit(
+                &SessionId::new(id),
+                None,
+                EventKind::SessionTitleProposed {
+                    title: "A model name".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let (_, state) = send(&router, "GET", &format!("/v1/sessions/{id}"), json!({})).await;
+        assert_eq!(state["title"], "New session");
+    }
     daemon.shutdown().await;
 }

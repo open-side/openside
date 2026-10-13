@@ -133,6 +133,9 @@ pub(crate) struct Controller {
     next_grant: AtomicU64,
     /// Per-session temporary-profile browsers of incognito sessions (B-10).
     incognito: incognito::Incognito,
+    pub(crate) accounts: openside_browser::account_spaces::AccountSpaces,
+    account_events: parking_lot::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    account_idle_started: AtomicBool,
     /// Agent tabs that died with a crashed browser, by tab id, with their owner session.
     lost_tabs: Mutex<HashMap<String, String>>,
     /// Crash-loop backoff for relaunching the shared browser (PP-23).
@@ -184,6 +187,9 @@ impl Controller {
             navigation_grants: Arc::default(),
             next_grant: AtomicU64::new(0),
             incognito: incognito::Incognito::default(),
+            accounts: Default::default(),
+            account_events: Default::default(),
+            account_idle_started: AtomicBool::new(false),
             lost_tabs: Mutex::new(HashMap::new()),
             relaunch: parking_lot::Mutex::default(),
             last_tab: parking_lot::Mutex::default(),
@@ -191,6 +197,147 @@ impl Controller {
             task_tabs: crate::browser_state::TabLedger::default(),
             warm_tabs: parking_lot::Mutex::default(),
         }
+    }
+
+    pub(crate) async fn account_browser(
+        &self,
+        shared: &Shared,
+        site: &str,
+        id: &str,
+    ) -> std::result::Result<Arc<Browser>, ToolError> {
+        if !self.available() {
+            return Err(ToolError("connection_browser_unavailable".into()));
+        }
+        let executable = self
+            .executable
+            .clone()
+            .ok_or_else(|| ToolError("connection_browser_unavailable".into()))?;
+        let root =
+            openside_config::data_layout::DataPath::AccountSpaces.path(&shared.config.data_dir);
+        let config = crate::browser::launch_config(
+            executable,
+            root.join(id),
+            openside_config::BrowserGatewaySetting::Off,
+            None,
+        );
+        let (browser, events) = self
+            .accounts
+            .open(&root, id, site, config)
+            .await
+            .map_err(browser_error)?;
+        self.install_navigation_policy(&browser, shared);
+        if let Some(mut events) = events {
+            let shared = shared.clone();
+            let weak = Arc::downgrade(&browser);
+            let mut shutdown = shared.shutdown.subscribe();
+            let task = tokio::spawn(async move {
+                let mut owners = HashMap::new();
+                let mut downloads = HashMap::new();
+                loop {
+                    let event = tokio::select! { _ = shutdown.recv() => break, event = events.recv() => match event { Some(event) => event, None => break } };
+                    match &event {
+                        BrowserEvent::TabOpened { tab } | BrowserEvent::PopupOpened { tab, .. } => {
+                            if let Some(owner) = &tab.owner_session_id {
+                                owners.insert(tab.id.clone(), owner.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                    if let BrowserEvent::DialogOpened { tab_id, kind, .. } = &event {
+                        if let Some(browser) = weak.upgrade() {
+                            let _ = browser
+                                .handle_dialog(tab_id, crate::browser::accepts_dialog(kind), None)
+                                .await;
+                        }
+                    }
+                    let owner = match &event {
+                        BrowserEvent::TabOpened { tab }
+                        | BrowserEvent::PopupOpened { tab, .. }
+                        | BrowserEvent::TabClosed { tab } => tab
+                            .owner_session_id
+                            .clone()
+                            .or_else(|| owners.get(&tab.id).cloned()),
+                        BrowserEvent::DownloadStarted { guid, tab_id, .. } => {
+                            let owner = tab_id.as_ref().and_then(|tab| owners.get(tab)).cloned();
+                            if let Some(owner) = &owner {
+                                downloads.insert(guid.clone(), owner.clone());
+                            }
+                            owner
+                        }
+                        BrowserEvent::DownloadFinished { guid, .. } => downloads.remove(guid),
+                        BrowserEvent::DialogOpened { tab_id, .. } => owners.get(tab_id).cloned(),
+                        BrowserEvent::TooManyTabs { .. } | BrowserEvent::OriginCommitted { .. } => {
+                            None
+                        }
+                    };
+                    if let Some(owner) = owner {
+                        let session = SessionId::new(owner);
+                        let _ = shared
+                            .emit(&session, None, crate::browser_event(event.clone()))
+                            .await;
+                        crate::browser::steer_browser_event(&shared, &session, &event).await;
+                    }
+                    if let BrowserEvent::TabClosed { tab } = &event {
+                        owners.remove(&tab.id);
+                    }
+                }
+            });
+            let mut tasks = self.account_events.lock();
+            tasks.retain(|task| !task.is_finished());
+            tasks.push(task);
+        }
+        if !self.account_idle_started.swap(true, Ordering::AcqRel) {
+            let shared = shared.clone();
+            let mut shutdown = shared.shutdown.subscribe();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = shutdown.recv() => { let _ = shared.registry.browser.accounts.close_all().await; break; },
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                            let _gate = shared.registry.browser.gate.lock().await;
+                            let _ = shared.registry.browser.accounts.close_idle().await;
+                        }
+                    }
+                }
+            });
+        }
+        Ok(browser)
+    }
+
+    pub(crate) async fn account_space_for_tab(&self, tab: &str) -> Option<String> {
+        self.accounts.space_for_tab(tab).await
+    }
+
+    pub(crate) async fn tab_browser(&self, session: &SessionId, tab: &str) -> Option<Arc<Browser>> {
+        if let Some(browser) = self.accounts.for_tab(session.as_str(), tab).await {
+            return Some(browser);
+        }
+        let browser = self.session_browser(session).await?;
+        Self::owned(&browser, session, tab).await.ok()?;
+        Some(browser)
+    }
+
+    pub(crate) async fn for_tab(
+        &self,
+        shared: &Shared,
+        session: &SessionId,
+        tab: &str,
+    ) -> std::result::Result<Arc<Browser>, ToolError> {
+        let state = shared
+            .db
+            .state(session)
+            .await
+            .map_err(|_| ToolError("Session is unavailable".into()))?;
+        if state.deleted
+            || (state.archived && state.browser_space == openside_proto::BrowserSpace::Isolated)
+        {
+            return Err(ToolError(
+                "session_archived: this session's browser space is unavailable".into(),
+            ));
+        }
+        self.tab_browser(session, tab)
+            .await
+            .ok_or_else(|| ToolError("Tab is unavailable or belongs to another session".into()))
     }
 
     /// Accessible name of a node in the tab's last snapshot.
@@ -342,6 +489,12 @@ impl Controller {
     }
 
     pub(crate) async fn preview_tab(&self, session: &SessionId) -> Option<(Arc<Browser>, String)> {
+        let last = self.last_tab.lock().get(session).cloned();
+        if let Some(tab) = last {
+            if let Some(browser) = self.tab_browser(session, &tab).await {
+                return Some((browser, tab));
+            }
+        }
         let browser = self.session_browser(session).await?;
         let mut tabs = browser.tabs().await;
         tabs.retain(|tab| {
@@ -399,6 +552,54 @@ impl Controller {
                 openside_policy::Effect::Deny => false,
             }
         }));
+    }
+
+    fn install_document_policy(&self, browser: &Browser, shared: &Shared) {
+        let connections = shared.connections.clone();
+        let agents = shared.agents.clone();
+        let db = shared.db.clone();
+        let ttl = shared.config.loaded.config.tickets.confirm_ttl_secs;
+        browser.set_document_policy(Arc::new(move |request| {
+            connections
+                .navigation
+                .decide(&connections, &db, &agents, request, ttl)
+        }));
+    }
+
+    pub(crate) async fn document_denial(
+        &self,
+        session: &SessionId,
+        requested: Option<&str>,
+        task: Option<&str>,
+    ) -> Option<openside_browser::BrowserError> {
+        let browser = match requested {
+            Some(tab) => self.tab_browser(session, tab).await?,
+            None => self.session_browser(session).await?,
+        };
+        let tabs = match requested {
+            Some(tab) => vec![tab.to_owned()],
+            None => browser
+                .tabs()
+                .await
+                .into_iter()
+                .filter(|tab| tab.owner_session_id.as_deref() == Some(session.as_str()))
+                .map(|tab| tab.id)
+                .collect(),
+        };
+        for tab in tabs {
+            if self
+                .task_tabs
+                .holder(session, &tab)
+                .as_deref()
+                .is_some_and(|holder| Some(holder) != task)
+            {
+                continue;
+            }
+            if let Ok(Some(error)) = browser.take_document_denial(session.as_str(), &tab).await {
+                return Some(error);
+            }
+        }
+        None
     }
     pub(crate) fn available(&self) -> bool {
         self.executable.is_some() && !self.stopped.load(Ordering::Acquire)
@@ -460,6 +661,7 @@ impl Controller {
             .launched(std::time::Instant::now(), launched.is_ok());
         let (browser, events) = launched.map_err(browser_error)?;
         self.install_navigation_policy(&browser, shared);
+        self.install_document_policy(&browser, shared);
         let browser = Arc::new(browser);
         *slot = Some(browser.clone());
         drop(slot);
@@ -495,8 +697,9 @@ impl Controller {
             Ok(saved) => saved,
             Err(_) => return Ok(()),
         };
+        let managed_root = tokio::fs::canonicalize(&shared.config.data_dir).await?;
         if saved.endpoint.profile_dir
-            != openside_config::data_layout::DataPath::BrowserProfile.path(&shared.config.data_dir)
+            != openside_config::data_layout::DataPath::BrowserProfile.path(&managed_root)
         {
             return Err("Browser state references an unmanaged profile".into());
         }
@@ -514,6 +717,7 @@ impl Controller {
             }
         };
         self.install_navigation_policy(&browser, shared);
+        self.install_document_policy(&browser, shared);
         // Spaces first: a space tab is only adopted into its restored space.
         self.restore_spaces(shared, &browser, saved.spaces).await;
         let restored = Self::adopt_saved(
@@ -612,6 +816,16 @@ impl Controller {
             // already have dropped it.
             loop {
                 let event = tokio::select! { _ = shutdown.recv() => break, event = events.recv() => match event { Some(event) => event, None => break } };
+                if let BrowserEvent::OriginCommitted {
+                    origin,
+                    browser_context_id,
+                } = &event
+                {
+                    if browser_context_id.is_none() {
+                        let _ = shared.connections.remember_tracked_origin(origin);
+                    }
+                    continue;
+                }
                 match &event {
                     BrowserEvent::TabOpened { tab } | BrowserEvent::PopupOpened { tab, .. } => {
                         if let Some(owner) = &tab.owner_session_id {
@@ -673,7 +887,7 @@ impl Controller {
                             Err(_) => None,
                         }
                     }
-                    BrowserEvent::TooManyTabs { .. } => None,
+                    BrowserEvent::TooManyTabs { .. } | BrowserEvent::OriginCommitted { .. } => None,
                 };
                 if let Some(owner) = owner {
                     let session = SessionId::new(owner);
@@ -713,7 +927,7 @@ impl Controller {
         {
             return Err(refused());
         }
-        let browser = self.session_browser(session).await.ok_or_else(refused)?;
+        let browser = self.tab_browser(session, tab).await.ok_or_else(refused)?;
         Self::owned(&browser, session, tab)
             .await
             .map_err(|_| refused())?;
@@ -805,7 +1019,7 @@ impl Controller {
             return Ok(checked);
         };
         let _gate = self.gate.lock().await;
-        let Some(browser) = self.session_browser(session).await else {
+        let Some(browser) = self.tab_browser(session, tab).await else {
             if named.is_empty() {
                 return Ok(checked);
             }
@@ -959,7 +1173,7 @@ impl Controller {
             })
             .map(|node| node.node.clone());
         // Without a bound node or a browser the sink refuses before writing anything.
-        let (Some(node), Some(browser)) = (node, self.session_browser(session).await) else {
+        let (Some(node), Some(browser)) = (node, self.tab_browser(session, tab).await) else {
             return Ok(());
         };
         let unavailable = || SecretSinkError {
@@ -1153,6 +1367,10 @@ impl Controller {
             return Ok(());
         }
         self.close_all_incognito(shared).await;
+        self.accounts.close_all().await?;
+        for task in self.account_events.lock().drain(..) {
+            task.abort();
+        }
         let task = self.event_task.lock().take();
         if let Some(task) = task {
             task.abort();
@@ -1259,8 +1477,7 @@ impl Controller {
             let Some(tab) = target.tab_id.as_deref() else {
                 continue;
             };
-            // Incognito sessions' tabs live in their own browser.
-            let Some(browser) = self.session_browser(&ticket.session_id).await else {
+            let Some(browser) = self.tab_browser(&ticket.session_id, tab).await else {
                 continue;
             };
             if Self::owned(&browser, &ticket.session_id, tab)
@@ -1272,7 +1489,7 @@ impl Controller {
             // A phone-approval wait resolves once its page stops waiting, with the next step.
             if ticket.approval.is_some() {
                 if let Some(outcome) =
-                    super::login::approval_outcome(&browser, ticket.session_id.as_str(), tab).await
+                    super::login::approval_outcome(shared, &browser, &ticket.session_id, tab).await
                 {
                     let outcome = shared
                         .registry
@@ -1317,6 +1534,7 @@ impl Controller {
                             &ticket.session_id,
                             None,
                             EventKind::TicketResolved {
+                                card: None,
                                 ticket_id: ticket.id.clone(),
                                 resolution,
                             },
@@ -1356,12 +1574,15 @@ impl SecretSink for Controller {
         value: Zeroizing<String>,
     ) -> BoxFuture<'a, std::result::Result<(), SecretSinkError>> {
         Box::pin(async move {
-            let browser = self.session_browser(session).await.ok_or(SecretSinkError {
-                code: "unavailable",
-            })?;
             let tab = target.tab_id.as_deref().ok_or(SecretSinkError {
                 code: "target_missing",
             })?;
+            let browser = self
+                .tab_browser(session, tab)
+                .await
+                .ok_or(SecretSinkError {
+                    code: "unavailable",
+                })?;
             let origin =
                 Self::origin(&browser, session, tab)
                     .await
@@ -1493,6 +1714,9 @@ struct ClipArgs {
 #[serde(deny_unknown_fields)]
 struct ScreenshotArgs {
     tab_id: String,
+    /// Save and deliver this screenshot to the user, rather than only observing the page.
+    #[serde(default)]
+    output: bool,
     /// Capture the whole scrollable page instead of the viewport.
     #[serde(default)]
     full_page: bool,
@@ -1651,7 +1875,7 @@ impl DaemonTool for BrowserTool {
             ),
             Kind::Screenshot => spec::<ScreenshotArgs>(
                 self.name(),
-                "Capture the viewport as a private PNG artifact; you receive saved/width/height plus the image itself (downscaled when large). Options: full_page captures the whole scrollable page; clip {x,y,width,height} captures a rectangle (viewport coordinates, or document coordinates with full_page); target (an eN reference) captures one element. Screenshots are denied in a document after secret fill; navigate or take a snapshot instead.",
+                "Capture the viewport for your own observation; you receive saved/width/height plus the image itself (downscaled when large). Observations are not files or user outputs. Set output=true only when the user asks for a screenshot or you deliberately deliver one: it saves a PNG in the user's Files. Options: full_page captures the whole scrollable page; clip {x,y,width,height} captures a rectangle (viewport coordinates, or document coordinates with full_page); target (an eN reference) captures one element. Screenshots are denied after secret fill; take a snapshot instead.",
                 ApprovalTier::Read,
                 false,
             ),
@@ -1695,7 +1919,7 @@ impl DaemonTool for BrowserTool {
                         .shared
                         .registry
                         .browser
-                        .for_session(&ctx.shared, &ctx.session)
+                        .for_tab(&ctx.shared, &ctx.session, &args.tab_id)
                         .await?;
                     Controller::owned(&browser, &ctx.session, &args.tab_id).await?;
                     return Ok(vec![Action::new(
@@ -1716,7 +1940,7 @@ impl DaemonTool for BrowserTool {
                 .shared
                 .registry
                 .browser
-                .for_session(&ctx.shared, &ctx.session)
+                .for_tab(&ctx.shared, &ctx.session, &tab)
                 .await?;
             let origin = Controller::origin(&browser, &ctx.session, &tab).await?;
             let mut actions = vec![Action::new(Capability::Browse, &origin)];
@@ -1729,7 +1953,9 @@ impl DaemonTool for BrowserTool {
                     .find(|node| node.reference.as_deref() == Some(args.target.as_str()))
                     .ok_or_else(|| ToolError("Unknown target; take a fresh snapshot".into()))?;
                 if sensitive(&node.name, &node.role) {
-                    actions.push(Action::new(Capability::Sensitive, &origin));
+                    let mut action = Action::new(Capability::Sensitive, &origin);
+                    action.label = Some(node.name.clone());
+                    actions.push(action);
                 }
             }
             Ok(actions)
@@ -1752,6 +1978,7 @@ impl DaemonTool for BrowserTool {
             object.retain(|key, _| {
                 [
                     "tab_id",
+                    "output",
                     "scope",
                     "url",
                     "since",
@@ -1790,7 +2017,10 @@ impl BrowserTool {
         ctx: &ToolEnv,
     ) -> std::result::Result<ToolExec, ToolError> {
         let controller = &ctx.shared.registry.browser;
-        let browser = controller.for_session(&ctx.shared, &ctx.session).await?;
+        let browser = match args.get("tab_id").and_then(Value::as_str) {
+            Some(tab) => controller.for_tab(&ctx.shared, &ctx.session, tab).await?,
+            None => controller.for_session(&ctx.shared, &ctx.session).await?,
+        };
         if ctx.cancellation.is_cancelled() {
             return Err(ToolError("Task tool cancelled".into()));
         }
@@ -1847,7 +2077,9 @@ impl BrowserTool {
             }
             Kind::Tabs => {
                 let groups = tabs::tab_groups(&browser).await;
-                Ok(done(json!(browser.tabs().await.into_iter().filter(|tab| tab.owner_session_id.as_deref() == Some(ctx.session.as_str())).map(|tab| json!({"group":groups.get(&tab.id),"tab_id":tab.id,"url":super::super::browser::public_url(&tab.url),"title":tab.title,"asleep":tab.discarded || tab.unloaded})).collect::<Vec<_>>())))
+                let mut all = browser.tabs().await;
+                all.extend(controller.accounts.tabs(ctx.session.as_str()).await);
+                Ok(done(json!(all.into_iter().filter(|tab| tab.owner_session_id.as_deref() == Some(ctx.session.as_str())).map(|tab| json!({"group":groups.get(&tab.id),"tab_id":tab.id,"url":super::super::browser::public_url(&tab.url),"title":tab.title,"asleep":tab.discarded || tab.unloaded})).collect::<Vec<_>>())))
             }
             Kind::Snapshot => {
                 let args: SnapshotArgs = parse(&args)?;
@@ -2041,19 +2273,31 @@ impl BrowserTool {
                         .try_into()
                         .map_err(|_| ToolError("Invalid PNG dimensions".into()))?,
                 );
-                if !component(ctx.session.as_str()) || !component(&ctx.tool_call_id) {
-                    return Err(ToolError("Invalid artifact identifier".into()));
-                }
-                let rel = format!("{}.png", ctx.tool_call_id);
-                let path = crate::artifacts::session_dir(&ctx.shared, &ctx.session).join(&rel);
-                // Vision models get the capture as an image part; oversized captures are
-                // downscaled and the full-size file stays in the artifact directory.
-                let image = crate::artifacts::model_image(&png);
-                crate::artifacts::save_tool_output(ctx, "browser_screenshot", &rel, png)
-                    .await
-                    .map_err(|_| ToolError("Screenshot artifact could not be saved".into()))?;
-                let for_model = json!({"saved":true,"width":width,"height":height});
-                let for_app = Some(json!({"path":path}));
+                let (image, rel) = if args.output {
+                    if !component(ctx.session.as_str()) || !component(&ctx.tool_call_id) {
+                        return Err(ToolError("Invalid artifact identifier".into()));
+                    }
+                    let rel = format!("screenshots/{}.png", ctx.tool_call_id);
+                    let image = crate::artifacts::model_image(&png);
+                    crate::artifacts::save_tool_output(ctx, "browser_screenshot", &rel, png)
+                        .await
+                        .map_err(|_| ToolError("Screenshot artifact could not be saved".into()))?;
+                    (image, Some(rel))
+                } else {
+                    let image = if png.len() <= crate::artifacts::MODEL_IMAGE_MAX_BYTES {
+                        Some(png)
+                    } else {
+                        crate::artifacts::model_image(&png)
+                    };
+                    (image, None)
+                };
+                let for_model = json!({
+                    "saved": args.output,
+                    "purpose": if args.output { "output" } else { "working" },
+                    "width": width,
+                    "height": height
+                });
+                let for_app = None;
                 Ok(match image {
                     Some(data) => ToolExec::DoneWithParts {
                         for_model,
@@ -2062,7 +2306,7 @@ impl BrowserTool {
                             kind: openside_core::ContentKind::Image,
                             mime: "image/png".into(),
                             data: Some(data),
-                            artifact_ref: Some(rel),
+                            artifact_ref: rel,
                             name: None,
                         }],
                     },
@@ -2114,6 +2358,8 @@ fn component(value: &str) -> bool {
 }
 pub(crate) fn browser_error(error: openside_browser::BrowserError) -> ToolError {
     match error {
+        openside_browser::BrowserError::ConnectionDenied=>ToolError("connection_denied".into()),
+        error@openside_browser::BrowserError::ConnectionGrantRequired {..}=>ToolError(error.to_string()),
         // B-7 ③: a distinct, documented code so the agent waits or opens another tab.
         openside_browser::BrowserError::TabAsleep(_) => ToolError(
             "tab_asleep: the tab is discarded or unloaded and is not attached; use another tab or open a new one".into(),

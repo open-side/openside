@@ -8,8 +8,9 @@
 //! Flags are `--config`, `--data-dir`, `--socket` and `--listen`. All runtime,
 //! model, credential-source, policy and sandbox settings come from openside-config.
 //! No default model is embedded: session creation without an explicit or configured
-//! model returns `model_not_configured`. The daemon passes credential configuration
-//! to the sidecar but never reads or stores credential values.
+//! model returns `model_not_configured`. The daemon stores managed provider keys only
+//! in the encrypted Vault and delivers them over the private authenticated sidecar socket;
+//! no public API, configuration file, event or log may expose the values.
 //!
 //! One warm sidecar belongs to each active session. Message injection is committed
 //! before runtime I/O for at-most-once delivery. Restart or process failure closes
@@ -35,8 +36,8 @@
 //! vaults hide their tools. Vault redaction covers every public event and tool result.
 //! Sensitive browser targets use a conservative accessible-name/role substring
 //! heuristic and always ask, even in Full mode. Typed text is logged as length only.
-//! Screenshots are private app artifacts, never model image data, and are denied
-//! for a document after secret fill until the tab navigates to a different document.
+//! Screenshot observations reach vision models without artifact copies; only explicit
+//! output captures become user files. Secret-filled tabs cannot be captured.
 //!
 //! Daemon-owned tools run through visibility, validation, canonical-target policy,
 //! ticket approval, redaction, a 32 KiB model-output limit, events and a private
@@ -55,29 +56,47 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod access_requests;
 mod accounts;
+mod agents;
 mod api;
 mod artifacts;
 mod browser;
 mod browser_state;
 mod browser_tabs_api;
+mod card_media;
+mod cards;
+mod channels_api;
 mod config;
+mod connections;
 mod crash;
 #[cfg(target_os = "linux")]
 mod credential_mounts;
 mod credential_paths;
 #[doc(hidden)]
 pub mod diag;
+mod doctor_api;
 mod engine;
+mod favicons;
 mod host;
 mod host_calls;
 mod import_api;
+mod import_delivery;
 mod inhibit;
+mod lifecycle;
+mod managed_subscriptions;
 mod memory;
+mod memory_model;
+mod model_accounts;
+mod model_broker;
+mod model_subscriptions_api;
+mod models_api;
 mod onboarding;
+mod operator;
 mod otp_ingest;
 mod pairing;
 mod persistence;
+mod person_only;
 mod policy_api;
 mod preview;
 mod profiles;
@@ -94,6 +113,7 @@ mod subagents;
 mod sync;
 mod takeover;
 mod tasks;
+mod team;
 mod tickets;
 mod tools;
 mod ui;
@@ -106,6 +126,7 @@ mod tests;
 pub use browser::browser_event;
 pub use config::Config;
 pub use engine::Daemon;
+pub use lifecycle::capture_restart_marker;
 
 /// Parse process arguments and serve until SIGINT or SIGTERM.
 pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

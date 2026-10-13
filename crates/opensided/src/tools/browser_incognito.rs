@@ -189,7 +189,10 @@ impl Controller {
                             .await;
                     }
                 }
-                if !matches!(event, BrowserEvent::TooManyTabs { .. }) {
+                if !matches!(
+                    event,
+                    BrowserEvent::TooManyTabs { .. } | BrowserEvent::OriginCommitted { .. }
+                ) {
                     let notice = crate::browser::steer_text(&event);
                     let _ = shared.emit(&owner, None, crate::browser_event(event)).await;
                     if let Some(text) = notice {

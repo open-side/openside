@@ -19,12 +19,7 @@ use openside_proto::{
 };
 use parking_lot::RwLock;
 
-use crate::{
-    api::{Caller, HttpError},
-    config::Resolved,
-    engine::Shared,
-    persistence::Result,
-};
+use crate::{api::HttpError, config::Resolved, engine::Shared, persistence::Result};
 
 const FILE: &str = openside_config::data_layout::DataPath::Policy.relative();
 const MAX_ENTRIES: usize = 512;
@@ -145,14 +140,10 @@ pub(crate) async fn get(State(shared): State<Shared>) -> Json<PolicySettings> {
 
 pub(crate) async fn put(
     State(shared): State<Shared>,
-    Extension(caller): Extension<Caller>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
     Json(settings): Json<PolicySettings>,
 ) -> std::result::Result<Json<PolicySettings>, HttpError> {
-    // The policy is what keeps a leaked device token from widening the agent, so it can only
-    // be rewritten from the local socket (like the config keys that hold executables).
-    if caller.0.is_some() {
-        return Err(HttpError(StatusCode::FORBIDDEN, "local_socket_required"));
-    }
+    local.require()?;
     let policy = Arc::clone(&shared.policy);
     // The whole persist-then-publish transaction runs in its own task: a client that drops the
     // request cannot release the writer lock while the blocking worker is still renaming, nor
@@ -210,6 +201,98 @@ pub(crate) async fn test(
     let decision = effective(&shared, &session)
         .decide(&Action::new(request.capability.into(), request.target));
     Ok(Json(decision.into()))
+}
+
+pub(crate) async fn validate_document(
+    Json(request): Json<openside_proto::ValidatePolicyRequest>,
+) -> Json<openside_proto::PolicyValidation> {
+    use openside_proto::{PolicyList, PolicyProblem};
+    let mut problems = Vec::new();
+    if let Some(policy) = request.policy {
+        for (list, entries) in [
+            (PolicyList::AllowOrigins, &policy.allow_origins),
+            (PolicyList::DenyOrigins, &policy.deny_origins),
+        ] {
+            for (index, entry) in entries.iter().enumerate() {
+                if entry.len() > MAX_PATTERN
+                    || OriginLists::new(&[entry.as_str()], &[] as &[&str]).is_err()
+                {
+                    problems.push(PolicyProblem {
+                        list,
+                        index: index as u32,
+                        message: "Enter a valid origin pattern.".into(),
+                    });
+                }
+            }
+        }
+        for (index, rule) in policy.rules.iter().enumerate() {
+            if rule.pattern.is_empty()
+                || rule.pattern.len() > MAX_PATTERN
+                || (rule.capability == PolicyCapability::Sensitive
+                    && rule.effect != PolicyEffect::Deny)
+            {
+                problems.push(PolicyProblem { list: PolicyList::Rules, index: index as u32, message: "Use a non-empty pattern up to 1024 characters; sensitive rules may only deny.".into() });
+            }
+        }
+        if policy.rules.len() + policy.allow_origins.len() + policy.deny_origins.len() > MAX_ENTRIES
+        {
+            problems.push(PolicyProblem {
+                list: PolicyList::Rules,
+                index: 0,
+                message: "Use at most 512 rules and origins in total.".into(),
+            });
+        }
+    }
+    if let Some(allow) = request.network_allow {
+        for (index, entry) in allow.iter().enumerate() {
+            if openside_policy::Egress::new([entry.as_str()]).is_err() {
+                problems.push(PolicyProblem {
+                    list: PolicyList::NetworkAllow,
+                    index: index as u32,
+                    message: "Enter a host, wildcard domain, host:port, or HTTP(S) origin.".into(),
+                });
+            }
+        }
+    }
+    Json(openside_proto::PolicyValidation {
+        valid: problems.is_empty(),
+        problems,
+    })
+}
+
+pub(crate) async fn network(
+    State(s): State<Shared>,
+) -> std::result::Result<Json<openside_proto::NetworkPolicy>, HttpError> {
+    let allow = crate::settings_api::stored(&s).await?.network.allow;
+    let restart_required = allow != s.config.loaded.config.network.allow;
+    Ok(Json(openside_proto::NetworkPolicy {
+        allow,
+        restart_required,
+    }))
+}
+
+pub(crate) async fn put_network(
+    State(s): State<Shared>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
+    Json(request): Json<openside_proto::UpdateNetworkPolicyRequest>,
+) -> std::result::Result<Json<openside_proto::NetworkPolicy>, HttpError> {
+    local.require()?;
+    openside_policy::Egress::new(request.allow.iter().map(String::as_str))
+        .map_err(|_| HttpError(StatusCode::BAD_REQUEST, "invalid_network_allow"))?;
+    tokio::spawn(async move {
+        let _writer = crate::settings_api::WRITE.lock().await;
+        let mut config = crate::settings_api::stored(&s).await?;
+        config.network.allow = request.allow;
+        crate::settings_api::persist(
+            &s,
+            serde_json::to_value(config).map_err(|_| HttpError::internal())?,
+        )
+        .await?;
+        crate::pairing::audit(&s, "network_policy", "written", serde_json::json!({})).await;
+        network(State(s)).await
+    })
+    .await
+    .map_err(|_| HttpError::internal())?
 }
 
 /// Atomically replaces `path`. `Ok` means the rename happened, so the new document is what a

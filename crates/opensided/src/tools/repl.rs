@@ -31,12 +31,30 @@ use super::{
     browser::{browser_error, sensitive, url_origin, Controller},
     parse, spec, DaemonTool, ToolEnv, ToolError, ToolExec,
 };
+
 use crate::{
     api::{Caller, HttpError},
     engine::Shared,
     host::Host,
     persistence::random_id,
 };
+async fn protect_cookie_output(
+    ctx: &ToolEnv,
+    browser: &openside_browser::Browser,
+    tab: &str,
+) -> Result<(), ToolError> {
+    browser
+        .visit_tab_cookie_values(ctx.session.as_str(), tab, |value| {
+            let secret = openside_vault::Secret::new(value.to_owned());
+            let redactor = openside_vault::Redactor::new([&secret]);
+            let mut installed = ctx.shared.registry.redactors.write();
+            if !redactor.covered_by(&installed) {
+                installed.push(redactor);
+            }
+        })
+        .await
+        .map_err(|_| ToolError("Cookie output protection is unavailable".into()))
+}
 
 /// Tool call ids of `/repl` runs, a subset of [`super::API_CALL_PREFIX`].
 const API_CALL_PREFIX: &str = "api-repl-";
@@ -384,7 +402,10 @@ impl BrowserRepl {
         let parsed: ReplArgs = parse(&args)?;
         let controller = &ctx.shared.registry.browser;
         controller.lost_tab(&ctx.session, &args).await?;
-        let browser = controller.for_session(&ctx.shared, &ctx.session).await?;
+        let browser = match parsed.tab_id.as_deref() {
+            Some(tab) => controller.for_tab(&ctx.shared, &ctx.session, tab).await?,
+            None => controller.for_session(&ctx.shared, &ctx.session).await?,
+        };
         if ctx.cancellation.is_cancelled() {
             return Err(ToolError("Task tool cancelled".into()));
         }
@@ -432,6 +453,7 @@ impl BrowserRepl {
                 ),
             });
         }
+        protect_cookie_output(ctx, &browser, &tab).await?;
         // The host approved the policy actions of these args; the snippet then matches each
         // approval by its exact descriptor.
         let approved = parsed
@@ -463,6 +485,10 @@ impl BrowserRepl {
             ctx.cancellation.cancelled(),
         )
         .await;
+        // Include rotated cookies before any result, console message or error is published.
+        if browser.tabs().await.iter().any(|known| known.id == tab) {
+            protect_cookie_output(ctx, &browser, &tab).await?;
+        }
         if output.stop.is_none() && browser.tabs().await.iter().any(|known| known.id == tab) {
             super::otp::protect_setup_page(&ctx.shared, &browser, ctx.session.as_str(), &tab)
                 .await?;
@@ -637,8 +663,16 @@ mod guard_tests {
 
     use super::*;
 
+    fn fixture_path(path: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!("C:{path}"))
+        } else {
+            PathBuf::from(path)
+        }
+    }
+
     fn guard(mode: Mode, downloads: Option<&str>) -> PolicyGuard {
-        let roots = vec![PathBuf::from("/work/space")];
+        let roots = vec![fixture_path("/work/space")];
         PolicyGuard {
             policy: Policy {
                 mode,
@@ -650,15 +684,20 @@ mod guard_tests {
             requested: parking_lot::Mutex::new(None),
             upload_roots: roots
                 .into_iter()
-                .chain([PathBuf::from("/data/artifacts/s1/attachments")])
+                .chain([fixture_path("/data/artifacts/s1/attachments")])
                 .collect(),
-            downloads: downloads.map(PathBuf::from),
+            downloads: downloads.map(fixture_path),
         }
     }
 
     fn upload(guard: &PolicyGuard, path: &str) -> Verdict {
+        let path = if std::path::Path::new(path).has_root() {
+            fixture_path(path).to_string_lossy().into_owned()
+        } else {
+            path.to_owned()
+        };
         guard.check(&Gate::Upload {
-            path,
+            path: &path,
             origin: "https://app.example",
             frame: None,
         })

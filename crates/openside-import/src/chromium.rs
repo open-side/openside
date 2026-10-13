@@ -9,7 +9,7 @@ use crate::crypto::Decryptor;
 use crate::db::{sqlite_text, Item};
 use crate::error::{ImportError, Result};
 use crate::model::{is_web_url, Bookmark, Cookie, SameSite, Visit};
-use crate::BrowserKind;
+use crate::{sanitize_import_url, BrowserKind};
 
 /// Microseconds between 1601-01-01 (WebKit epoch) and 1970-01-01.
 const WEBKIT_EPOCH_OFFSET_US: i64 = 11_644_473_600_000_000;
@@ -79,11 +79,19 @@ pub(crate) fn read_history(
     let (mut emitted, mut skipped) = (0, 0);
     for row in rows {
         let (url, title, time) = row.map_err(|error| item.sqlite(&error))?;
-        match webkit_to_unix_ms(time) {
-            Some(visited_at_ms) if is_web_url(&url) => {
+        match (
+            webkit_to_unix_ms(time),
+            is_web_url(&url)
+                .then(|| sanitize_import_url(&url))
+                .flatten(),
+        ) {
+            (Some(visited_at_ms), Some(clean)) => {
+                let title =
+                    sqlite_text(title)
+                        .map(|title| if title == url { clean.clone() } else { title });
                 sink(Visit {
-                    url,
-                    title: sqlite_text(title),
+                    url: clean,
+                    title,
                     visited_at_ms,
                 })?;
                 emitted += 1;
@@ -122,13 +130,17 @@ fn walk(node: &Value, folder: &mut Vec<String>, out: &mut Vec<Bookmark>, skipped
                 *skipped += 1;
                 return;
             };
-            if url.to_ascii_lowercase().starts_with("javascript:") {
+            let Some(clean) = sanitize_import_url(url) else {
                 *skipped += 1;
                 return;
-            }
+            };
             out.push(Bookmark {
-                url: url.to_owned(),
-                title: name.to_owned(),
+                title: if name == url {
+                    clean.clone()
+                } else {
+                    name.to_owned()
+                },
+                url: clean,
                 folder: folder.clone(),
                 added_at_ms: node
                     .get("date_added")
@@ -174,10 +186,20 @@ pub(crate) fn read_cookies(item: &Item, decryptor: &mut Decryptor) -> Result<(Ve
     let has = |name: &str| columns.iter().any(|column| column == name);
     let select = format!(
         "SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, \
-         is_httponly, {}, {} FROM cookies",
+         is_httponly, {}, {}, {}, {} FROM cookies",
         if has("samesite") { "samesite" } else { "NULL" },
         if has("top_frame_site_key") {
             "top_frame_site_key"
+        } else {
+            "NULL"
+        },
+        if has("last_access_utc") {
+            "last_access_utc"
+        } else {
+            "NULL"
+        },
+        if has("creation_utc") {
+            "creation_utc"
         } else {
             "NULL"
         },
@@ -209,13 +231,27 @@ pub(crate) fn read_cookies(item: &Item, decryptor: &mut Decryptor) -> Result<(Ve
                 row.get::<_, i64>(7)? != 0,
                 row.get::<_, Option<i64>>(8)?,
                 row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<i64>>(11)?,
             ))
         })
         .map_err(|error| item.sqlite(&error))?;
     let (mut cookies, mut partitioned) = (Vec::new(), 0);
     for row in rows {
-        let (host, name, plain, encrypted, path, expires_utc, secure, http_only, same_site, top) =
-            row.map_err(|error| item.sqlite(&error))?;
+        let (
+            host,
+            name,
+            plain,
+            encrypted,
+            path,
+            expires_utc,
+            secure,
+            http_only,
+            same_site,
+            top,
+            last_access_utc,
+            creation_utc,
+        ) = row.map_err(|error| item.sqlite(&error))?;
         if top.is_some_and(|site| !site.is_empty()) {
             partitioned += 1;
             continue;
@@ -239,7 +275,107 @@ pub(crate) fn read_cookies(item: &Item, decryptor: &mut Decryptor) -> Result<(Ve
                 Some(2) => Some(SameSite::Strict),
                 _ => None,
             },
+            last_accessed_at_ms: last_access_utc.and_then(webkit_to_unix_ms),
+            created_at_ms: creation_utc.and_then(webkit_to_unix_ms),
         });
     }
     Ok((cookies, partitioned))
+}
+
+#[cfg(all(test, unix))]
+mod timestamp_tests {
+    use super::*;
+    use crate::KeyringSource;
+    use rusqlite::{params, Connection};
+
+    fn create_cookie_table(db: &Connection) {
+        db.execute_batch(
+            "CREATE TABLE cookies (
+                 host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB, path TEXT,
+                 expires_utc INTEGER, is_secure INTEGER, is_httponly INTEGER
+             );",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn optional_cookie_dates_are_projected_independently() {
+        for (access, creation) in [(false, false), (true, false), (false, true), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let item = cookies_item(BrowserKind::Chrome, dir.path());
+            let db = Connection::open(&item.path).unwrap();
+            create_cookie_table(&db);
+            if access {
+                db.execute_batch("ALTER TABLE cookies ADD COLUMN last_access_utc INTEGER")
+                    .unwrap();
+            }
+            if creation {
+                db.execute_batch("ALTER TABLE cookies ADD COLUMN creation_utc INTEGER")
+                    .unwrap();
+            }
+            db.execute_batch(
+                "INSERT INTO cookies (host_key, name, value, encrypted_value, path,
+                     expires_utc, is_secure, is_httponly)
+                 VALUES ('example.test', 'display', 'dark', X'', '/', 0, 0, 0);",
+            )
+            .unwrap();
+            if access {
+                db.execute(
+                    "UPDATE cookies SET last_access_utc = ?1",
+                    [WEBKIT_EPOCH_OFFSET_US + 1_700_000_001_234_999],
+                )
+                .unwrap();
+            }
+            if creation {
+                db.execute(
+                    "UPDATE cookies SET creation_utc = ?1",
+                    [WEBKIT_EPOCH_OFFSET_US + 1_700_000_000_000_999],
+                )
+                .unwrap();
+            }
+            let (cookies, _) =
+                read_cookies(&item, &mut Decryptor::new(KeyringSource::None)).unwrap();
+            assert_eq!(cookies.len(), 1);
+            assert_eq!(
+                cookies[0].last_accessed_at_ms,
+                access.then_some(1_700_000_001_234)
+            );
+            assert_eq!(
+                cookies[0].created_at_ms,
+                creation.then_some(1_700_000_000_000)
+            );
+        }
+    }
+
+    #[test]
+    fn zero_null_and_invalid_raw_dates_are_missing_but_unix_epoch_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let item = cookies_item(BrowserKind::Chrome, dir.path());
+        let db = Connection::open(&item.path).unwrap();
+        create_cookie_table(&db);
+        db.execute_batch(
+            "ALTER TABLE cookies ADD COLUMN last_access_utc INTEGER;
+             ALTER TABLE cookies ADD COLUMN creation_utc INTEGER;",
+        )
+        .unwrap();
+        for (index, raw) in [None, Some(0), Some(-1), Some(WEBKIT_EPOCH_OFFSET_US)]
+            .into_iter()
+            .enumerate()
+        {
+            db.execute(
+                "INSERT INTO cookies (host_key, name, value, encrypted_value, path,
+                     expires_utc, is_secure, is_httponly, last_access_utc, creation_utc)
+                 VALUES ('example.test', ?1, 'dark', X'', '/', 0, 0, 0, ?2, ?2)",
+                params![index.to_string(), raw],
+            )
+            .unwrap();
+        }
+        let (cookies, _) = read_cookies(&item, &mut Decryptor::new(KeyringSource::None)).unwrap();
+        assert_eq!(cookies.len(), 4);
+        for cookie in cookies {
+            let expected = (cookie.name == "3").then_some(0);
+            assert_eq!(cookie.last_accessed_at_ms, expected);
+            assert_eq!(cookie.created_at_ms, expected);
+        }
+    }
 }

@@ -34,7 +34,7 @@ pub(crate) enum BrowserCommand {
     Act(CallArgs),
     /// browser_pointer: click, type or scroll at viewport coordinates.
     Pointer(CallArgs),
-    /// browser_screenshot: capture a tab; prints the saved artifact path (`--out FILE` saves it).
+    /// browser_screenshot: observe a tab; output=true delivers it (`--out FILE` saves and delivers it).
     Screenshot(CallArgs),
     /// browser_close_tab: close a tab (tab_id=...).
     Close(CallArgs),
@@ -172,7 +172,10 @@ pub(crate) async fn execute<W: Write, E: Write>(
         return Ok(());
     };
     summary.session_id = Some(call.session.clone());
-    let args = parse_args(&call.args)?;
+    let mut args = parse_args(&call.args)?;
+    if tool == "browser_screenshot" && call.out.is_some() {
+        args["output"] = Value::Bool(true);
+    }
     let wait = (!call.no_wait).then(|| call.timeout.map(Duration::from_secs));
     let Outcome { value, ok } = tool_call::drive(
         client,
@@ -207,11 +210,7 @@ pub(crate) async fn execute<W: Write, E: Write>(
             .and_then(|artifacts| artifacts.first())
             .and_then(Value::as_str)
             .ok_or("the call saved no file to write to --out")?;
-        let path = artifact
-            .split('/')
-            .map(client::encode_segment)
-            .collect::<Vec<_>>()
-            .join("/");
+        let path = client::encode_segment(artifact);
         let (_, bytes) = client
             .bytes(&client::session_path(
                 &call.session,

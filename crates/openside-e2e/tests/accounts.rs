@@ -42,7 +42,7 @@ async fn snapshot(State(fake): State<Arc<Fake>>, headers: HeaderMap) -> Response
     fake.requests.lock().push("GET /v1/snapshot".into());
     let blocks = fake.blocks.lock();
     Json(json!({"generation":1,"serverNowMs":now_ms(),"credentials":(1..=3).map(|id| json!({
-        "id":id,"provider":"anthropic","credential":{"type":"oauth","access":format!("{ACCESS}-{id}"),
+        "id":id,"provider":"anthropic","models":["anthropic:test/model-a"],"credential":{"type":"oauth","access":format!("{ACCESS}-{id}"),
         "refresh":"sentinel","expires":now_ms()+3_600_000.0,"accountId":format!("upstream-{id}"),"email":format!("private-{id}-{EMAIL}")},
         "blocks":blocks.iter().filter(|(cid,_)| *cid==id).map(|(_,block)| block.clone()).collect::<Vec<_>>()
     })).collect::<Vec<_>>() })).into_response()
@@ -146,11 +146,20 @@ impl Drop for Server {
     }
 }
 
-fn prepare(server: &Server, broker: bool) -> Option<Harness> {
-    let h = Harness::prepare(
-        env!("CARGO_BIN_EXE_e2e-opensided"),
-        &json!({"responses":[]}),
-    )?;
+fn prepare(server: &Server, broker: bool) -> Option<(Harness, tempfile::TempDir)> {
+    let environment = tempfile::tempdir().unwrap();
+    let daemon = environment.path().join("daemon-wrapper");
+    std::fs::write(
+        &daemon,
+        format!(
+            "#!/bin/sh\nexport TEST_API_KEY='{ENV_KEY}'\nexec '{}' \"$@\"\n",
+            env!("CARGO_BIN_EXE_e2e-opensided")
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&daemon, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let h = Harness::prepare(daemon.to_str().unwrap(), &json!({"responses":[]}))?;
     let path = h.root().join("config/openside/config.toml");
     let config = std::fs::read_to_string(&path).unwrap().replace(
         "default = \"script\"",
@@ -169,21 +178,26 @@ fn prepare(server: &Server, broker: bool) -> Option<Harness> {
     let injection = format!(
         r#"
 os.environ.pop('OPENSIDE_AGENT_SCRIPT', None)
-os.environ['TEST_API_KEY'] = {ENV_KEY:?}
-from openside_agent.providers import models, sources
-from pydantic_ai.providers.anthropic import AnthropicProvider
+from openside_agent.providers import request_auth
 endpoint = {endpoint:?}
-models.PROVIDER_URLS['anthropic'] = endpoint
-original = models.AsyncAnthropic
+original = request_auth.AsyncAnthropic
 def fake_client(**kwargs):
     return original(base_url=endpoint, **kwargs)
-models.AsyncAnthropic = fake_client
-sources.api_key_provider = lambda provider, key: AnthropicProvider(api_key=key, base_url=endpoint)
+request_auth.AsyncAnthropic = fake_client
 "#,
         endpoint = server.url
     );
     std::fs::write(hooks, existing + &injection).unwrap();
-    Some(h)
+    Some((h, environment))
+}
+
+fn source<'a>(report: &'a Value, name: &str) -> &'a Value {
+    report["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| source["name"] == name)
+        .expect("configured source appears in daemon diagnostics")
 }
 async fn turn(h: &Harness, id: &str, number: usize) -> Vec<Value> {
     let before = h
@@ -293,7 +307,7 @@ async fn audit(h: &mut Harness, id: &str, observed: &[Value]) {
 #[tokio::test]
 async fn broker_rate_limit_rotates_same_session_and_accounts_api_is_secret_free() {
     let server = Server::start().await;
-    let Some(mut h) = prepare(&server, true) else {
+    let Some((mut h, _daemon_environment)) = prepare(&server, true) else {
         return;
     };
     h.launch().await;
@@ -330,18 +344,18 @@ async fn broker_rate_limit_rotates_same_session_and_accounts_api_is_secret_free(
         .await;
     assert_eq!(initial.status, 200, "{}", initial.body);
     assert_eq!(
-        initial.body["sources"][0]["accounts"]
+        source(&initial.body, "omp-broker")["accounts"]
             .as_array()
             .unwrap()
             .len(),
         3
     );
     assert_eq!(
-        initial.body["sources"][0]["accounts"][0]["models"],
+        source(&initial.body, "omp-broker")["accounts"][0]["models"],
         json!(["anthropic:test/model-a"])
     );
     assert_eq!(
-        initial.body["sources"][0]["accounts"][0]["usage_windows"][0]["used_percent"],
+        source(&initial.body, "omp-broker")["accounts"][0]["usage_windows"][0]["used_percent"],
         10.0
     );
     let fetches = server.state.requests.lock().len();
@@ -349,19 +363,32 @@ async fn broker_rate_limit_rotates_same_session_and_accounts_api_is_secret_free(
         h.request("GET", "/v1/accounts", None),
         h.request("GET", "/v1/accounts", None)
     );
-    assert_eq!(one.body, initial.body);
-    assert_eq!(two.body, initial.body);
+    for response in [one, two] {
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            source(&response.body, "omp-broker")["accounts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        audit_bytes(&serde_json::to_vec(&response.body).unwrap());
+    }
     assert_eq!(server.state.requests.lock().len(), fetches);
     let id = h
-        .request("POST", "/v1/sessions", Some(json!({"mode":"read-only"})))
+        .request(
+            "POST",
+            "/v1/sessions",
+            Some(json!({"mode":"read-only","title":"Account rotation"})),
+        )
         .await
         .body["id"]
         .as_str()
         .unwrap()
         .to_owned();
     let mut events = turn(&h, &id, 1).await;
-    // Better quota does not break a live session pin.
-    *server.state.used.lock() = vec![0.9, 0.1, 0.5];
+    // A healthy warm affinity survives a sibling's better quota while above its reserve.
+    *server.state.used.lock() = vec![0.6, 0.1, 0.5];
     events.extend(turn(&h, &id, 2).await);
     events.extend(turn(&h, &id, 3).await);
     assert_eq!(
@@ -376,9 +403,26 @@ async fn broker_rate_limit_rotates_same_session_and_accounts_api_is_secret_free(
         .lock()
         .contains(&"POST /v1/credential/1/block".to_owned()));
     tokio::time::sleep(Duration::from_millis(5100)).await;
-    let accounts = h.request("GET", "/v1/accounts", None).await;
+    let fetches = server.state.requests.lock().len();
+    let (accounts, concurrent) = tokio::join!(
+        h.request("GET", "/v1/accounts", None),
+        h.request("GET", "/v1/accounts", None)
+    );
+    for response in [&accounts, &concurrent] {
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            source(&response.body, "omp-broker")["accounts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        audit_bytes(&serde_json::to_vec(&response.body).unwrap());
+    }
+    // A cold concurrent pair shares one snapshot/usage refresh.
+    assert_eq!(server.state.requests.lock().len(), fetches + 2);
     assert!(
-        accounts.body["sources"][0]["accounts"][0]["blocked_until_ms"]
+        source(&accounts.body, "omp-broker")["accounts"][0]["blocked_until_ms"]
             .as_f64()
             .unwrap()
             > now_ms()
@@ -389,12 +433,16 @@ async fn broker_rate_limit_rotates_same_session_and_accounts_api_is_secret_free(
 #[tokio::test]
 async fn env_source_runs_without_broker_and_never_persists_credentials() {
     let server = Server::start().await;
-    let Some(mut h) = prepare(&server, false) else {
+    let Some((mut h, _daemon_environment)) = prepare(&server, false) else {
         return;
     };
     h.launch().await;
     let id = h
-        .request("POST", "/v1/sessions", Some(json!({"mode":"read-only"})))
+        .request(
+            "POST",
+            "/v1/sessions",
+            Some(json!({"mode":"read-only","title":"Environment credentials"})),
+        )
         .await
         .body["id"]
         .as_str()
@@ -404,33 +452,36 @@ async fn env_source_runs_without_broker_and_never_persists_credentials() {
     assert_eq!(*server.state.provider_accounts.lock(), vec!["env"]);
     assert!(server.state.requests.lock().is_empty());
     let accounts = h.request("GET", "/v1/accounts", None).await;
-    assert_eq!(accounts.body["sources"][0]["name"], "env");
-    assert_eq!(accounts.body["sources"][0]["available"], true);
+    assert_eq!(source(&accounts.body, "env")["available"], true);
     audit(&mut h, &id, &events).await;
 }
 
 #[tokio::test]
 async fn no_credential_source_fails_closed_before_provider_requests() {
     let server = Server::start().await;
-    let Some(mut h) = prepare(&server, false) else {
+    let Some((mut h, daemon_environment)) = prepare(&server, false) else {
         return;
     };
-    let hooks = h.root().join("python-hooks/sitecustomize.py");
-    let text = std::fs::read_to_string(&hooks).unwrap();
+    let wrapper = daemon_environment.path().join("daemon-wrapper");
+    let text = std::fs::read_to_string(&wrapper).unwrap();
     std::fs::write(
-        hooks,
+        &wrapper,
         text.replace(
-            &format!("os.environ['TEST_API_KEY'] = {ENV_KEY:?}"),
-            "os.environ.pop('TEST_API_KEY', None)",
+            &format!("export TEST_API_KEY='{ENV_KEY}'"),
+            "unset TEST_API_KEY",
         ),
     )
     .unwrap();
     h.launch().await;
     let accounts = h.request("GET", "/v1/accounts", None).await;
     assert_eq!(accounts.status, 200);
-    assert_eq!(accounts.body["sources"][0]["available"], false);
+    assert_eq!(source(&accounts.body, "env")["available"], false);
     let id = h
-        .request("POST", "/v1/sessions", Some(json!({"mode":"read-only"})))
+        .request(
+            "POST",
+            "/v1/sessions",
+            Some(json!({"mode":"read-only","title":"Missing credentials"})),
+        )
         .await
         .body["id"]
         .as_str()
@@ -445,7 +496,7 @@ async fn no_credential_source_fails_closed_before_provider_requests() {
         )
         .await
         .status,
-        409
+        202
     );
     let mut auth_failure = false;
     loop {
@@ -473,7 +524,7 @@ async fn no_credential_source_fails_closed_before_provider_requests() {
 #[tokio::test]
 async fn command_source_runs_without_broker_and_never_persists_credentials() {
     let server = Server::start().await;
-    let Some(mut h) = prepare(&server, false) else {
+    let Some((mut h, _daemon_environment)) = prepare(&server, false) else {
         return;
     };
     let config = h.root().join("config/openside/config.toml");
@@ -487,11 +538,17 @@ async fn command_source_runs_without_broker_and_never_persists_credentials() {
         .join("../../agent/.venv/bin/python")
         .canonicalize()
         .unwrap();
-    let argv = json!([python, "-c", "import os; print(os.environ['TEST_API_KEY'])"]);
+    let command = h.root().join("credential-command.py");
+    std::fs::write(&command, format!("print({ENV_KEY:?})\n")).unwrap();
+    let argv = json!([python, command]);
     h.append_config(&format!("\n[credentials.command]\nanthropic = {argv}\n"));
     h.launch().await;
     let id = h
-        .request("POST", "/v1/sessions", Some(json!({"mode":"read-only"})))
+        .request(
+            "POST",
+            "/v1/sessions",
+            Some(json!({"mode":"read-only","title":"Command credentials"})),
+        )
         .await
         .body["id"]
         .as_str()
@@ -501,8 +558,7 @@ async fn command_source_runs_without_broker_and_never_persists_credentials() {
     assert_eq!(*server.state.provider_accounts.lock(), vec!["env"]);
     assert!(server.state.requests.lock().is_empty());
     let accounts = h.request("GET", "/v1/accounts", None).await;
-    assert_eq!(accounts.body["sources"][0]["name"], "command");
-    assert_eq!(accounts.body["sources"][0]["available"], true);
+    assert_eq!(source(&accounts.body, "command")["available"], true);
     audit(&mut h, &id, &events).await;
 }
 

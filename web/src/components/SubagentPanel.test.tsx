@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ClientContext } from "../context";
 import type { SubagentView } from "../state/session";
 import { fakeClient, json } from "../test/fakeDaemon";
-import { SubagentPanel } from "./SubagentPanel";
+import { AgentsTray } from "./SubagentPanel";
 
 const running: SubagentView = {
   id: "sa1",
@@ -22,22 +22,25 @@ function setup(subagents: SubagentView[]) {
   const daemon = fakeClient((call) => json(200, { id: call.path.split("/")[5], status: "running" }));
   const view = render(
     <ClientContext.Provider value={daemon.client}>
-      <SubagentPanel sessionId="s1" subagents={subagents} />
+      <AgentsTray sessionId="s1" subagents={subagents} />
     </ClientContext.Provider>,
   );
   return { ...daemon, ...view };
 }
 
-describe("SubagentPanel", () => {
+describe("AgentsTray", () => {
   it("lists children with status and their live event stream", async () => {
     const user = userEvent.setup();
     setup([running, failed]);
-    const panel = screen.getByRole("region", { name: "Subagents" });
-    expect(panel).toHaveTextContent("1 active");
+    await user.click(screen.getByRole("button", { name: "2 agents" }));
+    const panel = screen.getByRole("dialog", { name: "Agents" });
+    expect(panel).toHaveTextContent("1 working");
     const [first, second] = within(panel).getAllByRole("listitem").filter((li) => li.dataset.subagent);
     expect(first).toHaveTextContent("Collect prices");
     expect(first).toHaveTextContent("Running");
-    expect(within(first!).getByLabelText("Progress events")).toHaveTextContent("2");
+    // No internal event count: a running child says what it is doing now.
+    expect(first).toHaveTextContent("Running · Working");
+    expect(first).not.toHaveTextContent("events");
     await user.click(within(first!).getByText("Collect prices"));
     const events = within(first!).getByRole("list", { name: "Subagent events" });
     expect(within(events).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
@@ -54,11 +57,12 @@ describe("SubagentPanel", () => {
   it("steers and cancels a running child through the API", async () => {
     const user = userEvent.setup();
     const { calls } = setup([running]);
+    await user.click(screen.getByRole("button", { name: "1 agent" }));
     await user.click(screen.getByText("Collect prices"));
     await user.type(screen.getByLabelText("Steer sa1"), "only EU shops");
     await user.click(screen.getByRole("button", { name: "Steer" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    const confirm = screen.getByRole("dialog", { name: "Cancel this task?" });
+    const confirm = await screen.findByRole("dialog", { name: "Cancel this task?" });
     expect(confirm).toHaveTextContent("The agent and any other tasks keep running");
     await user.click(within(confirm).getByRole("button", { name: "Cancel task" }));
     expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([

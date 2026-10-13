@@ -2,10 +2,11 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createClient } from "../api/client";
-import type { Ticket } from "../api/types";
+import type { Card } from "../api/types";
+import { fixture } from "../cards/testing";
 import { ClientContext } from "../context";
 import { json } from "../test/fakeDaemon";
-import { TicketCard } from "./TicketCard";
+import { ConversationCard } from "./ConversationCard";
 
 class FakeSocket {
   static last: FakeSocket | null = null;
@@ -38,44 +39,29 @@ class FakeSocket {
   }
 }
 
-const ticket: Ticket = {
-  id: "k9",
-  session_id: "s1",
-  tool_call_id: "hs",
-  deferral: "external",
-  kind: "takeover",
-  summary: "Solve the CAPTCHA",
-  instructions: null,
-  options: [],
-  origin: { subagent_id: null },
-  tool: null,
-  target: { tab_id: "tab-1", origin: "https://shop.test", field_ref: null },
-  resume_when: null,
-  created_at: "2026-01-01T00:00:00Z",
-  expires_at: "2026-01-01T00:30:00Z",
-  status: "pending",
-  resolution: null,
-};
+const card: Card = { ...fixture("ticket:take1"), id: "ticket:k9", ticket_id: "k9", title: "Solve the CAPTCHA" };
 
-function setup(value: Ticket = ticket) {
+function setup(value: Card = card) {
   const calls: { method: string; path: string }[] = [];
   const client = createClient({
     token: () => "tok_123",
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ method: init?.method ?? "GET", path: new URL(String(input), "http://x").pathname });
-      return json(200, { ...value, status: "resolved" });
+      return json(200, { id: "k9", status: "resolved" });
     }) as typeof fetch,
     webSocket: (url, protocols) => new FakeSocket(url, protocols) as unknown as WebSocket,
   });
   render(
     <ClientContext.Provider value={client}>
-      <TicketCard ticket={value} />
+      <ConversationCard card={value} defaultOpen />
     </ClientContext.Provider>,
   );
   return { calls };
 }
 
 const FRAME = { type: "frame", data: "/9j/AAAA", width: 1440, height: 900 };
+// The card has its own polite live region; the stream's state line belongs to the remote-control dialog.
+const dialogStatus = () => document.querySelector<HTMLElement>(".takeover-state")!;
 
 describe("TakeoverView (HS-6)", () => {
   it("authenticates by subprotocol, shows frames and forwards pointer and keyboard input", async () => {
@@ -85,7 +71,7 @@ describe("TakeoverView (HS-6)", () => {
     const socket = FakeSocket.last!;
     expect(socket.url).toBe("ws://localhost:3000/v1/tickets/k9/takeover");
     expect(socket.protocols).toEqual(["openside.v1", "openside.bearer.tok_123"]);
-    expect(screen.getByRole("status")).toHaveTextContent("Connecting");
+    expect(dialogStatus()).toHaveTextContent("Connecting");
 
     act(() => {
       socket.open();
@@ -140,9 +126,9 @@ describe("TakeoverView (HS-6)", () => {
     act(() => socket.open());
     const dialog = screen.getByRole("dialog", { name: "Remote control" });
     await user.click(screen.getAllByRole("button", { name: "Done" }).find((b) => dialog.contains(b))!);
-    expect(calls).toEqual([{ method: "POST", path: "/v1/tickets/k9/done" }]);
+    expect(calls.filter((call) => call.method === "POST")).toEqual([{ method: "POST", path: "/v1/tickets/k9/done" }]);
     act(() => socket.receive({ type: "ended", reason: "done" }));
-    expect(screen.getByRole("status")).toHaveTextContent("Step completed.");
+    expect(dialogStatus()).toHaveTextContent("Step completed.");
     expect(socket.closed).toBe(true);
   });
 
@@ -156,7 +142,7 @@ describe("TakeoverView (HS-6)", () => {
       socket.receive({ type: "withheld", code: "screenshot_unavailable_after_secret_fill" });
       socket.receive({ type: "input_error", code: "out_of_bounds" });
     });
-    expect(screen.getByRole("status")).toHaveTextContent("hidden because the page holds a secret");
+    expect(dialogStatus()).toHaveTextContent("hidden because the page holds a secret");
     expect(screen.getByText("Input refused: out_of_bounds")).toBeInTheDocument();
   });
 
@@ -204,9 +190,10 @@ describe("TakeoverView (HS-6)", () => {
     expect(opener).toHaveFocus();
   });
 
-  it("falls back to desktop instructions for a takeover without a tab", () => {
-    setup({ ...ticket, target: null });
+  it("a takeover card the daemon sent without a screen action offers no remote screen, only Done and Cancel", () => {
+    setup({ ...card, actions: card.actions.filter((action) => action.target.type !== "takeover") });
     expect(screen.queryByRole("button", { name: "Open remote screen" })).toBeNull();
-    expect(screen.getByText(/Finish this step in the agent’s browser/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 });

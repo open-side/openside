@@ -39,6 +39,7 @@ impl Checkpoint {
 struct HostState {
     /// Existing sessions.
     sessions: HashSet<SessionId>,
+    agents: HashMap<String, SessionId>,
     /// Where each queued message stands; absent means it was never queued.
     messages: HashMap<(SessionId, MessageId), Progress>,
     started: Vec<NewSessionSpec>,
@@ -162,6 +163,9 @@ impl RoutineHost for FakeHost {
             checkpoint.pause().await;
         }
         exists
+    }
+    async fn agent_session(&self, agent: &str) -> Option<SessionId> {
+        self.0.lock().agents.get(agent).cloned()
     }
 }
 
@@ -1615,4 +1619,37 @@ async fn a_target_deleted_between_the_check_and_a_retarget_is_paused_by_the_dele
         stored.paused_reason,
         Some(RoutinePauseReason::TargetMissing)
     );
+}
+
+#[tokio::test]
+async fn team_routine_targets_home_and_retirement_pauses_without_fallback() {
+    let f = fixture("2026-10-01T00:00:00Z");
+    let home = f.host.add_session("mina-home");
+    f.host.0.lock().agents.insert("mina".into(), home.clone());
+    let routine = f
+        .scheduler
+        .create(CreateRoutineRequest {
+            name: "Prices".into(),
+            schedule: RoutineSchedule::Interval { secs: 60 },
+            action: RoutineAction::Agent {
+                agent_id: "mina".into(),
+                prompt: "Compare".into(),
+            },
+            enabled: None,
+            catch_up: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(routine.owner_agent_id.as_deref(), Some("mina"));
+    f.clock.advance(Duration::seconds(60));
+    let runs = f.scheduler.tick().await.unwrap();
+    assert_eq!(runs[0].session_id.as_ref(), Some(&home));
+    f.host.settle(&home);
+    f.host.0.lock().agents.remove("mina");
+    f.clock.advance(Duration::seconds(60));
+    f.scheduler.tick().await.unwrap();
+    let paused = f.scheduler.get(&routine.id).unwrap();
+    assert!(!paused.enabled);
+    assert_eq!(paused.paused_reason, Some(RoutinePauseReason::AgentRetired));
+    assert_eq!(f.host.follow_ups().len(), 1);
 }

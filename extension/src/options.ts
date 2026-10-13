@@ -1,5 +1,5 @@
 import { client } from "./api";
-import { validateDaemonUrl } from "./storage";
+import { parsePairingLink, validateDaemonUrl } from "./storage";
 import { clearAgentTabs } from "./agent-tabs";
 import { bindStatus, mountIcons } from "./ui";
 const status = document.querySelector<HTMLElement>("#status")!;
@@ -13,6 +13,28 @@ function showPairing(url: string | undefined): void {
   pairingState.dataset.paired = String(url !== undefined);
 }
 void chrome.storage.session.get("pairing").then(value => { if (value.pairing) urlInput.value = value.pairing.url; showPairing(value.pairing?.url); });
+const linkInput = document.querySelector<HTMLInputElement>("#link")!;
+document.querySelector<HTMLFormElement>("#pairing-link")!.addEventListener("submit", event => {
+  event.preventDefault();
+  let pairing: { url: string; code: string };
+  try { pairing = parsePairingLink(linkInput.value); } catch (error) { linkInput.value = ""; notify(error instanceof TypeError ? "That is not a link." : (error as Error).message, "error"); return; }
+  const parsed = new URL(pairing.url);
+  const hostPermission = `${parsed.protocol}//${parsed.hostname}/*`;
+  void chrome.permissions.request({ origins: [hostPermission] }).then(async granted => {
+    if (!granted) { notify("Allow daemon access to pair.", "error"); linkInput.value = ""; return; }
+    try {
+      const device = await client({ url: pairing.url, token: "" }).exchangePairing(pairing.code);
+      await chrome.storage.session.set({ pairing: { url: pairing.url, token: device.token } });
+      urlInput.value = pairing.url;
+      showPairing(pairing.url);
+      notify("Paired for this browser session.");
+    } catch {
+      notify("Pairing failed. The link may have expired or been used; make a new one in openside.", "error");
+    } finally {
+      linkInput.value = "";
+    }
+  }).catch(() => { linkInput.value = ""; notify("Daemon access was not granted. Try pairing again.", "error"); });
+});
 document.querySelector<HTMLFormElement>("#pairing")!.addEventListener("submit", event => {
   event.preventDefault();
   let url: string;
@@ -37,7 +59,7 @@ document.querySelector<HTMLFormElement>("#pairing")!.addEventListener("submit", 
 });
 document.querySelector("#forget")!.addEventListener("click", () => {
   // A stale optional group must not prevent forgetting credentials.
-  void clearAgentTabs().catch(() => undefined).then(() => chrome.storage.session.clear()).then(() => {
+  void clearAgentTabs().catch(() => undefined).then(() => Promise.all([chrome.storage.session.clear(), chrome.storage.local.remove("importPairing")])).then(() => {
     tokenInput.value = "";
     groupsEnabled = false;
     agentTabs.textContent = "Enable Agent Tabs";

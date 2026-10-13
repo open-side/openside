@@ -28,29 +28,47 @@ use crate::{
     tools::{SecretSink, SecretSinkError},
     Config, Daemon,
 };
+mod access_requests;
+mod agents;
 mod artifacts;
 mod browser;
 mod browser_snap;
 mod browser_space;
 mod browser_tabs;
+mod cards;
+mod channels;
+mod connection_tools;
+mod connections;
 mod core_gaps;
 mod credential_paths;
+mod favicons;
+mod hire;
+mod import_delivery;
 mod login;
+#[path = "managed_subscriptions/tests.rs"]
+mod managed_subscriptions;
 mod memory;
+mod message_authority;
+mod models;
 mod onboarding;
+mod operator;
 mod otp;
+mod person_only;
 mod policy;
 mod preview;
 mod profiles;
 mod remote;
+mod remote_setup;
 mod remote_transport;
 mod repl;
+mod resource_limits;
 mod routines;
 mod skills;
 mod subagents;
 mod sync;
 mod takeover;
 mod tasks;
+mod team;
 mod tools_api;
 mod vault;
 mod web;
@@ -180,7 +198,7 @@ impl TestRuntime {
     }
 }
 
-fn resolved_config(root: &Path) -> Resolved {
+pub(crate) fn resolved_config(root: &Path) -> Resolved {
     let mut product = openside_config::Config::default();
     product.agent.command = Some(vec!["unused-test-command".into()]);
     product.agent.orchestration = openside_config::Orchestration::Single;
@@ -270,6 +288,7 @@ async fn opened(
     deadline: chrono::DateTime<Utc>,
 ) -> Ticket {
     let ticket = Ticket {
+        hire: None,
         id: TicketId::new(id),
         session_id: session.clone(),
         tool_call_id: format!("call-{id}"),
@@ -299,6 +318,8 @@ async fn opened(
         login: None,
         choice: None,
         approval: None,
+        card: None,
+        form: None,
     };
     daemon
         .shared
@@ -394,6 +415,8 @@ async fn every_protocol_method_and_path_is_routed() {
                 text: "pending".into(),
                 mode: QueueMode::Queue,
                 attachments: Vec::new(),
+                author_kind: MessageAuthorKind::Person,
+                from_agent: None,
             },
         )
         .await
@@ -495,6 +518,8 @@ async fn every_protocol_method_and_path_is_routed() {
             .replace("{sid}", "child")
             .replace("{name}", "skill")
             .replace("{path}", "transcript.jsonl")
+            .replace("{provider}", "anthropic")
+            .replace("{source}", "claude-code")
             .replace("{id}", id);
         assert!(
             !path.contains('{'),
@@ -923,6 +948,7 @@ async fn startup_resumes_terminal_undelivered_ticket_without_queued_messages() {
                 &session,
                 None,
                 EventKind::TicketResolved {
+                    card: None,
                     ticket_id: ticket.id.clone(),
                     resolution: json!({"answer": "ready"}),
                 },
@@ -958,10 +984,7 @@ async fn startup_resumes_terminal_undelivered_ticket_without_queued_messages() {
                     .emit(
                         &session,
                         None,
-                        EventKind::RuntimeError {
-                            code: "auth_unavailable".into(),
-                            message: "Unavailable".into(),
-                        },
+                        EventKind::runtime_error("auth_unavailable", "Unavailable"),
                     )
                     .await
                     .unwrap();
@@ -1041,6 +1064,7 @@ async fn crash_after_ticket_delivery_recovers_only_interrupted_resolutions() {
                 &session,
                 None,
                 EventKind::TicketResolved {
+                    card: None,
                     ticket_id: ticket.id.clone(),
                     resolution: if approval {
                         json!({"approved":true})
@@ -1152,6 +1176,8 @@ async fn restart_reconciles_inflight_once_and_expires_overdue_tickets() {
                 text: "task".into(),
                 mode: QueueMode::Queue,
                 attachments: Vec::new(),
+                author_kind: MessageAuthorKind::Person,
+                from_agent: None,
             },
         )
         .await
@@ -1333,6 +1359,7 @@ async fn approval_binding_rejects_changed_args_and_is_single_use_across_restart(
             &session,
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: ticket.clone(),
                 resolution: json!({"approved": true}),
             },
@@ -1409,6 +1436,7 @@ async fn approval_binding_rejects_changed_policy_action_target() {
             &session,
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: ticket.clone(),
                 resolution: json!({"approved": true}),
             },
@@ -1445,6 +1473,7 @@ async fn policy_deny_cannot_be_approved() {
             &session,
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: ticket.clone(),
                 resolution: json!({"approved":true}),
             },
@@ -2227,7 +2256,7 @@ async fn sse_last_event_id_replays_only_newer_durable_events() {
     daemon.shutdown().await;
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn sandbox_setup_failure_is_denied_but_nonzero_command_exit_is_a_result() {
     use std::os::unix::fs::PermissionsExt;
@@ -2269,6 +2298,29 @@ async fn sandbox_setup_failure_is_denied_but_nonzero_command_exit_is_a_result() 
         ToolOutcome::Denied { .. }
     ));
     assert!(!root.path().join("no-fallback").exists());
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn nonzero_unsandboxed_command_exit_is_still_a_result() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "session", PolicyMode::Full, Some(root.path())).await;
+    let result = host(&daemon, &session)
+        .await
+        .call(call(
+            "bash",
+            json!({"command":"printf 'ordinary-output'; exit 7"}),
+            "nonzero",
+        ))
+        .await;
+    let ToolOutcome::Done { for_model_json } = result else {
+        panic!("a nonzero command exit is still a shell result: {result:?}");
+    };
+    let result: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(result["exit_code"], 7);
+    assert_eq!(result["stdout"], "ordinary-output");
     daemon.shutdown().await;
 }
 

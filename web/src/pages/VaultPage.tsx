@@ -1,10 +1,11 @@
 import { KeyRound, LockKeyhole, LockKeyholeOpen, Trash2 } from "lucide-react";
 import { useCallback, useState, type FormEvent } from "react";
+import { Link, useLocation } from "react-router";
 import type { VaultAuditQuery } from "../api/client";
 import type { VaultBackend, VaultPolicy, VaultPolicyOverride, VaultStatus } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
-import { Button, Dialog, DialogActions, ICON_STROKE, MenuItem, useToast } from "../ui";
+import { Button, Dialog, DialogActions, ICON_STROKE, MenuItem, Select, useToast } from "../ui";
 import {
   AddButton,
   CardActions,
@@ -13,12 +14,14 @@ import {
   ResourceCard,
   ResourceView,
   RowMenu,
-  ScopeNotice,
   SectionList,
   useConfirm,
   useDialogState,
   type BadgeTone,
 } from "./blocks";
+import { CliHint } from "./CliHint";
+import { manageLinkState } from "./manageRoutes";
+import { ScopeNotice } from "./ScopeNotice";
 import { formatDateTime } from "./format";
 
 const POLICY_LABEL: Record<VaultPolicy, string> = {
@@ -37,9 +40,9 @@ const REASON: Record<string, string> = {
   keyring_unreachable: "The computer's keyring service is not running.",
   keyring_locked: "The computer's keyring is locked. Unlock it on the computer, then unlock the vault here.",
   keyring_key_mismatch: "The key in the computer's keyring does not open this vault file.",
-  passphrase_cmd_failed: "vault.passphrase_cmd failed when the daemon started. Unlock with the passphrase.",
-  unsupported_platform: "This computer has no keyring openside can use. Set vault.unlock = \"passphrase\".",
-  format_mismatch: "The vault file was made with a different unlock method than vault.unlock.",
+  passphrase_cmd_failed: "The command that supplies the vault passphrase failed when openside started. Unlock with the passphrase.",
+  unsupported_platform: "This computer has no keyring openside can use. Choose the passphrase unlock method in Configuration.",
+  format_mismatch: "The vault file was made with a different unlock method than the one chosen in Configuration.",
   unreadable: "The vault file cannot be read.",
   probe_timeout: "The computer's keyring did not answer in time.",
 };
@@ -96,6 +99,7 @@ function PassphraseForm({ label, confirm, onSubmit }: { label: string; confirm: 
 /** Setup, unlock and lock. Passphrases only travel to the daemon and are cleared after each try. */
 function Status({ status, onChanged }: { status: VaultStatus; onChanged: () => void }) {
   const client = useClient();
+  const location = useLocation();
   const [error, setError] = useState<string | null>(null);
   const passphrase = status.backend === "passphrase";
 
@@ -152,9 +156,14 @@ function Status({ status, onChanged }: { status: VaultStatus; onChanged: () => v
         <PassphraseForm label="Unlock" confirm={false} onSubmit={(value) => act(() => client.unlockVault(value))} />
       ) : null}
       {status.state === "unavailable" ? (
-        <p className="resource-card-body">
-          Run <code>openside doctor</code> on the computer for the next step.
-        </p>
+        <>
+          <div className="resource-card-body">
+            <Link className="ui-button ui-button--compact" to="/config" state={manageLinkState(location)}>
+              Open Configuration
+            </Link>
+          </div>
+          <CliHint command="openside doctor">To check this computer from a terminal:</CliHint>
+        </>
       ) : null}
       {error ? <ErrorNote>{error}</ErrorNote> : null}
     </ResourceCard>
@@ -325,20 +334,18 @@ function Items({ status, onChanged }: { status: VaultStatus; onChanged: () => vo
                       detail={item.origins.join(", ")}
                       trailing={
                         <>
-                          <select
+                          <Select
+                            variant="inline"
                             className="inline-select"
                             aria-label={`Use policy for ${item.id}`}
                             title="When the agent may use this item"
                             value={item.policy ?? "default"}
-                            onChange={(e) => void setPolicy(item.id, e.target.value as VaultPolicyOverride)}
-                          >
-                            <option value="default">Default ({POLICY_LABEL[data.default_policy].toLowerCase()})</option>
-                            {(Object.keys(POLICY_LABEL) as VaultPolicy[]).map((policy) => (
-                              <option key={policy} value={policy}>
-                                {POLICY_LABEL[policy]}
-                              </option>
-                            ))}
-                          </select>
+                            onChange={(value) => void setPolicy(item.id, value as VaultPolicyOverride)}
+                            options={[
+                              { value: "default", label: `Default (${POLICY_LABEL[data.default_policy].toLowerCase()})` },
+                              ...(Object.keys(POLICY_LABEL) as VaultPolicy[]).map((policy) => ({ value: policy, label: POLICY_LABEL[policy] })),
+                            ]}
+                          />
                           <RowMenu name={item.id}>
                             <MenuItem
                               danger
@@ -500,7 +507,7 @@ export function VaultPage() {
   if (status.forbidden) {
     return (
       <div className="manage-body" data-section="vault">
-        <ScopeNotice what="the vault" />
+        <ScopeNotice what="the vault" onGranted={changed} />
       </div>
     );
   }

@@ -106,6 +106,7 @@ pub(crate) async fn pair<W: Write>(
             Some(&CreatePairingRequest {
                 name: args.name.clone(),
                 scopes,
+                import_delivery: false,
                 via: args.via.map(PairingTransport::from),
                 kind: if args.agent {
                     openside_proto::DeviceKind::AgentClient
@@ -116,9 +117,9 @@ pub(crate) async fn pair<W: Write>(
         )
         .await
         .map_err(|error| {
-            if error.contains("local_socket_required") {
-                "pairing codes can only be issued over the local Unix socket; run this on the \
-                 daemon host without --url/--token"
+            if error.contains("local_access_required") {
+                "pairing codes require the local person; run this command on the daemon host \
+                 without --url/--token, or open Remote access from openside-browser"
                     .to_owned()
             } else {
                 error
@@ -166,6 +167,14 @@ pub(crate) async fn device<W: Write>(
             let list: DeviceList = client.get("/v1/devices").await?;
             if json {
                 return emit(stdout, &list);
+            }
+            if let Some(ui) = crate::ui::pretty() {
+                return write!(
+                    stdout,
+                    "{}",
+                    crate::ui::devices(ui, &list, crate::ui::now_secs())
+                )
+                .map_err(output_error);
             }
             for device in &list.devices {
                 let scopes: Vec<String> = device

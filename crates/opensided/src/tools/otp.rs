@@ -34,6 +34,74 @@ use super::{
 };
 use crate::engine::Shared;
 
+type FilledLogins = HashMap<(SessionId, String), (String, Instant)>;
+
+static FILLED_LOGINS: LazyLock<parking_lot::Mutex<FilledLogins>> = LazyLock::new(Default::default);
+
+pub(crate) async fn filled(_shared: &Shared, ticket: &Ticket) {
+    if ticket.otp.is_none() {
+        return;
+    }
+    if let Some(target) = &ticket.target {
+        if let (Some(tab), Some(origin)) = (&target.tab_id, &target.origin) {
+            mark_filled(&ticket.session_id, tab, origin);
+        }
+    }
+}
+
+pub(super) fn mark_filled(session: &SessionId, tab: &str, origin: &str) {
+    let mut pending = FILLED_LOGINS.lock();
+    pending.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(600));
+    pending.insert(
+        (session.clone(), tab.to_owned()),
+        (origin.to_owned(), Instant::now()),
+    );
+}
+
+pub(crate) async fn observed(
+    shared: &Shared,
+    browser: &openside_browser::Browser,
+    session: &SessionId,
+    tab: &str,
+    url: &str,
+    kind: openside_proto::PageKind,
+) {
+    if matches!(
+        kind,
+        openside_proto::PageKind::Login | openside_proto::PageKind::Otp
+    ) {
+        return;
+    }
+    let origin = url::Url::parse(url)
+        .ok()
+        .map(|url| url.origin().ascii_serialization());
+    let ready = {
+        let mut pending = FILLED_LOGINS.lock();
+        pending.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(600));
+        let key = (session.clone(), tab.to_owned());
+        if pending
+            .get(&key)
+            .is_some_and(|(expected, _)| Some(expected) == origin.as_ref())
+        {
+            pending.remove(&key);
+            true
+        } else {
+            false
+        }
+    };
+    if ready {
+        let _ = crate::connections::complete_login(
+            shared,
+            browser,
+            session,
+            tab,
+            openside_proto::ConnectionSource::Otp,
+            None,
+        )
+        .await;
+    }
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OtpRequestArgs {
@@ -86,7 +154,7 @@ pub(super) async fn origin_actions(
         .shared
         .registry
         .browser
-        .for_session(&ctx.shared, &ctx.session)
+        .for_tab(&ctx.shared, &ctx.session, tab_id)
         .await?;
     let origin = Controller::origin(&browser, &ctx.session, tab_id).await?;
     Ok(vec![
@@ -128,27 +196,61 @@ impl DaemonTool for RequestOtp {
         json!({"tab_id":args["tab_id"],"field_ref":args["field_ref"],"channel":args["channel"],"summary":args["summary"]})
     }
     fn call<'a>(&'a self, args: Value, ctx: &'a ToolEnv) -> BoxFuture<'a, ToolExec> {
+        Self::call_with_vault(args, ctx, true)
+    }
+}
+
+impl RequestOtp {
+    pub(super) fn call_with_vault(
+        args: Value,
+        ctx: &ToolEnv,
+        allow_vault: bool,
+    ) -> BoxFuture<'_, ToolExec> {
         Box::pin(async move {
             let result = async {
                 let args: OtpRequestArgs = parse(&args)?;
+                let origin = approved_origin(ctx)?;
+                let browser = ctx
+                    .shared
+                    .registry
+                    .browser
+                    .for_tab(&ctx.shared, &ctx.session, &args.tab_id)
+                    .await?;
+                if Controller::origin(&browser, &ctx.session, &args.tab_id).await? != origin {
+                    return Err(ToolError(
+                        "Page origin changed; take a fresh snapshot".into(),
+                    ));
+                }
+                let _ = crate::connections::begin_login(
+                    &ctx.shared,
+                    &browser,
+                    &ctx.session,
+                    &args.tab_id,
+                    &origin,
+                )
+                .await;
                 let channel = args.channel.unwrap_or(OtpChannel::Unknown);
                 let vault = ctx.shared.registry.vault.available();
                 // Several saved accounts for one origin: the person types the code of the
                 // account they mean, and registering another one is not offered.
                 let mut ambiguous = false;
-                if vault && matches!(channel, OtpChannel::Authenticator | OtpChannel::Unknown) {
+                if allow_vault
+                    && vault
+                    && matches!(channel, OtpChannel::Authenticator | OtpChannel::Unknown)
+                {
                     match fill_saved_totp(ctx, &args.tab_id, &args.field_ref, None).await? {
                         SavedTotp::Used(exec) => return Ok(*exec),
                         SavedTotp::Ambiguous => ambiguous = true,
                         SavedTotp::Missing => {}
                     }
                 }
-                let origin = approved_origin(ctx)?;
                 let summary = args
                     .summary
                     .filter(|summary| !summary.trim().is_empty())
                     .unwrap_or_else(|| format!("Verification code for {origin}"));
                 Ok(ToolExec::Defer(Box::new(TicketRequest {
+                    hire: None,
+                    form: None,
                     kind: TicketKind::SecretInput,
                     summary,
                     instructions: Some(channel_text(channel).into()),
@@ -837,7 +939,7 @@ impl DaemonTool for RegisterAuthenticator {
                 let args: RegisterAuthenticatorArgs = parse(&args)?;
                 let origin = approved_origin(ctx)?;
                 let controller = &ctx.shared.registry.browser;
-                let browser = controller.for_session(&ctx.shared, &ctx.session).await?;
+                let browser = controller.for_tab(&ctx.shared, &ctx.session, &args.tab_id).await?;
                 if Controller::origin(&browser, &ctx.session, &args.tab_id).await? != origin {
                     return Err(ToolError("Tab origin changed".into()));
                 }
@@ -944,28 +1046,26 @@ impl DaemonTool for RegisterAuthenticator {
                     .issuer
                     .as_deref()
                     .map_or_else(|| origin.clone(), |issuer| format!("{issuer} ({origin})"));
-                Ok(ToolExec::Defer(Box::new(TicketRequest {
-                    kind: TicketKind::Confirm,
-                    summary: format!("Save the authenticator for {named} in the vault"),
-                    instructions: Some("Approve to keep this site's authenticator in openside's vault, so its codes are filled for you from now on. Decline to discard it.".into()),
-                    options: Vec::new(),
-                    target: Some(TicketTarget {
-                        tab_id: Some(args.tab_id),
-                        origin: Some(origin.clone()),
-                        field_ref: args.field_ref,
-                    }),
-                    resume_when: None,
-                    otp: None,
-                    otp_register: Some(TicketOtpRegister {
-                        origin,
-                        issuer: key.issuer,
-                        account: key.account,
-                    }),
-                    login: None,
-                    choice: None,
-                    approval: None,
-                    pins: Vec::new(),
-                })))
+                Ok(ToolExec::Defer(Box::new(TicketRequest { hire: None, form: None, kind: TicketKind::Confirm,
+                summary: format!("Save the authenticator for {named} in the vault"),
+                instructions: Some("Approve to keep this site's authenticator in openside's vault, so its codes are filled for you from now on. Decline to discard it.".into()),
+                options: Vec::new(),
+                target: Some(TicketTarget {
+                    tab_id: Some(args.tab_id),
+                    origin: Some(origin.clone()),
+                    field_ref: args.field_ref,
+                }),
+                resume_when: None,
+                otp: None,
+                otp_register: Some(TicketOtpRegister {
+                    origin,
+                    issuer: key.issuer,
+                    account: key.account,
+                }),
+                login: None,
+                choice: None,
+                approval: None,
+                pins: Vec::new(), })))
             }
             .await;
             result.unwrap_or_else(|error: ToolError| ToolExec::Denied {

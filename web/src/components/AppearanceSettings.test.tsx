@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { accentForeground, applyAccent, applyPalettes, applyTheme, loadAccent, loadPalettes, loadTheme } from "../theme";
+import { accentForeground, applyAccent, applyPalettes, applyTheme, loadAccent, loadPalettes, loadTheme, presetsFor } from "../theme";
+import { chooseOption } from "../test/select";
 import { AppearanceSettings } from "./AppearanceSettings";
 
 const root = document.documentElement;
@@ -20,17 +21,17 @@ describe("AppearanceSettings", () => {
     render(<AppearanceSettings />);
     const mode = screen.getByRole("combobox", { name: "Theme mode" });
     expect(root.dataset.theme).toBe("system");
-    expect(mode).toHaveValue("system");
+    expect(mode).toHaveTextContent("System");
 
-    await user.selectOptions(mode, "light");
+    await chooseOption(user, mode, "Light");
     expect(root.dataset.theme).toBe("light");
     expect(localStorage.getItem("openside.theme")).toBe("light");
 
-    await user.selectOptions(mode, "dark");
+    await chooseOption(user, mode, "Dark");
     expect(root.dataset.theme).toBe("dark");
     expect(loadTheme()).toBe("dark");
 
-    await user.selectOptions(mode, "system");
+    await chooseOption(user, mode, "System");
     expect(root.dataset.theme).toBe("system");
     expect(localStorage.getItem("openside.theme")).toBeNull();
   });
@@ -38,7 +39,7 @@ describe("AppearanceSettings", () => {
   it("applies a palette per scheme and stores its colours for the boot script", async () => {
     const user = userEvent.setup();
     render(<AppearanceSettings />);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Dark theme" }), "dracula-dark");
+    await chooseOption(user, screen.getByRole("combobox", { name: "Dark theme" }), "Dracula");
     expect(root.dataset.darkPalette).toBe("dracula-dark");
     expect(root.style.getPropertyValue("--dark-canvas")).toBe("#282a36");
     expect(root.style.getPropertyValue("--dark-accent-fg")).toBe(accentForeground("#ff79c6"));
@@ -47,10 +48,12 @@ describe("AppearanceSettings", () => {
       dark: { id: "dracula-dark", background: "#282a36", foreground: "#f8f8f2", accent: "#ff79c6" },
     });
     expect(loadPalettes()).toEqual({ light: "openside", dark: "dracula-dark" });
-    // A light preset is never offered for the dark scheme.
-    expect(screen.getByRole("combobox", { name: "Dark theme" }).querySelector('option[value="codex-light"]')).toBeNull();
+    // A light preset is never offered for the dark scheme: the built-in palette plus the dark presets.
+    await user.click(screen.getByRole("combobox", { name: "Dark theme" }));
+    expect(await screen.findAllByRole("option")).toHaveLength(presetsFor("dark").length + 1);
+    await user.keyboard("{Escape}");
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Dark theme" }), "openside");
+    await chooseOption(user, screen.getByRole("combobox", { name: "Dark theme" }), "openside");
     expect(root.dataset.darkPalette).toBeUndefined();
     expect(root.style.getPropertyValue("--dark-canvas")).toBe("");
     expect(localStorage.getItem("openside.palette")).toBeNull();

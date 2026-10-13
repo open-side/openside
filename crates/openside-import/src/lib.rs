@@ -1,27 +1,43 @@
-//! Browser data import (parity B-1): history, bookmarks and cookies from Chrome, Chromium
-//! and Firefox profile directories into a named openside browser profile.
+//! Local browser migration across Chromium brands, Firefox forks and permitted Safari files.
 //!
-//! The source profile is only read: every SQLite file is copied (with its WAL/journal)
-//! into a private temp directory first, because the source browser may be running and
-//! holding it locked. Cookies are decrypted in memory (`v10`; `v11` only with an explicit
-//! keyring password) and written to the target profile through its own Chromium, history
-//! and bookmarks into the profile's import store. See `docs/specs/import.md`.
+//! [`read_profile`] isolates failures by [`DataKind`]; [`select_recent_cookies`] resolves
+//! conflicting sessions by source recency before any native write. Secret records remain
+//! host-only: callers save passwords into encrypted Vault and apply cookies through Chromium.
+//! [`write_profile`] persists only source-scoped non-secret snapshots. SQLite's online
+//! backup API normally reads a `mode=ro`, `immutable=0` source, including committed WAL
+//! pages; closed WAL databases have a verified-quiescent main-file copy fallback.
+//! Advisory read locks may delay checkpoints; the stock VFS's path-reopen residual and
+//! filesystem metadata effects are documented in `docs/PLATFORMS.md`.
+//!
+//! [`import`] retains the standalone named-profile history/bookmark/cookie CLI workflow.
+//! Safe Storage can use ordinary OS keyring access or a caller-supplied key. See
+//! `docs/specs/import.md` for the daemon's nine-kind onboarding and native user delivery.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod apply;
+mod arc;
 mod chromium;
+mod chromium_extra;
+mod chromium_passwords;
 mod crypto;
 mod db;
 mod discover;
 mod error;
+mod everything;
 mod firefox;
+mod firefox_crypto;
+mod firefox_extra;
 mod model;
+mod password_csv;
+mod safari;
+mod safe_storage;
 mod store;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 #[cfg(test)]
 mod tests;
+mod url_safety;
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -29,11 +45,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+pub use apply::cdp_cookie;
 pub use crypto::KeyringSource;
+pub use db::profile_storage_origins;
 pub use discover::{discover, discover_system, DiscoveredProfile};
 pub use error::{ImportError, Result};
-pub use model::{Bookmark, Cookie, SameSite, Visit};
+pub use everything::{password_count, safe_note, select_recent_cookies};
+pub use everything::{read_profile, write_profile, Available, DataKind, ProfileData, ProfileRead};
+pub use model::{
+    AutofillAddress, Bookmark, Cookie, ExtensionMetadata, RestoreTab, SameSite, SavedPassword,
+    SearchEngine, SitePermission, Visit,
+};
+pub use password_csv::{parse_password_csv, CsvPasswords};
 pub use store::{ProfileLayout, DEFAULT_PROFILE};
+pub use url_safety::{sanitize_import_document_urls, sanitize_import_url};
 
 /// Browser family of a source profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -44,6 +69,8 @@ pub enum BrowserKind {
     Chromium,
     /// Mozilla Firefox.
     Firefox,
+    /// Apple Safari.
+    Safari,
 }
 
 impl BrowserKind {
@@ -53,6 +80,7 @@ impl BrowserKind {
             Self::Chrome => "chrome",
             Self::Chromium => "chromium",
             Self::Firefox => "firefox",
+            Self::Safari => "safari",
         }
     }
 
@@ -61,11 +89,12 @@ impl BrowserKind {
             Self::Chrome => "Chrome",
             Self::Chromium => "Chromium",
             Self::Firefox => "Firefox",
+            Self::Safari => "Safari",
         }
     }
 
     fn is_chromium_family(self) -> bool {
-        !matches!(self, Self::Firefox)
+        matches!(self, Self::Chrome | Self::Chromium)
     }
 }
 

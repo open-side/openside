@@ -7,6 +7,48 @@ const MAX_SIDE: f64 = 16384.0;
 /// Largest capture area in CSS pixels, so a tall page cannot become a gigabyte of PNG.
 const MAX_AREA: f64 = 40_000_000.0;
 
+const THUMBNAIL_SIZE: (u16, u16) = (360, 225);
+const THUMBNAIL_QUALITY: u8 = 35;
+
+fn thumbnail_jpeg(jpeg: Vec<u8>) -> Result<Vec<u8>, BrowserError> {
+    let invalid = || BrowserError::InvalidResponse("thumbnail JPEG");
+    let mut decoder = jpeg_decoder::Decoder::new(jpeg.as_slice());
+    decoder.read_info().map_err(|_| invalid())?;
+    let info = decoder.info().ok_or_else(invalid)?;
+    if info.width == 0
+        || info.height == 0
+        || u32::from(info.width) > super::VIEWPORT.0
+        || u32::from(info.height) > super::VIEWPORT.1
+    {
+        return Err(invalid());
+    }
+    if info.width <= THUMBNAIL_SIZE.0 && info.height <= THUMBNAIL_SIZE.1 {
+        return Ok(jpeg);
+    }
+    // Scaled IDCT produces only the thumbnail raster, not a full viewport RGB buffer.
+    let (width, height) = decoder
+        .scale(THUMBNAIL_SIZE.0, THUMBNAIL_SIZE.1)
+        .map_err(|_| invalid())?;
+    if width > THUMBNAIL_SIZE.0 || height > THUMBNAIL_SIZE.1 {
+        return Err(invalid());
+    }
+    decoder.set_max_decoding_buffer_size(
+        usize::from(THUMBNAIL_SIZE.0) * usize::from(THUMBNAIL_SIZE.1) * 4,
+    );
+    let pixels = decoder.decode().map_err(|_| invalid())?;
+    let color = match info.pixel_format {
+        jpeg_decoder::PixelFormat::L8 => jpeg_encoder::ColorType::Luma,
+        jpeg_decoder::PixelFormat::RGB24 => jpeg_encoder::ColorType::Rgb,
+        jpeg_decoder::PixelFormat::CMYK32 => jpeg_encoder::ColorType::Cmyk,
+        jpeg_decoder::PixelFormat::L16 => return Err(invalid()),
+    };
+    let mut output = Vec::with_capacity(usize::from(width) * usize::from(height));
+    jpeg_encoder::Encoder::new(&mut output, THUMBNAIL_QUALITY)
+        .encode(&pixels, width, height, color)
+        .map_err(|_| invalid())?;
+    Ok(output)
+}
+
 /// A rectangle in CSS pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenshotClip {
@@ -40,14 +82,17 @@ impl Browser {
     /// A small JPEG of an owned viewport; uses capture's focus-emulation cleanup.
     pub async fn thumbnail(&self, owner: &str, id: &str) -> Result<Vec<u8>, BrowserError> {
         let session = self.owned_session(owner, id).await?;
+        // clip.scale resizes Chromium's compositor surface and can poison an active
+        // screencast. Capture without a viewport transform and downscale off the renderer.
         let params = json!({
-            "format": "jpeg", "quality": 35, "captureBeyondViewport": false,
-            "clip": {"x": 0, "y": 0, "width": super::VIEWPORT.0,
-                "height": super::VIEWPORT.1, "scale": 0.25},
+            "format": "jpeg", "quality": THUMBNAIL_QUALITY, "captureBeyondViewport": false,
         });
-        tokio::spawn(Arc::clone(&self.inner).capture(session, params))
+        let jpeg = tokio::spawn(Arc::clone(&self.inner).capture(session, params))
             .await
-            .map_err(|error| BrowserError::Transport(error.to_string()))?
+            .map_err(|_| BrowserError::InvalidResponse("thumbnail capture"))??;
+        tokio::task::spawn_blocking(move || thumbnail_jpeg(jpeg))
+            .await
+            .map_err(|_| BrowserError::InvalidResponse("thumbnail processor"))?
     }
 
     /// Capture `area` of a tab as PNG, with the same focus-emulation hygiene as
@@ -210,6 +255,26 @@ fn fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewport_thumbnails_use_scaled_decode_and_preserve_small_jpegs() {
+        let mut source = Vec::new();
+        jpeg_encoder::Encoder::new(&mut source, THUMBNAIL_QUALITY)
+            .encode(
+                &vec![80; 1440 * 900 * 3],
+                1440,
+                900,
+                jpeg_encoder::ColorType::Rgb,
+            )
+            .unwrap();
+        let thumbnail = thumbnail_jpeg(source).unwrap();
+        let mut decoder = jpeg_decoder::Decoder::new(thumbnail.as_slice());
+        decoder.read_info().unwrap();
+        let info = decoder.info().unwrap();
+        assert_eq!((info.width, info.height), THUMBNAIL_SIZE);
+        assert_eq!(thumbnail_jpeg(thumbnail.clone()).unwrap(), thumbnail);
+        assert!(thumbnail_jpeg(b"not a JPEG".to_vec()).is_err());
+    }
 
     fn clip(x: f64, y: f64, width: f64, height: f64) -> ScreenshotClip {
         ScreenshotClip {

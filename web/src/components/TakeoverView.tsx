@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, ty
 import { createPortal } from "react-dom";
 import { ApiError } from "../api/client";
 import { whilePageShown } from "../api/pageLifecycle";
-import type { TakeoverInput, TakeoverServerMessage, Ticket } from "../api/types";
+import type { TakeoverInput, TakeoverServerMessage } from "../api/types";
 import { useClient } from "../context";
 import { Button, ICON_STROKE, IconButton } from "../ui";
 import { BrowserFrame } from "./BrowserFrame";
@@ -53,12 +53,18 @@ function utf8Chunks(text: string, limit: number): string[] {
   return chunks;
 }
 
+export interface TakeoverTarget {
+  id: string;
+  summary: string;
+  origin: string | null;
+}
+
 /**
  * Remote control of the ticket's browser tab over the takeover WebSocket: JPEG frames in,
  * pointer/keyboard input out (viewport CSS pixels). Minimized, it stays a read-only
  * picture-in-picture preview of the same frames.
  */
-export function TakeoverView({ ticket, onClose }: { ticket: Ticket; onClose: () => void }) {
+export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onClose: () => void }) {
   const client = useClient();
   const socket = useRef<WebSocket | null>(null);
   const lastMove = useRef(0);
@@ -272,10 +278,10 @@ export function TakeoverView({ ticket, onClose }: { ticket: Ticket; onClose: () 
       </header>
       <div className="takeover-body">
         <p className="takeover-summary">{ticket.summary}</p>
-        {ticket.target?.origin ? (
+        {ticket.origin ? (
           <div className="takeover-origin">
             <Globe size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            <span>{ticket.target.origin}</span>
+            <span>{ticket.origin}</span>
           </div>
         ) : null}
         <p className="takeover-note">The agent stays paused on this tab until you choose Done or Reject.</p>

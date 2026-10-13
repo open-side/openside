@@ -175,7 +175,7 @@ pub struct MemoryStore {
 }
 
 const COLUMNS: &str = "m.id, m.kind, m.content, m.tags, m.retention, m.url, m.title, \
-     m.created_at, m.updated_at, m.expires_at, m.version";
+     m.created_at, m.updated_at, m.expires_at, m.version, m.owner";
 const LIVE: &str = "(m.expires_at IS NULL OR m.expires_at > ?1)";
 
 impl MemoryStore {
@@ -202,6 +202,15 @@ impl MemoryStore {
              CREATE TABLE IF NOT EXISTS sync_ids(
                  sync_id TEXT PRIMARY KEY, memory_id TEXT NOT NULL UNIQUE);",
         )?;
+        let has_owner = conn
+            .prepare("PRAGMA table_info(memories)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|column| column == "owner");
+        if !has_owner {
+            conn.execute_batch("ALTER TABLE memories ADD COLUMN owner TEXT;")?;
+        }
         let fts_exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'memories_fts')",
             [],
@@ -265,6 +274,55 @@ impl MemoryStore {
         Ok(memory)
     }
 
+    /// Ownership is committed with the memory, never exposed briefly as shared.
+    pub fn create_owned(&self, new: NewMemory, actor: &str, owner: Option<&str>) -> Result<Memory> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = self.now_ms();
+        purge(&tx, now)?;
+        let mut memory = self.insert(&tx, new, actor, now)?;
+        tx.execute(
+            "UPDATE memories SET owner = ?2 WHERE id = ?1",
+            params![memory.id, owner],
+        )?;
+        memory.owner = owner.map(str::to_owned);
+        tx.commit()?;
+        Ok(memory)
+    }
+
+    /// Compare-and-set makes cross-store saga replay safe without stealing a later transfer.
+    pub fn transfer_owner(&self, id: &str, from: Option<&str>, to: Option<&str>) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Retention or an explicit deletion wins over an interrupted ownership transfer.
+        let Some(memory) = fetch(&tx, id, self.now_ms())? else {
+            return Ok(());
+        };
+        if memory.owner.as_deref() != to {
+            if memory.owner.as_deref() != from {
+                return Err(Error::Invalid("memory ownership changed"));
+            }
+            tx.execute(
+                "UPDATE memories SET owner = ?2 WHERE id = ?1",
+                params![id, to],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Lifecycle ownership enumeration is not a ranked search and must not truncate.
+    pub fn owned_ids(&self, owner: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock();
+        let mut query = conn.prepare(&format!(
+            "SELECT m.id FROM memories m WHERE {LIVE} AND m.owner = ?2 ORDER BY m.id"
+        ))?;
+        let ids = query
+            .query_map(params![self.now_ms(), owner], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
+    }
+
     fn insert(&self, tx: &Connection, new: NewMemory, actor: &str, now: i64) -> Result<Memory> {
         let retention = new.retention.unwrap_or(self.default_retention);
         // Screen raw input first so a secret is never reported as a mere format error.
@@ -284,6 +342,7 @@ impl MemoryStore {
         )?;
         let memory = Memory {
             id: new_id(),
+            owner: None,
             kind: new.kind,
             content: new.content,
             tags,
@@ -467,6 +526,20 @@ impl MemoryStore {
         kind: Option<MemoryKind>,
         limit: usize,
     ) -> Result<MemorySearchResponse> {
+        self.search_scoped(query, kind, limit, None, true)
+    }
+
+    /// Apply ownership before ranking and limits so another owner's data never competes.
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        kind: Option<MemoryKind>,
+        limit: usize,
+        owner: Option<Option<&str>>,
+        include_shared: bool,
+    ) -> Result<MemorySearchResponse> {
+        let all = owner.is_none();
+        let owner = owner.flatten();
         let limit = limit.clamp(1, MAX_LIMIT);
         let now = self.now_ms();
         let kind = kind.map(MemoryKind::as_str);
@@ -479,10 +552,14 @@ impl MemoryStore {
         if query.trim().is_empty() {
             let mut statement = conn.prepare(&format!(
                 "SELECT {COLUMNS} FROM memories m WHERE {LIVE} AND (?2 IS NULL OR m.kind = ?2)
+                 AND (?4 OR m.owner IS ?5 OR (?6 AND m.owner IS NULL))
                  ORDER BY m.updated_at DESC, m.rowid DESC LIMIT ?3"
             ))?;
             let hits = statement
-                .query_map(params![now, kind, limit as i64], read_memory)?
+                .query_map(
+                    params![now, kind, limit as i64, all, owner, include_shared],
+                    read_memory,
+                )?
                 .map(|memory| {
                     Ok(MemoryHit {
                         memory: memory?,
@@ -506,13 +583,23 @@ impl MemoryStore {
                 .join(" OR ");
             let mut statement = conn.prepare(&format!(
                 "SELECT m.id FROM memories_fts JOIN memories m ON m.rowid = memories_fts.rowid
-                 WHERE memories_fts MATCH ?4 AND {LIVE} AND (?2 IS NULL OR m.kind = ?2)
+                 WHERE memories_fts MATCH ?7 AND {LIVE} AND (?2 IS NULL OR m.kind = ?2)
+                 AND (?4 OR m.owner IS ?5 OR (?6 AND m.owner IS NULL))
                  ORDER BY bm25(memories_fts) LIMIT ?3"
             ))?;
             lexical = statement
-                .query_map(params![now, kind, CANDIDATES as i64, expression], |row| {
-                    row.get::<_, String>(0)
-                })?
+                .query_map(
+                    params![
+                        now,
+                        kind,
+                        CANDIDATES as i64,
+                        all,
+                        owner,
+                        include_shared,
+                        expression
+                    ],
+                    |row| row.get::<_, String>(0),
+                )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
         }
         let mut vector = Vec::new();
@@ -523,12 +610,14 @@ impl MemoryStore {
         {
             let mut statement = conn.prepare(&format!(
                 "SELECT m.id, m.embedding FROM memories m
-                 WHERE {LIVE} AND (?2 IS NULL OR m.kind = ?2) AND m.embedding_model = ?3"
+                 WHERE {LIVE} AND (?2 IS NULL OR m.kind = ?2) AND m.embedding_model = ?3
+                 AND (?4 OR m.owner IS ?5 OR (?6 AND m.owner IS NULL))"
             ))?;
             let mut scored = statement
-                .query_map(params![now, kind, embedder.id()], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-                })?
+                .query_map(
+                    params![now, kind, embedder.id(), all, owner, include_shared],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )?
                 .filter_map(|row| {
                     let (id, blob) = row.ok()?;
                     let cosine = dot(&query, &blob)?;
@@ -874,6 +963,7 @@ fn read_memory(row: &Row<'_>) -> rusqlite::Result<Memory> {
         updated_at: to_time(row.get(8)?),
         expires_at: row.get::<_, Option<i64>>(9)?.map(to_time),
         version: row.get(10)?,
+        owner: row.get(11)?,
     })
 }
 

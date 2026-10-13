@@ -6,14 +6,14 @@ use crate::error::{ChannelError, Result};
 
 const COMMAND_DEADLINE: Duration = Duration::from_secs(10);
 
-/// A credential read from its source. Never stored by openside, never logged.
+/// Adapter-only credential; zeroized when its last owned wrapper is dropped.
 #[derive(Clone)]
-pub struct Secret(String);
+pub struct Secret(zeroize::Zeroizing<String>);
 
 impl Secret {
     /// Wrap a value; callers keep it out of logs.
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self(zeroize::Zeroizing::new(value.into()))
     }
 
     /// The raw value, for building an `Authorization` header or a signature.
@@ -74,7 +74,7 @@ pub async fn resolve(
     if value.is_empty() {
         return Err(ChannelError::Config(format!("{label}: secret is empty")));
     }
-    Ok(Secret(value))
+    Ok(Secret::new(value))
 }
 
 #[cfg(test)]
@@ -85,6 +85,7 @@ mod tests {
         None
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn command_output_is_trimmed_and_debug_is_redacted() {
         let argv = vec!["echo".to_owned(), "tok-123".to_owned()];

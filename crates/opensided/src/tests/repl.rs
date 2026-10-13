@@ -15,6 +15,16 @@ async fn fixture() -> (String, tokio::task::JoinHandle<()>) {
     let router = Router::new()
         .route("/", get(|| async { Html(PAGE) }))
         .route(
+            "/api/echo",
+            get(|headers: axum::http::HeaderMap| async move {
+                headers
+                    .get(axum::http::header::COOKIE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_owned()
+            }),
+        )
+        .route(
             "/next",
             get(|| async { Html("<!doctype html><title>Next</title><h1>Next</h1>") }),
         );
@@ -546,6 +556,82 @@ async fn browser_repl_shares_snapshot_refs_and_reruns_sensitive_steps_after_appr
         .shutdown(&daemon.shared)
         .await
         .is_ok());
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connections_repl_cookie_values_are_redacted_in_results_events_and_logs() {
+    const CANARY: &str = "JS_COOKIE_CANARY_9a35fe";
+    const FRAME_CANARY: &str = "FRAME_COOKIE_CANARY_72be91";
+    const PATH_CANARY: &str = "API_PATH_COOKIE_CANARY_c2e915";
+    let root = tempfile::tempdir().unwrap();
+    let config = browser_config(root.path()).expect("headless Chromium required");
+    let (origin, server) = fixture().await;
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let session = create_session(&daemon, "cookie-repl", PolicyMode::Full, None).await;
+    let browser = daemon
+        .shared
+        .registry
+        .browser
+        .get(&daemon.shared)
+        .await
+        .map_err(|error| error.0)
+        .unwrap();
+    let tab = browser
+        .create_agent_tab(session.as_str(), "about:blank")
+        .await
+        .unwrap()
+        .id;
+    browser
+        .navigate(session.as_str(), &tab, &origin)
+        .await
+        .unwrap();
+    browser.evaluate(&tab, &format!("document.cookie='session={CANARY}; Path=/'; document.cookie='frame={FRAME_CANARY}; Path=/next'; document.cookie='api_session={PATH_CANARY}; Path=/api'; const frame=document.createElement('iframe'); frame.src='/next'; document.body.append(frame); null")).await.unwrap();
+    browser.record_protocol(true);
+    let result = repl(&daemon, &session, &tab,
+        "await page.frameLocator('iframe').locator('h1').waitFor(); const cookies=await page.evaluate(async () => ({top:document.cookie,frame:document.querySelector('iframe').contentDocument.cookie,echo:await (await fetch('/api/echo')).text()})); console.log(cookies); cookies",
+        "cookie-read").await;
+    let wire = result.to_string();
+    assert!(wire.contains("[REDACTED]"), "{wire}");
+    assert!(result["return_value"]["echo"]
+        .as_str()
+        .unwrap()
+        .contains("api_session=[REDACTED]"));
+    let events =
+        serde_json::to_string(&daemon.shared.db.events(&session, 0).await.unwrap()).unwrap();
+    let protocol = serde_json::to_string(&browser.take_protocol_log()).unwrap();
+    for secret in [CANARY, FRAME_CANARY, PATH_CANARY] {
+        assert!(!wire.contains(secret));
+        assert!(!events.contains(secret));
+        assert!(!protocol.contains(secret));
+    }
+    assert!(events.contains("[REDACTED]"));
+    daemon.shutdown().await;
+    fn assert_logs_clean(path: &Path, secrets: &[&str]) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                assert_logs_clean(&path, secrets);
+            } else if path
+                .extension()
+                .is_some_and(|extension| matches!(extension.to_str(), Some("jsonl" | "log")))
+            {
+                let bytes = std::fs::read(&path).unwrap();
+                for secret in secrets {
+                    assert!(
+                        !bytes
+                            .windows(secret.len())
+                            .any(|part| part == secret.as_bytes()),
+                        "secret in {}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+    assert_logs_clean(root.path(), &[CANARY, FRAME_CANARY, PATH_CANARY]);
     server.abort();
 }
 

@@ -49,12 +49,29 @@ pub enum KeyringSource {
     /// A command line, split like a shell would but run directly (no shell); its stdout,
     /// minus trailing newlines, is the password.
     Command(String),
+    /// The browser's own Safe Storage entry in the OS keyring (Secret Service on Linux,
+    /// Keychain on macOS), looked up by brand id (`chrome`, `brave`, ...). Explicit imports
+    /// may trigger a macOS access request; Linux never requests unlocking. Never used by preview.
+    System {
+        /// Brand id as reported by profile detection.
+        brand: String,
+    },
 }
 
 impl KeyringSource {
     /// A password the caller already holds; it is wiped from memory on drop.
     pub fn password(password: impl Into<String>) -> Self {
         Self::Password(Zeroizing::new(password.into()))
+    }
+
+    /// The keyring password this source designates; `None` when the caller supplied none.
+    pub(crate) fn resolve(&self) -> Result<Option<Zeroizing<String>>> {
+        match self {
+            Self::None => Ok(None),
+            Self::Password(password) => Ok(Some(password.clone())),
+            Self::Command(line) => run_command(line).map(Some),
+            Self::System { brand } => crate::safe_storage::keyring_password(brand).map(Some),
+        }
     }
 }
 
@@ -64,6 +81,7 @@ impl std::fmt::Debug for KeyringSource {
             Self::None => "KeyringSource::None",
             Self::Password(_) => "KeyringSource::Password([REDACTED])",
             Self::Command(_) => "KeyringSource::Command(..)",
+            Self::System { .. } => "KeyringSource::System(..)",
         })
     }
 }
@@ -74,7 +92,7 @@ pub(crate) fn derive_key(password: &[u8], iterations: u32) -> [u8; 16] {
     key
 }
 
-fn decrypt_raw(key: &[u8; 16], ciphertext: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn decrypt_raw(key: &[u8; 16], ciphertext: &[u8]) -> Option<Vec<u8>> {
     Aes128CbcDec::new(key.into(), &IV.into())
         .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
         .ok()
@@ -212,15 +230,14 @@ impl Decryptor {
         if let Some(key) = self.keyring_key {
             return Ok(key);
         }
-        let password = match &self.keyring {
-            KeyringSource::None => {
+        let password = match self.keyring.resolve()? {
+            Some(password) => password,
+            None => {
                 return Err(ImportError::KeyringPasswordRequired {
                     host: host.to_owned(),
                     name: name.to_owned(),
                 })
             }
-            KeyringSource::Password(password) => password.clone(),
-            KeyringSource::Command(line) => run_command(line)?,
         };
         let key = derive_key(password.as_bytes(), ITERATIONS);
         self.keyring_key = Some(key);

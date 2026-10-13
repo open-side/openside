@@ -188,6 +188,7 @@ pub(crate) struct SearchQuery {
     q: Option<String>,
     kind: Option<MemoryKind>,
     limit: Option<usize>,
+    owner: Option<String>,
 }
 
 pub(crate) async fn search(
@@ -198,7 +199,18 @@ pub(crate) async fn search(
     let limit = query.limit.unwrap_or(20);
     let response = s
         .memory
-        .run(move |store| store.search(&text, query.kind, limit))
+        .run(move |store| {
+            store.search_scoped(
+                &text,
+                query.kind,
+                limit,
+                query
+                    .owner
+                    .as_deref()
+                    .map(|owner| (owner != "shared").then_some(owner)),
+                false,
+            )
+        })
         .await
         .map_err(error)?;
     Ok(Json(redacted(&s, response)?))

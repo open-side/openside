@@ -5,18 +5,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def hermetic_environment(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
-):
-    # Live smoke must be explicit; otherwise no test can discover the user's home.
-    if request.node.get_closest_marker("live") and os.getenv("OPENSIDE_LIVE_MODEL"):
-        return
-    if (
-        request.node.get_closest_marker("live_broker")
-        and os.getenv("OPENSIDE_LIVE_BROKER_URL")
-        and os.getenv("OPENSIDE_LIVE_BROKER_TOKEN_ENV")
-    ):
-        return
+def hermetic_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     for name in (
         "HOME",
         "XDG_CONFIG_HOME",
@@ -24,6 +13,7 @@ def hermetic_environment(
         "XDG_STATE_HOME",
         "XDG_RUNTIME_DIR",
         "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
     ):
         path = tmp_path / name.lower()
         path.mkdir()

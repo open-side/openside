@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Connect openside for importing</title>
+<link rel="stylesheet" href="fonts/wanted-sans/WantedSansVariable.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="options">
+<main class="page">
+<header class="page-head"><h1>Connect openside for importing</h1><p>Choose the openside app this extension can import from.</p></header>
+<section class="card">
+<h2 id="question">Loading connection request…</h2>
+<p class="hint">Only connect if this is the openside app you opened. The extension will verify this app before reconnecting automatically. If that check fails, it will ask you again.</p>
+<p id="warning" role="alert" class="hint" hidden></p>
+<div class="actions"><button id="allow" type="button" class="button primary" disabled>Connect</button><button id="decline" type="button" class="button" disabled>Not now</button></div>
+<p id="status" role="status" class="hint">Your saved data will stay pending if you do not connect.</p>
+</section>
+</main>
+<script src="import-connect.js"></script>
+</body>
+</html>

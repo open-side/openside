@@ -7,6 +7,7 @@
 - 종류(`kind`): `note`(사용자·에이전트가 남긴 메모), `history`(에이전트가 본 웹 페이지).
 - 한도: 본문 1–16384바이트, 제목 512바이트, URL 2048바이트, 태그 32개(각 1–64자).
 - `PRAGMA secure_delete` 와 FTS5 `secure-delete` 를 켜 두어, 지운 내용이 DB 파일의 빈 페이지에 남지 않는다.
+- `Memory.owner`는 공유 메모의 경우 null이고 개별 소유 메모는 해당 에이전트 ID다. 기존 데이터베이스는 메모를 다시 쓰지 않고 nullable owner 열을 추가한다. 에이전트 검색은 순위 매기기 및 제한을 적용하기 전에 본인 소유와 공유 메모(own-plus-shared) 범위를 먼저 적용한다. teammate의 쓰기는 소유 메모가 되고 chief의 쓰기는 공유 메모가 되며, teammate는 공유 쓰기를 요청할 수 없다. `GET /v1/memory?owner=<id>|shared`로 소유권을 필터링한다. 생명주기 이전(lifecycle transfer)은 멱등한 compare-and-set을 사용하며, 무관한 이후 소유자를 덮어쓰지 않는다.
 
 ## 2. 검색과 순위
 - 어휘 검색: 질의에서 영숫자 단어만 뽑아 `"단어"*` 접두 검색을 OR 로 묶고 FTS5 bm25 순으로 정렬한다. 질의가 비어 있으면 최근 수정 순으로 나열한다.
@@ -21,6 +22,7 @@
 - 받기: `openside memory model fetch <owner/name> [--revision R] [--endpoint URL]`. 데몬 없이 실행되는 유일한 다운로드 경로다. 두 파일을 `.<이름>.generations/` 아래 임시 디렉터리에 받아 실제로 로드해 보고, 통과하면 바꾸지 않는 세대 디렉터리(`gen-*`)로 확정한다. `model_dir` 은 현재 세대를 가리키는 심볼릭 링크이고, 새 링크를 rename 한 번으로 바꿔 끼운다. 로더는 `model_dir` 을 한 번만 해석한 뒤 두 파일을 같은 세대에서 읽으므로, 설치 중에 로드해도 서로 다른 모델의 토크나이저와 가중치가 섞이지 않는다. 다운로드·검증이 실패하면 현재 모델은 그대로다. 교체된 세대는 60초가 지난 뒤 다음 설치 때 지운다.
 - 설치는 `.<이름>.lock` 으로 하나씩 진행한다. 링크가 아닌 일반 디렉터리였던 `model_dir`(직접 넣은 모델)을 처음 바꿀 때만 rename 이 두 번 필요하다. 이때는 `.<이름>.journal` 에 새 세대를 먼저 기록하고, 중간에 중단되면 다음 `model fetch`(다운로드에 실패해도)가 시작할 때 기록된 세대로 링크를 마저 만든다. 그 사이에는 모델이 없어 어휘 검색만 한다. 심볼릭 링크를 쓰므로 Unix 전용이다.
 - `--endpoint`(`OPENSIDE_HF_ENDPOINT`)와 리다이렉트로 거치는 모든 주소는 https 여야 한다. http 는 loopback 테스트 서버에만 허용한다. 리다이렉트는 최대 10번.
+- `GET /v1/memory/model`은 다운로드 작업, 설치된 모델, 재시작 필요 여부를 보고한다. 관리자는 `POST /v1/memory/model/download` 및 `/cancel`로 다운로드를 시작하거나 취소할 수 있으며, 대체 엔드포인트·리포지토리·리비전을 사용하려면 로컬 권한이 필요하다. 데몬과 CLI는 `openside-model-fetch`, 체크섬 검증, egress 검사, 원자적 설치 로직을 공유한다. 암묵적으로 시작되는 다운로드는 없다. `GET /v1/doctor`는 터미널 명령을 요구하는 대신 Memory 다운로드 버튼을 제공한다.
 - 네트워크: `openside-memory` 크레이트는 HTTP·TLS·소켓 크레이트에 의존하지 않는다(`tests/no_network.rs` 가 `cargo metadata` 로 확인). 저장·검색·삭제·purge 중에 소켓이 열리지 않는 것도 Linux `/proc/self/fd` 로 확인한다.
 - 상태: `openside doctor` 의 `memory.embeddings` 항목은 파일이 있는지만 본다(파일이 있어도 실제로 쓸 수 있는지는 판단하지 않는다). 실제 동작 모드는 `GET /v1/memory/health`(로드 실패 이유 `problem`, 다음 단계 `next_step`, 모델 ID, 개수)로 확인한다.
 

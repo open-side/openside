@@ -42,6 +42,13 @@ pub enum RoutineAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
     },
+    /// Deliver to the active owner's permanent home thread.
+    Agent {
+        /// Registry identity resolved at dispatch, never a fallback session.
+        agent_id: String,
+        /// Prompt queued only while the owner remains active.
+        prompt: String,
+    },
     /// Inject a follow-up (queue lane) message into an existing session.
     Heartbeat {
         /// Session that receives the message.
@@ -51,12 +58,24 @@ pub enum RoutineAction {
     },
 }
 
+impl RoutineAction {
+    /// Derive ownership from dispatch intent instead of a second stored assignment.
+    pub fn owner_agent_id(&self) -> Option<&str> {
+        match self {
+            Self::Agent { agent_id, .. } => Some(agent_id),
+            _ => None,
+        }
+    }
+}
+
 /// Why a routine is not firing although the user did not disable it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutinePauseReason {
     /// The heartbeat target session no longer exists.
     TargetMissing,
+    /// The assigned agent is retired or no longer exists.
+    AgentRetired,
 }
 
 /// A scheduled routine.
@@ -70,6 +89,9 @@ pub struct Routine {
     pub schedule: RoutineSchedule,
     /// Action performed on each run.
     pub action: RoutineAction,
+    /// Derived from the action; not a separately stored ownership record.
+    #[serde(default)]
+    pub owner_agent_id: Option<String>,
     /// Whether the scheduler fires this routine; automatic pauses clear it too.
     pub enabled: bool,
     /// Set when the daemon paused the routine on its own; cleared by resuming.

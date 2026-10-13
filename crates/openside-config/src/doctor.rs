@@ -73,6 +73,30 @@ pub struct DoctorReport {
     pub checks: Vec<Check>,
 }
 
+/// Headings that group doctor checks, in display order; shared by the CLI and the GUI.
+pub const GROUPS: [&str; 7] = [
+    "Daemon and config",
+    "Agent and models",
+    "Browser and sandbox",
+    "Vault",
+    "Network and remote access",
+    "Memory and diagnostics",
+    "Other",
+];
+
+/// The entry of [`GROUPS`] a check id belongs to, by the part of the id before its first dot.
+pub fn group_of(id: &str) -> &'static str {
+    match id.split('.').next().unwrap_or(id) {
+        "daemon" | "config" | "configured" | "paths" => GROUPS[0],
+        "agent" | "models" | "credentials" | "executable" => GROUPS[1],
+        "browser" | "sandbox" | "native_messaging" => GROUPS[2],
+        "vault" => GROUPS[3],
+        "network" | "remote" => GROUPS[4],
+        "memory" | "crash_reports" => GROUPS[5],
+        _ => GROUPS[6],
+    }
+}
+
 impl DoctorReport {
     /// Render readable diagnostics, including remediation under every problem.
     pub fn render_text(&self) -> String {
@@ -110,8 +134,8 @@ impl DoctorReport {
 
 /// Check installation state without creating directories or exposing credentials.
 ///
-/// The sidecar receives only credential-source configuration and model settings
-/// through `OPENSIDE_DOCTOR_CONFIG`; stdout must be one JSON object within 60s.
+/// The child receives model identifiers and sanitized metadata only through
+/// `OPENSIDE_DOCTOR_CONFIG`; credential readiness belongs to the running daemon.
 pub async fn run(loaded: &Loaded, opts: DoctorOptions) -> DoctorReport {
     let env = |key: &str| std::env::var_os(key);
     run_with(
@@ -488,11 +512,13 @@ async fn probe_sidecar(report: &mut DoctorReport, loaded: &Loaded, argv: &[Strin
         );
         return;
     };
-    let config = serde_json::json!({ "credentials": loaded.config.credentials, "models": loaded.config.models });
+    let config = serde_json::json!({ "credentials": {}, "models": loaded.config.models });
     let mut command = Command::new(program);
     command
         .args(&argv[1..])
         .args(["doctor", "--json"])
+        .env_clear()
+        .envs(crate::runtime_environment(&loaded.config.credentials))
         .env("OPENSIDE_DOCTOR_CONFIG", config.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

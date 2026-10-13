@@ -11,18 +11,26 @@
 <body class="options">
 <main class="page">
 <header class="page-head"><h1>Pair openside</h1><p id="pairing-state" class="pairing-state">Not paired</p></header>
-<form id="pairing" class="card">
-<label class="field"><span>Daemon URL</span><input id="url" type="url" required placeholder="http://localhost:PORT"></label>
-<label class="field"><span>Device token</span><input id="token" type="password" required autocomplete="off"></label>
-<p class="hint">On the daemon’s computer, run <code>openside token create --person --scope read --scope steer --scope approve</code> and paste its token here. This is your person-device token for approvals; never give it to an agent. Pairing is cleared when the browser exits.</p>
+<form id="pairing-link" class="card">
+<label class="field"><span>Pairing link</span><input id="link" type="text" required autocomplete="off" spellcheck="false" placeholder="Paste the link from openside"></label>
+<p class="hint">In openside on the daemon’s computer, open Settings → Remote access → Connect a phone and copy the pairing link. It pairs this browser as your own device for approvals; never give it to an agent. Pairing is cleared when the browser exits.</p>
 <div class="actions"><button class="button primary">Pair for this browser session</button><button id="forget" type="button" class="button danger">Forget pairing</button></div>
 </form>
+<details class="card">
+<summary>Use a device token instead</summary>
+<form id="pairing">
+<label class="field"><span>Daemon URL</span><input id="url" type="url" required placeholder="http://localhost:PORT"></label>
+<label class="field"><span>Device token</span><input id="token" type="password" required autocomplete="off"></label>
+<p class="hint">Or from a terminal on the daemon’s computer: <code>openside token create --person --scope read --scope steer --scope approve</code>, then paste its token here. This is your person-device token for approvals; never give it to an agent.</p>
+<div class="actions"><button class="button">Pair with the token</button></div>
+</form>
+</details>
 <section class="card">
 <div class="card-row"><h2><span data-icon="layout-grid" data-size="18"></span>Agent Tabs</h2><button id="agent-tabs" type="button" class="button compact">Enable Agent Tabs</button></div>
 <p class="hint">Agent Tabs optionally requests debugger metadata permission. Ask does not need it.</p>
 </section>
 </main>
-<div class="toast" data-tone="info"><span class="toast-icon" data-icon="circle-alert" data-size="18"></span><p id="status" role="status"></p><button type="button" class="toast-close" aria-label="Dismiss"><span data-icon="x" data-size="16"></span></button></div>
+<div class="toast glass-float" data-tone="info"><span class="toast-icon" data-icon="circle-alert" data-size="18"></span><p id="status" role="status"></p><button type="button" class="toast-close" aria-label="Dismiss"><span data-icon="x" data-size="16"></span></button></div>
 <script src="options.js"></script>
 </body>
 </html>

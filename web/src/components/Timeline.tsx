@@ -1,203 +1,23 @@
-import {
-  Ban,
-  BookOpen,
-  Brain,
-  Check,
-  ChevronRight,
-  CircleAlert,
-  CodeXml,
-  FilePenLine,
-  FileText,
-  Globe,
-  KeyRound,
-  MessageCircleQuestion,
-  Search,
-  Terminal,
-  Users,
-  type LucideIcon,
-} from "lucide-react";
-import { Fragment, type ReactNode } from "react";
-import type { Visual } from "../api/types";
-import { pendingTickets, type SessionView, type SubagentView, type TimelineItem } from "../state/session";
-import { ICON_STROKE, Spinner } from "../ui";
+import { Ban, Check, ChevronRight, CircleAlert, FileText, RotateCw, X } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
+import type { Attachment, Visual } from "../api/types";
+import { pendingTickets, type SessionView, type SubagentView } from "../state/session";
+import { newMessageId, useClient } from "../context";
+import { outgoing, type OutgoingMessage } from "../state/outgoing";
+import { ICON_STROKE } from "../ui";
 import { ArtifactImage } from "./ArtifactImage";
 import { Markdown } from "./Markdown";
-import { isApprovalTicket, isChoiceTicket, isLoginTicket } from "../otp/loginForm";
-import { isOtpTicket } from "../otp/otpForm";
+import { RuntimeErrorRow, retrySource } from "./RuntimeError";
 import { StatusMark, STATUS_LABEL, SubagentSteer } from "./SubagentPanel";
-import { TicketCard } from "./TicketCard";
+import { askerOf } from "../cards/attention";
+import { ConversationCard } from "./ConversationCard";
+import { Activity, StatusLine } from "./ToolActivity";
+import { collectToolFacts, type ToolItem } from "./toolCopy";
 import { lastHost, outcomeNote, statusPhrase, TASK_REPORT_PREFIX, taskPhrase, taskSteps } from "./toolStatus";
 import { VisualFrame } from "./VisualFrame";
 
 /** Fenced ```html visual / ```svg visual blocks; shown as rendered frames instead of text. */
 const VISUAL_BLOCK = /```[a-z]+ visual[^\n]*\n[\s\S]*?```\n?/g;
-
-const PREVIEW_LIMIT = 4000;
-
-type ToolItem = Extract<TimelineItem, { type: "tool" }>;
-
-function pretty(value: unknown): string {
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  return text.length > PREVIEW_LIMIT ? `${text.slice(0, PREVIEW_LIMIT)}\n… (${text.length - PREVIEW_LIMIT} more characters)` : text;
-}
-
-interface ToolKind {
-  Icon: LucideIcon;
-  /** Group summary once every call of this kind has finished. */
-  done: string;
-  running: string;
-}
-
-const KINDS: { test: RegExp; kind: ToolKind }[] = [
-  { test: /browser|navigate|tab|web|fetch|url/, kind: { Icon: Globe, done: "Browsed the web", running: "Browsing the web" } },
-  { test: /search|grep|find|glob/, kind: { Icon: Search, done: "Searched", running: "Searching" } },
-  { test: /write|edit|patch|save|create_file/, kind: { Icon: FilePenLine, done: "Edited files", running: "Editing files" } },
-  { test: /read|list|file|ls/, kind: { Icon: FileText, done: "Read files", running: "Reading files" } },
-  { test: /shell|bash|exec|command|terminal|run/, kind: { Icon: Terminal, done: "Ran commands", running: "Running commands" } },
-  { test: /delegate|subagent|agent/, kind: { Icon: Users, done: "Delegated work", running: "Delegating work" } },
-  { test: /skill/, kind: { Icon: BookOpen, done: "Loaded a skill", running: "Loading a skill" } },
-  { test: /memory|remember|recall/, kind: { Icon: Brain, done: "Used memory", running: "Using memory" } },
-  { test: /vault|secret|credential|otp/, kind: { Icon: KeyRound, done: "Used the vault", running: "Using the vault" } },
-  { test: /ask|human|approval|ticket|takeover/, kind: { Icon: MessageCircleQuestion, done: "Asked you", running: "Asking you" } },
-];
-
-const DEFAULT_KIND: ToolKind = { Icon: CodeXml, done: "Ran actions", running: "Running actions" };
-
-function kindOf(name: string): ToolKind {
-  const lower = name.toLowerCase();
-  return KINDS.find((entry) => entry.test.test(lower))?.kind ?? DEFAULT_KIND;
-}
-
-/** `browser_navigate` → "Browser navigate". */
-function humanize(name: string): string {
-  const words = name.replace(/[_.-]+/g, " ").trim();
-  return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
-}
-
-function groupSummary(tools: ToolItem[]): string {
-  const kinds = [...new Set(tools.map((tool) => kindOf(tool.name)))];
-  const first = kinds[0] ?? DEFAULT_KIND;
-  if (kinds.length > 1) return `Used ${tools.length} actions`;
-  const host = first.Icon === Globe ? lastHost(tools) : null;
-  return host ? `Browsed ${host}` : first.done;
-}
-
-/** The argument a person recognises a call by: the file, page, command or question it acts on. */
-const TARGET_KEYS = ["path", "url", "command", "query", "pattern", "task", "question", "summary", "name"];
-
-function targetOf(args: unknown): string | null {
-  if (!args || typeof args !== "object") return null;
-  const record = args as Record<string, unknown>;
-  for (const key of TARGET_KEYS) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim().split("\n")[0]!;
-  }
-  return null;
-}
-
-function ToolAction({ item }: { item: ToolItem }) {
-  const { Icon } = kindOf(item.name);
-  const state = !item.done ? "running" : item.isError ? "failed" : "done";
-  const target = targetOf(item.args);
-  return (
-    <li className={`tool tool-${state}`} data-tool={item.id}>
-      <details className="tool-details">
-        <summary className="tool-line">
-          <span className="tool-icon" aria-hidden="true">
-            {state === "running" ? <Spinner size={14} /> : state === "failed" ? <CircleAlert size={16} strokeWidth={ICON_STROKE} /> : <Icon size={16} strokeWidth={ICON_STROKE} />}
-          </span>
-          <span className="tool-name">{humanize(item.name)}</span>
-          {target ? (
-            <span className="tool-target" title={target}>
-              {target}
-            </span>
-          ) : null}
-          {state !== "done" ? <span className="tool-state">{state === "running" ? "Running" : "Failed"}</span> : null}
-        </summary>
-        <div className="tool-body">
-          <h4>Arguments</h4>
-          <pre>{pretty(item.args)}</pre>
-          {item.updates.length ? (
-            <>
-              <h4>Progress</h4>
-              {item.updates.map((update, index) => (
-                <pre key={index}>{pretty(update)}</pre>
-              ))}
-            </>
-          ) : null}
-          {item.done ? (
-            <>
-              <h4>{item.isError ? "Error" : "Result"}</h4>
-              <pre>{pretty(item.result)}</pre>
-            </>
-          ) : null}
-        </div>
-      </details>
-    </li>
-  );
-}
-
-const ERROR_TITLES: Record<string, string> = {
-  interrupted: "The agent stopped unexpectedly",
-  sandbox_unavailable: "Shell commands are running without a sandbox",
-  browser_tab_limit: "Too many browser tabs are open",
-};
-
-function ActionList({ tools }: { tools: ToolItem[] }) {
-  return (
-    <ol className="activity-actions">
-      {tools.map((tool) => (
-        <ToolAction key={tool.id} item={tool} />
-      ))}
-    </ol>
-  );
-}
-
-/** A finished run of tool calls: a quiet event chip ("✓ Browsed example.com") that opens the calls. */
-function Activity({ tools }: { tools: ToolItem[] }) {
-  const failed = tools.filter((tool) => tool.isError).length;
-  return (
-    <details className="activity">
-      <summary className="event-chip">
-        <span className="activity-icon" aria-hidden="true">
-          {tools.some((tool) => !tool.done) ? (
-            <Spinner size={13} />
-          ) : failed ? (
-            <CircleAlert size={15} strokeWidth={ICON_STROKE} />
-          ) : (
-            <Check size={15} strokeWidth={2.2} />
-          )}
-        </span>
-        <span className="activity-label">{groupSummary(tools)}</span>
-        {failed ? <span className="activity-failed">{failed} failed</span> : null}
-        <ChevronRight className="activity-chevron" size={15} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </summary>
-      <ActionList tools={tools} />
-    </details>
-  );
-}
-
-/**
- * The transient line under the latest message while the agent works ("Clicking on
- * nid.naver.com"). With calls behind it, it opens to show them, like a finished chip.
- */
-function StatusLine({ label, tools }: { label: string; tools?: ToolItem[] }) {
-  const text = (
-    <span className="status-line-text" key={label}>
-      {label}
-    </span>
-  );
-  if (!tools) return <p className="status-line">{text}</p>;
-  return (
-    <details className="activity status-line-group">
-      <summary className="status-line">
-        {text}
-        <ChevronRight className="activity-chevron" size={15} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </summary>
-      <ActionList tools={tools} />
-    </details>
-  );
-}
 
 /**
  * A background task, where it was started: its goal and state on a chip that opens to its
@@ -247,54 +67,288 @@ const REPORT_LABEL: Partial<Record<SubagentView["status"], string>> = {
   cancelled: "Task cancelled",
 };
 
+type Receipt = "sending" | "sent" | "read";
+
+const RECEIPT_LABEL: Record<Receipt, string> = { sending: "Sending…", sent: "Sent", read: "Read" };
+
+/** One message of the person's, right-aligned, with the delivery note messengers put under it. */
+function UserBubble({
+  sessionId,
+  text,
+  attachments,
+  fileNames,
+  note,
+  receipt,
+  failure,
+}: {
+  sessionId: string;
+  text: string;
+  attachments?: Attachment[];
+  /** Files of a message that is still on this device: no artifact exists to preview yet. */
+  fileNames?: string[];
+  note?: string;
+  receipt?: Receipt;
+  failure?: ReactNode;
+}) {
+  return (
+    <>
+      {attachments?.length || fileNames?.length ? (
+        <ul className="attachments" aria-label="Attachments">
+          {attachments?.map((attachment) => (
+            <li key={attachment.path}>
+              {attachment.kind === "image" ? (
+                <ArtifactImage sessionId={sessionId} path={attachment.path} alt={attachment.name ?? attachment.path} />
+              ) : (
+                <span className="attachment-file">
+                  <FileText size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                  {attachment.name ?? attachment.path}
+                </span>
+              )}
+            </li>
+          ))}
+          {fileNames?.map((name, index) => (
+            <li key={`${index}-${name}`}>
+              <span className="attachment-file">
+                <FileText size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                {name}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {text ? <p>{text}</p> : null}
+      {note ? <span className="message-outcome">{note}</span> : null}
+      {receipt ? (
+        <span className="receipt" data-state={receipt}>
+          {RECEIPT_LABEL[receipt]}
+        </span>
+      ) : null}
+      {failure}
+    </>
+  );
+}
+
+/** A message this device sent that the daemon has not (yet) echoed into the conversation. */
+function OutgoingBubble({ sessionId, message }: { sessionId: string; message: OutgoingMessage }) {
+  const failed = message.state === "failed";
+  return (
+    <li className="bubble user" data-message={message.message_id} data-receipt={failed ? "failed" : message.state === "sending" ? "sending" : "sent"}>
+      <UserBubble
+        sessionId={sessionId}
+        text={message.text}
+        fileNames={message.attachments.flatMap((file) => (file.name ? [file.name] : []))}
+        receipt={failed ? undefined : message.state === "sending" ? "sending" : "sent"}
+        failure={
+          failed ? (
+            <FailedReceipt
+              detail={message.error ?? ""}
+              retry={{ sessionId: message.session_id, text: message.text, message }}
+              onDismiss={() => outgoing.forget(message.message_id)}
+            />
+          ) : undefined
+        }
+      />
+    </li>
+  );
+}
+
+/**
+ * "Not sent" with the way forward. A message still held on this device is posted again under its
+ * own id; one the agent run dropped (interrupted) goes out as a new message with the same words.
+ */
+function FailedReceipt({
+  detail,
+  label,
+  retry,
+  onDismiss,
+}: {
+  detail?: string;
+  /** Replaces "Not sent" when the message did arrive and the run behind it did not finish. */
+  label?: string;
+  retry?: { sessionId: string; text: string; message?: OutgoingMessage };
+  onDismiss?: () => void;
+}) {
+  const client = useClient();
+  return (
+    <span className="receipt receipt-failed" data-state="failed">
+      <CircleAlert size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      <span>{label ?? (detail ? `Not sent · ${detail}` : "Not sent")}</span>
+      {retry ? (
+        <button
+          type="button"
+          className="receipt-action"
+          onClick={() =>
+            void outgoing.submit(client, {
+              message_id: retry.message?.message_id ?? newMessageId(),
+              session_id: retry.sessionId,
+              text: retry.text,
+              attachments: retry.message?.attachments ?? [],
+            })
+          }
+        >
+          <RotateCw size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          Retry
+        </button>
+      ) : null}
+      {onDismiss ? (
+        <button type="button" className="receipt-action" aria-label="Discard message" onClick={onDismiss}>
+          <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+/** Three dots that bounce one after another while the agent works before its first words. */
+function TypingIndicator() {
+  return (
+    <p className="typing" role="status">
+      <span className="sr-only">Agent is working</span>
+      <span className="typing-dot" aria-hidden="true" />
+      <span className="typing-dot" aria-hidden="true" />
+      <span className="typing-dot" aria-hidden="true" />
+    </p>
+  );
+}
+
+interface Reply {
+  key: string;
+  parts: ReactNode[];
+  final: boolean;
+  frames: Visual[];
+}
+
 export function Timeline({
   view,
   sessionId,
   visuals = {},
+  outgoing: sending = [],
+  browserCard,
+  inertCardId,
 }: {
   view: SessionView;
   sessionId: string;
   visuals?: Record<number, Visual[]>;
+  /** Messages sent from this device that the event log does not know yet. */
+  outgoing?: readonly OutgoingMessage[];
+  /** The live browser, shown right under the message that started the browsing (`null`: no such message, so first). */
+  browserCard?: { anchorItemId: string | null; node: ReactNode };
+  /** A card hosted somewhere else right now (a sheet); its inline copy stays visible but inert. */
+  inertCardId?: string | null;
 }) {
+  const facts = useMemo(() => collectToolFacts(view.items, view.browserStates), [view.items, view.browserStates]);
   const rows: ReactNode[] = [];
+  const cardRow = browserCard ? (
+    <li key="browser" className="browser-row">
+      {browserCard.node}
+    </li>
+  ) : null;
+  if (cardRow && browserCard?.anchorItemId === null) rows.push(cardRow);
   let tools: ToolItem[] = [];
-  // The last flushed group of calls; the live status line takes its row when nothing follows it.
-  const lastGroup = { row: -1, tools: [] as ToolItem[] };
-  const flush = () => {
+  // A run with nothing new on screen (no streaming text, no card waiting for an answer) shows
+  // what it is doing; a trailing group of calls becomes that line instead of a finished chip.
+  // Until the agent has picked a message up (`Sent`, `Read`) there is nothing to show yet.
+  const last = view.items.at(-1);
+  const unanswered = last?.type === "user" && last.outcome === undefined;
+  const live =
+    view.status === "running" &&
+    pendingTickets(view).length === 0 &&
+    view.delivering === null &&
+    !(unanswered && !view.engaged) &&
+    (view.thinking || last?.type !== "assistant");
+
+  // One reply, one bubble: the agent's text segments of a turn and the calls between them read
+  // as one message. Calls before its first words stay a row above the bubble.
+  const turn: { reply: Reply | null } = { reply: null };
+  const closeReply = () => {
+    const reply = turn.reply;
+    if (!reply) return;
+    turn.reply = null;
+    if (reply.parts.length) {
+      rows.push(
+        <li key={reply.key} className={`bubble assistant${reply.final ? "" : " streaming"}`} data-final={reply.final}>
+          {reply.parts}
+        </li>,
+      );
+    }
+    if (reply.frames.length) {
+      rows.push(
+        <li key={`${reply.key}-visuals`} className="visuals">
+          {reply.frames.map((visual) => (
+            <VisualFrame key={visual.id} visual={visual} />
+          ))}
+        </li>,
+      );
+    }
+  };
+  const place = (key: string, node: ReactNode, className: string, status = false) => {
+    if (turn.reply) {
+      turn.reply.parts.push(
+        <div key={key} className={`reply-activity ${className}`.trim()} {...(status ? { role: "status" } : {})}>
+          {node}
+        </div>,
+      );
+    } else {
+      rows.push(
+        <li key={key} className={`activity-row ${className}`.trim()} {...(status ? { role: "status" } : {})}>
+          {node}
+        </li>,
+      );
+    }
+  };
+  const flush = (liveStatus = false) => {
     const first = tools[0];
     if (first) {
-      lastGroup.row = rows.length;
-      lastGroup.tools = tools;
-      rows.push(
-        <li key={`t-${first.id}`} className="activity-row">
-          <Activity tools={tools} />
-        </li>,
+      place(
+        `t-${first.id}`,
+        liveStatus ? (
+          <StatusLine label={view.thinking ? "Thinking" : statusPhrase(tools, lastHost(view.items))} tools={tools} facts={facts} />
+        ) : (
+          <Activity tools={tools} facts={facts} inline={turn.reply !== null} />
+        ),
+        liveStatus ? "live-status" : "",
+        liveStatus,
       );
     }
     tools = [];
   };
 
   const tasks = new Map(view.subagents.filter((child) => child.background).map((child) => [child.parentToolCallId, child]));
+  // A request is its card, so the call that raised it adds nothing next to it, and neither does
+  // a `present` call whose card is on the timeline. An approved call's own outcome arrives on
+  // its card too. A `present` call that failed has no card and keeps its row.
+  const ticketCalls = new Set(Object.values(view.tickets).map((ticket) => ticket.tool_call_id));
+  // Questions waiting for the person come to the end of the conversation, oldest first, so the
+  // newest thing on screen is the thing that needs them.
+  const waiting: { id: string; firstSeq: number }[] = [];
+  const conversationRow = (id: string) => {
+    const card = view.cards[id]!.card;
+    const ticket = card.ticket_id ? view.tickets[card.ticket_id] : undefined;
+    const child = ticket?.origin.subagent_id ? view.subagents.find((candidate) => candidate.id === ticket.origin.subagent_id) : undefined;
+    return (
+      <li key={`k-${id}`} className="card-row" data-card={id}>
+        <ConversationCard card={card} sessionId={sessionId} inert={inertCardId === id} asker={ticket ? askerOf(ticket, child?.task) : null} />
+      </li>
+    );
+  };
 
   for (const item of view.items) {
     if (item.type === "tool") {
+      if (ticketCalls.has(item.id) || view.cards[`present:${item.id}`]) continue;
       const task = tasks.get(item.id);
       if (!task) {
         tools.push(item);
         continue;
       }
       flush();
-      rows.push(
-        <li key={`task-${task.id}`} className="activity-row task-row">
-          <TaskChip sessionId={sessionId} task={task} />
-        </li>,
-      );
+      place(`task-${task.id}`, <TaskChip sessionId={sessionId} task={task} />, "task-row");
       continue;
     }
     flush();
+    if (item.type !== "assistant") closeReply();
     switch (item.type) {
       case "user": {
-        if (item.id.startsWith(TASK_REPORT_PREFIX)) {
+        if (item.author_kind === "internal" && item.id.startsWith(TASK_REPORT_PREFIX)) {
           // The daemon hands a finished task's result to the front agent as a message; it is not
           // the person's words, so it shows as a marker and the full answer stays on the chip.
           const task = view.subagents.find((child) => child.id === item.id.slice(TASK_REPORT_PREFIX.length));
@@ -320,108 +374,90 @@ export function Timeline({
           );
           break;
         }
+        const lastUser = item === view.items.at(-1) && item.outcome === undefined;
+        const failed = item.outcome === "failed";
+        // Only the newest failed message is offered again, and not while something else is on its way.
+        const newest = item === view.items.findLast((it) => it.type === "user" && it.author_kind === "person");
+        const idle = sending.length === 0 && view.queue.length === 0 && view.status !== "running";
+        const note = item.outcome && item.outcome !== "completed" && item.outcome !== "deferred" ? outcomeNote(item.outcome, item.reason) : undefined;
+        // The agent's own error row below carries the retry for a run that died; one is enough.
+        const errorFollows = view.items.slice(view.items.indexOf(item) + 1).some((it) => it.type === "error");
         rows.push(
-          <li key={`u-${item.id}`} className="bubble user">
-            {item.attachments?.length ? (
-              <ul className="attachments" aria-label="Attachments">
-                {item.attachments.map((attachment) => (
-                  <li key={attachment.path}>
-                    {attachment.kind === "image" ? (
-                      <ArtifactImage sessionId={sessionId} path={attachment.path} alt={attachment.name ?? attachment.path} />
-                    ) : (
-                      <span className="attachment-file">
-                        <FileText size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                        {attachment.name ?? attachment.path}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {item.text ? <p>{item.text}</p> : null}
-            {item.outcome && item.outcome !== "completed" && item.outcome !== "deferred" ? (
-              <span className="message-outcome">
-                {outcomeNote(item.outcome, item.reason)}
-              </span>
-            ) : null}
+          <li key={`u-${item.id}`} className="bubble user" data-message={item.id} {...(failed && newest ? { "data-receipt": "failed" } : {})}>
+            <UserBubble
+              sessionId={sessionId}
+              text={item.text}
+              {...(item.attachments ? { attachments: item.attachments } : {})}
+              {...(note && !(failed && newest) ? { note } : {})}
+              {...(lastUser ? { receipt: "read" as const } : {})}
+              {...(failed && newest
+                ? {
+                    failure: (
+                      <FailedReceipt
+                        {...(item.reason === "interrupted" ? { label: "Not finished" } : { detail: (note ?? "").replace(/^(Failed|Not sent)(: )?/, "") })}
+                        {...(idle && !item.attachments?.length && !errorFollows ? { retry: { sessionId, text: item.text } } : {})}
+                      />
+                    ),
+                  }
+                : {})}
+            />
           </li>,
         );
+        if (cardRow && browserCard?.anchorItemId === item.id) rows.push(cardRow);
         break;
       }
       case "assistant": {
         const frames = item.finalSeq !== undefined ? (visuals[item.finalSeq] ?? []) : [];
         const text = frames.length ? item.text.replace(VISUAL_BLOCK, "").trim() : item.text;
-        rows.push(
-          <Fragment key={item.id}>
-            <li className={`bubble assistant${item.final ? "" : " streaming"}`} data-final={item.final}>
-              <Markdown text={text} />
-            </li>
-            {frames.length ? (
-              <li className="visuals">
-                {frames.map((visual) => (
-                  <VisualFrame key={visual.id} visual={visual} />
-                ))}
-              </li>
-            ) : null}
-          </Fragment>,
-        );
+        const current = (turn.reply ??= { key: item.id, parts: [], final: item.final, frames: [] });
+        if (text.trim()) current.parts.push(<Markdown key={item.id} text={text} />);
+        current.final = item.final;
+        current.frames.push(...frames);
         break;
       }
-      case "ticket": {
-        const ticket = view.tickets[item.id];
-        if (ticket)
-          rows.push(
-            <li key={`k-${item.id}`} className="ticket-row">
-              {ticket.status === "pending" && (isOtpTicket(ticket) || isLoginTicket(ticket) || isChoiceTicket(ticket) || isApprovalTicket(ticket)) ? (
-                <span className="action-chip" data-tone="warn">
-                  <span className="action-chip-dot" aria-hidden="true" />
-                  Action needed
-                </span>
-              ) : null}
-              <TicketCard
-                ticket={ticket}
-                subagentTask={view.subagents.find((child) => child.id === ticket.origin.subagent_id)?.task}
-              />
-            </li>,
-          );
+      case "card": {
+        const entry = view.cards[item.id];
+        if (!entry) break;
+        if (entry.card.interaction === "ask" && entry.card.status === "pending") waiting.push({ id: item.id, firstSeq: entry.firstSeq });
+        else rows.push(conversationRow(item.id));
         break;
       }
-      case "error":
+      case "error": {
+        const retry = retrySource(view.items, view.items.indexOf(item));
         rows.push(
-          <li key={item.id} className="runtime-error" role="status">
-            <CircleAlert size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            <div>
-              <p className="runtime-error-title">{ERROR_TITLES[item.code] ?? "Something went wrong"}</p>
-              {item.message ? <p>{item.message}</p> : null}
-              {item.code in ERROR_TITLES ? null : <p className="runtime-error-code">{item.code}</p>}
-            </div>
+          <li key={item.id} className="runtime-error-row">
+            <RuntimeErrorRow error={item} sessionId={sessionId} {...(retry ? { retry } : {})} />
           </li>,
         );
         break;
+      }
     }
   }
-  flush();
+  // A trailing group of calls is the live status line itself; with nothing trailing, the typing
+  // dots stand in for it.
+  const trailingLive = live && tools.length > 0;
+  flush(trailingLive);
+  closeReply();
+  for (const entry of waiting.sort((a, b) => a.firstSeq - b.firstSeq)) rows.push(conversationRow(entry.id));
+  if (live && !trailingLive) {
+    rows.push(
+      <li key="status" className="live-status typing-row">
+        <TypingIndicator />
+      </li>,
+    );
+  }
 
-  // A run with nothing new on screen (no streaming text, no card waiting for an answer) shows
-  // what it is doing; a trailing group of calls becomes that line instead of a finished chip.
-  const last = view.items.at(-1);
-  const live =
-    view.status === "running" && pendingTickets(view).length === 0 && (view.thinking || last?.type !== "assistant");
-  if (live) {
-    if (lastGroup.row >= 0 && lastGroup.row === rows.length - 1) {
-      const host = lastHost(view.items);
-      rows[lastGroup.row] = (
-        <li key={`t-${lastGroup.tools[0]!.id}`} className="activity-row live-status" role="status">
-          <StatusLine label={view.thinking ? "Thinking" : statusPhrase(lastGroup.tools, host)} tools={lastGroup.tools} />
-        </li>
-      );
-    } else {
-      rows.push(
-        <li key="status" className="live-status" role="status">
-          <StatusLine label="Thinking" />
-        </li>,
-      );
-    }
+  const delivering = view.delivering ? view.queue.find((message) => message.id === view.delivering) : undefined;
+  if (delivering && delivering.author_kind !== "internal") {
+    rows.push(
+      <li key={`d-${delivering.id}`} className="bubble user" data-message={delivering.id}>
+        <UserBubble sessionId={sessionId} text={delivering.text} {...(delivering.attachments ? { attachments: delivering.attachments } : {})} receipt="sent" />
+      </li>,
+    );
+  }
+  const known = new Set([...view.queue.map((message) => message.id), ...view.items.flatMap((item) => (item.type === "user" ? [item.id] : []))]);
+  for (const message of sending) {
+    if (!known.has(message.message_id)) rows.push(<OutgoingBubble key={`o-${message.message_id}`} sessionId={sessionId} message={message} />);
   }
 
   return (

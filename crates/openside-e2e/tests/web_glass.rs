@@ -142,19 +142,20 @@ async fn web_and_extension_share_glass_styles_and_transient_status_pills() {
         .await;
     panel.eval("const draft=document.querySelector('#message'); draft.value='Glass acceptance draft'; draft.dispatchEvent(new Event('input',{bubbles:true})); true").await;
     fixture.cards().await;
-    let web = glass_assertions(".shell", ".app-header-heading", ".bubble.assistant", ".ticket-pending .auth-card, .ticket-pending:not(.ticket-auth)", ".composer button[type=submit], .ticket-pending .auth-primary, .ticket-pending .ui-button--primary");
+    let web = glass_assertions(".shell", ".app-header-heading", ".bubble.assistant", ".oc-card[data-ticket][data-status=pending]", ".composer button[type=submit], .oc-card[data-ticket][data-status=pending] .oc-btn--primary");
     let extension = glass_assertions(
         "body.panel",
-        ".bar select",
+        ".bar .session-picker .picker-button",
         ".bubble.assistant",
-        ".ticket .auth-card, .ticket:not(.ticket-auth)",
-        ".composer button[type=submit], .ticket .auth-primary, .ticket .button.primary",
+        ".oc-card[data-ticket][data-status=pending]",
+        ".composer button[type=submit], .oc-card[data-ticket][data-status=pending] .oc-btn--primary",
     );
     let mut failures = Vec::new();
     for theme in ["light", "dark"] {
         for (width, height) in [(390, 844), (1440, 900)] {
             ui.cdp.viewport(width, height, theme).await;
-            ui.goto(&format!("/sessions/{}", fixture.session), "document.querySelectorAll('.ticket-pending').length === 5 && !!document.querySelector('.bubble.assistant')").await;
+            ui.goto(&format!("/sessions/{}", fixture.session), "document.querySelectorAll('.oc-card[data-ticket][data-status=pending]').length === 5 && !!document.querySelector('.bubble.assistant')").await;
+            ui.cdp.eval("document.querySelectorAll('.oc-card[data-ticket] .oc-pill').forEach(b => b.click()); true").await;
             let actual = ui.cdp.eval(&web).await;
             if actual != json!([]) {
                 failures.push(format!("web {theme} {width}x{height}: {actual}"));
@@ -170,17 +171,18 @@ async fn web_and_extension_share_glass_styles_and_transient_status_pills() {
             panel.call("Network.emulateNetworkConditions", json!({"offline":false,"latency":800,"downloadThroughput":-1,"uploadThroughput":-1})).await;
             panel
                 .eval(
-                    "document.querySelector('#sessions').dispatchEvent(new Event('change')); true",
+                    "(() => { const root = document.querySelector('#sessions'); const label = root.querySelector('.picker-label').textContent; const pick = (text) => { root.querySelector('.picker-button').click(); [...root.querySelectorAll('[role=option]')].find((option) => option.textContent === text).click(); }; pick('New chat'); pick(label); return true; })()",
                 )
                 .await;
             panel.wait("getComputedStyle(document.querySelector('.connection')).display !== 'none' && document.querySelector('.connection').textContent === 'Connecting…'").await;
             let status = panel
                 .eval("getComputedStyle(document.querySelector('.connection')).borderRadius")
                 .await;
-            assert_eq!(status, "999px", "extension connecting status is a pill");
+            assert_eq!(status, "9999px", "extension connecting status is a pill");
             panel.wait("document.querySelector('.connection').textContent === '' && getComputedStyle(document.querySelector('.connection')).display === 'none'").await;
             panel.call("Network.emulateNetworkConditions", json!({"offline":false,"latency":0,"downloadThroughput":-1,"uploadThroughput":-1})).await;
-            panel.wait("document.querySelectorAll('.ticket').length === 5 && !!document.querySelector('.bubble.assistant')").await;
+            panel.wait("document.querySelectorAll('.oc-card[data-ticket][data-status=pending]').length === 5 && !!document.querySelector('.bubble.assistant')").await;
+            panel.eval("document.querySelectorAll('.oc-card[data-ticket] .oc-pill').forEach(b=>b.click()); true").await;
             let actual = panel.eval(&extension).await;
             if actual != json!([]) {
                 failures.push(format!("extension {theme} {width}x{height}: {actual}"));

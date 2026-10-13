@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 mod connection;
+mod credential_rpc;
 mod framing;
 #[cfg(unix)]
 mod process;
@@ -37,7 +38,7 @@ pub struct SidecarConfig {
     pub runtime_dir: PathBuf,
     /// Deadline for process spawning, hello authentication, and ready.
     pub startup_timeout: Duration,
-    /// Additional inherited environment overrides; never included in diagnostics.
+    /// Complete approved runtime environment; the child never inherits the daemon environment.
     pub env: Vec<(String, String)>,
 }
 

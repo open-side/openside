@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openside.dev/specs/omp-broker-wire.schema.json",
-  "$comment": "Consumed-field contract from can1357/oh-my-pi commit eec114a9226da698ebc015fd8996a8ca3bc4625c: docs/auth-broker-gateway.md, packages/ai/src/auth-broker/types.ts and wire-schemas.ts, packages/ai/src/usage.ts. Only the snapshot, usage and scoped block messages consumed by openside are defined. Unconsumed/additive broker fields remain allowed. Validation failures must not display response values, credentials or metadata.",
+  "$comment": "Consumed-field contract from can1357/oh-my-pi commit eec114a9226da698ebc015fd8996a8ca3bc4625c: docs/auth-broker-gateway.md, packages/ai/src/auth-broker/types.ts and wire-schemas.ts, packages/ai/src/usage.ts. Only the snapshot, usage and scoped block messages consumed by openside are defined. Unconsumed/additive broker fields remain allowed. The Rust daemon validates consumed snapshot, usage and block-response fields and returns a value-free BrokerError on incompatibility; unavailable usage fails closed rather than creating an unmetered account. Regression evidence lives in crates/opensided/src/model_broker.rs::tests. Broker environment/home lookup is injected at daemon construction: production uses the process environment, in-process test fixtures use an empty resolver, and precedence tests supply an isolated map. Validation failures must not display response values, credentials or metadata.",
   "oneOf": [
     {"$ref": "#/$defs/snapshot"},
     {"$ref": "#/$defs/usage"},

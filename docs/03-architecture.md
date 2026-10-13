@@ -20,9 +20,9 @@
 │ + 선택한 pydantic-ai-harness 기능  │   │ Stage C: 패치 Chromium(browser/)│
 │ 툴 = 데몬 툴 프록시(자체 툴 없음)  │   └────────────────────────────────┘
 └────────┬─────────────────────────┘
-         │ 자격증명 소스 플러그인 (사이드카가 직접 읽음, 데몬은 값을 모름)
+         │ daemon-owned source pools; fresh private credential leases per request
 ┌────────▼──────────────────────────────────────────────────────────┐
-│ omp-broker(선택) │ env │ command(argv) │ codex-cli │ builtin        │
+│ omp-broker │ vault │ env │ command │ claude-code │ codex-cli │ builtin │
 └───────────────────────────────────────────────────────────────────┘
 ```
 사이드카 연동의 세부(핸드셰이크, 툴 경로, 티켓 재개, 복구, 계정 규칙)는 [04-sidecar-integration.md](04-sidecar-integration.md), 와이어 계약은 [specs/sidecar-protocol.md](specs/sidecar-protocol.md).
@@ -108,7 +108,7 @@ CEF 기반 자체 셸은 채택하지 않는다: 확장 생태계(비밀번호 �
 - 신뢰 경계: ① 모델 출력(비신뢰) ② 웹 페이지 내용(비신뢰, 프롬프트 인젝션 가능) ③ 클라이언트 토큰(스코프) ④ 로컬 사용자 ⑤ Python 사이드카(툴 실행권 없음, 비밀 수신 없음).
 - 툴은 데몬만 실행한다. 사이드카는 `open.tools` 로 받은 프록시만 노출하고, 노출 목록이 데몬 목록과 다르면 세션을 거부한다(툴 게이트, ADR-015).
 - Vault 입력값과 `secret_input`은 Rust 프로세스 메모리에서만 다루며, CDP 입력 직후 0으로 덮어써 완전히 파기(zeroize)한다. 사이드카나 이벤트 로그로 전달하지 않고 도구 결과에서도 마스킹하지만, 에이전트가 실행한 페이지 스크립트는 페이지 데이터를 직접 읽을 수 있다(ADR-022).
-- 모델 자격증명은 사이드카가 소스에서 직접 읽는다. 데몬은 `[credentials]` 를 해석하지 않고 값을 모른다. 소스 불가는 fail-closed(`auth_unavailable` → 세션 중지).
+- 데몬이 모델 자격 증명 소스, 명시적 프로바이더 풀, 갱신, 계정 사용량 및 차단 상태를 관리한다. 사이드카는 외부 요청을 시도할 때마다 유효한 비공개 접근 리스만 받는다. 관리 대상 API 키와 OAuth 상태는 Vault에 암호화하여 정식 보관하며 기본 사용자 CLI 홈은 읽기 전용 상태를 유지한다. 소스가 없거나 모두 소진되면 목록에 없는 소스로 다운그레이드하지 않고 fail-closed 처리한다.
 - redaction: 모든 공개 이벤트와 툴 결과에 Vault 패턴 redaction, 툴 인자는 툴별 `redact_args`(입력 텍스트는 길이만), 감사 JSONL 은 메타데이터만.
 - 승인: 정책 `Ask` → `confirm` 티켓 → 런 보류. 승인된 티켓은 같은 세션·tool_call_id·툴 이름에만 유효. `Deny` 는 승인으로 뒤집히지 않는다. 만료는 거부.
 - `bash` 는 bubblewrap(workspace 읽기·쓰기, 시스템 디렉터리 읽기 전용, 네트워크 unshare). 설정 실패 시 샌드박스 없이 실행하지 않는다.

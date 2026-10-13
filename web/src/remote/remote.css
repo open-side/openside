@@ -1,0 +1,298 @@
+/*
+ * Remote access and the "connect a phone" flow. Sits inside the Settings/Workspace dialogs and the
+ * setup guide, so it uses the same glass-inset rows, the 0.75 / 0.8125 / 0.875 / 0.9375rem type
+ * scale and the pages.css colour rule: colour marks state only, the accent is the primary action.
+ */
+
+.remote-note,
+.remote-hint,
+.remote-reco {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.remote-note svg {
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+.remote-note code,
+.remote-local code,
+.remote-url code,
+.remote-facts code {
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.remote-reco {
+  color: var(--text);
+}
+.remote-hint--error {
+  color: var(--danger);
+}
+.remote-url {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.remote-url code {
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.remote-fields,
+.remote-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.remote-field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.875rem;
+}
+.remote-field > span,
+.remote-field > label,
+.remote-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.remote-field small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.remote-field input {
+  min-height: 40px;
+  width: 100%;
+}
+
+.remote-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.remote-form .remote-actions {
+  margin-top: 0;
+}
+.remote-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.remote-scopes {
+  display: grid;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
+}
+.remote-scopes legend {
+  padding: 0;
+  margin-bottom: 8px;
+  float: left;
+  width: 100%;
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.remote-scopes legend + * {
+  clear: both;
+}
+.remote-scope {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  border-top: 1px solid var(--glass-inset-border);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.remote-scopes legend + .remote-scope {
+  border-top: 0;
+}
+.remote-scope input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+.remote-scope:has(input:disabled) {
+  color: var(--muted);
+  cursor: default;
+}
+.remote-scope[data-risk="high"] span::after {
+  content: " (full control)";
+  color: var(--muted);
+}
+
+/* The QR code is always black on white; the white tile is what makes it scannable in dark mode. */
+.remote-offer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.remote-qr {
+  position: relative;
+  padding: 12px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: #fff;
+  line-height: 0;
+}
+.remote-qr .qr-code {
+  display: block;
+  width: 208px;
+  height: 208px;
+}
+.remote-qr-veil {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: rgb(255 255 255 / 0.9);
+  color: #3a3f4b;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.remote-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.remote-steps li::marker {
+  color: var(--muted);
+  font-weight: 600;
+}
+.remote-facts {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0 0;
+}
+.remote-facts > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  font-size: 0.875rem;
+}
+.remote-facts dt {
+  min-width: 5.5rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.remote-facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.remote-facts [data-expired] {
+  color: var(--danger);
+}
+@media (max-width: 560px) {
+  .remote-offer {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+  .remote-offer-copy {
+    justify-self: stretch;
+  }
+  .remote-qr .qr-code {
+    width: min(208px, 60vw);
+    height: min(208px, 60vw);
+  }
+}
+
+.remote-result {
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--success) 30%, var(--glass-inset-border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--success) 7%, transparent);
+}
+.remote-result-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+.remote-result-title svg {
+  color: var(--success);
+}
+
+.remote-local {
+  padding: 14px 16px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
+}
+.remote-local-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 620;
+}
+.remote-local .remote-note {
+  margin-top: 6px;
+}
+.remote-local-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.8125rem;
+}
+.remote-local-form label {
+  font-weight: 600;
+}
+.remote-local-form textarea {
+  width: 100%;
+  font-family: var(--font-code);
+  font-size: 0.8125rem;
+}
+.remote-copy-row {
+  display: flex;
+}
+
+@media (max-width: 700px) {
+  .remote-field input,
+  .remote-local-form textarea {
+    min-height: 44px;
+    /* iOS Safari zooms the page when a focused control's text is under 16px. */
+    font-size: 16px;
+  }
+  .remote-url .ui-button--compact,
+  .remote-actions .ui-button,
+  .remote-local .ui-button {
+    min-height: 44px;
+  }
+  .remote-scope {
+    min-height: 48px;
+  }
+}

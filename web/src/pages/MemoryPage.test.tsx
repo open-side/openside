@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Memory } from "../api/types";
 import { ClientContext } from "../context";
+import { chooseOption } from "../test/select";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
 import { MemoryPage } from "./MemoryPage";
 
@@ -11,6 +12,7 @@ function memory(id: string, content: string, extra: Partial<Memory> = {}): Memor
     id,
     kind: "note",
     content,
+    owner: null,
     tags: [],
     retention: "permanent",
     created_at: "2026-10-01T00:00:00Z",
@@ -20,13 +22,26 @@ function memory(id: string, content: string, extra: Partial<Memory> = {}): Memor
   };
 }
 
+const IDLE_MODEL = {
+  state: "idle",
+  installed: false,
+  model_dir: "/data/models/potion",
+  source: { endpoint: "https://huggingface.co", repo: "minishlab/potion-base-8M", revision: "main" },
+  files_done: 0,
+  files_total: 0,
+  bytes_done: 0,
+  bytes_total: 0,
+  restart_required: false,
+};
+
 function daemon() {
   const memories = [memory("m1", "Prefers window seats", { tags: ["travel"] }), memory("m2", "Visited docs", { kind: "history", title: "Docs" })];
   let next = 3;
   return fakeClient((call: Call) => {
     const url = new URL(call.path, "http://daemon.test");
     const [, , , id, verb] = url.pathname.split("/");
-    if (url.pathname === "/v1/memory/health") return json(200, { mode: "lexical_only", count: memories.length, next_step: "openside memory model fetch" });
+    if (url.pathname === "/v1/memory/health") return json(200, { mode: "lexical_only", count: memories.length, next_step: "Download the search model." });
+    if (url.pathname === "/v1/memory/model") return json(200, IDLE_MODEL);
     if (url.pathname === "/v1/memory" && call.method === "GET") {
       const q = url.searchParams.get("q")?.toLowerCase() ?? "";
       const kind = url.searchParams.get("kind");
@@ -80,7 +95,7 @@ describe("MemoryPage", () => {
     const user = userEvent.setup();
     const { calls } = setup();
     expect(await screen.findByLabelText("Memory status")).toHaveTextContent("2 memories · keyword search");
-    expect(screen.getByText("openside memory model fetch")).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Search model" })).toHaveTextContent("Not installed");
     const list = await screen.findByRole("list", { name: "Memories" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(2);
 
@@ -103,7 +118,7 @@ describe("MemoryPage", () => {
     let form = await screen.findByRole("form", { name: "New memory" });
     await user.type(within(form).getByLabelText("Content"), "Dentist on Fridays");
     await user.type(within(form).getByLabelText("Tags (comma separated)"), "health, calendar ,");
-    await user.selectOptions(within(form).getByLabelText("Retention"), "days_30");
+    await chooseOption(user, within(form).getByLabelText("Retention"), "30 days after last edit");
     await user.click(within(form).getByRole("button", { name: "Remember" }));
     expect(await screen.findByText("Dentist on Fridays")).toBeInTheDocument();
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ content: "Dentist on Fridays", tags: ["health", "calendar"], retention: "days_30" });
@@ -113,7 +128,7 @@ describe("MemoryPage", () => {
     await user.click(within(row).getByRole("button", { name: "Options for Prefers window seats" }));
     await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
     const editor = await screen.findByRole("form", { name: "Edit memory m1" });
-    await user.selectOptions(within(editor).getByLabelText("Retention"), "days_90");
+    await chooseOption(user, within(editor).getByLabelText("Retention"), "90 days after last edit");
     await user.click(within(editor).getByRole("button", { name: "Save" }));
     expect(await within(row).findByText("90 days after last edit")).toBeInTheDocument();
     expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ path: "/v1/memory/m1", body: { retention: "days_90", tags: ["travel"] } });

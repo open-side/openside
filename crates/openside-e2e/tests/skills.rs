@@ -59,6 +59,7 @@ fn skill_calls(events: &[Event]) -> Vec<(&str, &Value, bool)> {
         .iter()
         .filter_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error,

@@ -16,7 +16,11 @@ allow = [
 ]
 # option-ext is an unmodified dirs dependency. MPL is file-level copyleft;
 # its original source and license remain available from the crates.io package.
-exceptions = [{ name = "option-ext", allow = ["MPL-2.0"] }]
+exceptions = [
+  { name = "option-ext", allow = ["MPL-2.0"] },
+  # The encoder's IJG-derived DCT retains its permissive copyright and warranty notice.
+  { name = "jpeg-encoder", allow = ["IJG"] },
+]
 
 [bans]
 multiple-versions = "warn"

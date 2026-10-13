@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import type { Memory, MemoryKind, MemorySearchResponse, Retention } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
-import { Button, Dialog, DialogActions, ICON_STROKE, MenuItem, Segmented, useToast } from "../ui";
+import { Button, Dialog, DialogActions, ICON_STROKE, MenuItem, Segmented, Select, useToast } from "../ui";
 import {
   AddButton,
   Badge,
@@ -14,11 +14,12 @@ import {
   Loading,
   ResourceCard,
   RowMenu,
-  ScopeNotice,
   SectionList,
   useConfirm,
   useDialogState,
 } from "./blocks";
+import { MemoryModelCard } from "./MemoryModelCard";
+import { ScopeNotice } from "./ScopeNotice";
 import { formatDate, formatDateTime } from "./format";
 
 const RETENTIONS: { value: Retention; label: string }[] = [
@@ -90,16 +91,12 @@ function MemoryForm({ memory, onSaved, onCancel }: { memory?: Memory; onSaved: (
         <span>Tags (comma separated)</span>
         <input value={tags} onChange={(e) => setTags(e.target.value)} />
       </label>
-      <label className="field">
-        <span>Retention</span>
-        <select value={retention} onChange={(e) => setRetention(e.target.value as Retention)}>
-          {RETENTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="field">
+        <label htmlFor="memory-retention">
+          <span>Retention</span>
+        </label>
+        <Select id="memory-retention" value={retention} options={RETENTIONS} onChange={(value) => setRetention(value as Retention)} />
+      </div>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
       <DialogActions>
         <Button onClick={onCancel}>Cancel</Button>
@@ -152,13 +149,14 @@ export function MemoryPage() {
   if (forbidden || health.forbidden) {
     return (
       <div className="manage-body" data-section="memory">
-        <ScopeNotice what="memory" />
+        <ScopeNotice what="memory" onGranted={() => void search().then(() => health.reload())} />
       </div>
     );
   }
 
   return (
     <div className="manage-body" data-section="memory">
+      <MemoryModelCard onChanged={() => void health.reload()} />
       <SectionList
         label="Saved memories"
         summary={
@@ -169,7 +167,6 @@ export function MemoryPage() {
             </span>
           ) : undefined
         }
-        description={health.data?.next_step || undefined}
         actions={<AddButton onClick={() => form.show({})}>New memory</AddButton>}
       >
         <div className="section-toolbar">

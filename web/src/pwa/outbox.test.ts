@@ -96,7 +96,8 @@ describe("outbox", () => {
     await box.enqueue(entry("m1", { session_id: null, create: { title: "Hello" } }));
     const lost = client({ submitMessage: vi.fn(async (_id: string, _request: SubmitMessageRequest) => Promise.reject(offline())) });
     await box.flush(lost);
-    expect(lost.createSession).toHaveBeenCalledWith({ title: "Hello" });
+    // Entries from before conversations had owners land in History, not in someone's thread.
+    expect(lost.createSession).toHaveBeenCalledWith({ agent_id: null, title: "Hello" });
     expect(store.rows.get("m1")?.session_id).toBe("created");
 
     const up = client();

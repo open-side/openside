@@ -10,15 +10,17 @@ use crate::CapabilityScope;
 
 /// Routes callable without a bearer token: `(method, path)`. The one-time pairing code in
 /// the body is the credential; an artifact preview is authorized by its signed query.
+/// Platform hooks carry their per-account cryptographic signature in headers.
 pub const PUBLIC_ROUTES: &[(&str, &str)] = &[
     ("POST", "/v1/pairing/exchange"),
     ("GET", "/v1/sessions/{id}/artifacts/{path}/preview"),
+    ("POST", "/v1/hooks/{kind}/{account_id}"),
 ];
 
 /// Seconds a pairing offer stays valid.
 pub const PAIRING_TTL_SECS: i64 = 180;
 
-/// Create a one-time pairing offer (Unix socket only).
+/// Create a one-time pairing offer from the local socket or a verified local person.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreatePairingRequest {
@@ -33,6 +35,9 @@ pub struct CreatePairingRequest {
     /// plain `remote.public_url` when no transport is configured.
     #[serde(default)]
     pub via: Option<PairingTransport>,
+    /// Establish an import authenticator for the extension through this local-person offer.
+    #[serde(default)]
+    pub import_delivery: bool,
 }
 
 /// How a paired device reaches the daemon from outside its network.
@@ -83,6 +88,16 @@ pub struct RemoteStatus {
     pub cloudflare: Option<CloudflareStatus>,
     /// The relay registration, when enabled.
     pub relay: Option<RelayStatus>,
+    /// Tailscale installation and the openside Serve handler.
+    pub tailscale: TailscaleStatus,
+    /// Persisted transport settings, without secret values or executable overrides.
+    pub configuration: RemoteConfiguration,
+    /// This request proved local-person authority to issue an offer.
+    pub pairing_allowed: bool,
+    /// This request proved local-person authority to change transport settings.
+    pub configure_allowed: bool,
+    /// A missing listener prevents a persisted transport from applying live.
+    pub restart_required: bool,
 }
 
 /// Supervised `cloudflared` state.
@@ -101,7 +116,7 @@ pub struct CloudflareStatus {
 /// Relay registration state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RelayStatus {
-    /// `connecting`, `connected` or `backoff`.
+    /// `connecting`, `connected`, `backoff` or `failed` (local registration setup failed).
     pub state: String,
     /// Relay origin.
     pub url: String,
@@ -113,6 +128,101 @@ pub struct RelayStatus {
     pub clients: u32,
     /// Latest failure, without secrets.
     pub last_error: Option<String>,
+    /// Noise encrypts every daemon/device stream end-to-end.
+    pub e2ee: bool,
+}
+
+/// Tailscale Serve state for the openside handler, not unrelated services.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TailscaleStatus {
+    /// Whether tailscale is available on PATH.
+    pub installed: bool,
+    /// `unavailable`, `stopped`, `running` or `failed`.
+    pub state: String,
+    /// HTTPS origin of the active openside handler.
+    pub url: Option<String>,
+    /// Latest failure, without command output or secrets.
+    pub last_error: Option<String>,
+}
+
+/// Enable or disable openside's Tailscale Serve handler.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigureTailscaleRequest {
+    /// Whether the transport should run.
+    pub enabled: bool,
+}
+
+/// Configure the managed Cloudflare Tunnel; token values remain file/env-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetCloudflareRequest {
+    /// Whether the transport should run.
+    pub enabled: bool,
+    /// `quick` or `named`.
+    pub tunnel: String,
+    /// Named tunnel hostname.
+    pub hostname: Option<String>,
+    /// Local file containing the named tunnel's token, or null to use the environment.
+    pub token_file: Option<String>,
+}
+
+/// Configure a self-hosted relay; its registration token remains file/env-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetRelayRequest {
+    /// Whether the daemon should register with the relay.
+    pub enabled: bool,
+    /// Relay origin.
+    pub url: Option<String>,
+    /// Local registration-token file, or null to use the environment.
+    pub token_file: Option<String>,
+}
+
+/// Tailscale configuration presented to the web setup screen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TailscaleConfiguration {
+    /// Whether Tailscale is configured.
+    pub enabled: bool,
+    /// Persisted direct pairing origin.
+    pub public_url: Option<String>,
+}
+
+/// Transport settings safe to inspect; no registration or tunnel token values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteConfiguration {
+    /// Tailscale settings.
+    pub tailscale: TailscaleConfiguration,
+    /// Cloudflare settings.
+    pub cloudflare: SetCloudflareRequest,
+    /// Relay settings.
+    pub relay: SetRelayRequest,
+}
+
+/// Socket-only bootstrap for a desktop browser; never returned to TCP callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalAccess {
+    /// Per-boot locality proof; keep only in browser sessionStorage.
+    pub secret: String,
+    /// Loopback launch URL with credentials in its fragment, or null without a listener.
+    pub url: Option<String>,
+    /// Local person-device identifier.
+    pub device_id: String,
+    /// Bearer token for the local person, distinct from the per-boot secret.
+    pub token: String,
+    /// Token scopes.
+    pub scopes: Vec<CapabilityScope>,
+    /// Fixed person-device identity.
+    pub kind: DeviceKind,
+}
+
+/// A bounded durable event page for transports that buffer server-sent events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EventPoll {
+    /// Events in ascending per-session sequence order.
+    pub events: Vec<crate::Event>,
+    /// Exclusive replay cursor, including filtered subagent events.
+    pub last_seq: u64,
 }
 
 /// Exchange a pairing code for a device token (no bearer token needed).
@@ -155,6 +265,56 @@ pub struct Device {
 pub struct DeviceList {
     /// Devices in pairing order.
     pub devices: Vec<Device>,
+}
+
+/// Seconds a pending access request stays open.
+pub const ACCESS_REQUEST_TTL_SECS: i64 = 600;
+
+/// Ask for scopes the calling device does not hold yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RequestAccessRequest {
+    /// Scopes wanted in addition to the ones the device holds; at least one.
+    pub scopes: Vec<CapabilityScope>,
+}
+
+/// A device waiting for someone on the daemon's computer to allow more scopes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccessRequest {
+    /// Decision identifier (`POST /v1/access-requests/{id}/approve`).
+    pub id: String,
+    /// The requesting device.
+    pub device_id: String,
+    /// Label given at pairing.
+    pub name: String,
+    /// Scopes asked for.
+    pub scopes: Vec<CapabilityScope>,
+    /// When the request was made.
+    pub created_at: DateTime<Utc>,
+    /// Display time after which the request is dropped; the deadline itself is monotonic.
+    pub expires_at: DateTime<Utc>,
+}
+
+/// Requests waiting for a decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccessRequestList {
+    /// Oldest first.
+    pub requests: Vec<AccessRequest>,
+}
+
+/// The calling device's own record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MyDevice {
+    /// Revocation identifier.
+    pub device_id: String,
+    /// Label given at pairing.
+    pub name: String,
+    /// Pairing-time trust role.
+    pub kind: DeviceKind,
+    /// Scopes the token holds now.
+    pub scopes: Vec<CapabilityScope>,
+    /// This device's pending request for more access, if one is open.
+    pub request: Option<AccessRequest>,
 }
 
 /// The daemon's VAPID public key, the PWA's `applicationServerKey`.
@@ -268,10 +428,13 @@ pub struct SettingsDocument {
     pub restart_required: bool,
     /// JSON Schema of `config`, so a client can render and validate every key.
     pub schema: Value,
-    /// Dotted keys a TCP (paired-device) caller may change; an entry ending in `.` covers
-    /// every key under that prefix. Everything else changes only over the local Unix socket.
+    /// Dotted keys a paired person device may change without local authority; an entry
+    /// ending in `.` covers every key under that prefix. Every other key (executables, paths,
+    /// listeners, trust lists, sandbox, network, credentials, remote access) needs local
+    /// authority: the Unix socket, or a browser opened from the launcher on this computer.
+    /// Empty for an agent client that has no local authority.
     pub remote_editable: Vec<String>,
-    /// Whether this caller is a paired device over TCP, i.e. limited to `remote_editable`.
+    /// Whether this caller lacks local authority, i.e. is limited to `remote_editable`.
     pub remote: bool,
 }
 

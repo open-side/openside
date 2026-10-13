@@ -25,12 +25,18 @@ data_paths! {
     Devices => ("devices.db", false, "Hashed capability tokens and device metadata; SQLite companions"),
     Memory => ("memory.db", false, "Local memory, history and search indexes; SQLite companions"),
     Routines => ("routines.db", false, "Schedules and run history; SQLite companions"),
+    Agents => ("agents.db", false, "Team registry, handoffs, transfer progress and metadata-only audit; SQLite companions"),
     Policy => ("policy.json", false, "Live policy; .policy.json.<nonce>.tmp during atomic replacement"),
     Port => ("opensided.port", false, "Selected loopback TCP port"),
     Audit => ("audit.jsonl", false, "Redacted tool/security audit metadata"),
     VaultAudit => ("vault-audit.jsonl", false, "Vault-use metadata, never secret values"),
+    Connections => ("connections.db", false, "Sign-in metadata, masked identities, keyed identity hashes and cookie keys only; SQLite companions"),
+    ConnectionsAudit => ("connections-audit.jsonl", false, "Connection-use metadata; never cookie or header values"),
+    ConnectionsKey => ("connections.key", false, "Private identity HMAC key; never exposed to agents"),
+    RestartHandoff => ("restart-handoff.json", false, "Private one-use controlled-exec launcher secret; boot/request-bound, five-minute TTL; never exposed to agents"),
     Vault => ("vault.db", false, "Encrypted vault when vault.path is unset; created only by vault setup"),
     BrowserProfile => ("browser-profile", true, "Daemon-owned Chromium profile and caches; never the user's profile"),
+    AccountSpaces => ("browser-profiles/accounts", true, "Opt-in persistent account profiles; launched on demand, never restored at daemon startup"),
     BrowserState => ("browser-state.json", false, "Private browser endpoint and tab ownership"),
     BrowserStateTemp => ("browser-state.tmp", false, "Browser-state atomic replacement"),
     SecretFillIntents => ("secret-fill-intents", true, "<ticket>.json durable at-most-once fill markers, without secret values"),
@@ -43,6 +49,8 @@ data_paths! {
     Subscriptions => ("push-subscriptions.json", false, "Device-bound push subscriptions; atomic replacement companions"),
     CrashReports => ("crash-reports", true, "panic-<time>-<pid>.json metadata-only redacted reports; no upload"),
     Onboarding => ("onboarding.json", false, "First-run guide state (pending, completed or skipped); atomic replacement companions"),
+    BrowserImports => ("browser-imports", true, "Private imported source metadata and durable native delivery revisions; pending cookie keys only"),
+    ExtensionImportKeys => ("extension-import-keys", true, "Private per-pairing import HMAC authenticators; never exposed to the model or web pages"),
 }
 
 /// Reject undocumented locations observed in hermetic daemon lifecycle tests.

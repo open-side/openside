@@ -10,8 +10,8 @@ use openside_core::{
     SessionSpec, SubagentControl, TicketId,
 };
 use openside_proto::{
-    title_from_message, Event, EventKind, Message, MessageOutcome, SessionId, SessionStatus,
-    Ticket, TicketStatus, DEFAULT_SESSION_TITLE,
+    normalize_model_title, Event, EventKind, Message, MessageOutcome, SessionId, SessionStatus,
+    Ticket, TicketStatus,
 };
 use openside_sessions::SessionState;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
@@ -27,11 +27,15 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct Shared {
     pub(crate) db: Database,
+    pub(crate) agents: Arc<crate::agents::Service>,
     pub(crate) config: Arc<Resolved>,
     pub(crate) actors: Arc<Mutex<HashMap<SessionId, mpsc::Sender<Command>>>>,
+    retirement_stops: Arc<parking_lot::Mutex<HashMap<SessionId, Arc<tokio::sync::Notify>>>>,
     pub(crate) events: broadcast::Sender<Event>,
     pub(crate) ticket_gate: Arc<Mutex<()>>,
+    pub(crate) presentation_gate: Arc<Mutex<()>>,
     pub(crate) registry: Arc<Registry>,
+    pub(crate) favicons: Arc<crate::favicons::Service>,
     runtime: Arc<dyn Runtime>,
     pub(crate) shutdown: broadcast::Sender<()>,
     pub(crate) routines: Arc<crate::routines::Slot>,
@@ -42,8 +46,15 @@ pub(crate) struct Shared {
     pub(crate) transports: Arc<crate::remote::Transports>,
     pub(crate) previews: Arc<crate::preview::Registry>,
     pub(crate) accounts: Arc<crate::accounts::Service>,
+    pub(crate) models: Arc<crate::models_api::Service>,
+    pub(crate) broker_environment: fn(&str) -> Option<std::ffi::OsString>,
+    pub(crate) managed_subscriptions: Arc<crate::managed_subscriptions::Service>,
+    pub(crate) channels: Arc<crate::channels_api::Service>,
     pub(crate) credential_paths: Arc<crate::credential_paths::ProtectedPaths>,
     pub(crate) host_calls: Arc<crate::host_calls::Calls>,
+    pub(crate) import_delivery: Arc<crate::import_delivery::DeliveryState>,
+    pub(crate) connections: Arc<crate::connections::Service>,
+    pub(crate) ops: Arc<crate::operator::State>,
 }
 
 pub(crate) enum Action {
@@ -87,6 +98,18 @@ pub struct Daemon {
     _lock: std::fs::File,
 }
 
+#[cfg(unix)]
+fn raise_open_file_limit() -> Result<()> {
+    use nix::sys::resource::{getrlimit, setrlimit, Resource};
+
+    let (soft, hard) = getrlimit(Resource::RLIMIT_NOFILE)?;
+    let wanted = hard.min(8192);
+    if soft < wanted {
+        setrlimit(Resource::RLIMIT_NOFILE, wanted, hard)?;
+    }
+    Ok(())
+}
+
 impl Daemon {
     /// Resolve portable configuration, replay state, and reconcile interrupted runs.
     pub async fn open(config: Config) -> Result<Self> {
@@ -95,11 +118,13 @@ impl Daemon {
             argv: config.argv.clone(),
             runtime_dir: config.loaded.paths.runtime_dir.clone(),
             startup_timeout: Duration::from_millis(config.loaded.config.agent.startup_timeout_ms),
-            env: Vec::new(),
+            env: openside_config::runtime_environment(&config.loaded.config.credentials),
         });
-        Self::open_runtime(config, runtime).await
+        Self::open_runtime_with_broker_environment(config, runtime, |name| std::env::var_os(name))
+            .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn open_runtime<R: AgentRuntime + 'static>(
         config: Resolved,
         runtime: R,
@@ -107,6 +132,19 @@ impl Daemon {
     where
         R::Session: 'static,
     {
+        Self::open_runtime_with_broker_environment(config, runtime, |_| None).await
+    }
+
+    async fn open_runtime_with_broker_environment<R: AgentRuntime + 'static>(
+        config: Resolved,
+        runtime: R,
+        broker_environment: fn(&str) -> Option<std::ffi::OsString>,
+    ) -> Result<Self>
+    where
+        R::Session: 'static,
+    {
+        #[cfg(unix)]
+        raise_open_file_limit()?;
         // A malformed network.allow entry would silently admit nothing at the sidecar's
         // transport; refuse to start instead.
         openside_policy::Egress::new(&config.loaded.config.network.allow)?;
@@ -149,16 +187,32 @@ impl Daemon {
         let memory = Arc::new(
             crate::memory::MemoryService::open(&config, registry.redactors.clone()).await?,
         );
+        let connections = Arc::new(crate::connections::Service::open(&config.data_dir)?);
+        let agents = Arc::new(crate::agents::Service::open(&config.data_dir)?);
         let credential_paths = Arc::new(crate::credential_paths::ProtectedPaths::from_config(
             &config,
         ));
+        let models = Arc::new(crate::models_api::Service::new(&config.loaded.config));
+        let managed_subscriptions =
+            Arc::new(crate::managed_subscriptions::Service::new(&config.data_dir));
+        let channels = Arc::new(crate::channels_api::Service::new(
+            &config.loaded.config.channels,
+        ));
+        let ops = Arc::new(crate::operator::State::new(&config.loaded.config));
+        let transports = crate::lifecycle::take_handoff(&config.data_dir)
+            .map(crate::remote::Transports::with_secret)
+            .unwrap_or_default();
         let shared = Shared {
             db,
+            agents,
             config: Arc::new(config),
             actors: Default::default(),
+            retirement_stops: Default::default(),
             events,
             ticket_gate: Default::default(),
+            presentation_gate: Default::default(),
             registry,
+            favicons: Default::default(),
             runtime: Arc::new(runtime),
             shutdown,
             routines: Default::default(),
@@ -166,17 +220,29 @@ impl Daemon {
             policy,
             sync: Default::default(),
             remote: Default::default(),
-            transports: Default::default(),
+            transports: Arc::new(transports),
             previews: Default::default(),
             accounts: Default::default(),
+            models,
+            broker_environment,
+            managed_subscriptions,
+            channels,
             credential_paths,
             host_calls: Default::default(),
+            import_delivery: Default::default(),
+            connections,
+            ops,
         };
+        crate::agents::bootstrap(&shared).await?;
         shared.registry.vault.unlock(&shared).await;
+        crate::model_accounts::initialize(&shared)
+            .await
+            .map_err(|_| "Credential pool migration unavailable")?;
         shared.registry.browser.recover(&shared).await?;
         crate::push::start(&shared);
         crate::otp_ingest::start(&shared);
         crate::inhibit::start(&shared);
+        crate::connections::start(&shared);
         let daemon = Self {
             shared,
             _lock: lock,
@@ -254,6 +320,9 @@ impl Daemon {
             }
         }
         crate::routines::start(&daemon.shared).await?;
+        crate::team::start(&daemon.shared)
+            .await
+            .map_err(|_| "team recovery failed")?;
         crate::memory::start(&daemon.shared);
         let shared = daemon.shared.clone();
         let mut shutdown = shared.shutdown.subscribe();
@@ -265,6 +334,23 @@ impl Daemon {
                     _ = shutdown.recv() => { let _ = shared.registry.browser.shutdown(&shared).await; break; },
                     _ = tick.tick() => { let _ = crate::tickets::expire(&shared).await; }
                     _ = browser_tick.tick() => { let _ = shared.registry.browser.poll(&shared).await; }
+                }
+            }
+        });
+        let shared = daemon.shared.clone();
+        tokio::spawn(async move {
+            let mut shutdown = shared.shutdown.subscribe();
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tokio::select! {
+                    _ = shutdown.recv() => break,
+                    _ = tick.tick() => {
+                        crate::model_accounts::reap(&shared).await;
+                        tokio::select! {
+                            _ = shutdown.recv() => break,
+                            _ = shared.managed_subscriptions.watch(&shared) => {}
+                        }
+                    }
                 }
             }
         });
@@ -311,15 +397,35 @@ impl Daemon {
         let unix_task = tokio::spawn(async move { axum::serve(unix, unix_router).await });
         let tcp_task = tcp.map(|listener| {
             let router = crate::api::router(self.shared.clone(), false);
-            tokio::spawn(async move { axum::serve(listener, router).await })
+            tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                .await
+            })
         });
-        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+        crate::channels_api::start(&self.shared, listen);
+        let reexec = tokio::select! {
+            _ = tokio::signal::ctrl_c() => false,
+            _ = term.recv() => false,
+            _ = self.shared.ops.lifecycle.reexec_requested() => true,
+        };
         unix_task.abort();
         if let Some(task) = tcp_task {
             task.abort();
         }
         self.shared.shutdown().await;
         tokio::fs::remove_file(socket).await?;
+        if reexec {
+            // Existing sandboxes must be gone before the transient secret file appears.
+            crate::lifecycle::write_handoff(
+                &self.shared.config.data_dir,
+                self.shared.transports.boot_secret(),
+                &self.shared.ops.lifecycle,
+            )?;
+            return Err(self.shared.ops.lifecycle.exec().into());
+        }
         Ok(())
     }
 
@@ -338,6 +444,7 @@ impl Daemon {
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.shared.shutdown.send(());
+        self.shared.routines.clear();
     }
 }
 
@@ -421,64 +528,59 @@ impl Shared {
         run: Option<String>,
         kind: EventKind,
     ) -> Result<Event> {
-        let kind = serde_json::to_value(kind)?;
-        let keep = crate::tools::event_keep(kind["kind"].as_str().unwrap_or_default());
-        let keep: Vec<&[&str]> = keep.iter().map(Vec::as_slice).collect();
-        let kind: EventKind = serde_json::from_value(self.registry.redact_except(kind, &keep)?)?;
-        // The daemon is the only place that names an untitled session after its first message;
-        // clients (web, extension, CLI) show whatever `session.updated` says.
-        let derived = match &kind {
-            EventKind::MessageQueued {
-                text, attachments, ..
-            } => self.first_message_title(id, text, attachments).await?,
+        let connection_grant = matches!(&kind, EventKind::TicketOpened { ticket }
+            if crate::tools::connections::is_grant_ticket(ticket));
+        let connection_grant_resolution = match &kind {
+            EventKind::TicketResolved {
+                ticket_id,
+                resolution,
+                ..
+            } if resolution["access"]
+                .as_str()
+                .is_some_and(|access| matches!(access, "once" | "always" | "reject")) =>
+            {
+                self.db
+                    .state(id)
+                    .await?
+                    .tickets
+                    .get(ticket_id)
+                    .is_some_and(crate::tools::connections::is_grant_ticket)
+            }
+            _ => false,
+        };
+        let released_grant = match &kind {
+            EventKind::TicketResolved { ticket_id, .. }
+            | EventKind::TicketRejected { ticket_id, .. }
+            | EventKind::TicketExpired { ticket_id, .. } => self
+                .db
+                .state(id)
+                .await?
+                .tickets
+                .get(ticket_id)
+                .and_then(crate::connections::navigation::Navigation::ticket_ids),
             _ => None,
         };
+        let kind = serde_json::to_value(kind)?;
+        let mut keep = crate::tools::event_keep(kind["kind"].as_str().unwrap_or_default());
+        if connection_grant {
+            keep.extend(crate::tools::connections::GRANT_KEEP.iter().map(|path| {
+                let mut path = path.to_vec();
+                path.insert(0, "ticket");
+                path
+            }));
+        }
+        if connection_grant_resolution {
+            keep.push(vec!["resolution", "access"]);
+        }
+        let keep: Vec<&[&str]> = keep.iter().map(Vec::as_slice).collect();
+        let kind: EventKind = serde_json::from_value(self.registry.redact_except(kind, &keep)?)?;
         let event = self.db.append(id, run, kind).await?;
+        if let Some((agent, ids)) = released_grant {
+            self.connections.navigation.release(&agent, &ids);
+        }
         crate::preview::committed(self, &event);
         let _ = self.events.send(event.clone());
-        if let Some(title) = derived {
-            let titled = self
-                .db
-                .append(
-                    id,
-                    None,
-                    EventKind::SessionUpdated {
-                        title: Some(title),
-                        pinned: None,
-                        archived: None,
-                    },
-                )
-                .await?;
-            let _ = self.events.send(titled);
-        }
         Ok(event)
-    }
-    /// Title for a session still called "New session" from its first message: the first non-blank
-    /// line, or the first file's name when the message is only files.
-    async fn first_message_title(
-        &self,
-        id: &SessionId,
-        text: &str,
-        attachments: &[openside_proto::Attachment],
-    ) -> Result<Option<String>> {
-        let id = id.clone();
-        let untitled = self
-            .db
-            .store(move |s| {
-                Ok(s.session(&id).is_some_and(|state| {
-                    state.first_message.is_none() && state.title == DEFAULT_SESSION_TITLE
-                }))
-            })
-            .await?;
-        Ok(untitled
-            .then(|| {
-                title_from_message(text).or_else(|| {
-                    attachments
-                        .iter()
-                        .find_map(|a| a.name.as_deref().and_then(title_from_message))
-                })
-            })
-            .flatten())
     }
     pub(crate) async fn auth_failed(&self, id: &SessionId) -> Result<bool> {
         let mut after = 0;
@@ -512,7 +614,11 @@ impl Shared {
                     // while holding it, so no new actor can be spawned for a tombstone.
                     self.db.state(id).await?;
                     let (tx, rx) = mpsc::channel(64);
-                    tokio::spawn(actor(self.clone(), id.clone(), rx));
+                    let retirement = Arc::new(tokio::sync::Notify::new());
+                    self.retirement_stops
+                        .lock()
+                        .insert(id.clone(), retirement.clone());
+                    tokio::spawn(actor(self.clone(), id.clone(), rx, retirement));
                     actors.insert(id.clone(), tx.clone());
                     tx
                 }
@@ -526,6 +632,7 @@ impl Shared {
         result.await.map_err(|_| "session actor closed")?
     }
     async fn shutdown(&self) {
+        self.channels.shutdown(self).await;
         self.transports.stop().await;
         let senders: Vec<_> = self
             .actors
@@ -548,6 +655,9 @@ impl Shared {
             }
         }
         let _ = self.shutdown.send(());
+        // The scheduler's host owns Shared. Clear its slot before a short-lived runtime
+        // can cancel the tick task without executing that task's trailing cleanup.
+        self.routines.clear();
         let _ = self.registry.browser.shutdown(self).await;
     }
     pub(crate) async fn message(&self, id: &SessionId, mid: &MessageId) -> Result<Message> {
@@ -556,6 +666,8 @@ impl Shared {
             id: mid.clone(),
             text: state.queue.text(mid).ok_or("unknown message")?.into(),
             status: state.queue.status(mid).ok_or("unknown message")?.clone(),
+            author_kind: state.message_authors.get(mid).copied().unwrap_or_default(),
+            from_agent: state.message_senders.get(mid).cloned(),
         })
     }
     pub(crate) async fn tickets(&self) -> Result<Vec<Ticket>> {
@@ -565,6 +677,12 @@ impl Shared {
                     .iter()
                     .filter_map(|session| s.session(&session.id))
                     .flat_map(|state| state.tickets.values().cloned())
+                    .map(|mut ticket| {
+                        if ticket.card.is_none() {
+                            ticket.card = Some(crate::cards::ticket(&ticket));
+                        }
+                        ticket
+                    })
                     .collect())
             })
             .await
@@ -588,9 +706,17 @@ struct Live {
     resolutions: HashSet<TicketId>,
     deleted: bool,
     owed: Option<Owed>,
+    persona_version: Option<u64>,
+    model: Option<String>,
+    model_generation: Option<u64>,
 }
 
-async fn actor(shared: Shared, id: SessionId, mut commands: mpsc::Receiver<Command>) {
+async fn actor(
+    shared: Shared,
+    id: SessionId,
+    mut commands: mpsc::Receiver<Command>,
+    retirement: Arc<tokio::sync::Notify>,
+) {
     let mut live = Live::default();
     let mut shutdown = shared.shutdown.subscribe();
     loop {
@@ -598,6 +724,11 @@ async fn actor(shared: Shared, id: SessionId, mut commands: mpsc::Receiver<Comma
         tokio::select! {
             biased;
             _ = shutdown.recv() => break,
+            () = retirement.notified() => {
+                if handle(&shared, &id, &mut live, Action::Stop).await.is_err() {
+                    live.owed = Some(Owed::Interruption);
+                }
+            }
             command = commands.recv() => {
                 let Some(command) = command else { break; };
                 let shutdown = matches!(command.action, Action::Shutdown);
@@ -669,9 +800,37 @@ async fn actor(shared: Shared, id: SessionId, mut commands: mpsc::Receiver<Comma
             }
         }
     }
+    crate::model_accounts::release_session(&shared, &id).await;
+    shared.retirement_stops.lock().remove(&id);
     if let Some(mut session) = live.session {
         let _ = session.shutdown().await;
     }
+}
+
+/// Caller holds the registry admission gate after committing retirement. Notifications
+/// bypass the bounded actor command queue, so self-retirement never waits for its own actor.
+pub(crate) async fn cancel_agent_runs(shared: &Shared, agent_id: &str) -> Result<()> {
+    let agent_id = agent_id.to_owned();
+    let sessions = shared
+        .db
+        .store(move |store| {
+            Ok(store
+                .list_sessions()
+                .into_iter()
+                .filter(|session| session.agent_id.as_deref() == Some(agent_id.as_str()))
+                .map(|session| session.id)
+                .collect::<Vec<_>>())
+        })
+        .await?;
+    // Serialize with actor registration; admission cannot pass the caller's registry gate.
+    let _actors = shared.actors.lock().await;
+    let stops = shared.retirement_stops.lock();
+    for session in sessions {
+        if let Some(stop) = stops.get(&session) {
+            stop.notify_one();
+        }
+    }
+    Ok(())
 }
 
 async fn handle(shared: &Shared, id: &SessionId, live: &mut Live, action: Action) -> Result<()> {
@@ -693,6 +852,8 @@ async fn handle(shared: &Shared, id: &SessionId, live: &mut Live, action: Action
                         text,
                         mode: QueueMode::Steer,
                         attachments: Vec::new(),
+                        author_kind: openside_proto::MessageAuthorKind::Internal,
+                        from_agent: None,
                     },
                 )
                 .await?;
@@ -858,6 +1019,7 @@ pub(crate) async fn prewarm_runtime(shared: &Shared, id: &SessionId) {
 }
 
 async fn close_runtime(shared: &Shared, id: &SessionId, live: &mut Live) {
+    crate::model_accounts::release_session(shared, id).await;
     if let Some(mut session) = live.session.take() {
         let _ = session.shutdown().await;
         // Shutdown may have buffered the final consistent snapshot before bye.
@@ -871,11 +1033,56 @@ async fn close_runtime(shared: &Shared, id: &SessionId, live: &mut Live) {
     live.resolutions.clear();
 }
 
-async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()> {
-    if live.session.is_some() {
-        return Ok(());
+pub(crate) fn session_model(
+    shared: &Shared,
+    state: &SessionState,
+    agent: Option<&openside_proto::Agent>,
+) -> Option<String> {
+    match agent.filter(|agent| agent.home_session_id == state.id) {
+        Some(agent) => agent
+            .model
+            .clone()
+            .or_else(|| shared.models.default_model()),
+        None => (!state.model.is_empty())
+            .then(|| state.model.clone())
+            .or_else(|| shared.models.default_model()),
     }
+}
+
+async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()> {
     let state = shared.db.state(id).await?;
+    let agent = crate::agents::for_session(shared, &state)?;
+    let persona_version = match agent.as_ref() {
+        Some(agent) if agent.kind == openside_proto::AgentKind::Chief => {
+            Some(shared.agents.revision()?)
+        }
+        Some(agent) => Some(agent.persona_version),
+        None => None,
+    };
+    if agent
+        .as_ref()
+        .is_some_and(|agent| agent.status != openside_proto::AgentStatus::Active)
+    {
+        return Err("agent_retired".into());
+    }
+    let model = session_model(shared, &state, agent.as_ref()).ok_or("model_not_configured")?;
+    let model_generation = agent
+        .as_ref()
+        .filter(|agent| agent.home_session_id == state.id)
+        .map(|_| shared.models.default_generation());
+    if live.session.is_some() {
+        if live.running
+            || (live.persona_version == persona_version
+                && live.model.as_ref() == Some(&model)
+                && live.model_generation == model_generation)
+        {
+            return Ok(());
+        }
+        close_runtime(shared, id, live).await;
+    }
+    live.persona_version = persona_version;
+    live.model = Some(model.clone());
+    live.model_generation = model_generation;
     let host = Host::new(shared.clone(), &state);
     let tools = host.specs();
     let stored_id = id.clone();
@@ -883,26 +1090,68 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
         .db
         .store(move |s| Ok(s.agent_state(&stored_id)?))
         .await?;
-    let system_prompt_parts =
-        crate::profiles::system_prompt_parts(shared, state.workspace.as_deref()).await;
+    let mut system_prompt_parts =
+        crate::profiles::system_prompt_parts(shared, state.workspace.as_deref(), agent.as_ref())
+            .await;
+    if agent
+        .as_ref()
+        .is_some_and(|agent| agent.kind == openside_proto::AgentKind::Chief)
+        && !shared
+            .db
+            .events(id, 0)
+            .await?
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::AssistantFinal { .. }))
+    {
+        system_prompt_parts.push("On your first real reply, greet the person briefly in your own name. Mention that they can rename you in Profile and find earlier conversations in History, then address their request. Do not start a background turn just to greet them.".into());
+    }
     let mut agent_json = agent_options(&shared.config.loaded.config);
-    if crate::tasks::front(shared) {
+    agent_json["title_needed"] = serde_json::json!(!state.title_locked && !state.title_proposed);
+    let team = match agent.as_ref() {
+        Some(agent) => {
+            let chief = agent.kind == openside_proto::AgentKind::Chief;
+            agent_json["orchestration"] = serde_json::json!(if chief { "front" } else { "single" });
+            Some(openside_core::TeamContext {
+                agent_id: agent.id.clone(),
+                role: if chief {
+                    openside_core::TeamRole::Chief
+                } else {
+                    openside_core::TeamRole::Teammate
+                },
+                persona: crate::agents::persona(agent),
+                roster: if chief {
+                    crate::agents::roster(&shared.agents.list()?)?
+                } else {
+                    String::new()
+                },
+            })
+        }
+        None => None,
+    };
+    if crate::tasks::front(shared, state.agent_id.as_deref()) {
         agent_json["front_tools"] = serde_json::json!(crate::tasks::front_tools(&tools));
-        if let Some(front) = &shared.config.loaded.config.models.front {
+        if let Some(front) = shared.models.front_model() {
             agent_json["front_model"] = serde_json::json!(front);
         }
     }
-    let spec = SessionSpec {
+    let generation = shared.models.credentials_generation();
+    let mut spec = SessionSpec {
         session: id.clone(),
-        model: state.model,
-        fallback_models: shared.config.loaded.config.models.fallback.clone(),
+        team,
+        model,
+        fallback_models: shared.models.fallback_models(),
         system_prompt_parts,
         tools,
         resume_state,
-        credentials_json: shared.config.loaded.config.credentials.to_string(),
+        credentials_json: shared.models.sidecar_options().to_string(),
         agent_json: agent_json.to_string(),
     };
-    let mut session = match shared.runtime.open(spec, Arc::new(host)).await {
+    let startup =
+        crate::models_api::fence_startup(shared, generation, &mut spec.credentials_json).await;
+    crate::model_accounts::bind_session(shared, id, &spec.model, &spec.fallback_models).await;
+    let opened = shared.runtime.open(spec, Arc::new(host)).await;
+    drop(startup);
+    let mut session = match opened {
         Ok(session) => session,
         Err(error) => {
             fail(shared, id, live, error).await?;
@@ -923,7 +1172,7 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
         crate::diag!(
             "opensided: shell tools use policy-only isolation because bubblewrap is unavailable"
         );
-        shared.emit(id, None, EventKind::RuntimeError { code: "sandbox_unavailable".into(), message: "Bubblewrap is unavailable; shell tools use policy-only isolation. Install bubblewrap or set sandbox.required=true.".into() }).await?;
+        shared.emit(id, None, EventKind::runtime_error("sandbox_unavailable", "Bubblewrap is unavailable; shell tools use policy-only isolation. Install bubblewrap or set sandbox.required=true.")).await?;
     }
     live.resolutions.clear();
     let pending = session.info().pending_deferred.clone();
@@ -1052,6 +1301,16 @@ async fn dispatch(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()
             .text(mid)
             .ok_or("queue text missing")?
             .to_owned();
+        let admission = shared.agents.gate.lock().await;
+        let current = shared.db.state(id).await?;
+        if crate::agents::for_session(shared, &current)?
+            .is_some_and(|agent| agent.status != openside_proto::AgentStatus::Active)
+        {
+            return Ok(());
+        }
+        if !matches!(current.queue.status(mid), Some(MessageStatus::Queued(_))) {
+            continue;
+        }
         shared
             .emit(
                 id,
@@ -1061,6 +1320,7 @@ async fn dispatch(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()
                 },
             )
             .await?;
+        drop(admission);
         if let Some(session) = live.session.as_mut() {
             let parts =
                 crate::artifacts::message_parts(shared, id, state.attachments.get(mid)).await;
@@ -1079,6 +1339,9 @@ async fn complete_inflight(
     outcome: MessageOutcome,
     reason: &str,
 ) -> Result<()> {
+    if reason == "interrupted" {
+        crate::cards::interrupt_approvals(shared, id).await?;
+    }
     let state = shared.db.state(id).await?;
     for mid in state
         .injected
@@ -1137,11 +1400,10 @@ async fn recover_owed(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
             .emit(
                 id,
                 None,
-                EventKind::RuntimeError {
-                    code: "interrupted".into(),
-                    message: "Agent process interrupted; dispatched messages will not be resent."
-                        .into(),
-                },
+                EventKind::runtime_error(
+                    "interrupted",
+                    "Agent process interrupted; dispatched messages will not be resent.",
+                ),
             )
             .await?;
     }
@@ -1153,6 +1415,7 @@ async fn recover_owed(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
 }
 
 async fn interrupted(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()> {
+    crate::model_accounts::release_session(shared, id).await;
     live.session = None;
     live.running = false;
     live.resolutions.clear();
@@ -1163,11 +1426,10 @@ async fn interrupted(shared: &Shared, id: &SessionId, live: &mut Live) -> Result
         .emit(
             id,
             None,
-            EventKind::RuntimeError {
-                code: "interrupted".into(),
-                message: "Agent process interrupted; dispatched messages will not be resent."
-                    .into(),
-            },
+            EventKind::runtime_error(
+                "interrupted",
+                "Agent process interrupted; dispatched messages will not be resent.",
+            ),
         )
         .await?;
     if !live.stopped {
@@ -1199,20 +1461,18 @@ async fn fail(shared: &Shared, id: &SessionId, live: &mut Live, error: RuntimeEr
         .emit(
             id,
             None,
-            EventKind::RuntimeError {
-                code: if auth {
+            EventKind::runtime_error(
+                if auth {
                     "auth_unavailable"
                 } else {
                     "runtime_unavailable"
-                }
-                .into(),
-                message: if auth {
+                },
+                if auth {
                     "Configured credential sources are unavailable; the session is stopped."
                 } else {
                     "Agent runtime unavailable; retrying a queued message will start a new process."
-                }
-                .into(),
-            },
+                },
+            ),
         )
         .await?;
     live.stopped = auth;
@@ -1277,6 +1537,12 @@ async fn record(shared: &Shared, id: &SessionId, event: RuntimeEvent) -> Result<
     let kind = match event {
         RuntimeEvent::AssistantDelta { text } => EventKind::AssistantDelta { text },
         RuntimeEvent::AssistantFinal { text } => EventKind::AssistantFinal { text },
+        RuntimeEvent::SessionTitleProposed { title } => {
+            let Some(title) = normalize_model_title(&title) else {
+                return Ok(());
+            };
+            EventKind::SessionTitleProposed { title }
+        }
         RuntimeEvent::ThinkingDelta { text } => EventKind::ThinkingDelta { text },
         RuntimeEvent::TurnStarted => EventKind::TurnStarted {},
         RuntimeEvent::TurnEnded => EventKind::TurnEnded {},

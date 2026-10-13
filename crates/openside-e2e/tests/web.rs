@@ -146,8 +146,19 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
         true
     );
 
-    // `/` is the new-chat screen: the model picker lists the daemon's configured default, and
-    // the first message creates the conversation (titled after it) and opens it.
+    // Model selection now belongs to the assistant profile, not the composer.
+    page.wait(
+        "assistant profile",
+        "!!document.querySelector('.person-heading')",
+    )
+    .await;
+    page.eval("document.querySelector('.person-heading').click(); true")
+        .await;
+    page.wait(
+        "profile model picker",
+        "!!document.querySelector('.profile-sheet .model-picker button')",
+    )
+    .await;
     page.eval("document.querySelector('.model-picker button').click(); true")
         .await;
     page.wait(
@@ -161,9 +172,36 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
     .await;
     page.wait(
         "model dialog closed",
-        "!document.querySelector('[role=dialog]')",
+        "!document.querySelector('.model-options')",
     )
     .await;
+    page.eval("document.querySelector('.profile-sheet button[aria-label=Close]').click(); true")
+        .await;
+    let created = harness
+        .request(
+            "POST",
+            "/v1/sessions",
+            Some(json!({
+                "mode":"full","workspace":harness.workspace()
+            })),
+        )
+        .await;
+    assert_eq!(created.status, 201, "{}", created.body);
+    let ordinary = created.body["id"].as_str().unwrap();
+    browser
+        .navigate(
+            OWNER,
+            &tab.id,
+            &format!("http://127.0.0.1:{port}/sessions/{ordinary}"),
+        )
+        .await
+        .unwrap();
+    page.wait(
+        "ordinary conversation",
+        "!!document.querySelector('main.session .composer')",
+    )
+    .await;
+    page.eval(HELPERS).await;
     page.eval(
         "(() => { const f = document.querySelector('.composer'); \
          __os.fill(f.querySelector('textarea'), 'Which color?'); \
@@ -182,18 +220,24 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
         .unwrap()
         .to_owned();
     page.wait(
-        "session title from replayed events",
-        "document.querySelector('.session-heading')?.textContent === 'Which color?'",
+        "untitled session before the first reply",
+        "document.querySelector('.session-heading')?.textContent === 'New session'",
     )
     .await;
 
     page.wait(
         "ticket card",
-        "!!document.querySelector('section.ticket-pending') && !!__os.button(document.querySelector('section.ticket-pending'), 'blue')",
+        "!!document.querySelector('.oc-card[data-kind=form][data-status=pending] .oc-pill')",
+    )
+    .await;
+    page.eval("document.querySelector('.oc-card[data-kind=form][data-status=pending] .oc-pill').click(); true").await;
+    page.wait(
+        "expanded choice",
+        "!!document.querySelector('.oc-card[data-kind=form] input[type=radio][value=blue]')",
     )
     .await;
     assert_eq!(
-        page.eval("document.querySelector('section.ticket-pending .ticket-summary').textContent")
+        page.eval("document.querySelector('.oc-card[data-kind=form] .oc-title').textContent")
             .await,
         "Choose a color"
     );
@@ -202,7 +246,9 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
         .await;
     assert_eq!(waiting.body["status"], "waiting_human");
 
-    page.eval("__os.button(document.querySelector('section.ticket-pending'), 'blue').click()")
+    page.eval("(() => { const card = document.querySelector('.oc-card[data-kind=form][data-status=pending]'); card.querySelector('input[type=radio][value=blue]').click(); return true })()")
+        .await;
+    page.eval("__os.button(document.querySelector('.oc-card[data-kind=form][data-status=pending]'), 'Continue').click()")
         .await;
     page.wait(
         "resumed final answer",
@@ -212,7 +258,7 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
     .await;
     page.wait(
         "resolved ticket card",
-        "Array.from(document.querySelectorAll('section.ticket .chip')).some((c) => c.textContent === 'Answered: blue')",
+        "!!document.querySelector('.oc-card[data-kind=form][data-status=done]') && !document.querySelector('.oc-card[data-kind=form] input')",
     )
     .await;
     assert_eq!(page.eval("window.__violations.length").await, 0);
@@ -227,12 +273,17 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
         .find(|ticket| ticket["session_id"] == session.as_str())
         .expect("resolved ticket");
     assert_eq!(ticket["resolution"]["answer"], "blue");
+    page.wait(
+        "model conversation title",
+        "document.querySelector('.session-heading')?.textContent === 'Discuss the request'",
+    )
+    .await;
     assert_eq!(ticket["tool_call_id"], "ask-call");
     let settled = harness
         .request("GET", &format!("/v1/sessions/{session}"), None)
         .await;
     assert_eq!(settled.body["status"], "idle");
-    assert_eq!(settled.body["title"], "Which color?");
+    assert_eq!(settled.body["title"], "Discuss the request");
     let snapshot = harness.snapshot(&session);
     let returns: Vec<_> = snapshot["messages"]
         .as_array()

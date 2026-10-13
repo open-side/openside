@@ -54,6 +54,114 @@ pub struct Route {
 pub const ROUTES: &[Route] = &[
     Route {
         method: HttpMethod::Get,
+        path: "/v1/agents",
+        request_schema: None,
+        response_schema: Some("AgentList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/agents",
+        request_schema: Some("HireDraft"),
+        response_schema: Some("Agent"),
+        scope: CapabilityScope::Admin,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/agents/{id}",
+        request_schema: None,
+        response_schema: Some("Agent"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/agents/{id}",
+        request_schema: Some("UpdateAgentRequest"),
+        response_schema: Some("Agent"),
+        scope: CapabilityScope::Steer,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/agents/{id}/retire",
+        request_schema: Some("RetireAgentRequest"),
+        response_schema: Some("Agent"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/agents/{id}/restore",
+        request_schema: None,
+        response_schema: Some("Agent"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/agents/{id}/transfer",
+        request_schema: Some("TransferRequest"),
+        response_schema: Some("Agent"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/agents/{id}/handoffs",
+        request_schema: None,
+        response_schema: Some("HandoffList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/agents/{id}/handoffs",
+        request_schema: Some("CreateHandoffRequest"),
+        response_schema: Some("Handoff"),
+        scope: CapabilityScope::Steer,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/team/proposals/suppressed",
+        request_schema: None,
+        response_schema: Some("SuppressedProposalList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/team/proposals/{key}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/favicons/{origin}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
         path: "/v1/health",
         request_schema: None,
         response_schema: Some("Health"),
@@ -67,6 +175,195 @@ pub const ROUTES: &[Route] = &[
         request_schema: None,
         response_schema: Some("AccountsResponse"),
         scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/channels",
+        request_schema: None,
+        response_schema: Some("ChannelAccountList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/settings/channels/{kind}/accounts",
+        request_schema: Some("AddChannelAccountRequest"),
+        response_schema: Some("ChannelAccount"),
+        scope: CapabilityScope::Admin,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/settings/channels/{kind}/accounts/{account_id}",
+        request_schema: Some("UpdateChannelAccountRequest"),
+        response_schema: Some("ChannelAccount"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/settings/channels/{kind}/accounts/{account_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/settings/channels/{kind}/accounts/{account_id}/test",
+        request_schema: None,
+        response_schema: Some("ChannelAccountTest"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/hooks/{kind}/{account_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/models",
+        request_schema: None,
+        response_schema: Some("ModelCatalog"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/settings/models",
+        request_schema: Some("UpdateModelsRequest"),
+        response_schema: Some("ModelSelection"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/keys",
+        request_schema: None,
+        response_schema: Some("ProviderKeyList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/settings/keys/{provider}",
+        request_schema: Some("CreateProviderKeyRequest"),
+        response_schema: Some("ProviderKeyInfo"),
+        scope: CapabilityScope::Admin,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/settings/keys/{provider}/{key_id}",
+        request_schema: Some("SetProviderKeyRequest"),
+        response_schema: Some("ProviderKeyInfo"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/settings/keys/{provider}/{key_id}",
+        request_schema: Some("UpdateProviderKeyRequest"),
+        response_schema: Some("ProviderKeyInfo"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/settings/keys/{provider}/{key_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/subscriptions",
+        request_schema: None,
+        response_schema: Some("SubscriptionList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/settings/subscriptions/{source}",
+        request_schema: Some("CreateSubscriptionAccountRequest"),
+        response_schema: Some("SubscriptionAccount"),
+        scope: CapabilityScope::Admin,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/subscriptions/{source}/{account_id}",
+        request_schema: None,
+        response_schema: Some("SubscriptionAccount"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/settings/subscriptions/{source}/{account_id}",
+        request_schema: Some("UpdateSubscriptionAccountRequest"),
+        response_schema: Some("SubscriptionAccount"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/settings/subscriptions/{source}/{account_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/pools",
+        request_schema: None,
+        response_schema: Some("ProviderPoolList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/settings/pools/{provider}",
+        request_schema: Some("UpdateProviderPoolRequest"),
+        response_schema: Some("ProviderPool"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/sessions/{id}/account",
+        request_schema: Some("UpdateSessionAccountRequest"),
+        response_schema: Some("SessionAccountSelection"),
+        scope: CapabilityScope::Steer,
         success_status: 200,
         sse: false,
     },
@@ -213,6 +510,15 @@ pub const ROUTES: &[Route] = &[
         scope: CapabilityScope::Read,
         success_status: 200,
         sse: true,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/sessions/{id}/events/poll",
+        request_schema: None,
+        response_schema: Some("EventPoll"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
     },
     Route {
         method: HttpMethod::Get,
@@ -625,8 +931,80 @@ pub const ROUTES: &[Route] = &[
         method: HttpMethod::Post,
         path: "/v1/import",
         request_schema: Some("ImportRequest"),
-        response_schema: Some("ImportReport"),
+        response_schema: Some("ImportJob"),
         scope: CapabilityScope::Admin,
+        success_status: 202,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/import/preview",
+        request_schema: Some("ImportRequest"),
+        response_schema: Some("ImportBatchReport"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/import/passwords",
+        request_schema: Some("ImportPasswordsRequest"),
+        response_schema: Some("ImportCategoryReport"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/import/jobs/{id}",
+        request_schema: None,
+        response_schema: Some("ImportJob"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/import/jobs/{id}/events",
+        request_schema: None,
+        response_schema: Some("ImportProgress"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: true,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/import/delivery",
+        request_schema: None,
+        response_schema: Some("ImportDeliveryList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/import/delivery/{id}/ack",
+        request_schema: Some("ImportDeliveryAck"),
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/import/delivery/{id}/ticket",
+        request_schema: Some("ImportDeliveryTicketRequest"),
+        response_schema: Some("ImportDeliveryTicket"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/extension/import/{ticket}",
+        request_schema: None,
+        response_schema: Some("ImportDeliverySigned"),
+        scope: CapabilityScope::Read,
         success_status: 200,
         sse: false,
     },
@@ -680,6 +1058,96 @@ pub const ROUTES: &[Route] = &[
         path: "/v1/vault/audit",
         request_schema: None,
         response_schema: Some("VaultAuditList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/connections",
+        request_schema: None,
+        response_schema: Some("ConnectionList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/connections/spaces",
+        request_schema: Some("CreateAccountSpaceRequest"),
+        response_schema: Some("CreateAccountSpaceResult"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/connections/spaces/{space_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/connections/{id}",
+        request_schema: None,
+        response_schema: Some("Connection"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/connections/{id}",
+        request_schema: Some("UpdateConnectionRequest"),
+        response_schema: Some("Connection"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/connections/{id}/check",
+        request_schema: None,
+        response_schema: Some("Connection"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/connections/{id}/relogin",
+        request_schema: Some("ReloginConnectionRequest"),
+        response_schema: Some("ReloginResult"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/connections/{id}/revoke",
+        request_schema: Some("RevokeConnectionRequest"),
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/connections/candidates/{id}/dismiss",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/connections/audit",
+        request_schema: None,
+        response_schema: Some("ConnectionAuditList"),
         scope: CapabilityScope::Admin,
         success_status: 200,
         sse: false,
@@ -777,7 +1245,7 @@ pub const ROUTES: &[Route] = &[
     Route {
         method: HttpMethod::Post,
         path: "/v1/sync/setup",
-        request_schema: None,
+        request_schema: Some("SyncSecrets"),
         response_schema: Some("SyncSetupResponse"),
         scope: CapabilityScope::Admin,
         success_status: 201,
@@ -799,6 +1267,123 @@ pub const ROUTES: &[Route] = &[
         response_schema: Some("SyncReport"),
         scope: CapabilityScope::Admin,
         success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/sync/config",
+        request_schema: Some("UpdateSyncConfigRequest"),
+        response_schema: Some("SyncStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/sync/unlock",
+        request_schema: Some("SyncSecrets"),
+        response_schema: Some("SyncStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/policy/validate",
+        request_schema: Some("ValidatePolicyRequest"),
+        response_schema: Some("PolicyValidation"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/policy/network",
+        request_schema: None,
+        response_schema: Some("NetworkPolicy"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/policy/network",
+        request_schema: Some("UpdateNetworkPolicyRequest"),
+        response_schema: Some("NetworkPolicy"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/external-agents/{id}",
+        request_schema: Some("SetExternalAgentRequest"),
+        response_schema: Some("ExternalAgent"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/external-agents/{id}",
+        request_schema: None,
+        response_schema: Some("ExternalAgentList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/memory/model",
+        request_schema: None,
+        response_schema: Some("MemoryModelStatus"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/memory/model/download",
+        request_schema: Some("StartMemoryModelRequest"),
+        response_schema: Some("MemoryModelStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 202,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/memory/model/cancel",
+        request_schema: None,
+        response_schema: Some("MemoryModelStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/doctor",
+        request_schema: None,
+        response_schema: Some("DoctorReport"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/daemon",
+        request_schema: None,
+        response_schema: Some("DaemonStatus"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/daemon/restart",
+        request_schema: None,
+        response_schema: Some("RestartDaemonResponse"),
+        scope: CapabilityScope::Admin,
+        success_status: 202,
         sse: false,
     },
     Route {
@@ -830,8 +1415,89 @@ pub const ROUTES: &[Route] = &[
     },
     Route {
         method: HttpMethod::Get,
+        path: "/v1/devices/me",
+        request_schema: None,
+        response_schema: Some("MyDevice"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/devices/me/access-requests",
+        request_schema: Some("RequestAccessRequest"),
+        response_schema: Some("AccessRequest"),
+        scope: CapabilityScope::Read,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/access-requests",
+        request_schema: None,
+        response_schema: Some("AccessRequestList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/access-requests/{id}/approve",
+        request_schema: None,
+        response_schema: Some("Device"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/access-requests/{id}/deny",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
         path: "/v1/remote/status",
         request_schema: None,
+        response_schema: Some("RemoteStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/remote/local-access",
+        request_schema: None,
+        response_schema: Some("LocalAccess"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/remote/tailscale",
+        request_schema: Some("ConfigureTailscaleRequest"),
+        response_schema: Some("RemoteStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/remote/cloudflare",
+        request_schema: Some("SetCloudflareRequest"),
+        response_schema: Some("RemoteStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/remote/relay",
+        request_schema: Some("SetRelayRequest"),
         response_schema: Some("RemoteStatus"),
         scope: CapabilityScope::Admin,
         success_status: 200,
@@ -963,6 +1629,35 @@ pub fn schemas() -> Map<String, Value> {
     }
     add!(
         Health,
+        Agent,
+        AgentSummary,
+        AgentList,
+        AgentPersona,
+        AgentChannelBinding,
+        AgentKind,
+        AgentStatus,
+        HireDraft,
+        HireDecision,
+        UpdateAgentRequest,
+        RetireAgentRequest,
+        TransferRequest,
+        SuppressedProposal,
+        SuppressedProposalList,
+        Handoff,
+        HandoffList,
+        HandoffPacket,
+        HandoffKind,
+        HandoffStatus,
+        CreateHandoffRequest,
+        MessageAuthorKind,
+        ChannelAccountStatus,
+        ChannelAccountOptions,
+        ChannelAccount,
+        ChannelAccountList,
+        ChannelCredentials,
+        AddChannelAccountRequest,
+        UpdateChannelAccountRequest,
+        ChannelAccountTest,
         AccountsResponse,
         AccountSource,
         AccountStatus,
@@ -978,6 +1673,43 @@ pub fn schemas() -> Map<String, Value> {
         EditMessageRequest,
         MoveMessageRequest,
         Ticket,
+        Card,
+        CardKind,
+        CardStatus,
+        CardInteraction,
+        CardSite,
+        FaviconRef,
+        MediaRef,
+        Money,
+        Rating,
+        CardLink,
+        CardValue,
+        KvRow,
+        ListItem,
+        TableColumn,
+        TableLayout,
+        ChoiceLayout,
+        ChoiceOption,
+        InputKind,
+        CardField,
+        InputValidation,
+        FieldInitial,
+        InputField,
+        NoticeTone,
+        NoticePlacement,
+        CardPerson,
+        Block,
+        Action,
+        ActionStyle,
+        ChoiceAnswerEncoding,
+        FieldAnswerEncoding,
+        TicketAnswer,
+        ActionTarget,
+        TeamCardCommand,
+        PresentRequest,
+        PresentImage,
+        PresentResult,
+        TicketForm,
         TicketList,
         ResolveTicketRequest,
         RejectTicketRequest,
@@ -1067,6 +1799,26 @@ pub fn schemas() -> Map<String, Value> {
         VaultUnlockRequest,
         VaultAuditRecord,
         VaultAuditList,
+        Connection,
+        ConnectionList,
+        ConnectionListQuery,
+        UpdateConnectionRequest,
+        RevokeConnectionRequest,
+        ReloginConnectionRequest,
+        ConnectionAuditRecord,
+        ConnectionAuditList,
+        ConnectionAuditQuery,
+        ConnectionError,
+        ConnectionsListArgs,
+        ConnectionOpenArgs,
+        ConnectionCheckArgs,
+        ConnectionConfirmArgs,
+        ConnectionObserveArgs,
+        ConnectionFetchArgs,
+        TicketRef,
+        ReloginResult,
+        CreateAccountSpaceRequest,
+        CreateAccountSpaceResult,
         PinnedTab,
         PinnedTabList,
         CreatePinnedTabRequest,
@@ -1081,10 +1833,22 @@ pub fn schemas() -> Map<String, Value> {
         Device,
         DeviceKind,
         DeviceList,
+        MyDevice,
+        AccessRequest,
+        AccessRequestList,
+        RequestAccessRequest,
         PairingTransport,
         RemoteStatus,
         CloudflareStatus,
         RelayStatus,
+        TailscaleStatus,
+        TailscaleConfiguration,
+        RemoteConfiguration,
+        ConfigureTailscaleRequest,
+        SetCloudflareRequest,
+        SetRelayRequest,
+        LocalAccess,
+        EventPoll,
         VapidPublicKey,
         PushKeys,
         CreatePushSubscriptionRequest,
@@ -1096,10 +1860,33 @@ pub fn schemas() -> Map<String, Value> {
         OtpIngestResponse,
         SettingsDocument,
         UpdateSettingsRequest,
+        ModelCatalog,
+        ModelProvider,
+        CatalogModel,
+        ModelAccount,
+        UpdateModelsRequest,
+        ModelSelection,
+        ProviderKeyInfo,
+        ProviderKeyList,
+        SetProviderKeyRequest,
+        CreateProviderKeyRequest,
+        UpdateProviderKeyRequest,
+        ModelAccountRef,
+        ProviderPool,
+        ProviderPoolList,
+        UpdateProviderPoolRequest,
+        SubscriptionAccount,
+        SubscriptionSource,
+        SubscriptionList,
+        CreateSubscriptionAccountRequest,
+        UpdateSubscriptionAccountRequest,
+        UpdateSessionAccountRequest,
+        SessionAccountSelection,
         AttachmentUpload,
         Attachment,
         ContentKind,
         ArtifactSource,
+        ArtifactPurpose,
         Artifact,
         ArtifactList,
         VisualKind,
@@ -1131,7 +1918,53 @@ pub fn schemas() -> Map<String, Value> {
         ImportRequest,
         ImportRejectedCookie,
         ImportCategoryReport,
-        ImportReport
+        ImportedRestoreTab,
+        ImportedExtension,
+        ImportedSearchEngine,
+        ImportedPermission,
+        ImportDeliveryTarget,
+        ImportDeliveryQuery,
+        ImportDeliveryAck,
+        ImportDeliverySource,
+        ImportDeliveryBookmark,
+        ImportDeliveryVisit,
+        ImportDeliveryCookie,
+        ImportDeliveryCookiePartitionKey,
+        ImportDeliveryBatch,
+        ImportDeliveryList,
+        ImportDeliveryPending,
+        ImportDeliveryTicketRequest,
+        ImportDeliveryTicket,
+        ImportDeliverySigned,
+        ImportBatchReport,
+        ImportJobState,
+        ImportJob,
+        ImportProgress,
+        ImportPasswordsRequest,
+        ImportReport,
+        RestartMethod,
+        DaemonStatus,
+        RestartDaemonResponse,
+        DoctorStatus,
+        DoctorFixAction,
+        DoctorFix,
+        DoctorCheck,
+        DoctorGroup,
+        DoctorReport,
+        MemoryModelState,
+        MemoryModelSource,
+        MemoryModelStatus,
+        StartMemoryModelRequest,
+        SetExternalAgentRequest,
+        PolicyList,
+        PolicyProblem,
+        ValidatePolicyRequest,
+        PolicyValidation,
+        NetworkPolicy,
+        UpdateNetworkPolicyRequest,
+        SyncSecretSource,
+        SyncSecrets,
+        UpdateSyncConfigRequest
     );
     schemas
 }
@@ -1205,10 +2038,51 @@ pub fn openapi() -> Value {
             operation["responses"]["200"]["content"] =
                 json!({"image/jpeg": {"schema": {"type":"string","format":"binary"}}});
         }
+        if route.path.starts_with("/v1/settings/channels") {
+            operation["description"] = json!("Manage independent labelled channel identities. Read lists are metadata only. Mutations require admin and a person device or the local socket. Credentials are encrypted in the Vault, never returned, synced or exposed to browser fill. Account changes affect only that account; failed credentials never select another identity.");
+            for name in ["kind", "account_id"] {
+                if route.path.contains(&format!("{{{name}}}")) {
+                    parameters.push(
+                        json!({"name":name,"in":"path","required":true,"schema":{"type":"string"}}),
+                    );
+                }
+            }
+        }
+        if route.path == "/v1/hooks/{kind}/{account_id}" {
+            operation["description"] = json!("Public signed platform callback for one managed identity, not bearer authentication. Slack events/interactivity use v0 HMAC-SHA256; Discord uses strict Ed25519 verification. Both signed timestamps must be within five minutes. Exact-body replay detection is per account with five-minute monotonic expiry. Bodies are capped at 256 KiB with a ten-second read deadline; each account admits 120 requests per rolling minute. Unknown or inactive accounts return sanitized 404 without Vault or platform lookup. OS keyring idle lock does not stop service identities; an explicit openside Vault lock does.");
+            parameters.push(json!({"name":"kind","in":"path","required":true,"schema":{"type":"string","enum":["slack","discord"]}}));
+            parameters.push(json!({"name":"account_id","in":"path","required":true,"schema":{"type":"string","pattern":"^[a-z0-9_-]{1,40}$"}}));
+            for name in [
+                "X-Slack-Request-Timestamp",
+                "X-Slack-Signature",
+                "X-Signature-Timestamp",
+                "X-Signature-Ed25519",
+            ] {
+                parameters.push(json!({"name":name,"in":"header","required":false,"description":"Required by the selected platform's signing protocol.","schema":{"type":"string"}}));
+            }
+            operation["requestBody"] = json!({"required":true,"content":{
+                "application/json":{"schema":{"type":"object"}},
+                "application/x-www-form-urlencoded":{"schema":{"type":"object","properties":{"payload":{"type":"string"}}}}
+            }});
+            operation["responses"]["200"]["content"] =
+                json!({"application/json":{"schema":{"type":"object"}}});
+            for (status, code) in [
+                ("401", "channel_bad_signature"),
+                ("404", "channel_account_not_found"),
+                ("409", "channel_replay"),
+                ("413", "channel_body_too_large"),
+                ("408", "channel_body_timeout"),
+                ("429", "channel_rate_limited"),
+            ] {
+                operation["responses"][status] = json!({"description":code,"content":{"application/json":{"schema":reference("ApiError")}}});
+            }
+            operation["responses"]["429"]["headers"] =
+                json!({"Retry-After":{"schema":{"type":"string"},"description":"60 seconds"}});
+        }
         if route.sse {
             parameters.push(
                 json!({"name": "Last-Event-ID", "in": "header", "required": false,
-                "description": "Last seen per-session sequence; only later events are returned.",
+                "description": "Last seen sequence in this stream; only later events are returned.",
                 "schema": {"type": "string", "pattern": "^[0-9]+$"}}),
             );
         }
@@ -1232,6 +2106,9 @@ pub fn openapi() -> Value {
             operation["description"] = json!("Queue steering text for the child's next model request; a waiting child receives it when it resumes.");
         }
         if route.path == "/v1/sessions" && route.method == HttpMethod::Get {
+            parameters.push(json!({"name":"agent","in":"query","required":false,
+                "description":"Filter immutable agent ownership: none selects earlier untagged conversations; an agent id selects all its threads.",
+                "schema":{"type":"string"}}));
             parameters.push(json!({"name": "q", "in": "query", "required": false,
                 "description": "Case-insensitive substring of the title or first message.",
                 "schema": {"type": "string"}}));
@@ -1241,6 +2118,9 @@ pub fn openapi() -> Value {
         }
         if route.path == "/v1/sessions" && route.method == HttpMethod::Post {
             operation["description"] = json!("Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space).");
+        }
+        if route.path == "/v1/agents/{id}" && route.method == HttpMethod::Patch {
+            operation["description"] = json!("Edit the profile for the next turn. Omitted nullable overrides are unchanged; explicit null inherits defaults. Permission widening and skills/model/account-pool/channel changes additionally require Admin and a person device (local socket exempt). Immutable identity and home fields cannot be patched.");
         }
         if route.path == "/v1/sessions/{id}" && route.method == HttpMethod::Patch {
             operation["description"] =
@@ -1312,7 +2192,30 @@ pub fn openapi() -> Value {
             operation["x-public"] = json!(true);
         }
         if route.path == "/v1/pairing" {
-            operation["description"] = json!("Issue a one-time pairing code valid for 180 seconds. Only callable over the Unix socket (TCP callers get 403 local_socket_required). The operator fixes kind here: person_device for phones/browsers, agent_client for external CLI/MCP agents. Redemption cannot change it. Issuing, exchanging and revoking are written to audit.jsonl.");
+            operation["description"] = json!("Issue a one-time pairing code valid for 180 monotonic seconds. Requires the local socket, or verified loopback TCP with a socket-issued person_device admin token and current X-Openside-Local-Secret. Proxied/relay traffic is refused with 403 local_access_required; loopback alone never proves locality. Requested scopes cannot exceed caller grants (403 scope_ceiling_exceeded). The local operator fixes person_device or agent_client in the offer; redemption cannot change kind. Codes and local secrets are never audited.");
+        }
+        if route.path == "/v1/remote/local-access" {
+            operation["description"] = json!("Local socket only: every call atomically replaces the one managed owner-bootstrap device/token, closes the predecessor's streams/polls, clears its push subscriptions, and audits rotation. A distinct persistent bootstrap marker survives boots; intentional CLI devices are never revoked by display name. Returns the per-boot locality secret and fresh person/admin token plus a loopback launch URL with credentials in its fragment. TCP/relay callers get 403 local_socket_required. Keep the proof only in sessionStorage; strip the fragment immediately and clear proof on sign-out, rejection or identity change.");
+        }
+        if route.path == "/v1/pairing"
+            || route.path == "/v1/access-requests/{id}/approve"
+            || route.path.starts_with("/v1/remote/") && route.path != "/v1/remote/local-access"
+        {
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
+        }
+        if route.path == "/v1/sessions/{id}/events/poll" {
+            operation["description"] = json!("Bounded long polling for transports that buffer SSE. At most 512 raw durable events per page, ordered by seq; last_seq is the exclusive replay cursor and includes filtered subagent events. Subscribe-before-read prevents replay/live gaps. Pending requests wake immediately on device revocation. Delivers the deletion tombstone as the final event, then 404. A cursor beyond an active session's durable log returns 400 invalid_event_id.");
+            parameters.push(json!({"name":"after","in":"query","required":false,"schema":{"type":"integer","minimum":0,"default":0}}));
+            parameters.push(json!({"name":"wait","in":"query","required":false,"schema":{"type":"integer","minimum":0,"maximum":25,"default":20}}));
+            parameters.push(json!({"name":"subagents","in":"query","required":false,"schema":{"type":"boolean","default":true}}));
+        }
+        if route.path == "/v1/devices/me/access-requests" {
+            operation["description"] = json!("A person's device asks for scopes it does not hold, for example admin to manage the vault. The request waits ten minutes for someone on the computer running openside to allow or decline it; a new request from the same device replaces the old one. 400 invalid_value when the device already holds every requested scope; 403 person_approval_required for an agent client.");
+        }
+        if route.path == "/v1/access-requests/{id}/approve" {
+            operation["description"] = json!("Grants the requested scopes to the device, in addition to the ones it holds. Requires the same local-person authority as pairing (local socket, or verified loopback TCP with a socket-issued person_device admin token and the current X-Openside-Local-Secret); a QR-paired, agent or proxied caller gets 403 local_access_required. 404 not_found for an unknown, expired or already decided request.");
         }
         if route.path == "/v1/pairing/exchange" {
             operation["description"] = json!("No bearer token: the one-time code is the credential. The token inherits the operator-selected kind from the offer; sending kind at redemption is rejected as an unknown field. 404 pairing_not_found for an unknown or already used code, 410 pairing_expired after 180 seconds. A valid request consumes the code on its first exchange attempt.");
@@ -1324,16 +2227,102 @@ pub fn openapi() -> Value {
             operation["description"] = json!("Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). Reopening the guide from Settings does not reset the flag.");
         }
         if route.path == "/v1/external-agents" {
-            operation["description"] = json!("The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any `[skills.agents]` entry. `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`.");
+            operation["description"] = json!("The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any agent whose skills folder was added with `PUT /v1/external-agents/{id}` (stored as a `[skills.agents]` entry). `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`.");
         }
         if route.path == "/v1/external-agents/{id}/browser-skill" {
-            operation["description"] = json!("Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown.");
+            operation["description"] = json!("Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown (add the folder with `PUT /v1/external-agents/{id}`).");
+        }
+        if route.path == "/v1/external-agents/{id}" && route.method == HttpMethod::Put {
+            operation["description"] = json!("Add or change the skills folder of an agent that is not a preset. Requires local access (the computer's own user, or its launcher with X-Openside-Local-Secret): 403 local_access_required otherwise. The id is lowercase letters, digits and hyphens and not a preset name (400 invalid_agent); the folder must be absolute or `~/…`, without `..`, and resolve inside the user's home, config or data folders (400 invalid_skills_dir). Persisted as `[skills.agents]` in config.toml and effective at once; audited.");
+        }
+        if route.path == "/v1/external-agents/{id}" && route.method == HttpMethod::Delete {
+            operation["description"] = json!("Forget a custom agent's skills folder. Requires local access. Presets cannot be removed (400 invalid_agent); 404 unknown_agent. Installed skill files are not touched.");
+        }
+        if route.path == "/v1/memory/model" {
+            operation["description"] = json!("The local embedding model and the download job: whether both model files exist, the stage and byte progress of the current or last download, its error code and whether a restart is needed before vector search starts. The daemon downloads only when asked; nothing runs implicitly.");
+        }
+        if route.path == "/v1/memory/model/download" {
+            operation["description"] = json!("Start downloading the embedding model into `memory.embedding.model_dir`: the file list and per-file checksums come from the model hub (SHA-256 for weights, git blob id for plain files), every request and redirect must pass `network.allow`, both files must match their checksum and load as a static model, and only then is the model swapped in atomically. One download at a time (409 download_in_progress). An empty body fetches the default model from the default source; naming a repo, revision or endpoint needs local access (403 local_access_required). 400 invalid_model_source; the outcome (including checksum_mismatch, checksum_unavailable, egress_refused, download_failed, unsupported_model) is reported by GET /v1/memory/model.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof; only needed to name a different repo, revision or endpoint.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
+        }
+        if route.path == "/v1/memory/model/cancel" {
+            operation["description"] = json!("Stop the running download; the installed model and the staged files are left untouched. A no-op when nothing is running.");
+        }
+        if route.path == "/v1/doctor" {
+            operation["description"] = json!("Run the diagnostics of `openside doctor` inside the daemon and return them grouped by area, with a web fix for findings that have one. The vault probe reads only the file header and the keyring state. One report at a time; callers wait for the run in progress.");
+        }
+        if route.path == "/v1/daemon" {
+            operation["description"] = json!("Identity of the running process: version, a random `boot_id` that changes on every start, when it started and how a restart would be carried out. A client that asked for a restart waits until `boot_id` changes.");
+        }
+        if route.path == "/v1/daemon/restart" {
+            operation["description"] = json!("Restart the daemon by graceful shutdown and in-place exec with the same PID and arguments, including under systemd or launchd. Returns 202 with the current boot_id; wait for a new boot_id to reconnect. Requires local access (403 local_access_required). A private single-use 0600 handoff in the 0700 data directory preserves the launcher secret only for this controlled exec, bound to the old boot_id and restart request id by an exec-only environment marker, with a five-minute TTL. Ordinary external or service-manager restarts rotate the secret.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
+        }
+        if route.path == "/v1/policy/validate" {
+            operation["description"] = json!("Check an edit of the live policy and/or the network allow-list without saving it. Returns every problem with the list and zero-based index of the entry, so a form can mark the exact row; PUT /v1/policy and PUT /v1/policy/network apply the same checks.");
+        }
+        if route.path == "/v1/policy/network" && route.method == HttpMethod::Get {
+            operation["description"] = json!("The saved outbound allow-list (`network.allow`) and whether the running daemon still enforces an older one.");
+        }
+        if route.path == "/v1/policy/network" && route.method == HttpMethod::Put {
+            operation["description"] = json!("Replace `network.allow` in config.toml (validated like the file; 400 invalid_network_allow). Requires local access; it applies after the daemon restarts. Audited.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
+        }
+        if route.path == "/v1/sync/config" {
+            operation["description"] = json!("Choose where synced data is stored: a shared directory or a WebDAV URL (https, or http on loopback), exactly one or neither to turn sync off, plus whether the live policy syncs and which memory tags sync. Requires local access. The backend of a device that already joined an account cannot change (409 sync_already_set_up). Persisted in `[sync]` of config.toml and effective at once without a restart. 400 invalid_sync_config.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
+        }
+        if route.path == "/v1/sync/unlock" {
+            operation["description"] = json!("Derive the sync key for the account this device joined from a passphrase typed in the app (or from `sync.passphrase_cmd` when none is given) and keep it in daemon memory only. A WebDAV password typed here is likewise memory-only. Requires local access when a secret is sent. 400 sync_wrong_passphrase; 409 sync_not_set_up, sync_passphrase_unavailable.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
+        }
+        if route.path.starts_with("/v1/import") {
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket; paired, agent and proxied callers cannot use it.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
         }
         if route.path == "/v1/import/profiles" {
-            operation["description"] = json!("Chrome, Chromium and Firefox profiles found in their standard locations on the daemon's computer, with the data each has. Directory paths are never returned; `POST /v1/import` takes the profile id.");
+            operation["description"] = json!("Detect all browser profiles in standard local locations, including Chromium brands, Firefox forks and Safari on macOS. Includes per-kind availability, local display metadata and permission warnings; never source paths. Requires local-person authority.");
         }
         if route.path == "/v1/import" {
-            operation["description"] = json!("Import history, bookmarks and cookies of a discovered profile into the daemon's browser profile. `dry_run` reads and decrypts everything and reports counts without writing; a real run reads everything before it writes anything. Cookies encrypted with the OS keyring (`v11`) need the CLI (`openside import --keyring-password-cmd`). One import runs at a time. 400 unknown_profile; 409 import_in_progress, profile_in_use; 422 source_locked, source_unreadable, source_corrupt, source_unsupported, keyring_password_required; 500 import_failed; 503 browser_unavailable.");
+            operation["description"] = json!("Start importing selected profiles and kinds into the agent's default browser profile; omitted selections mean everything from every detected profile. Requires local-person authority. Passwords go only into an unlocked openside Vault; 409 vault_setup_required or vault_locked before writes. This explicit run is the credential-access phase: macOS may show a Keychain permission request; Linux never requests unlocking. Returns an asynchronous job; progress is available through job polling or job SSE. One write at a time (409 import_in_progress). Keyring/encryption failures skip only the affected kind and are included in the summary.");
+        }
+        if route.path == "/v1/import/preview" {
+            operation["description"] = json!("Preview selected local profiles without target writes or browser startup; omitted selections mean all profiles and kinds. Cookie/password counts come only from source rows or binary record headers: no decryption, OS-keyring access, Unlock or credential verification. No unlocked Vault is required. Notes explain that the system may ask for access during the explicitly started import; actual counts can decrease after expired/unsupported/duplicate filtering. Other kinds are parsed and URL-sanitized normally. Requires local-person authority.");
+        }
+        if route.path == "/v1/import/passwords" {
+            operation["description"] = json!("Import browser-exported CSV passwords directly from an in-memory request into the encrypted Vault. Accepts Chrome, Edge, Firefox and Safari URL/username/password headers; never stores the CSV file or returns values. Dedupes normalized origin and username through Vault save_login. Requires local-person authority and an unlocked Vault (409 vault_setup_required, vault_locked).");
+        }
+        if route.path == "/v1/import/jobs/{id}/events" {
+            operation["description"] = json!("Replay durable per-job progress then stream new progress with SSE event import_progress and monotonically increasing event ids. Last-Event-ID resumes a stream; final completed/failed progress closes it. No secret data is included; local-person authority is required.");
+        }
+        if route.path == "/v1/import/delivery" {
+            parameters.push(json!({"name":"target","in":"query","required":false,
+                "description":"Independent migration destination; defaults to the dedicated desktop user profile.",
+                "schema":reference("ImportDeliveryTarget")}));
+            operation["description"] = json!("Local-person-only, value-free pending revision descriptors. Returns batch IDs and exact cookie permission origins, never bookmarks/history records or cookie values. Mint a device-bound single-use ticket for the paired extension; only the extension fetches authenticated native payloads. Agent cookies and read-only side-store destinations are already applied.");
+            operation["responses"]["200"]["headers"]["Cache-Control"] =
+                json!({"schema":{"type":"string"},"description":"Always no-store."});
+        }
+        if route.path == "/v1/import/delivery/{id}/ack" {
+            operation["description"] = json!("Acknowledge one migration revision only after the selected destination applied it. Targets acknowledge independently; retries are idempotent. Requires the same local-person authority as importing browser data.");
+        }
+        if route.path == "/v1/import/delivery/{id}/ticket" {
+            operation["description"] = json!("Local-person-only authorization of a pending revision for one import-enabled extension device. Ticket expires after120 seconds and is consumed once by that device; not a cookie or data payload. A retry needs a new ticket and uses native-store idempotency.");
+        }
+        if route.path == "/v1/extension/import/{ticket}" {
+            operation["description"] = json!("Paired device-token fetch of its one-use native delivery ticket. HMAC-SHA256 authenticates ticket || batch_id || hex(SHA256(exact UTF-8 payload)) with the32-byte secret established only at locally authorized, pinned-extension-origin redemption. Payload never goes through a web page; owned cookie/payload buffers are zeroized where feasible, with JS/HTTP/WebSocket/library residuals. The extension verifies before native writes.");
+            operation["responses"]["200"]["headers"]["Cache-Control"] = json!({"schema":{"type":"string"},"description":"Always no-store; payload contains cookie values."});
         }
         if route.path == "/v1/devices/{id}" {
             operation["description"] = json!("Revoke a device token. The next request with it gets 401, its open SSE streams end, and its push subscriptions are deleted.");
@@ -1345,7 +2334,55 @@ pub fn openapi() -> Value {
             operation["description"] = json!("Forwarded SMS. 403 sender_not_allowed unless the sender is in otp.senders. A code extracted by an otp.sites pattern fills pending secret_input tickets of that exact origin, or is kept in memory for otp.ttl_secs for a step that opens later. Codes are never returned, logged or persisted.");
         }
         if route.path == "/v1/settings/config" {
-            operation["description"] = json!("The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy).");
+            operation["description"] = json!("The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof that makes a loopback TCP caller local; paired devices elsewhere omit it.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
+        }
+        if route.path == "/v1/settings/models" {
+            operation["description"] = if route.method == HttpMethod::Get {
+                json!("Local model readiness grouped by provider, from configured ids, source accounts and curated chat/tool-capable models. Credential values, email and upstream account identities are never included. Metadata is cached for at most five seconds; key/source/Vault lifecycle writes invalidate it. Readiness is not an upstream entitlement guarantee.")
+            } else {
+                json!("Set the default and ordered fallback ids without raw TOML editing. Requires admin; every id must be available in the current catalog (400 model_unavailable), at most16 distinct fallbacks and no default duplicate (400 invalid_models). Atomically persists selection without daemon restart. Ordinary sessions retain stored models; Team homes use their Agent override or the current default and reopen on the next idle/real turn when effective selection changes. Running requests finish their captured model. Response effective:new_sessions_and_home_next_turn.")
+            };
+        }
+        if route.path == "/v1/settings/keys" {
+            operation["description"] = json!("Administrator-only labelled account metadata: provider, key_id, label, last_four, created_at, enabled and reserve_percent. No API path returns key material; read-scoped devices receive403.");
+        }
+        if route.path == "/v1/settings/keys/{provider}"
+            || route.path == "/v1/settings/keys/{provider}/{key_id}"
+        {
+            parameters.push(json!({"name":"provider","in":"path","required":true,
+                "schema":{"type":"string","enum":["anthropic","openai","google"]}}));
+            if route.path.contains("{key_id}") {
+                parameters.push(
+                    json!({"name":"key_id","in":"path","required":true,"schema":{"type":"string"}}),
+                );
+            }
+            operation["description"] = json!("Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409.");
+            operation["responses"]["403"] = json!({"description":"Missing admin scope or person-device authority",
+                "content":{"application/json":{"schema":reference("ApiError")}}});
+            operation["responses"]["409"] = json!({"description":"Vault unavailable, or an ordinary legacy item conflicts with the provider id",
+                "content":{"application/json":{"schema":reference("ApiError")}}});
+        }
+        if route.path.starts_with("/v1/settings/subscriptions") {
+            if route.path.contains("{source}") {
+                parameters.push(json!({"name":"source","in":"path","required":true,
+                    "schema":{"type":"string","enum":["claude-code","codex-cli"]}}));
+            }
+            if route.path.contains("{account_id}") {
+                parameters.push(json!({"name":"account_id","in":"path","required":true,"schema":{"type":"string"}}));
+            }
+            operation["description"] = json!("Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.");
+        }
+        if route.path == "/v1/settings/pools/{provider}" {
+            parameters.push(
+                json!({"name":"provider","in":"path","required":true,"schema":{"type":"string"}}),
+            );
+            operation["description"] = json!("Replace the explicit ordered provider trust boundary. Requires admin plus person_device or local socket. Known compatible account refs only; no duplicates, at most64; empty disables routing. Unlisted sources never become automatic fallbacks.");
+        }
+        if route.path == "/v1/sessions/{id}/account" {
+            operation["description"] = json!("Set/clear a preferred sticky account for the next request. Requires steer and membership in the existing effective global/Agent pool; preference never bypasses disablement, quota blocks or Agent restrictions. Invalid account400 account_not_in_pool.");
         }
         if route.path.contains("{path}") {
             parameters.push(json!({"name": "path", "in": "path", "required": true,
@@ -1372,7 +2409,10 @@ pub fn openapi() -> Value {
             operation["x-capability-also-granted-by"] = json!([CapabilityScope::Steer]);
         }
         if route.path == "/v1/policy" && route.method == HttpMethod::Put {
-            operation["description"] = json!("Replace the live policy. Invalid globs or a sensitive allow rule return 400 invalid_policy and change nothing. Applies to the next tool call of every session and is persisted in <data_dir>/policy.json, which overrides [policy] in config.toml.");
+            operation["description"] = json!("Replace the live policy. Invalid globs or a sensitive allow rule return 400 invalid_policy and change nothing; POST /v1/policy/validate reports which entry is wrong. Requires local access (403 local_access_required): the policy decides what agents may do, so it is edited from the computer itself. Applies to the next tool call of every session and is persisted in <data_dir>/policy.json, which overrides [policy] in config.toml.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
         }
         if route.path == "/v1/policy/test" {
             operation["description"] = json!(
@@ -1393,6 +2433,9 @@ pub fn openapi() -> Value {
         }
         if route.path == "/v1/memory" && route.method == HttpMethod::Get {
             operation["description"] = json!("Hybrid search: FTS5 bm25 and local-embedding cosine ranks fused by reciprocal rank (k=60); lexical-only without a local model. An empty q lists recent memories.");
+            parameters.push(json!({"name":"owner","in":"query","required":false,
+                "description":"Filter by an exact agent id, or shared for notes without an owner; omitted includes all owners.",
+                "schema":{"type":"string"}}));
             parameters.push(json!({"name": "q", "in": "query", "required": false,
                 "description": "Search text; omit to list the most recently updated memories.",
                 "schema": {"type": "string"}}));
@@ -1431,10 +2474,16 @@ pub fn openapi() -> Value {
             operation["description"] = json!("Drop the decrypted vault from daemon memory; vault tools stop working until it is unlocked again. Audited (`lock`) after locking, attributed to the caller; 500 vault_locked_audit_incomplete means it is locked but unrecorded. Output masking of values seen while unlocked stays in place until the daemon restarts.");
         }
         if route.path == "/v1/sync/setup" {
-            operation["description"] = json!("Create a sync account for this device: derive the key from sync.passphrase_cmd (kept in memory), create the account collection on the WebDAV share or directory and return the pairing code for the second device. 409 sync_not_configured, sync_already_set_up, sync_passphrase_unavailable, sync_password_unavailable; 502 sync_backend_unavailable, sync_unauthorized.");
+            operation["description"] = json!("Create a sync account for this device: derive the key from the passphrase in the body (typed in the app, memory only, needs local access) or from sync.passphrase_cmd, create the account collection on the WebDAV share or directory and return the pairing code for the second device. The body may be empty. 409 sync_not_configured, sync_already_set_up, sync_passphrase_unavailable, sync_password_unavailable; 403 local_access_required when a secret is sent without local access; 502 sync_backend_unavailable, sync_unauthorized.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP when the body carries a passphrase or WebDAV password.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
         }
         if route.path == "/v1/sync/pair" {
-            operation["description"] = json!("Join the account of a pairing code with the same passphrase. 400 invalid_pairing_code, sync_wrong_passphrase; 409 as setup; 502 sync_backend_unavailable, sync_unauthorized.");
+            operation["description"] = json!("Join the account of a pairing code with the same passphrase, typed in the body (needs local access) or read from sync.passphrase_cmd. 400 invalid_pairing_code, sync_wrong_passphrase; 403 local_access_required when a secret is sent without local access; 409 as setup; 502 sync_backend_unavailable, sync_unauthorized.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP when the body carries a passphrase or WebDAV password.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
         }
         if route.path == "/v1/sync/run" {
             operation["description"] = json!("Sync now: seal local changes to the live policy, pinned tabs, vault items and tagged memories, pull and merge remote records (docs/specs/sync.md conflict rules), push winners with conditional writes. Tampered records are counted in `rejected` and never applied.");
@@ -1452,6 +2501,28 @@ pub fn openapi() -> Value {
             parameters.push(json!({"name": "limit", "in": "query", "required": false,
                 "description": "Newest N matches; defaults to 200, capped at 1000.",
                 "schema": {"type": "integer", "minimum": 1}}));
+        }
+        if route.path.starts_with("/v1/connections") {
+            operation["description"] = json!("Admin-only sign-in metadata. Cookie/header values and identity HMACs are never returned. Missing rows return connection_not_found; grant/policy refusal returns connection_denied; unavailable browser returns connection_browser_unavailable. Same-site URL validation returns connection_cross_site.");
+        }
+        if route.path == "/v1/connections" {
+            parameters.push(
+                json!({"name":"agent","in":"query","required":false,"schema":{"type":"string"},
+                "description":"Exclude rows explicitly denied to this agent."}),
+            );
+            parameters.push(json!({"name":"status","in":"query","required":false,"schema":reference("ConnectionStatus")}));
+        }
+        if route.path == "/v1/connections/audit" {
+            for name in ["connection", "agent"] {
+                parameters.push(
+                    json!({"name":name,"in":"query","required":false,"schema":{"type":"string"}}),
+                );
+            }
+            parameters.push(json!({"name":"action","in":"query","required":false,"schema":reference("ConnectionAuditAction")}));
+            parameters.push(json!({"name":"limit","in":"query","required":false,"schema":{"type":"integer","minimum":1,"maximum":1000,"default":100}}));
+        }
+        if route.path == "/v1/connections/{id}/relogin" {
+            operation["description"] = json!("Start the existing login flow in the supplied shared session, or the chief agent's home session. Silent Vault completion returns signed_in. OTP, device approval and login continuations return needs_you with the matching existing ticket; other actionable states use a Finish signing in takeover ticket.");
         }
         if route.path.starts_with("/v1/skills/{name}") {
             parameters.push(json!({"name": "name", "in": "path", "required": true,

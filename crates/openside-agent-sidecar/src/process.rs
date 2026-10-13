@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::SocketAddr as UnixSocketAddr;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -230,19 +232,47 @@ fn launch_error(message: &str) -> RuntimeError {
     RuntimeError::Unavailable(message.into())
 }
 
+fn private_socket_directory(runtime_dir: &Path) -> Result<TempDir, RuntimeError> {
+    // Reserve the randomized suffix and filename before choosing a parent; Darwin has a
+    // shorter sun_path than Linux, and the configured runtime directory can be arbitrarily deep.
+    let candidate = runtime_dir.join("sidecar-000000/rpc.sock");
+    let parent = if UnixSocketAddr::from_pathname(&candidate).is_ok() {
+        runtime_dir
+    } else {
+        Path::new("/tmp")
+    };
+    fs::create_dir_all(parent).map_err(|_| launch_error("could not create runtime directory"))?;
+    let directory = tempfile::Builder::new()
+        .prefix("sidecar-")
+        .rand_bytes(6)
+        .tempdir_in(parent)
+        .map_err(|_| launch_error("could not create private socket directory"))?;
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+        .map_err(|_| launch_error("could not secure private socket directory"))?;
+    Ok(directory)
+}
+
+#[allow(unsafe_code)]
+fn protect_child(command: &mut Command) {
+    // The closure runs after fork: only async-signal-safe syscalls, no allocation or locks.
+    unsafe {
+        command.pre_exec(|| {
+            nix::sys::resource::setrlimit(nix::sys::resource::Resource::RLIMIT_CORE, 0, 0)
+                .map_err(|error| std::io::Error::from_raw_os_error(error as i32))?;
+            #[cfg(target_os = "linux")]
+            nix::sys::prctl::set_dumpable(false)
+                .map_err(|error| std::io::Error::from_raw_os_error(error as i32))?;
+            Ok(())
+        });
+    }
+}
+
 fn spawn(config: &SidecarConfig) -> Result<(UnixListener, Process, String), RuntimeError> {
     let (program, args) = config
         .argv
         .split_first()
         .ok_or_else(|| launch_error("sidecar command is empty"))?;
-    fs::create_dir_all(&config.runtime_dir)
-        .map_err(|_| launch_error("could not create runtime directory"))?;
-    let directory = tempfile::Builder::new()
-        .prefix("sidecar-")
-        .tempdir_in(&config.runtime_dir)
-        .map_err(|_| launch_error("could not create private socket directory"))?;
-    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-        .map_err(|_| launch_error("could not secure private socket directory"))?;
+    let directory = private_socket_directory(&config.runtime_dir)?;
     let path = directory.path().join("rpc.sock");
     let listener =
         UnixListener::bind(&path).map_err(|_| launch_error("could not bind sidecar socket"))?;
@@ -259,6 +289,7 @@ fn spawn(config: &SidecarConfig) -> Result<(UnixListener, Process, String), Runt
     let mut command = Command::new(program);
     command
         .args(args)
+        .env_clear()
         .envs(config.env.iter().map(|(key, value)| (key, value)))
         .env("OPENSIDE_SIDECAR_SOCKET", &path)
         .env("OPENSIDE_SIDECAR_NONCE", &nonce)
@@ -267,6 +298,7 @@ fn spawn(config: &SidecarConfig) -> Result<(UnixListener, Process, String), Runt
         .stderr(Stdio::piped())
         .process_group(0)
         .kill_on_drop(true);
+    protect_child(&mut command);
     let mut child = command
         .spawn()
         .map_err(|_| launch_error("could not spawn sidecar command"))?;
@@ -318,3 +350,46 @@ async fn capture_stderr<R: AsyncRead + Unpin>(read: R, tail: StderrTail) {
 #[cfg(test)]
 #[path = "process_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod socket_directory_tests {
+    use super::*;
+
+    #[test]
+    fn short_runtime_paths_keep_the_configured_private_socket_layout() {
+        let root = tempfile::Builder::new()
+            .prefix("ossc-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let runtime = root.path().join("run");
+        let directory = private_socket_directory(&runtime).unwrap();
+        assert_eq!(directory.path().parent(), Some(runtime.as_path()));
+        assert_eq!(
+            fs::metadata(directory.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let listener =
+            std::os::unix::net::UnixListener::bind(directory.path().join("rpc.sock")).unwrap();
+        drop(listener);
+    }
+
+    #[test]
+    fn oversized_runtime_paths_use_a_short_private_socket_directory() {
+        let root = tempfile::Builder::new()
+            .prefix("ossc-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let runtime = root.path().join("long-".repeat(30));
+        assert!(UnixSocketAddr::from_pathname(runtime.join("sidecar-000000/rpc.sock")).is_err());
+        let directory = private_socket_directory(&runtime).unwrap();
+        assert_eq!(directory.path().parent(), Some(Path::new("/tmp")));
+        assert_eq!(
+            fs::metadata(directory.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let path = directory.path().join("rpc.sock");
+        assert!(UnixSocketAddr::from_pathname(&path).is_ok());
+        let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
+        drop(listener);
+    }
+}

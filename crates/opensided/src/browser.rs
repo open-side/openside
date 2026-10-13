@@ -9,6 +9,10 @@ use serde_json::json;
 /// URL credentials, query parameters and fragments are never included.
 pub fn browser_event(event: BrowserEvent) -> EventKind {
     match event {
+        BrowserEvent::OriginCommitted { .. } => EventKind::runtime_error(
+            "browser_internal_event",
+            "Internal browser observation cannot be published",
+        ),
         BrowserEvent::TabOpened { tab } | BrowserEvent::PopupOpened { tab, .. } => {
             EventKind::TabOpened {
                 tab_id: tab.id,
@@ -26,6 +30,7 @@ pub fn browser_event(event: BrowserEvent) -> EventKind {
             update: json!({"browser_event":"download.started","url":public_url(&url),"tab_id":tab_id}),
         },
         BrowserEvent::DownloadFinished { guid, status } => EventKind::ToolEnded {
+            card: None,
             tool_call_id: guid,
             result: json!({"browser_event":"download.finished"}),
             is_error: status == openside_browser::DownloadStatus::Canceled,
@@ -38,10 +43,9 @@ pub fn browser_event(event: BrowserEvent) -> EventKind {
             tool_call_id: tab_id,
             update: json!({"browser_event":"dialog.opened","dialog_kind":kind}),
         },
-        BrowserEvent::TooManyTabs { count } => EventKind::RuntimeError {
-            code: "browser_tab_limit".into(),
-            message: format!("{count} live browser tabs"),
-        },
+        BrowserEvent::TooManyTabs { count } => {
+            EventKind::runtime_error("browser_tab_limit", format!("{count} live browser tabs"))
+        }
     }
 }
 
@@ -147,7 +151,7 @@ pub(crate) fn steer_text(event: &BrowserEvent) -> Option<String> {
                 "cancelled"
             }
         ),
-        BrowserEvent::TabOpened { .. } | BrowserEvent::TooManyTabs { .. } => return None,
+        BrowserEvent::TabOpened { .. } | BrowserEvent::TooManyTabs { .. } | BrowserEvent::OriginCommitted { .. } => return None,
     })
 }
 

@@ -55,6 +55,7 @@ fn result<'a>(events: &'a [Event], call: &str) -> &'a Value {
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,

@@ -9,7 +9,7 @@ use openside_proto::{
     CreateRoutineRequest, Routine, RoutineAction, RoutineDraft, RoutineList, RoutineSuggestionList,
     RunList, RunRecord, UpdateRoutineRequest,
 };
-use openside_sched::{UserMessage, DEFAULT_RUN_LIMIT, ROUTINE_MESSAGE_PREFIX};
+use openside_sched::{UserMessage, DEFAULT_RUN_LIMIT};
 use serde::Deserialize;
 
 use super::{ApiFailure, Sched};
@@ -112,10 +112,8 @@ pub(crate) async fn suggestions(State(s): State<Shared>) -> Result<Json<RoutineS
     let messages: Vec<UserMessage> = queued
         .into_iter()
         .filter(|message| {
-            !message
-                .message_id
-                .as_str()
-                .starts_with(ROUTINE_MESSAGE_PREFIX)
+            message.author_kind == openside_proto::MessageAuthorKind::Person
+                && message.from_agent.is_none()
         })
         .map(|message| UserMessage {
             session_id: message.session_id,

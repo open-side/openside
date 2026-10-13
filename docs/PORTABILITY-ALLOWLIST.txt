@@ -1,17 +1,21 @@
 # Portability gate allowlist (tools/check-portability.sh). Format: <path>:<line|*>  # reason
 # Entries are narrowly scoped to optional defaults, synthetic tests, or recorded evidence.
-agent/src/openside_agent/providers/broker.py:31  # optional omp auth broker default URL (used only when the broker source is configured/token present)
+crates/opensided/src/model_broker.rs:119  # optional omp auth broker default token file (used only when no token is configured)
+crates/opensided/src/model_broker.rs:130  # optional omp auth broker default URL
+crates/opensided/src/model_broker.rs:662  # synthetic home default-token test
+crates/opensided/src/model_broker.rs:688  # asserts the optional default URL
+docs/CONFIGURATION.md:121  # documents the optional broker defaults
 tools/check-portability.sh:*  # defines the gate regex
-crates/opensided/src/onboarding.rs:233  # synthetic home for tilde-path tests, not a runtime default
-crates/opensided/src/onboarding.rs:235  # synthetic skills path in the same test
-crates/opensided/src/onboarding.rs:238  # exact-home abbreviation assertion
-crates/opensided/src/onboarding.rs:240  # distinct synthetic home tests component boundaries
-crates/opensided/src/onboarding.rs:241  # expected distinct-home path, not a runtime default
-crates/openside-e2e/tests/tasks.rs:496  # optional compositor skip diagnostic, not a platform requirement
-crates/openside-e2e/tests/login_scenarios.rs:149  # explicitly opted-in live broker test credential location
-crates/openside-e2e/tests/login_scenarios.rs:155  # same opted-in broker default, not the offline gate
+crates/opensided/src/onboarding.rs:401  # synthetic home for tilde-path tests, not a runtime default
+crates/opensided/src/onboarding.rs:403  # synthetic skills path in the same test
+crates/opensided/src/onboarding.rs:406  # exact-home abbreviation assertion
+crates/opensided/src/onboarding.rs:408  # distinct synthetic home tests component boundaries
+crates/opensided/src/onboarding.rs:409  # expected distinct-home path, not a runtime default
+crates/openside-e2e/tests/tasks.rs:501  # optional compositor skip diagnostic, not a platform requirement
+crates/openside-e2e/tests/login_scenarios.rs:152  # explicitly opted-in live broker test credential location
+crates/openside-e2e/tests/login_scenarios.rs:158  # same opted-in broker default, not the offline gate
 docs/specs/e2e-scenarios.md:150  # documents that optional live broker fixture
-docs/specs/acceptance.csv:109  # records the compositor test's skip and isolated evidence
+docs/specs/acceptance.csv:110  # records the compositor test's skip and isolated evidence
 docs/specs/responsive-results.json:506  # preserves the exact historical evidence command
 docs/specs/responsive-results.json:522  # records compositor availability for that evidence run
-docs/01-requirements.md:157  # records isolated compositor verification, not a runtime dependency
+docs/01-requirements.md:160  # records isolated compositor verification, not a runtime dependency

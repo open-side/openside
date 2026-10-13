@@ -26,13 +26,19 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod accounts;
+mod agents;
 mod api;
 mod artifacts;
 mod browser_tabs;
+mod cards;
+mod channels;
+mod connections;
 mod events;
 mod memory;
+mod models;
 mod onboarding;
 mod openapi;
+mod operator;
 mod policy;
 mod preview;
 mod remote;
@@ -47,16 +53,22 @@ mod tool_api;
 mod vault;
 
 pub use accounts::*;
+pub use agents::*;
 pub use api::*;
 pub use artifacts::*;
 pub use browser_tabs::*;
+pub use cards::*;
+pub use channels::*;
+pub use connections::*;
 pub use events::*;
 pub use memory::*;
+pub use models::*;
 pub use onboarding::*;
 pub use openapi::{openapi, schemas, HttpMethod, Route, ROUTES};
 pub use openside_core::{
     ContentKind, DropReason, MessageId, MessageStatus, QueueMode, SessionId, TicketId,
 };
+pub use operator::*;
 pub use policy::*;
 pub use preview::*;
 pub use remote::*;

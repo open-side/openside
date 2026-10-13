@@ -1,15 +1,15 @@
 """Outbound destination allow-list for the sidecar (D-5, G-4, PP-25).
 
-The sidecar may reach loopback, the endpoints of the providers it actually built
-(and the credential broker), and the user's ``network.allow`` entries, which the
-daemon forwards as ``open.config.agent.network_allow``. Entry syntax and matching
+The sidecar may reach loopback, the endpoints of the providers it actually built,
+and the user's ``network.allow`` entries, which the daemon forwards as
+``open.config.agent.network_allow``. Entry syntax and matching
 mirror the Rust ``openside_policy::Egress``: ``host``, ``*.domain`` (subdomains
 only), ``host:port`` or ``scheme://host[:port]``; an entry without a port matches
 every port.
 
-Enforcement sits in the HTTP transports of both httpx generations used here
-(``httpx`` for the broker, ``httpx2`` inside the provider SDKs), so every request any
-client sends, including each redirect hop, is checked before a connection opens.
+Enforcement sits in the HTTP transports of both httpx generations, so every
+request any client sends, including each redirect hop, is checked before a
+connection opens.
 Once :func:`install` runs, the check stays active for the life of the process.
 """
 
@@ -24,11 +24,6 @@ import httpx
 import httpx2
 
 DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
-
-# Token refresh endpoints the provider SDK calls besides its model base URL.
-AUXILIARY_ENDPOINTS: dict[str, tuple[str, ...]] = {
-    "openai-codex": ("https://auth.openai.com",),
-}
 
 
 class EgressRefused(Exception):

@@ -28,7 +28,7 @@ pub(crate) struct Applied {
 }
 
 /// CDP `Storage.setCookies` parameters for one cookie, or `None` when it already expired.
-pub(crate) fn cdp_cookie(cookie: &Cookie, now: i64) -> Option<Value> {
+pub fn cdp_cookie(cookie: &Cookie, now: i64) -> Option<Value> {
     let expires = match cookie.expires {
         Some(expires) if expires <= now => return None,
         Some(expires) => expires,
@@ -118,6 +118,10 @@ pub(crate) async fn apply(
         _ if profile_in_use(profile_dir) => ImportError::ProfileInUse(profile_name.to_owned()),
         other => browser_error(&other),
     })?;
+    // Cookie acknowledgements do not prove disk persistence; shutdown finishes this write.
+    let _write = browser
+        .profile_write()
+        .map_err(|error| browser_error(&error))?;
     let outcome = send(&browser.endpoint().ws_url, cookies).await;
     // Shut down even after a failure so no Chromium outlives the import.
     let shutdown = browser
@@ -195,6 +199,8 @@ mod tests {
             secure: false,
             http_only: true,
             same_site: Some(SameSite::None),
+            last_accessed_at_ms: None,
+            created_at_ms: None,
         }
     }
 

@@ -176,3 +176,15 @@ pub(crate) fn write_bookmarks(
         file.flush()
     })
 }
+
+pub(crate) fn write_document<T: serde::Serialize + ?Sized>(
+    dir: &Path,
+    target: &Path,
+    document: &T,
+) -> Result<()> {
+    persist(dir, target, |file| {
+        let mut out = BufWriter::new(file);
+        serde_json::to_writer(&mut out, document).map_err(std::io::Error::other)?;
+        out.flush()
+    })
+}

@@ -475,7 +475,7 @@ async fn remote_agent_and_browser(relay: bool) {
             assert_remote_response(&harness, &link, relay, "PUT", path, admin, body).await;
         assert_eq!(
             (status, denied["code"].as_str()),
-            (403, Some("local_socket_required")),
+            (403, Some("local_access_required")),
             "{path}: {denied}"
         );
     }

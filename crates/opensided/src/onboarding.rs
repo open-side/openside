@@ -1,7 +1,5 @@
-//! First-run guide (F-5): the persisted "seen it" flag and the external-agent endpoints the
-//! guide's skill step calls. Everything here works on fixed content and known locations:
-//! the skill text is bundled, and the directory comes from a preset or `[skills.agents]`,
-//! never from the request. See `docs/specs/onboarding.md`.
+//! First-run guide and external-agent skills folders. Folder edits require local authority;
+//! custom destinations are validated again immediately before installing bundled skills.
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +12,7 @@ use chrono::{DateTime, Utc};
 use openside_config::data_layout::DataPath;
 use openside_proto::{
     ExternalAgent, ExternalAgentList, InstallAgentSkillRequest, InstalledAgentSkill,
-    OnboardingState, OnboardingStatus, UpdateOnboardingRequest,
+    OnboardingState, OnboardingStatus, SetExternalAgentRequest, UpdateOnboardingRequest,
 };
 use openside_skills::{agent_skills_dir, bundled, install::write_skill, Error, BROWSER_SKILL};
 use serde::{Deserialize, Serialize};
@@ -92,9 +90,7 @@ pub(crate) async fn put(
 }
 
 fn skills_dir(s: &Shared, agent: &str) -> Option<PathBuf> {
-    agent_skills_dir(agent, &s.config.loaded.config.skills.agents, &|key| {
-        std::env::var_os(key)
-    })
+    agent_skills_dir(agent, &s.ops.agents.read(), &|key| std::env::var_os(key))
 }
 
 /// Shown to people, so a path under the daemon user's home reads `~/.claude/skills`.
@@ -140,7 +136,7 @@ fn known_agents(s: &Shared) -> Vec<(String, String)> {
         .iter()
         .map(|(id, label)| ((*id).to_owned(), (*label).to_owned()))
         .collect();
-    for id in s.config.loaded.config.skills.agents.keys() {
+    for id in s.ops.agents.read().keys() {
         if !agents.iter().any(|(known, _)| known == id) {
             agents.push((id.clone(), id.clone()));
         }
@@ -158,12 +154,14 @@ fn describe(s: &Shared, id: String, label: String) -> ExternalAgent {
     let skill_installed = dir
         .as_deref()
         .is_some_and(|dir| dir.join(BROWSER_SKILL).join("SKILL.md").is_file());
+    let custom = !PRESETS.iter().any(|(preset, _)| *preset == id);
     ExternalAgent {
         id,
         label,
         detected,
         skill_installed,
         skills_dir: dir.as_deref().map(home_relative),
+        custom,
     }
 }
 
@@ -190,6 +188,11 @@ pub(crate) async fn install_skill(
     }
     let Some(dir) = skills_dir(&s, &id) else {
         return Err(HttpError(StatusCode::BAD_REQUEST, "skills_dir_unknown"));
+    };
+    let dir = if PRESETS.iter().any(|(preset, _)| *preset == id) {
+        dir
+    } else {
+        validate_path(&dir.to_string_lossy(), &roots())?
     };
     let files = bundled(BROWSER_SKILL).ok_or_else(HttpError::internal)?;
     let force = request.force;
@@ -224,8 +227,173 @@ pub(crate) async fn install_skill(
     ))
 }
 
+fn roots() -> Vec<PathBuf> {
+    ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn validate_id(id: &str) -> Result<(), HttpError> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        || PRESETS.iter().any(|(preset, _)| *preset == id)
+    {
+        return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_agent"));
+    }
+    Ok(())
+}
+
+fn canonical_destination(path: &Path) -> Option<PathBuf> {
+    let mut existing = path;
+    let mut suffix = Vec::new();
+    while !existing.exists() {
+        // A dangling link is not a missing directory that may safely be created.
+        if std::fs::symlink_metadata(existing).is_ok() {
+            return None;
+        }
+        suffix.push(existing.file_name()?);
+        existing = existing.parent()?;
+    }
+    let mut canonical = existing.canonicalize().ok()?;
+    if !canonical.is_dir() {
+        return None;
+    }
+    for part in suffix.into_iter().rev() {
+        canonical.push(part);
+    }
+    Some(canonical)
+}
+
+fn validate_path(raw: &str, roots: &[PathBuf]) -> Result<PathBuf, HttpError> {
+    let invalid = || HttpError(StatusCode::BAD_REQUEST, "invalid_skills_dir");
+    if raw.is_empty()
+        || raw.chars().any(char::is_control)
+        || Path::new(raw)
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    {
+        return Err(invalid());
+    }
+    let path = if let Some(rest) = raw.strip_prefix("~/") {
+        PathBuf::from(std::env::var_os("HOME").ok_or_else(invalid)?).join(rest)
+    } else {
+        PathBuf::from(raw)
+    };
+    if !path.is_absolute() {
+        return Err(invalid());
+    }
+    let canonical = canonical_destination(&path).ok_or_else(invalid)?;
+    if !roots
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .any(|root| canonical.starts_with(root))
+    {
+        return Err(invalid());
+    }
+    Ok(canonical)
+}
+
+pub(crate) async fn set_agent(
+    State(s): State<Shared>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
+    UrlPath(id): UrlPath<String>,
+    Json(request): Json<SetExternalAgentRequest>,
+) -> Result<Json<ExternalAgent>, HttpError> {
+    local.require()?;
+    validate_id(&id)?;
+    let dir = validate_path(&request.skills_dir, &roots())?;
+    tokio::spawn(async move {
+        let _writer = crate::settings_api::WRITE.lock().await;
+        let mut config = crate::settings_api::stored(&s).await?;
+        config.skills.agents.insert(id.clone(), dir.clone());
+        crate::settings_api::persist(
+            &s,
+            serde_json::to_value(config).map_err(|_| HttpError::internal())?,
+        )
+        .await?;
+        s.ops.agents.write().insert(id.clone(), dir);
+        crate::pairing::audit(&s, "external_agent", "folder_saved", json!({"agent": id})).await;
+        Ok(Json(describe(&s, id.clone(), id)))
+    })
+    .await
+    .map_err(|_| HttpError::internal())?
+}
+
+pub(crate) async fn delete_agent(
+    State(s): State<Shared>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<ExternalAgentList>, HttpError> {
+    local.require()?;
+    validate_id(&id)?;
+    tokio::spawn(async move {
+        let _writer = crate::settings_api::WRITE.lock().await;
+        let mut config = crate::settings_api::stored(&s).await?;
+        if config.skills.agents.remove(&id).is_none() {
+            return Err(HttpError(StatusCode::NOT_FOUND, "unknown_agent"));
+        }
+        crate::settings_api::persist(
+            &s,
+            serde_json::to_value(config).map_err(|_| HttpError::internal())?,
+        )
+        .await?;
+        s.ops.agents.write().remove(&id);
+        crate::pairing::audit(&s, "external_agent", "folder_removed", json!({"agent": id})).await;
+        agents(State(s)).await
+    })
+    .await
+    .map_err(|_| HttpError::internal())?
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_folder_paths_reject_traversal_and_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let allowed = vec![root.path().to_path_buf()];
+        assert_eq!(
+            validate_path(&root.path().join("new/skills").to_string_lossy(), &allowed)
+                .unwrap_or_else(|_| panic!("valid folder rejected")),
+            root.path().join("new/skills")
+        );
+        for path in [
+            "relative".to_owned(),
+            root.path().join("../escape").display().to_string(),
+            outside.path().display().to_string(),
+        ] {
+            assert!(validate_path(&path, &allowed).is_err(), "{path}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
+            assert!(validate_path(
+                &root.path().join("escape/skills").to_string_lossy(),
+                &allowed
+            )
+            .is_err());
+            std::os::unix::fs::symlink(
+                outside.path().join("missing"),
+                root.path().join("dangling"),
+            )
+            .unwrap();
+            assert!(validate_path(
+                &root.path().join("dangling/skills").to_string_lossy(),
+                &allowed
+            )
+            .is_err());
+        }
+        for id in ["", "../agent", "a/b", "Agent", "claude", "codex", "omp"] {
+            assert!(validate_id(id).is_err());
+        }
+        assert!(validate_id("my-agent2").is_ok());
+    }
+
     use super::*;
 
     #[test]

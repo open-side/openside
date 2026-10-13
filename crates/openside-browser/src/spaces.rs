@@ -392,6 +392,7 @@ mod tests {
                 navigation_policy: std::sync::RwLock::new(None),
                 screencasts: Default::default(),
                 page: Default::default(),
+                profile_writes: Default::default(),
             }),
             process: Process {
                 child: parking_lot::Mutex::new(None),
@@ -400,7 +401,7 @@ mod tests {
                 temporary_profile: None,
                 stderr: None,
                 detached: true,
-                running: false,
+                running: false.into(),
             },
             ws_url: url,
             event_task: tokio::spawn(std::future::pending()),
@@ -418,6 +419,7 @@ mod tests {
             backend_node_id: 1,
             document_id: "old-document".into(),
             origin: "http://localhost".into(),
+            frame: None,
         };
         for replaced in [false, true] {
             if replaced {

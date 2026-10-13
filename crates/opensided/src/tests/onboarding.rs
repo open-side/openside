@@ -304,72 +304,123 @@ async fn external_agents_are_detected_and_get_the_bundled_browser_skill() {
 }
 
 #[tokio::test]
-async fn import_endpoints_need_admin_and_only_take_discovered_profile_ids() {
+async fn import_endpoints_need_admin_and_local_person_authority() {
     let root = tempfile::tempdir().unwrap();
     let daemon = daemon_with(root.path(), |_| {}).await;
     let unix = api::router(daemon.shared.clone(), true);
     let tcp = api::router(daemon.shared.clone(), false);
     let reader = token(&daemon, vec![CapabilityScope::Read]).await;
     let admin = token(&daemon, vec![CapabilityScope::Admin]).await;
-
-    let (status, _) = call(
-        &tcp,
-        "GET",
-        "/v1/import/profiles",
-        Value::Null,
-        Some(&reader),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, _) = call(
-        &tcp,
-        "POST",
-        "/v1/import",
-        json!({"profile": "chrome:Default", "dry_run": true}),
-        Some(&reader),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-
-    let (status, list) = call(
-        &tcp,
-        "GET",
-        "/v1/import/profiles",
-        Value::Null,
-        Some(&admin),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{list}");
-    assert!(list["profiles"].is_array());
-    // Whether a Chromium is installed is a property of the machine running the test.
-    assert!(list["cookies_writable"].is_boolean(), "{list}");
-
-    // A path, a traversal or an id nobody discovered is refused before anything is read.
-    for profile in ["/etc", "chrome:../../etc", "chrome:Nope", ""] {
-        let (status, body) = call(
-            &unix,
+    for (method, path, body) in [
+        ("GET", "/v1/import/profiles", Value::Null),
+        ("POST", "/v1/import", json!({})),
+        ("POST", "/v1/import/preview", json!({})),
+        (
             "POST",
-            "/v1/import",
-            json!({"profile": profile, "dry_run": true}),
-            None,
-        )
-        .await;
+            "/v1/import/passwords",
+            json!({"csv":"url,username,password\n"}),
+        ),
+        (
+            "GET",
+            "/v1/import/jobs/00000000000000000000000000000000",
+            Value::Null,
+        ),
+        (
+            "GET",
+            "/v1/import/jobs/00000000000000000000000000000000/events",
+            Value::Null,
+        ),
+        ("GET", "/v1/import/delivery", Value::Null),
+        (
+            "POST",
+            "/v1/import/delivery/00000000000000000000000000000000/ack",
+            json!({"target":"user"}),
+        ),
+    ] {
+        let (status, _) = call(&tcp, method, path, body.clone(), Some(&reader)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+        let (status, body) = call(&tcp, method, path, body, Some(&admin)).await;
         assert_eq!(
             (status, body["code"].as_str()),
-            (StatusCode::BAD_REQUEST, Some("unknown_profile")),
-            "{profile}"
+            (StatusCode::FORBIDDEN, Some("local_access_required")),
+            "{path}"
         );
     }
-    let (status, _) = call(
+    // These bodies are rejected before discovery, so this test never reads real browsers.
+    for body in [
+        json!({"profile":"/etc","dry_run":true}),
+        json!({"profiles":["chrome:Default"],"keyring_password_cmd":"id"}),
+    ] {
+        let (status, _) = call(&unix, "POST", "/v1/import", body, None).await;
+        assert!(status.is_client_error());
+    }
+    let (status, _) = call(&unix, "GET", "/v1/import/jobs/not-a-job", Value::Null, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn password_csv_import_requires_vault_dedupes_and_never_returns_values() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with(root.path(), |config| {
+        config.vault.unlock = openside_config::VaultUnlockSetting::Passphrase;
+    })
+    .await;
+    let unix = api::router(daemon.shared.clone(), true);
+    let csv = "name,url,username,password\nExample,https://example.test:443/login,person,import-password-canary-729\nExample,https://example.test/other,person,duplicate-canary\n";
+    let (status, body) = call(
         &unix,
         "POST",
-        "/v1/import",
-        json!({"profile": "chrome:Default", "keyring_password_cmd": "id"}),
+        "/v1/import/passwords",
+        json!({"csv":csv}),
         None,
     )
     .await;
-    assert!(
-        status.is_client_error(),
-        "no command line may come from the network"
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::CONFLICT, Some("vault_setup_required"))
     );
+    let (status, _) = call(
+        &unix,
+        "POST",
+        "/v1/vault/setup",
+        json!({"passphrase":"import-test-passphrase-729"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for _ in 0..2 {
+        let (status, report) = call(
+            &unix,
+            "POST",
+            "/v1/import/passwords",
+            json!({"csv":csv}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{report}");
+        assert_eq!(report["read"], 2);
+        assert_eq!(report["imported"], 1);
+        assert_eq!(report["skipped"], 1);
+        assert!(!report.to_string().contains("import-password-canary"));
+    }
+    let (status, items) = call(&unix, "GET", "/v1/vault/items", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(items["items"].as_array().unwrap().len(), 1);
+    call(&unix, "POST", "/v1/vault/lock", Value::Null, None).await;
+    let (status, body) = call(
+        &unix,
+        "POST",
+        "/v1/import/passwords",
+        json!({"csv":csv}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::CONFLICT, Some("vault_locked"))
+    );
+    let bytes = std::fs::read(crate::tools::vault::Service::file(&daemon.shared)).unwrap();
+    assert!(!bytes
+        .windows(b"import-password-canary-729".len())
+        .any(|window| window == b"import-password-canary-729"));
 }

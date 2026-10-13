@@ -395,6 +395,7 @@ fn ticket_notification(ticket: &Ticket) -> PushNotification {
         TicketKind::Takeover => "Action needed",
         TicketKind::Login => "Sign-in needed",
         TicketKind::Choice => "Choice needed",
+        TicketKind::Hire => "Teammate proposal",
     };
     PushNotification {
         kind: "ticket".into(),

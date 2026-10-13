@@ -43,13 +43,17 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod audit;
+mod channel;
 mod origin;
 mod passkey;
 mod platform;
+mod provider;
 mod secret;
+mod subscription;
 mod sync;
 
 pub use audit::{read_audit, AuditAction, AuditContext, AuditQuery, AuditRecord};
+pub use channel::ChannelSecretInfo;
 pub use origin::AllowedOrigin;
 pub use passkey::{PasskeyCredential, PasskeyRelease, SignCount};
 #[cfg(any(target_os = "macos", windows))]
@@ -57,7 +61,11 @@ pub use platform::native::NativeKeyringLock;
 #[cfg(target_os = "linux")]
 pub use platform::secret_service::SecretServiceLock;
 pub use platform::{keyring_reachable, PassphraseLock, PlatformLock, WrappingKey};
+pub use provider::ProviderKeyInfo;
 pub use secret::{parse_base32_seed, Redactor, Secret, Totp, TotpAlgorithm, TotpParams, TotpSeed};
+pub use subscription::SubscriptionInfo;
+#[cfg(target_os = "macos")]
+pub use subscription::{delete_cli_keychain, read_cli_keychain, write_cli_keychain};
 pub use sync::PreparedImport;
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -227,6 +235,10 @@ pub struct Entry {
     /// Operation id of the [`Vault::register_totp`] call that created this item, so a host
     /// that lost the outcome of that call can tell its own save from any other at the origin.
     registration: Option<String>,
+    provider_key: Option<ProviderKeyInfo>,
+    channel_secret: Option<ChannelSecretInfo>,
+    subscription: Option<SubscriptionInfo>,
+    subscription_tokens: Vec<Secret>,
 }
 impl fmt::Debug for Entry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -290,6 +302,10 @@ impl Entry {
             policy,
             passkeys,
             registration: None,
+            provider_key: None,
+            channel_secret: None,
+            subscription: None,
+            subscription_tokens: Vec::new(),
         })
     }
 
@@ -304,6 +320,7 @@ impl Entry {
             .into_iter()
             .chain(self.totp.iter().map(|totp| &totp.seed))
             .chain(self.passkeys.iter().map(|passkey| &passkey.private_key))
+            .chain(self.subscription_tokens.iter())
     }
 }
 
@@ -633,15 +650,67 @@ impl<L: PlatformLock> Vault<L> {
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut entry = Entry::build(
-                item.site,
-                origins,
-                item.username.0,
-                item.password.0,
-                ReadEntry::totp(item.totp_seed, item.totp_params)?,
-                item.policy,
-                passkeys,
-            )?;
+            if [
+                item.provider_key.is_some(),
+                item.channel_secret.is_some(),
+                item.subscription.is_some(),
+            ]
+            .into_iter()
+            .filter(|present| *present)
+            .count()
+                > 1
+            {
+                return Err(Error::Format);
+            }
+            let mut entry = if let Some(info) = item.provider_key {
+                if !origins.is_empty() || !passkeys.is_empty() || item.totp_seed.is_some() {
+                    return Err(Error::Format);
+                }
+                let mut entry = Entry::provider_key(
+                    &info.provider,
+                    &info.key_id,
+                    &info.label,
+                    item.password.0,
+                    info.created_at_ms,
+                )?;
+                if info.reserve_percent > 99 {
+                    return Err(Error::Format);
+                }
+                let metadata = entry.provider_key.as_mut().ok_or(Error::Format)?;
+                metadata.enabled = info.enabled;
+                metadata.reserve_percent = info.reserve_percent;
+                entry
+            } else if let Some(info) = item.channel_secret {
+                if !origins.is_empty() || !passkeys.is_empty() || item.totp_seed.is_some() {
+                    return Err(Error::Format);
+                }
+                let signing = (!item.username.0 .0.is_empty()).then_some(item.username.0);
+                Entry::channel_secret(
+                    &info.kind,
+                    &info.account_id,
+                    item.password.0,
+                    signing,
+                    info.created_at_ms,
+                )?
+            } else if let Some(info) = item.subscription {
+                if !origins.is_empty() || !passkeys.is_empty() || item.totp_seed.is_some() {
+                    return Err(Error::Format);
+                }
+                Entry::subscription(info, item.password.0)?
+            } else {
+                Entry::build(
+                    item.site.clone(),
+                    origins,
+                    item.username.0,
+                    item.password.0,
+                    ReadEntry::totp(item.totp_seed, item.totp_params)?,
+                    item.policy,
+                    passkeys,
+                )?
+            };
+            if entry.site != item.site {
+                return Err(Error::Format);
+            }
             entry.registration = item.registration;
             entries.push(entry);
         }
@@ -707,7 +776,16 @@ impl<L: PlatformLock> Vault<L> {
             return Err(Error::Locked);
         };
         self.audit(ctx, AuditAction::Get, None, None, "allowed", None)?;
-        Ok(state.entries.iter().map(|entry| self.info(entry)).collect())
+        Ok(state
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.provider_key.is_none()
+                    && entry.channel_secret.is_none()
+                    && entry.subscription.is_none()
+            })
+            .map(|entry| self.info(entry))
+            .collect())
     }
 
     /// Change one item's policy override (`None` inherits the default). The decision is
@@ -1613,6 +1691,12 @@ struct WriteEntry<'a> {
     // without registered authenticators stay readable by builds that predate this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     registration: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_key: Option<&'a ProviderKeyInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel_secret: Option<&'a ChannelSecretInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subscription: Option<&'a SubscriptionInfo>,
 }
 #[derive(Serialize)]
 struct WritePasskey<'a> {
@@ -1648,6 +1732,9 @@ impl<'a> From<&'a Entry> for WriteEntry<'a> {
                 })
                 .collect(),
             registration: entry.registration.as_deref(),
+            provider_key: entry.provider_key.as_ref(),
+            channel_secret: entry.channel_secret.as_ref(),
+            subscription: entry.subscription.as_ref(),
         }
     }
 }
@@ -1669,6 +1756,12 @@ struct ReadEntry {
     passkeys: Vec<ReadPasskey>,
     #[serde(default)]
     registration: Option<String>,
+    #[serde(default)]
+    provider_key: Option<ProviderKeyInfo>,
+    #[serde(default)]
+    channel_secret: Option<ChannelSecretInfo>,
+    #[serde(default)]
+    subscription: Option<SubscriptionInfo>,
 }
 impl ReadEntry {
     fn totp(seed: Option<ReadSecret>, params: Option<TotpParams>) -> Result<Option<Totp>, Error> {

@@ -1,6 +1,6 @@
 //! QR pairing and device administration (F-3, WS-5).
 //!
-//! `POST /v1/pairing` (Unix socket only) issues a one-time code valid for
+//! `POST /v1/pairing` (local socket or verified local-person browser) issues a one-time code valid for
 //! [`PAIRING_TTL_SECS`] of monotonic time; the UTC `expires_at` is for display and audit
 //! only, so moving the wall clock never extends a code. Only the code's SHA-256 is kept, in
 //! memory: a daemon restart voids every open offer. `POST /v1/pairing/exchange` (no bearer
@@ -21,7 +21,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Extension, Json,
+};
 use chrono::{DateTime, Utc};
 use openside_proto::{
     CapabilityScope, CreatePairingRequest, DeviceList, ExchangePairingRequest, PairDeviceResponse,
@@ -46,6 +51,7 @@ struct Offer {
     scopes: Vec<CapabilityScope>,
     kind: openside_proto::DeviceKind,
     deadline: Instant,
+    import_delivery: bool,
 }
 
 /// In-memory remote-access state shared by pairing, push and OTP ingest.
@@ -60,6 +66,7 @@ pub(crate) struct Remote {
     wall: RwLock<Wall>,
     pub(crate) push: crate::push::PushState,
     pub(crate) otp: crate::otp_ingest::Codes,
+    pub(crate) access: crate::access_requests::Pending,
 }
 
 impl Default for Remote {
@@ -74,6 +81,7 @@ impl Default for Remote {
             wall: RwLock::new(Arc::new(Utc::now)),
             push: Default::default(),
             otp: Default::default(),
+            access: Default::default(),
         }
     }
 }
@@ -101,6 +109,10 @@ impl Remote {
     /// Set (before the token is deleted) by revocation; device ids are never reused.
     pub(crate) fn is_revoked(&self, device_id: &str) -> bool {
         self.revoked_ids.lock().contains(device_id)
+    }
+    pub(crate) fn mark_revoked(&self, device_id: &str) {
+        self.revoked_ids.lock().insert(device_id.to_owned());
+        let _ = self.revoked.send(device_id.to_owned());
     }
     pub(crate) fn device_gate(&self, device_id: &str) -> Arc<tokio::sync::RwLock<()>> {
         // Keep gate identity stable even after revoke: an admitted waiter may still own it.
@@ -163,12 +175,21 @@ fn well_formed(code: &str) -> bool {
 
 pub(crate) async fn create(
     State(s): State<Shared>,
+    Extension(access): Extension<crate::api::Access>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
     Json(request): Json<CreatePairingRequest>,
 ) -> Result<(StatusCode, Json<PairingOffer>), HttpError> {
+    local.require()?;
     let mut scopes = request.scopes;
     scopes.sort_by_key(|scope| *scope as u8);
     scopes.dedup();
+    if scopes.iter().any(|scope| !access.has(*scope)) {
+        return Err(HttpError(StatusCode::FORBIDDEN, "scope_ceiling_exceeded"));
+    }
     if !valid(&request.name, &scopes) {
+        return Err(HttpError::invalid_value());
+    }
+    if request.import_delivery && request.kind != openside_proto::DeviceKind::PersonDevice {
         return Err(HttpError::invalid_value());
     }
     let code = format!("{}{}", random_id(), random_id());
@@ -185,6 +206,7 @@ pub(crate) async fn create(
                 name: request.name.clone(),
                 scopes: scopes.clone(),
                 kind: request.kind,
+                import_delivery: request.import_delivery,
                 deadline: now + Duration::from_secs(PAIRING_TTL_SECS.unsigned_abs()),
             },
         );
@@ -235,8 +257,9 @@ async fn bad_attempt(s: &Shared, now: Instant, reason: &'static str) -> bool {
 
 pub(crate) async fn exchange(
     State(s): State<Shared>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<ExchangePairingRequest>,
-) -> Result<(StatusCode, Json<PairDeviceResponse>), HttpError> {
+) -> Result<Response, HttpError> {
     let now = s.remote.instant();
     let limited = || HttpError(StatusCode::TOO_MANY_REQUESTS, "too_many_attempts");
     if !well_formed(&request.code) {
@@ -258,10 +281,26 @@ pub(crate) async fn exchange(
         audit(&s, "device", "pairing_expired", json!({"name": offer.name})).await;
         return Err(HttpError(StatusCode::GONE, "pairing_expired"));
     }
+    if offer.import_delivery
+        && headers
+            .get(axum::http::header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            != Some("chrome-extension://jneddlbpgmlheplolfonafkbkbkjhcfj")
+    {
+        return Err(HttpError(
+            StatusCode::FORBIDDEN,
+            "extension_origin_required",
+        ));
+    }
     let (device_id, token) =
         s.db.pair_as(offer.name.clone(), offer.scopes.clone(), offer.kind)
             .await
             .map_err(|_| HttpError::internal())?;
+    let import_secret = if offer.import_delivery {
+        Some(crate::import_delivery::create_pairing_secret(&s, &device_id).await?)
+    } else {
+        None
+    };
     audit(
         &s,
         "device",
@@ -269,15 +308,34 @@ pub(crate) async fn exchange(
         json!({"device_id": device_id, "name": offer.name, "scopes": offer.scopes, "kind": offer.kind, "via": "pairing"}),
     )
     .await;
-    Ok((
-        StatusCode::CREATED,
-        Json(PairDeviceResponse {
-            device_id,
-            token,
-            scopes: offer.scopes,
-            kind: offer.kind,
-        }),
-    ))
+    let response = PairDeviceResponse {
+        device_id,
+        token,
+        scopes: offer.scopes,
+        kind: offer.kind,
+        import_secret,
+    };
+    let payload = serde_json::to_vec(&response).map_err(|_| HttpError::internal())?;
+    let mut response_headers = axum::http::HeaderMap::new();
+    response_headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    response_headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    if offer.import_delivery {
+        if let Some(proof) =
+            crate::import_delivery::pairing_continuity_proof(&s, &headers, &payload).await?
+        {
+            response_headers.insert(
+                "x-openside-import-proof",
+                proof.parse().map_err(|_| HttpError::internal())?,
+            );
+        }
+    }
+    Ok((StatusCode::CREATED, response_headers, payload).into_response())
 }
 
 pub(crate) async fn list(State(s): State<Shared>) -> Result<Json<DeviceList>, HttpError> {
@@ -291,8 +349,7 @@ pub(crate) async fn list(State(s): State<Shared>) -> Result<Json<DeviceList>, Ht
 pub(crate) async fn revoke(s: &Shared, device_id: &str) -> Result<(), HttpError> {
     let (s, device_id) = (s.clone(), device_id.to_owned());
     tokio::spawn(async move {
-        s.remote.revoked_ids.lock().insert(device_id.clone());
-        let _ = s.remote.revoked.send(device_id.clone());
+        s.remote.mark_revoked(&device_id);
         let gate = s.remote.device_gate(&device_id);
         let _commit = gate.write().await;
         let existed =
@@ -300,6 +357,7 @@ pub(crate) async fn revoke(s: &Shared, device_id: &str) -> Result<(), HttpError>
                 .await
                 .map_err(|_| HttpError::internal())?;
         crate::push::forget_device(&s, &device_id).await?;
+        crate::import_delivery::forget_device(&s, &device_id).await?;
         audit(
             &s,
             "device",

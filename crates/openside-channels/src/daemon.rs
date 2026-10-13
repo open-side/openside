@@ -27,6 +27,7 @@ pub struct DaemonClient {
     stream: reqwest::Client,
     base: Url,
     token: Secret,
+    agent_id: Option<String>,
 }
 
 impl DaemonClient {
@@ -79,7 +80,38 @@ impl DaemonClient {
             stream: build(false)?,
             base: url,
             token,
+            agent_id: None,
         })
+    }
+
+    /// Bind channel traffic to one effective owner; old sessions keep their immutable tags.
+    pub fn for_agent(mut self, agent_id: Option<String>) -> Self {
+        self.agent_id = Some(agent_id.unwrap_or_else(|| "chief".into()));
+        self
+    }
+
+    pub(crate) fn owns_session(&self, session: &Session) -> bool {
+        self.agent_id
+            .as_deref()
+            .map_or(true, |owner| session.agent_id.as_deref() == Some(owner))
+    }
+
+    pub(crate) fn has_owner(&self) -> bool {
+        self.agent_id.is_some()
+    }
+
+    pub(crate) async fn owner_name(&self) -> Result<String> {
+        let owner = self
+            .agent_id
+            .as_deref()
+            .ok_or_else(|| ChannelError::Config("channel owner is not configured".into()))?;
+        let agent: openside_proto::Agent = self
+            .call(Method::GET, &format!("/v1/agents/{owner}"), None)
+            .await?;
+        if agent.status != openside_proto::AgentStatus::Active {
+            return Err(ChannelError::Refused("agent_retired".into()));
+        }
+        Ok(agent.name)
     }
 
     async fn call<T: DeserializeOwned>(
@@ -120,8 +152,11 @@ impl DaemonClient {
 
     /// `POST /v1/sessions`.
     pub async fn create_session(&self, request: &CreateSessionRequest) -> Result<Session> {
-        self.call(Method::POST, "/v1/sessions", to_json(request))
-            .await
+        let mut body = to_json(request);
+        if let (Some(agent_id), Some(body)) = (&self.agent_id, body.as_mut()) {
+            body["agent_id"] = Value::String(agent_id.clone());
+        }
+        self.call(Method::POST, "/v1/sessions", body).await
     }
 
     /// `GET /v1/sessions/{id}`.
@@ -174,7 +209,7 @@ impl DaemonClient {
 
     /// `POST /v1/tickets/{id}/resolve`.
     pub async fn resolve(&self, id: &str, value: Value) -> Result<Ticket> {
-        let request = ResolveTicketRequest { value };
+        let request = ResolveTicketRequest { hire: None, value };
         self.call(
             Method::POST,
             &ticket_path(id, "/resolve"),

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Client } from "../api/client";
+import { isOutputArtifact } from "../api/artifacts";
 import type { Artifact, Visual } from "../api/types";
 import type { SessionView } from "../state/session";
 
@@ -36,7 +37,7 @@ export function useSessionFiles(client: Client, sessionId: string, view: Session
         if (cancelled) return;
         const bySeq: Record<number, Visual[]> = {};
         for (const visual of visuals.visuals) (bySeq[visual.seq] ??= []).push(visual);
-        setFiles({ artifacts: artifacts.artifacts, visuals: bySeq });
+        setFiles({ artifacts: artifacts.artifacts.filter(isOutputArtifact), visuals: bySeq });
       })
       .catch(() => undefined);
     return () => {

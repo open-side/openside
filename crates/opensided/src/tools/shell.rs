@@ -142,7 +142,11 @@ async fn execute(args: Value, ctx: &ToolEnv) -> ToolExec {
             }
         };
         for path in masks {
-            command.arg("--ro-bind").arg("/dev/null").arg(path);
+            if ctx.shared.credential_paths.sandbox_directory(&path) {
+                command.arg("--tmpfs").arg(path);
+            } else {
+                command.arg("--ro-bind").arg("/dev/null").arg(path);
+            }
         }
         command
             .arg("--chdir")

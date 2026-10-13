@@ -154,6 +154,18 @@ fn card(ticket: &Ticket, web_url: Option<&str>) -> (String, Vec<Button>) {
         )
     };
     match ticket.kind {
+        TicketKind::Info | TicketKind::SecretInput if ticket.form.is_some() => (
+            format!(
+                "Form requested\n{}\nFill this form privately in the openside web UI: open {}.",
+                ticket.summary,
+                web()
+            ),
+            Vec::new(),
+        ),
+        TicketKind::Hire => (
+            format!("Teammate proposal\n{}\nReview and approve this proposal in the openside app: open {}.", ticket.summary, web()),
+            Vec::new(),
+        ),
         // Saving a site's authenticator is decided on the person's own device, never by
         // whoever can press a button in a shared chat.
         TicketKind::Confirm if ticket.otp_register.is_some() => (
@@ -290,6 +302,14 @@ impl<M: Messenger> Core<M> {
 
     /// Handle one allowed user message.
     pub async fn handle_inbound(self: &Arc<Self>, inbound: Inbound) {
+        tokio::select! {
+            biased;
+            _ = self.shutdown.cancelled() => {}
+            _ = self.handle_inbound_active(inbound) => {}
+        }
+    }
+
+    async fn handle_inbound_active(self: &Arc<Self>, inbound: Inbound) {
         let lock = self.thread_lock(&inbound.thread);
         let _guard = lock.lock().await;
         let thread = &inbound.thread;
@@ -356,16 +376,30 @@ impl<M: Messenger> Core<M> {
         })
     }
 
-    /// Session of the thread, creating and mapping a new one when absent.
+    /// Reuse a thread only while its immutable session owner still matches this identity.
     async fn ensure_session(self: &Arc<Self>, thread: &ThreadKey) -> Result<String, ChannelError> {
         let state = self.store.get(thread);
+        let mut changed_owner = None;
         if let Some(id) = state.as_ref().and_then(|state| state.session_id.clone()) {
-            return Ok(id);
+            if !self.daemon.has_owner() {
+                return Ok(id);
+            }
+            match self.daemon.session(&id).await {
+                Ok(session) if self.daemon.owns_session(&session) => return Ok(id),
+                Ok(_) => {
+                    self.stop_watcher(thread);
+                    changed_owner = Some(self.daemon.owner_name().await?);
+                }
+                Err(error) if error.is_not_found() => {}
+                Err(error) => return Err(error),
+            }
+            self.stop_watcher(thread);
         }
         let session = self
             .daemon
             .create_session(&CreateSessionRequest {
-                title: Some(format!("{} {}", M::PLATFORM, thread.chat)),
+                agent_id: None,
+                title: None,
                 model: state.and_then(|state| state.model),
                 mode: None,
                 workspace: None,
@@ -373,12 +407,22 @@ impl<M: Messenger> Core<M> {
                 browser_space: Default::default(),
             })
             .await?;
+        if !self.daemon.owns_session(&session) {
+            return Err(ChannelError::Refused("channel_binding_conflict".into()));
+        }
         let id = session.id.as_str().to_owned();
         self.store.update(thread, |state| {
             state.session_id = Some(id.clone());
             state.cursor = 0;
             state.cards.clear();
         })?;
+        if let Some(name) = changed_owner {
+            self.say(
+                thread,
+                &format!("This conversation now continues with {name}."),
+            )
+            .await;
+        }
         self.ensure_watcher(thread, &id);
         Ok(id)
     }
@@ -595,6 +639,14 @@ impl<M: Messenger> Core<M> {
 
     /// Handle one allowed button press on an approval card.
     pub async fn handle_press(self: &Arc<Self>, press: Press) {
+        tokio::select! {
+            biased;
+            _ = self.shutdown.cancelled() => {}
+            _ = self.handle_press_active(press) => {}
+        }
+    }
+
+    async fn handle_press_active(self: &Arc<Self>, press: Press) {
         // Serialized per thread so two presses on one card cannot interleave: the loser's
         // failure must not clear the winner's recorded decision before the card settles.
         let lock = self.thread_lock(&press.thread);
@@ -825,6 +877,57 @@ mod tests {
         assert!(text.contains("Open the openside web UI"), "{text}");
     }
 
+    #[test]
+    fn form_cards_keep_imported_suggestions_out_of_channel_text_and_actions() {
+        let canary = "IMPORTED_ADDRESS_CHANNEL_CANARY_73b1";
+        let mut ticket = otp_ticket();
+        ticket.otp = None;
+        ticket.summary = "Fill fields for https://bank.test".into();
+        let field: openside_proto::InputField = serde_json::from_value(json!({
+            "id":"field_0","label":"Street address","kind":"text","secret":false,
+            "otp":false,"card":null,"required":true,"autocomplete":"street-address",
+            "placeholder":null,"validation":"text","max_length":160,"initial":null,
+            "suggestions":[canary],"target_origin":"https://bank.test"
+        }))
+        .unwrap();
+        ticket.form = Some(openside_proto::TicketForm {
+            origin: "https://bank.test".into(),
+            site_name: "Bank".into(),
+            fields: vec![field.clone()],
+            payment: false,
+            submit_label: "Fill fields".into(),
+        });
+        ticket.card = Some(openside_proto::Card {
+            id: format!("ticket:{}", ticket.id),
+            kind: openside_proto::CardKind::Form,
+            site: openside_proto::CardSite {
+                origin: Some("https://bank.test".into()),
+                name: "Bank".into(),
+                favicon_ref: None,
+            },
+            title: "Fill fields".into(),
+            subtitle: None,
+            status: openside_proto::CardStatus::Pending,
+            blocks: vec![openside_proto::Block::InputFields {
+                id: "fields".into(),
+                fields: vec![field],
+            }],
+            actions: Vec::new(),
+            interaction: openside_proto::CardInteraction::Ask,
+            ticket_id: Some(ticket.id.clone()),
+            collapsed_summary: "Fill fields".into(),
+        });
+        assert!(serde_json::to_string(&ticket).unwrap().contains(canary));
+        for kind in [TicketKind::Info, TicketKind::SecretInput] {
+            ticket.kind = kind;
+            let (text, buttons) = card(&ticket, Some("https://host.example.ts.net/"));
+            assert!(!text.contains(canary));
+            assert!(!text.contains("/answer"));
+            assert!(text.contains("https://host.example.ts.net/sessions/s-1"));
+            assert!(buttons.is_empty());
+        }
+    }
+
     fn login_ticket() -> Ticket {
         let mut ticket = otp_ticket();
         ticket.id = openside_proto::TicketId::new("t-login");
@@ -1021,6 +1124,17 @@ mod tests {
             "{requests:?}"
         );
         server.abort();
+    }
+
+    #[test]
+    fn hire_cards_only_link_to_person_approval_in_the_app() {
+        let mut ticket = otp_ticket();
+        ticket.kind = TicketKind::Hire;
+        ticket.otp = None;
+        let (text, buttons) = card(&ticket, Some("https://host.example.ts.net/"));
+        assert!(buttons.is_empty());
+        assert!(text.contains("Review and approve this proposal in the openside app"));
+        assert!(text.contains("https://host.example.ts.net/sessions/s-1"));
     }
 
     #[test]

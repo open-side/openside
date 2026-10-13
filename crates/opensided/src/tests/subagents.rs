@@ -42,6 +42,7 @@ async fn child_ticket(daemon: &Daemon, session: &SessionId, child: &str) -> Tick
 
 fn request() -> TicketRequest {
     TicketRequest {
+        hire: None,
         kind: TicketKind::Info,
         summary: "Question".into(),
         instructions: None,
@@ -53,6 +54,7 @@ fn request() -> TicketRequest {
         login: None,
         choice: None,
         approval: None,
+        form: None,
         pins: Vec::new(),
     }
 }
@@ -102,6 +104,7 @@ async fn restore_fails_children_the_sidecar_snapshot_cannot_wake() {
             &session,
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: saved.id.clone(),
                 resolution: json!({"answer":"blue"}),
             },
@@ -263,6 +266,7 @@ async fn restore_discards_a_continuation_whose_final_is_already_durable() {
     // snapshot, so the restored sidecar still reports the call as deferred.
     for kind in [
         EventKind::TicketResolved {
+            card: None,
             ticket_id: ticket.id.clone(),
             resolution: json!({"answer":"blue"}),
         },
@@ -322,6 +326,7 @@ async fn restore_still_resumes_a_continuation_without_a_durable_final() {
             &session,
             None,
             EventKind::TicketResolved {
+                card: None,
                 ticket_id: ticket.id.clone(),
                 resolution: json!({"answer":"blue"}),
             },

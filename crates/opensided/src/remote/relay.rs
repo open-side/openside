@@ -60,6 +60,7 @@ impl Link {
             daemon_key: self.daemon_key.clone(),
             clients: status.clients,
             last_error: status.last_error,
+            e2ee: true,
         }
     }
 }
@@ -106,8 +107,10 @@ impl axum::serve::Listener for Streams {
     }
 }
 
-pub(crate) fn start(shared: &Shared) -> Result<Link, String> {
-    let remote = &shared.config.loaded.config.remote;
+pub(crate) fn start_config(
+    shared: &Shared,
+    remote: &openside_config::RemoteConfig,
+) -> Result<Link, String> {
     let relay_url = remote
         .relay
         .url
@@ -124,7 +127,8 @@ pub(crate) fn start(shared: &Shared) -> Result<Link, String> {
     let daemon_id = noise::daemon_id(&keypair.public);
     let daemon_key = noise::encode_key(&keypair.public);
     let (streams, incoming) = mpsc::unbounded_channel();
-    let router = crate::api::router(shared.clone(), false);
+    let router =
+        crate::api::router(shared.clone(), false).layer(axum::Extension(super::RelayOrigin));
     let server = tokio::spawn(async move {
         let _ = axum::serve(Streams(incoming), router).await;
     });

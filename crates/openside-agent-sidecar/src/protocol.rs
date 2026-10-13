@@ -1,4 +1,8 @@
-use openside_core::{ApprovalTier, DeferKind, MessageId, SessionId, TicketId};
+use openside_core::{
+    ApprovalTier, CredentialAction, CredentialAuth, CredentialErrorCode, CredentialOutcome,
+    CredentialScope, CredentialUsage, CredentialUsageWindow, DeferKind, MessageId, ModelAccountRef,
+    SessionId, TicketId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -26,6 +30,8 @@ pub(crate) enum DaemonMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         resume_state: Option<State>,
         config: Config,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        team: Option<openside_core::TeamContext>,
     },
     UserMessage {
         message_id: MessageId,
@@ -38,6 +44,31 @@ pub(crate) enum DaemonMessage {
     ToolResult {
         rpc_id: String,
         outcome: Outcome,
+    },
+    CredentialResponse {
+        id: String,
+        request_id: String,
+        lease_id: String,
+        generation: u64,
+        account: ModelAccountRef,
+        auth: CredentialAuth,
+    },
+    CredentialError {
+        id: String,
+        request_id: String,
+        code: CredentialErrorCode,
+        reason: String,
+        retry_at_ms: Option<u64>,
+        generation: u64,
+    },
+    CredentialReported {
+        id: String,
+        request_id: String,
+        lease_id: String,
+        generation: u64,
+        action: CredentialAction,
+        retry_at_ms: Option<u64>,
+        reason: Option<String>,
     },
     TicketResolved {
         ticket_id: TicketId,
@@ -174,6 +205,25 @@ pub(crate) enum SidecarMessage {
         subagent: Option<String>,
         approval_ticket: Option<TicketId>,
     },
+    CredentialRequest {
+        id: String,
+        request_id: String,
+        provider: String,
+        model: String,
+        attempt: u32,
+        subagent: Option<String>,
+    },
+    CredentialReport {
+        id: String,
+        request_id: String,
+        lease_id: String,
+        outcome: CredentialOutcome,
+        stream_started: bool,
+        retry_after_ms: Option<u64>,
+        scope: CredentialScope,
+        usage: Option<CredentialUsage>,
+        usage_windows: Vec<CredentialUsageWindow>,
+    },
     SubagentSteerResult {
         control_id: String,
         delivered: bool,
@@ -245,6 +295,8 @@ pub(crate) enum Event {
     AssistantDelta { text: String },
     #[serde(rename = "assistant.final")]
     AssistantFinal { text: String },
+    #[serde(rename = "session.title_proposed")]
+    SessionTitleProposed { title: String },
     #[serde(rename = "thinking.delta")]
     ThinkingDelta { text: String },
     #[serde(rename = "subagent.lifecycle")]

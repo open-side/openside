@@ -337,7 +337,13 @@ async fn write_edit_and_bash_outputs_are_collected_per_task() {
             "b1",
         ))
         .await;
+    #[cfg(target_os = "linux")]
     assert!(matches!(bash, ToolOutcome::Done { .. }), "{bash:?}");
+    #[cfg(not(target_os = "linux"))]
+    assert!(
+        matches!(bash, ToolOutcome::Denied { ref reason, .. } if reason == "Credential-safe sandbox setup is supported on Linux"),
+        "{bash:?}"
+    );
 
     let saved: Vec<(String, String, String)> = daemon
         .shared
@@ -359,6 +365,7 @@ async fn write_edit_and_bash_outputs_are_collected_per_task() {
     let expected = [
         ("files/report.md", "write", "w1"),
         ("files/report.md", "edit", "e1"),
+        #[cfg(target_os = "linux")]
         ("files/out/chart.svg", "bash", "b1"),
     ]
     .map(|(path, tool, id)| (path.to_owned(), tool.to_owned(), id.to_owned()));
@@ -382,6 +389,7 @@ async fn write_edit_and_bash_outputs_are_collected_per_task() {
         files,
         [
             ("files/report.md", "tool", Some("edit")),
+            #[cfg(target_os = "linux")]
             ("files/out/chart.svg", "tool", Some("bash")),
             ("transcript.jsonl", "transcript", None),
         ]
@@ -570,6 +578,70 @@ async fn deleting_a_session_removes_its_artifact_directory() {
     assert!(artifacts.join("keeper").is_dir());
     let (status, _, _) = call_api(&router, "GET", "/v1/sessions/doomed/artifacts", json!({})).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn artifact_listing_excludes_working_screenshots_without_deleting_legacy_files() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "session", PolicyMode::Full, None).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let dir = crate::artifacts::session_dir(&daemon.shared, &session);
+    std::fs::create_dir_all(dir.join("screenshots")).unwrap();
+    std::fs::create_dir_all(dir.join("files")).unwrap();
+    let png = png_image(8, 8, false);
+    for (path, tool) in [
+        ("toolu_old.png", "browser_screenshot"),
+        ("old-cli.png", "browser_screenshot"),
+        ("toolu_unlabelled.png", "unknown"),
+        ("screenshots/shared.png", "browser_screenshot"),
+        ("files/toolu_report.png", "write"),
+    ] {
+        std::fs::write(dir.join(path), &png).unwrap();
+        daemon
+            .shared
+            .emit(
+                &session,
+                None,
+                EventKind::ArtifactSaved {
+                    path: path.into(),
+                    size: png.len() as u64,
+                    mime: "image/png".into(),
+                    tool_call_id: path.into(),
+                    tool: tool.into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let list = get_json(&router, "/v1/sessions/session/artifacts").await;
+    let artifacts = list["artifacts"].as_array().unwrap();
+    assert_eq!(
+        artifacts
+            .iter()
+            .map(|artifact| artifact["path"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "screenshots/shared.png",
+            "files/toolu_report.png",
+            "transcript.jsonl"
+        ]
+    );
+    assert!(artifacts
+        .iter()
+        .all(|artifact| artifact["purpose"] == "output"));
+    let (status, _, bytes) = call_api(
+        &router,
+        "GET",
+        &raw_path("session", "toolu_old.png"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, png);
+    assert!(dir.join("old-cli.png").is_file());
     daemon.shutdown().await;
 }
 
@@ -814,19 +886,10 @@ async fn nothing_recreates_a_deleted_tasks_artifacts() {
 #[cfg(unix)]
 #[tokio::test]
 async fn credential_files_are_never_collected() {
-    use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
-    let program = root.path().join("test-bwrap");
-    std::fs::write(
-        &program,
-        "#!/bin/sh\nwhile [ \"$1\" != '--' ]; do shift; done\nshift\nexec \"$@\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
     let workspace = root.path().join("work");
     std::fs::create_dir_all(&workspace).unwrap();
     let mut config = resolved_config(root.path());
-    config.bwrap = Some(program);
     // Protected storage with innocuous names inside the workspace.
     config.loaded.config.vault.path = Some(workspace.join("notes.db"));
     config.data_dir = workspace.join("state");
@@ -842,11 +905,26 @@ async fn credential_files_are_never_collected() {
             &openside_vault::Secret::new("sunflower-4402".into()),
         ]));
     let session = create_session(&daemon, "session", PolicyMode::Full, Some(&workspace)).await;
-    let host = host(&daemon, &session).await;
-    let bash = host
-        .call(call("bash", json!({"command":"printf 'TOKEN=abc' > .env && mkdir -p .ssh && printf k > .ssh/id_ed25519 && printf k > server.pem && printf vault > notes.db && printf lock > notes.db.lock && printf private > state/cache.bin && printf '\\377\\376 sunflower-4402 \\377' > blob.bin && printf ok > notes.txt"}), "b1"))
-        .await;
-    assert!(matches!(bash, ToolOutcome::Done { .. }), "{bash:?}");
+    let state = daemon.shared.db.state(&session).await.unwrap();
+    let mut env = crate::tools::ToolEnv::new(daemon.shared.clone(), &state);
+    env.tool_call_id = "b1".into();
+    // Collector screening is portable even where credential-masked shell execution is refused.
+    let tracker = crate::artifacts::Tracker::before(&env, "bash").await;
+    std::fs::create_dir(workspace.join(".ssh")).unwrap();
+    let files: [(&str, &[u8]); 8] = [
+        (".env", b"TOKEN=abc"),
+        (".ssh/id_ed25519", b"k"),
+        ("server.pem", b"k"),
+        ("notes.db", b"vault"),
+        ("notes.db.lock", b"lock"),
+        ("state/cache.bin", b"private"),
+        ("blob.bin", b"\xff\xfe sunflower-4402 \xff"),
+        ("notes.txt", b"ok"),
+    ];
+    for (path, bytes) in files {
+        std::fs::write(workspace.join(path), bytes).unwrap();
+    }
+    tracker.record(&env, "bash").await;
     let saved: Vec<String> = daemon
         .shared
         .db

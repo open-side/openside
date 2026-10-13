@@ -32,6 +32,10 @@ responsive_checks() {
   python3 tools/qa/responsive.py --results "$DIR" --jobs "$JOBS"
 }
 
+mobile_remote_checks() {
+  python3 tools/qa/mobile_remote.py --results "$DIR" --jobs "$JOBS"
+}
+
 browser_ux_checks() {
   tools/check-browser-ux.py &&
     OPENSIDE_QA_OUT="$DIR" tools/qa/headed-ux.sh sway stock --prewarm-only \
@@ -94,6 +98,7 @@ js_checks web
 js_checks extension
 step "cargo test" cargo_test
 step "responsive first browser action" responsive_checks
+step "mobile encrypted relay journey twice" mobile_remote_checks
 step "agent (ruff, pyright, pytest)" agent_checks
 step "portability" tools/check-portability.sh
 step "tools tests" uv run --no-project --with pytest pytest -q tools/tests --junitxml="$DIR/tools-pytest.xml"

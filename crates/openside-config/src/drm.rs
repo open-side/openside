@@ -189,7 +189,16 @@ mod tests {
             let mut report = DoctorReport::default();
             doctor_check(&mut report, Some(&browser));
             assert_eq!(report.checks[0].status, Status::Ok, "{module}");
-            assert!(report.checks[0].summary.contains(&cdm.display().to_string()));
+            let reported_cdm = report.checks[0]
+                .summary
+                .strip_prefix("WidevineCdm library found at ")
+                .unwrap()
+                .strip_suffix(&format!(". {LIMITATION}"))
+                .unwrap();
+            assert_eq!(
+                std::fs::canonicalize(reported_cdm).unwrap(),
+                std::fs::canonicalize(&cdm).unwrap()
+            );
         }
     }
     #[test]

@@ -73,7 +73,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             return (
               <div
                 key={toast.id}
-                className={`ui-toast ui-toast--${toast.tone}`}
+                className={`ui-toast glass-float ui-toast--${toast.tone}`}
                 data-depth={depth}
                 data-leaving={toast.leaving || undefined}
                 role={toast.tone === "error" ? "alert" : "status"}

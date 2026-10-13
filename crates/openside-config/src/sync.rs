@@ -70,7 +70,8 @@ impl SyncConfig {
         self.webdav_url.is_some() || self.dir.is_some()
     }
 
-    pub(crate) fn validate(&self) -> Result<(), (&'static str, &'static str)> {
+    /// Validate backend, credential command and selection settings.
+    pub fn validate(&self) -> Result<(), (&'static str, &'static str)> {
         if self.webdav_url.is_some() && self.dir.is_some() {
             return Err((
                 "sync.dir",
@@ -88,10 +89,10 @@ impl SyncConfig {
                 ));
             }
         }
-        if self.webdav_username.is_some() != self.webdav_password_cmd.is_some() {
+        if self.webdav_username.is_none() && self.webdav_password_cmd.is_some() {
             return Err((
                 "sync.webdav_password_cmd",
-                "set webdav_username and webdav_password_cmd together",
+                "webdav_password_cmd requires webdav_username",
             ));
         }
         if self
@@ -220,10 +221,7 @@ mod tests {
             webdav_username: Some("alice".into()),
             ..webdav("https://dav.example.test")
         };
-        assert_eq!(
-            user_only.validate().map_err(|e| e.0),
-            Err("sync.webdav_password_cmd")
-        );
+        assert!(user_only.validate().is_ok());
         let defaults = SyncConfig::default();
         assert!(!defaults.settings && defaults.memory_tags == ["sync"] && !defaults.enabled());
     }

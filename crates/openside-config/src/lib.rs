@@ -20,6 +20,7 @@ mod native_messaging;
 mod paths;
 mod profile;
 mod remote;
+mod runtime_env;
 mod skills;
 mod sync;
 mod ui;
@@ -33,7 +34,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use channels::{ChannelsConfig, DiscordConfig, SlackConfig, TelegramConfig};
+pub use channels::{
+    valid_channel_id, ChannelAccountConfig, ChannelKind, ChannelOptions, ChannelsConfig,
+    LegacyChannelSecret,
+};
 pub use discovery::{agent_command, discover_browser, find_on_path, AgentCommand, BrowserNotFound};
 pub use memory::{EmbeddingConfig, MemoryConfig, MemoryRetentionSetting, EMBEDDING_MODEL_FILES};
 pub use paths::Paths;
@@ -42,6 +46,7 @@ pub use remote::{
     expand_home, read_secret, CloudflareConfig, CloudflareTunnel, OtpConfig, RelayConfig,
     RemoteConfig, RemoteMode, ServiceConfig,
 };
+pub use runtime_env::runtime_environment;
 pub use skills::SkillsConfig;
 pub use sync::SyncConfig;
 pub use ui::UiConfig;
@@ -58,9 +63,11 @@ pub struct Config {
     pub tickets: TicketsConfig,
     /// Python sidecar launch settings.
     pub agent: AgentConfig,
+    /// Durable teammate scheduling; separate from ephemeral Task concurrency.
+    pub team: TeamConfig,
     /// Model selection, without hardcoded model identifiers.
     pub models: ModelsConfig,
-    /// Opaque credential-source settings interpreted only by the sidecar.
+    /// Opaque credential-source settings interpreted only by the daemon's policy owner.
     #[serde(default = "empty_table")]
     #[schemars(with = "std::collections::BTreeMap<String, Value>")]
     pub credentials: Value,
@@ -97,6 +104,7 @@ impl Default for Config {
             vault: VaultConfig::default(),
             tickets: TicketsConfig::default(),
             agent: AgentConfig::default(),
+            team: TeamConfig::default(),
             models: ModelsConfig::default(),
             credentials: empty_table(),
             browser: BrowserConfig::default(),
@@ -126,6 +134,35 @@ impl fmt::Debug for Config {
 
 fn empty_table() -> Value {
     Value::Object(serde_json::Map::new())
+}
+
+/// Scheduler admission for independently running teammate home conversations.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TeamConfig {
+    /// Positive concurrency ceiling; additional handoffs remain durably queued.
+    #[serde(deserialize_with = "positive_team_slots")]
+    #[schemars(range(min = 1))]
+    pub max_running: usize,
+}
+
+impl Default for TeamConfig {
+    fn default() -> Self {
+        Self { max_running: 3 }
+    }
+}
+
+fn positive_team_slots<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<usize, D::Error> {
+    let value = usize::deserialize(deserializer)?;
+    if value == 0 {
+        Err(serde::de::Error::custom(
+            "team.max_running must be positive",
+        ))
+    } else {
+        Ok(value)
+    }
 }
 
 /// Human-step expiration settings, in seconds, without environment overrides.
@@ -614,6 +651,7 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
                 "orchestration",
             ],
         ),
+        ("team", &["max_running"]),
         ("models", &["default", "fallback", "front"]),
         ("credentials", &[]),
         (
@@ -649,6 +687,7 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
                 "max_audio_bytes",
                 "edit_interval_ms",
                 "state_dir",
+                "accounts",
                 "telegram",
                 "slack",
                 "discord",

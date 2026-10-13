@@ -234,7 +234,10 @@ struct AgentCancel {
 
 impl Mcp {
     pub(crate) fn new(client: Client, token: Option<String>) -> Self {
-        Self { client, token }
+        Self {
+            client: client.with_agent_client(),
+            token,
+        }
     }
 
     fn redact(&self, message: String) -> String {
@@ -459,11 +462,7 @@ impl Mcp {
             let Some(artifact) = artifact.as_str().filter(|path| path.ends_with(".png")) else {
                 continue;
             };
-            let path = artifact
-                .split('/')
-                .map(client::encode_segment)
-                .collect::<Vec<_>>()
-                .join("/");
+            let path = client::encode_segment(artifact);
             let (content_type, bytes) = self
                 .client
                 .bytes(&client::session_path(
@@ -489,6 +488,7 @@ impl Mcp {
             return Err(Failure::Params("goal must not be empty".into()));
         }
         let create = openside_proto::CreateSessionRequest {
+            agent_id: None,
             title: None,
             model: args.model,
             mode: args.mode,

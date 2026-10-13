@@ -94,6 +94,14 @@ pub(crate) async fn execute<W: Write>(
             if json {
                 return emit(stdout, &list);
             }
+            if let Some(ui) = crate::ui::pretty() {
+                return write!(
+                    stdout,
+                    "{}",
+                    crate::ui::routines(ui, &list, crate::ui::now_secs())
+                )
+                .map_err(output_error);
+            }
             for routine in &list.routines {
                 writeln!(
                     stdout,
@@ -241,6 +249,7 @@ fn state(routine: &Routine) -> &'static str {
     match (routine.enabled, routine.paused_reason) {
         (true, _) => "enabled",
         (false, Some(RoutinePauseReason::TargetMissing)) => "paused:target_missing",
+        (false, Some(RoutinePauseReason::AgentRetired)) => "paused:agent_retired",
         (false, None) => "paused",
     }
 }
@@ -261,6 +270,7 @@ fn print_routine<W: Write>(json: bool, stdout: &mut W, routine: &Routine) -> Res
     let target = match &routine.action {
         RoutineAction::NewSession { .. } => "new session".to_owned(),
         RoutineAction::Heartbeat { session_id, .. } => format!("heartbeat to {session_id}"),
+        RoutineAction::Agent { agent_id, .. } => format!("agent {agent_id}"),
     };
     let next = routine
         .next_run_at

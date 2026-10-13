@@ -1,0 +1,160 @@
+diff --git a/chrome/browser/openside/agent_gateway.cc b/chrome/browser/openside/agent_gateway.cc
+--- a/chrome/browser/openside/agent_gateway.cc
++++ b/chrome/browser/openside/agent_gateway.cc
+@@ -624,7 +624,7 @@
+     tab_groups::TabGroupId id = strip->AddToNewGroup({index});
+     strip->ChangeTabGroupVisuals(
+         id, tab_groups::TabGroupVisualData(kAgentTabsTitle,
+-                                           tab_groups::TabGroupColorId::kBlue));
++                                           tab_groups::TabGroupColorId::kGrey));
+   }
+ 
+   // Every agent page is emulated at 1440x900, DSF 1, wherever it lives: in
+diff --git a/chrome/browser/ui/color/chrome_color_mixer.cc b/chrome/browser/ui/color/chrome_color_mixer.cc
+--- a/chrome/browser/ui/color/chrome_color_mixer.cc
++++ b/chrome/browser/ui/color/chrome_color_mixer.cc
+@@ -246,8 +246,11 @@
+           kColorSavedTabGroupOutlineGrey, kColorTabGroupBookmarkBarGrey,
+           gfx::kTabGroupGreyDarkMode, gfx::kTabGroupGreyLightMode,
+           gfx::kTabGroupGreyChipDarkMode, gfx::kTabGroupGreyChipLightMode,
+-          gfx::kTabGroupGreyTextDarkMode, gfx::kGoogleGrey300,
+-          gfx::kGoogleGrey700, gfx::kGoogleGrey100, gfx::kGoogleGrey700,
++          gfx::kTabGroupGreyTextDarkMode,
++          // openside: chip fills match the near-black / near-white pills of
++          // the web UI instead of Chromium's slate grey.
++          SkColorSetRGB(0xF5, 0xF5, 0xF7), SkColorSetRGB(0x1D, 0x1D, 0x1F),
++          gfx::kGoogleGrey100, gfx::kGoogleGrey700,
+           gfx::kGoogleGrey300, gfx::kGoogleGrey700,
+           SkColorSetRGB(0x4C, 0x4D, 0x4E), gfx::kGoogleGrey100),
+       CreateColorParams(
+diff --git a/chrome/browser/ui/layout_constants.cc b/chrome/browser/ui/layout_constants.cc
+--- a/chrome/browser/ui/layout_constants.cc
++++ b/chrome/browser/ui/layout_constants.cc
+@@ -145,8 +145,10 @@
+       return 20;
+     case LayoutConstant::kMainBackgroundRegionCornerRadius:
+     case LayoutConstant::kToolbarCornerRadius:
++      return 8;
++    // openside: pill-shaped vertical tabs (the strip is 30 dip per row).
+     case LayoutConstant::kVerticalTabCornerRadius:
+-      return 8;
++      return 16;
+     case LayoutConstant::kVerticalTabHeight:
+       return 30;
+     case LayoutConstant::kVerticalTabPinnedHeight:
+diff --git a/chrome/browser/ui/views/chrome_layout_provider.cc b/chrome/browser/ui/views/chrome_layout_provider.cc
+--- a/chrome/browser/ui/views/chrome_layout_provider.cc
++++ b/chrome/browser/ui/views/chrome_layout_provider.cc
+@@ -176,7 +176,8 @@
+     case DISTANCE_SIDE_PANEL_HEADER_INTERIOR_MARGIN_HORIZONTAL:
+       return 4;
+     case DISTANCE_SIDE_PANEL_CONTENT_RADIUS:
+-      return 8;
++      // openside: matches the 24 dip surface radius of the web UI.
++      return 24;
+     case DISTANCE_HORIZONTAL_SEPARATOR_PADDING_PAGE_INFO_VIEW:
+       return 20;
+     case DISTANCE_INFOBAR_HORIZONTAL_ICON_LABEL_PADDING:
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -81,6 +81,9 @@
+ // enabled and expand-on-hover is active.
+ constexpr double kGlassExpandOnHoverOpacity = 0.95;
+ 
++// Opacity of the toolbar-coloured sheet painted over the vertical tab strip.
++constexpr float kVerticalTabStripGlassTintOpacity = 0.58f;
++
+ // Increases the leading or trailing exclusion padding to `minimum`.
+ void IncreasePaddingToMinimum(BrowserLayoutParams& params, int minimum) {
+   // Default to increasing the trailing exclusion padding. On ChromeOS, the
+@@ -1568,6 +1571,13 @@
+ 
+     vertical_tabs_background->SetCorners(vertical_tabs_corners);
+ 
++    // openside: the strip is a translucent toolbar-coloured sheet over the
++    // frame (the theme gradient), like the web UI's glass panels, instead of
++    // the flat frame. The organizer-panel fade below replaces it while open.
++    const CustomCorners::ColorChoiceWithAlpha glass_tint{
++        kColorToolbar, kVerticalTabStripGlassTintOpacity};
++    vertical_tabs_background->SetFadeBackground(glass_tint);
++
+     // When the organizer panel is animating open or closed and does not appear
+     // elevated, the background of vertical tabs should fade to match the
+     // background color of the panel.
+@@ -1591,9 +1601,9 @@
+         vertical_tabs_top_corner->SetFadeBackground(fade_background);
+         vertical_tabs_bottom_corner->SetFadeBackground(fade_background);
+       } else {
+-        vertical_tabs_background->SetFadeBackground(std::nullopt);
+-        vertical_tabs_top_corner->SetFadeBackground(std::nullopt);
+-        vertical_tabs_bottom_corner->SetFadeBackground(std::nullopt);
++        vertical_tabs_background->SetFadeBackground(glass_tint);
++        vertical_tabs_top_corner->SetFadeBackground(glass_tint);
++        vertical_tabs_bottom_corner->SetFadeBackground(glass_tint);
+       }
+     }
+ 
+diff --git a/chrome/browser/ui/views/frame/main_background_region_view.cc b/chrome/browser/ui/views/frame/main_background_region_view.cc
+--- a/chrome/browser/ui/views/frame/main_background_region_view.cc
++++ b/chrome/browser/ui/views/frame/main_background_region_view.cc
+@@ -11,7 +11,9 @@
+   SetCanProcessEventsWithinSubtree(false);
+   SetVisible(false);
+   SetBackground(std::make_unique<CustomCornersBackground>(
+-      *this, browser_view, CustomCornersBackground::ToolbarTheme(),
++      // openside: the area around a side panel shows the frame (theme gradient)
++      // instead of a flat toolbar-coloured frame.
++      *this, browser_view, CustomCornersBackground::FrameTheme(),
+       CustomCornersBackground::FrameTheme()));
+ }
+ 
+diff --git a/chrome/browser/ui/views/tabs/common/tab_group_style.cc b/chrome/browser/ui/views/tabs/common/tab_group_style.cc
+--- a/chrome/browser/ui/views/tabs/common/tab_group_style.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_group_style.cc
+@@ -17,7 +17,8 @@
+ constexpr int kHeaderChipVerticalInset = 2;
+ constexpr int kEmptyChipSize = 20;
+ constexpr int kCornerRadius = 6;
+-constexpr int kVerticalCornerRadius = 8;
++// openside: pill-shaped chips; Skia clamps the radius to half the chip height.
++constexpr int kChipCornerRadius = 16;
+ constexpr int kVerticalHeaderChipHorizontalInset = 8;
+ constexpr int kTabGroupOverlapAdjustment = 2;
+ 
+@@ -29,10 +30,8 @@
+ }
+ 
+ // static
+-int TabGroupStyle::GetChipCornerRadius(TabStripOrientation orientation) {
+-  return orientation == TabStripOrientation::kHorizontal
+-             ? kCornerRadius
+-             : kVerticalCornerRadius;
++int TabGroupStyle::GetChipCornerRadius(TabStripOrientation /*orientation*/) {
++  return kChipCornerRadius;
+ }
+ 
+ // static
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -587,6 +587,8 @@
+     scroll_view->SetVerticalScrollBar(
+         std::make_unique<VerticalTabStripScrollBar>(
+             collection_node_->GetController()->GetStateController()));
++    scroll_view->SetVerticalScrollBarMode(
++        views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+   } else {
+     scroll_view->SetHorizontalScrollBarMode(
+         views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+@@ -755,8 +757,9 @@
+   scroll_view->RegisterPostLayoutCallback(base::DoNothing());
+   if (IsVerticalOrientation(collection_node_)) {
+     scroll_view->SetDrawOverflowIndicator(true);
++    // openside: wheel and touch scrolling stay, the scrollbar is never drawn.
+     scroll_view->SetVerticalScrollBarMode(
+-        views::ScrollView::ScrollBarMode::kEnabled);
++        views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+ 
+     // Restore normal VerticalTabStripScrollBar scrollbar behavior.
+     if (auto* scroll_bar = views::AsViewClass<VerticalTabStripScrollBar>(

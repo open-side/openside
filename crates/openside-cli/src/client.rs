@@ -53,6 +53,7 @@ pub(crate) struct Client {
     token: Option<HeaderValue>,
     key: String,
     host: String,
+    agent_client: bool,
 }
 
 fn bearer(token: &str) -> Result<HeaderValue, String> {
@@ -112,6 +113,7 @@ impl Client {
             endpoint,
             token: Some(bearer(&token)?),
             key: format!("remote:{name}"),
+            agent_client: false,
         })
     }
 
@@ -135,6 +137,7 @@ impl Client {
             host: origin.authority(),
             endpoint,
             token: None,
+            agent_client: false,
             key: format!("pairing:{}", origin.http_url()),
         })
     }
@@ -178,6 +181,7 @@ impl Client {
                 token: Some(bearer(token)?),
                 key: format!("http://{address}"),
                 host: "localhost".into(),
+                agent_client: false,
             })
         } else {
             let socket = match socket {
@@ -198,8 +202,14 @@ impl Client {
                 endpoint: Endpoint::Unix(socket),
                 token: None,
                 host: "localhost".into(),
+                agent_client: false,
             })
         }
+    }
+
+    pub(crate) fn with_agent_client(mut self) -> Self {
+        self.agent_client = true;
+        self
     }
 
     pub(crate) fn endpoint_key(&self) -> &str {
@@ -214,7 +224,16 @@ impl Client {
         )
     }
 
-    pub(crate) fn ticket_command(&self, id: &str, action: &str, value: Option<&str>) -> String {
+    // A socket or relay does not establish an HTTP address for the daemon's web app.
+    pub(crate) fn web_origin(&self) -> Option<String> {
+        match &self.endpoint {
+            Endpoint::Tcp(address) => Some(format!("http://{address}")),
+            Endpoint::Direct { origin, .. } => Some(origin.http_url()),
+            Endpoint::Unix(_) | Endpoint::Relay { .. } => None,
+        }
+    }
+
+    fn command_prefix(&self) -> String {
         let connection = match &self.endpoint {
             Endpoint::Unix(path) => format!("--socket {}", shell_quote(&path.to_string_lossy())),
             Endpoint::Tcp(address) => format!("--url http://{address}"),
@@ -222,7 +241,24 @@ impl Client {
                 format!("--remote {}", shell_quote(name))
             }
         };
-        let mut command = format!("openside {connection} ticket {action} {}", shell_quote(id));
+        format!("openside {connection}")
+    }
+
+    pub(crate) fn team_command(&self, action: &str, id: Option<&str>) -> String {
+        let mut command = format!("{} team {action}", self.command_prefix());
+        if let Some(id) = id {
+            command.push(' ');
+            command.push_str(&shell_quote(id));
+        }
+        command
+    }
+
+    pub(crate) fn ticket_command(&self, id: &str, action: &str, value: Option<&str>) -> String {
+        let mut command = format!(
+            "{} ticket {action} {}",
+            self.command_prefix(),
+            shell_quote(id)
+        );
         if let Some(value) = value {
             command.push(' ');
             command.push_str(&shell_quote(value));
@@ -302,6 +338,16 @@ impl Client {
         self.request(method, path, Vec::new(), None).await.map(drop)
     }
 
+    pub(crate) async fn send_json<B: Serialize>(
+        &self,
+        method: &str,
+        path: &str,
+        body: &B,
+    ) -> Result<(), String> {
+        let body = serde_json::to_vec(body).map_err(|_| "could not encode API request")?;
+        self.request(method, path, body, None).await.map(drop)
+    }
+
     pub(crate) async fn events(&self, id: &str, seq: u64) -> Result<Response<Incoming>, String> {
         let response = self
             .request("GET", &session_path(id, "events"), Vec::new(), Some(seq))
@@ -337,6 +383,9 @@ impl Client {
         }
         if let Some(token) = &self.token {
             builder = builder.header(AUTHORIZATION, token);
+        }
+        if self.agent_client {
+            builder = builder.header("x-openside-client", "mcp");
         }
         if let Some(seq) = seq {
             builder = builder
@@ -454,14 +503,14 @@ fn route_matches(template: &str, path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
     let mut actual = path.split('/');
     for expected in template.split('/') {
-        let Some(actual) = actual.next() else {
+        let Some(segment) = actual.next() else {
             return false;
         };
         if expected.starts_with('{') && expected.ends_with('}') {
-            if actual.is_empty() {
+            if segment.is_empty() {
                 return false;
             }
-        } else if actual != expected {
+        } else if segment != expected {
             return false;
         }
     }
@@ -508,5 +557,37 @@ fn shell_quote(value: &str) -> String {
         value.into()
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::route_matches;
+
+    #[test]
+    fn encoded_artifact_paths_preserve_exact_route_segments() {
+        let template = "/v1/sessions/{id}/artifacts/{path}";
+        assert!(route_matches(
+            template,
+            "/v1/sessions/s/artifacts/screenshot.png"
+        ));
+        assert!(route_matches(
+            template,
+            "/v1/sessions/s/artifacts/screenshots%2Ftab.png?download=1"
+        ));
+        assert!(!route_matches(
+            template,
+            "/v1/sessions/s/artifacts/screenshots/tab.png"
+        ));
+        assert!(!route_matches(template, "/v1/sessions/s/artifacts/"));
+        assert!(!route_matches(
+            template,
+            "/v1/sessions/s/artifacts//tab.png"
+        ));
+        assert!(!route_matches(template, "/v1/sessions//artifacts/tab.png"));
+        assert!(route_matches("/v1/tickets/{id}", "/v1/tickets/t"));
+        assert!(!route_matches("/v1/tickets/{id}", "/v1/tickets/t/extra"));
+        assert!(!route_matches("/v1/tools", "/v1/tools/extra"));
+        assert!(!route_matches("/v1/{path}/status", "/v1/a/b/status"));
     }
 }

@@ -359,12 +359,16 @@ pub async fn assert_transient_status(ui: &mut Ui, harness: &Harness, session: &s
     )
     .await;
     submit(harness, session, "thinking", "Please answer").await;
+    // Once the agent has started on the message, typing dots stand in for a text status.
     ui.cdp
-        .wait("!!document.querySelector('.status-line')")
+        .wait("!!document.querySelector('.typing .typing-dot')")
         .await;
-    let style = ui.cdp.eval("(() => { const s=getComputedStyle(document.querySelector('.status-line')); return {radius:s.borderRadius, background:s.backgroundColor}; })()").await;
-    assert_eq!(style["radius"], "999px", "status is a pill: {style}");
-    ui.cdp.wait("document.body.innerText.includes('The answer is ready.') && !document.querySelector('.status-line')").await;
+    let style = ui.cdp.eval("(() => { const el=document.querySelector('.typing'); const s=getComputedStyle(el); return {radius:parseFloat(s.borderRadius), height:el.getBoundingClientRect().height, background:s.backgroundColor}; })()").await;
+    assert!(
+        style["radius"].as_f64().unwrap() >= style["height"].as_f64().unwrap() / 2.0,
+        "status is a pill: {style}"
+    );
+    ui.cdp.wait("document.body.innerText.includes('The answer is ready.') && !document.querySelector('.typing')").await;
     let mut stream = harness.events(session, 0).await;
     tokio::time::timeout(Duration::from_secs(30), async {
         while !matches!(stream.next().await.kind, EventKind::SessionSettled {}) {}

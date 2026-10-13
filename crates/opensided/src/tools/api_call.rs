@@ -10,6 +10,7 @@
 //! `browser_repl` keeps its own route (`/repl`) because it asks for approvals itself.
 
 use axum::{
+    body::Bytes,
     extract::{Path, State},
     http::StatusCode,
     Extension, Json,
@@ -43,8 +44,10 @@ const TOOLS: &[(&str, CapabilityScope)] = &[
     ("browser_screenshot", CapabilityScope::Browse),
     ("browser_snapshot", CapabilityScope::Browse),
     ("browser_tabs", CapabilityScope::Browse),
+    ("present", CapabilityScope::Browse),
     ("register_authenticator", CapabilityScope::Browse),
     ("request_choice", CapabilityScope::Browse),
+    ("request_form", CapabilityScope::Browse),
     ("request_human_step", CapabilityScope::Browse),
     ("request_login", CapabilityScope::Browse),
     ("request_otp", CapabilityScope::Browse),
@@ -83,12 +86,17 @@ pub(crate) async fn route(
     Extension(access): Extension<Access>,
     Extension(caller): Extension<Caller>,
     Path((id, name)): Path<(String, String)>,
-    Json(request): Json<ToolCallRequest>,
+    body: Bytes,
 ) -> Result<Json<ToolCallResponse>, HttpError> {
     let required = scope(&name).ok_or_else(HttpError::not_found)?;
     if !access.has(required) {
         return Err(HttpError(StatusCode::FORBIDDEN, "forbidden"));
     }
+    if name == "present" && body.len() > 65536 {
+        return Err(HttpError(StatusCode::PAYLOAD_TOO_LARGE, "card_too_large"));
+    }
+    let request: ToolCallRequest =
+        serde_json::from_slice(&body).map_err(|_| HttpError::invalid_value())?;
     if !request.args.is_object() {
         return Err(HttpError::invalid_value());
     }

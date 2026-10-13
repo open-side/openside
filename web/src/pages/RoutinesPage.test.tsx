@@ -16,6 +16,7 @@ function daemon() {
       action: { type: "new_session", prompt: "Summarize my inbox" },
       enabled: true,
       catch_up: false,
+      owner_agent_id: null,
       created_at: "2026-10-01T00:00:00Z",
       next_run_at: "2026-10-13T06:00:00Z",
     },
@@ -42,7 +43,7 @@ function daemon() {
     }
     if (url.pathname === "/v1/routines" && call.method === "POST") {
       const body = call.body as Pick<Routine, "name" | "schedule" | "action">;
-      const routine: Routine = { ...body, id: `r${nextId++}`, enabled: true, catch_up: false, created_at: "2026-10-12T00:00:00Z" };
+      const routine: Routine = { ...body, id: `r${nextId++}`, enabled: true, catch_up: false, owner_agent_id: null, created_at: "2026-10-12T00:00:00Z" };
       routines.push(routine);
       return json(201, routine);
     }

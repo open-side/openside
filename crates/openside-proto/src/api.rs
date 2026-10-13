@@ -123,11 +123,20 @@ pub struct Message {
     pub text: String,
     /// Pending or terminal disposition.
     pub status: MessageStatus,
+    /// Preserves the durable caller authority rather than inferring it from message text.
+    #[serde(default)]
+    pub author_kind: crate::MessageAuthorKind,
+    /// Present only for daemon-authored team deliveries.
+    #[serde(default)]
+    pub from_agent: Option<String>,
 }
 
 /// Session metadata and pending queue, in delivery order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Session {
+    /// Immutable owner tag; null keeps earlier conversations separate from agent homes.
+    #[serde(default)]
+    pub agent_id: Option<String>,
     /// Stable session identifier.
     pub id: SessionId,
     /// User-visible conversation title.
@@ -140,6 +149,9 @@ pub struct Session {
     pub workspace: Option<String>,
     /// Rebuilt from turn and session events.
     pub status: SessionStatus,
+    /// Short, redacted description of the current work, rebuilt from session events.
+    #[serde(default)]
+    pub activity: String,
     /// Latest durable sequence, or zero before creation.
     pub last_seq: u64,
     /// Steering first, then follow-up messages.
@@ -171,6 +183,9 @@ pub struct Health {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSessionRequest {
+    /// Existing active agent for a new non-home thread; cannot rebind an existing session.
+    #[serde(default)]
+    pub agent_id: Option<String>,
     /// Conversation title, or a daemon-generated title when omitted.
     pub title: Option<String>,
     /// Model override, or settings default when omitted.
@@ -269,6 +284,8 @@ pub enum TicketKind {
     /// Pick one of the choices a page offers (`request_choice`); the daemon clicks the page's
     /// own control.
     Choice,
+    /// Approve a proposed teammate using the attached draft.
+    Hire,
 }
 
 /// Resumption semantics for the suspended tool call.
@@ -413,6 +430,10 @@ pub struct TicketLoginField {
     /// `current-password`, `one-time-code`), so the person's own password manager can fill it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autocomplete: Option<String>,
+    /// Imported non-secret address values offered only when the person chooses one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(extend("x-person-only" = []))]
+    pub suggestions: Vec<String>,
     /// Whether the input hides what is typed (passwords).
     pub masked: bool,
     /// Whether the page requires a value.
@@ -495,6 +516,7 @@ pub struct TicketLogin {
     pub alternatives: Vec<TicketLoginAlternative>,
     /// Logins saved for this origin, when there are several to pick from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-person-only" = null))]
     pub accounts: Option<Vec<TicketLoginAccount>>,
     /// The page's own text for its sign-in button.
     pub submit_label: String,
@@ -610,6 +632,15 @@ pub struct Ticket {
     /// (`wait_for_approval`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<TicketApproval>,
+    /// Daemon projection; absence in historical logs is hydrated without rewriting them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<crate::Card>,
+    /// Bound page-field metadata for fill-only requests; never contains entered values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<crate::TicketForm>,
+    /// Authoritative teammate proposal; card text alone cannot authorize a hire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hire: Option<crate::HireDraft>,
 }
 
 /// Ticket list, optionally filtered by status.
@@ -632,6 +663,9 @@ pub struct ResolveTicketRequest {
     /// `{"values": {<field id>: string | bool}, "save": bool}`, `{"account": <item_id>}` or
     /// `{"alternative": <id>}`; a `choice` ticket takes `{"option": <id>}`.
     pub value: Value,
+    /// Optional complete edited proposal, accepted only for a hire decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hire: Option<crate::HireDraft>,
 }
 
 /// Explicit ticket rejection.
@@ -667,6 +701,9 @@ pub struct PairDeviceResponse {
     /// Operator-selected trust role fixed when this token was paired.
     #[serde(default)]
     pub kind: crate::DeviceKind,
+    /// One-time extension import authenticator; never returned to a web page or logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_secret: Option<String>,
 }
 
 /// JSON error response for non-successful HTTP requests.

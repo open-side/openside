@@ -375,8 +375,19 @@ async fn a_device_that_stops_reading_is_dropped_without_stalling_the_others() {
     paused.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut floods = Vec::new();
     for _ in 0..64 {
-        let mut stream = slow.open().await.unwrap();
-        stream.write_all(b"F").await.unwrap();
+        // Socket buffering can drop the intentionally stalled device before all opens finish.
+        let mut stream = match slow.open().await {
+            Ok(stream) => stream,
+            Err(Error::Closed) => break,
+            Err(error) => panic!("slow stream open failed: {error}"),
+        };
+        match stream.write_all(b"F").await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe && slow.is_closed() => {
+                break;
+            }
+            Err(error) => panic!("slow stream write failed: {error}"),
+        }
         floods.push(stream);
     }
     wait_for(|| host.status().clients == 1, "slow device to be dropped").await;

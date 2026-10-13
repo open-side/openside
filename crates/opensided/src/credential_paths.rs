@@ -5,10 +5,12 @@ use std::{
 
 use crate::config::Resolved;
 
-/// Path metadata only: credential contents must never enter the daemon.
+/// External credential sources contribute path metadata, never file contents.
 #[derive(Default)]
 pub(crate) struct ProtectedPaths {
     paths: Vec<PathBuf>,
+    directories: Vec<PathBuf>,
+    managed_root: Option<PathBuf>,
     #[cfg(unix)]
     identities: parking_lot::Mutex<Vec<std::os::fd::OwnedFd>>,
     #[cfg(unix)]
@@ -21,11 +23,47 @@ impl ProtectedPaths {
         let codex_home = std::env::var_os("CODEX_HOME")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
-        Self::build(
+        let mut protected = Self::build(
             &config.loaded.config.credentials,
             home.as_deref(),
             codex_home.as_deref(),
-        )
+        );
+        if let Some(directory) =
+            std::env::var_os("CLAUDE_CONFIG_DIR").filter(|value| !value.is_empty())
+        {
+            let path = PathBuf::from(directory).join(".credentials.json");
+            let path = if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir().unwrap_or_default().join(path)
+            };
+            if !protected.paths.contains(&path) {
+                protected.paths.push(path);
+                #[cfg(unix)]
+                let _ = protected.refresh_identities();
+            }
+        }
+        protected.directories = [
+            openside_config::data_layout::DataPath::BrowserImports,
+            openside_config::data_layout::DataPath::ExtensionImportKeys,
+            openside_config::data_layout::DataPath::AccountSpaces,
+        ]
+        .into_iter()
+        .map(|path| path.path(&config.data_dir))
+        .collect();
+        protected.managed_root = Some(config.data_dir.join("managed-subscriptions"));
+        protected
+            .directories
+            .extend(protected.managed_root.iter().cloned());
+        protected
+            .paths
+            .push(openside_config::data_layout::DataPath::ConnectionsKey.path(&config.data_dir));
+        protected
+            .paths
+            .push(openside_config::data_layout::DataPath::RestartHandoff.path(&config.data_dir));
+        #[cfg(unix)]
+        let _ = protected.refresh_identities();
+        protected
     }
 
     pub(crate) fn build(
@@ -54,6 +92,7 @@ impl ProtectedPaths {
         collect(credentials, home, &mut paths);
         if let Some(home) = home {
             paths.push(home.join(".omp").join("auth-broker.token"));
+            paths.push(home.join(".claude").join(".credentials.json"));
         }
         if let Some(codex) = codex_home {
             paths.push(codex.join("auth.json"));
@@ -87,6 +126,13 @@ impl ProtectedPaths {
         }
         let target = resolve(path);
         if self
+            .directories
+            .iter()
+            .any(|root| target.starts_with(resolve(root)))
+        {
+            return true;
+        }
+        if self
             .paths
             .iter()
             .any(|source| target == *source || target == resolve(source))
@@ -107,6 +153,43 @@ impl ProtectedPaths {
     }
 
     #[cfg(unix)]
+    fn managed_files(&self) -> std::io::Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        let Some(root) = &self.managed_root else {
+            return Ok(files);
+        };
+        for (source, filename) in [
+            ("claude-code", ".credentials.json"),
+            ("codex-cli", "auth.json"),
+        ] {
+            let directory = root.join(source);
+            let homes = match std::fs::read_dir(&directory) {
+                Ok(homes) => homes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            for home in homes {
+                let home = home?;
+                if home.file_type()?.is_symlink() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "Managed credential home is a symlink",
+                    ));
+                }
+                if home.file_type()?.is_dir() {
+                    files.push(home.path().join(filename));
+                }
+                if files.len() > 256 {
+                    return Err(std::io::Error::other(
+                        "Managed credential identity limit reached",
+                    ));
+                }
+            }
+        }
+        Ok(files)
+    }
+
+    #[cfg(unix)]
     fn refresh_identities(&self) -> std::io::Result<()> {
         use rustix::fs::{fstat, open, Mode, OFlags};
         use std::sync::atomic::Ordering;
@@ -116,7 +199,8 @@ impl ProtectedPaths {
             ));
         }
         let mut identities = self.identities.lock();
-        for path in &self.paths {
+        let managed = self.managed_files()?;
+        for path in self.paths.iter().chain(&managed) {
             #[cfg(target_os = "linux")]
             let flags = OFlags::PATH | OFlags::CLOEXEC;
             #[cfg(not(target_os = "linux"))]
@@ -151,7 +235,22 @@ impl ProtectedPaths {
     pub(crate) fn check_fd(&self, fd: impl std::os::fd::AsFd) -> std::io::Result<()> {
         self.check_filesystem(fd.as_fd())?;
         self.refresh_identities()?;
-        let stat = rustix::fs::fstat(fd)?;
+        let stat = rustix::fs::fstat(&fd)?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            let path = std::fs::read_link(format!("/proc/self/fd/{}", fd.as_fd().as_raw_fd()))?;
+            if self
+                .directories
+                .iter()
+                .any(|root| resolve(&path).starts_with(resolve(root)))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Private import data is protected",
+                ));
+            }
+        }
         if self.identities.lock().iter().any(|known| {
             rustix::fs::fstat(known)
                 .is_ok_and(|known| (known.st_dev, known.st_ino) == (stat.st_dev, stat.st_ino))
@@ -189,11 +288,22 @@ impl ProtectedPaths {
         Ok(())
     }
 
-    #[cfg(all(unix, not(target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    fn check_filesystem(&self, fd: impl std::os::fd::AsFd) -> std::io::Result<()> {
+        let stat = rustix::fs::fstatfs(fd)?;
+        let name = stat.f_fstypename.map(|byte| byte as u8);
+        let end = name
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(name.len());
+        check_macos_filesystem_name(&name[..end])
+    }
+
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     fn check_filesystem(&self, _: impl std::os::fd::AsFd) -> std::io::Result<()> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "Host filesystem screening is supported on Linux",
+            "Host filesystem screening is unsupported on this platform",
         ))
     }
 
@@ -264,14 +374,47 @@ impl ProtectedPaths {
                 masks.push(path);
             }
         }
+        for root in &self.directories {
+            let path = resolve(root);
+            if path.starts_with(&workspace)
+                || ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"]
+                    .iter()
+                    .any(|base| path.starts_with(base))
+            {
+                masks.push(path);
+            }
+        }
         masks.sort();
         masks.dedup();
         Ok(masks)
     }
 
+    #[cfg(unix)]
+    pub(crate) fn sandbox_directory(&self, path: &Path) -> bool {
+        self.directories.iter().any(|root| resolve(root) == path)
+    }
+
     #[cfg(all(unix, not(target_os = "linux")))]
     pub(crate) fn sandbox_masks(&self, _: &Path) -> Result<Vec<PathBuf>, &'static str> {
         Err("Credential-safe sandbox setup is supported on Linux")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn check_macos_filesystem_name(name: &[u8]) -> std::io::Result<()> {
+    match name {
+        b"apfs" | b"hfs" | b"ufs" | b"nfs" | b"smbfs" | b"webdav" | b"msdos" | b"exfat"
+        | b"ntfs" | b"udf" | b"cd9660" => Ok(()),
+        b"devfs" | b"procfs" | b"fdesc" | b"fdescfs" | b"kernfs" => Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "Process and kernel filesystems are protected",
+        )),
+        // Darwin names filesystems rather than exposing Linux magic values. Unknown
+        // providers stay closed because they may expose process or device data.
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Host filesystem type is not supported",
+        )),
     }
 }
 
@@ -441,10 +584,46 @@ mod tests {
         assert!(protected.is_protected(&source));
         assert!(protected.is_protected(&root.path().join("actual/../actual/source.txt")));
         assert!(protected.is_protected(&actual.join("missing.txt")));
+        #[cfg(target_os = "linux")]
         assert_eq!(protected.sandbox_masks(&actual).unwrap(), vec![source]);
+        #[cfg(not(target_os = "linux"))]
+        assert!(protected.sandbox_masks(&actual).is_err());
         assert_eq!(
             std::fs::read_to_string(actual.join("source.txt")).unwrap(),
             "credential-path-test-canary"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_filesystem_screening_accepts_storage_and_refuses_pseudo_or_unknown_types() {
+        assert!(check_macos_filesystem_name(b"apfs").is_ok());
+        assert!(check_macos_filesystem_name(b"hfs").is_ok());
+        for name in [b"devfs".as_slice(), b"procfs", b"fdesc", b"kernfs"] {
+            assert_eq!(
+                check_macos_filesystem_name(name).unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied,
+            );
+        }
+        assert_eq!(
+            check_macos_filesystem_name(b"unknown-provider")
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::Unsupported,
+        );
+        assert!(check_macos_filesystem_name(b"").is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_descriptor_screening_allows_a_file_but_refuses_devfs() {
+        let file = tempfile::tempfile().unwrap();
+        let protected = ProtectedPaths::default();
+        protected.check_fd(&file).unwrap();
+        let device = std::fs::File::open("/dev/null").unwrap();
+        assert_eq!(
+            protected.check_fd(&device).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied,
         );
     }
 }

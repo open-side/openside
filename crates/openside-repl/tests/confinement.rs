@@ -1,4 +1,5 @@
 //! Benign local fixtures for tab, frame, init-script and renderer-recovery boundaries.
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use axum::{response::Html, routing::get, Router};
@@ -171,6 +172,37 @@ impl Fixture {
             .await
             .unwrap();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connections_cookie_values_are_redacted_for_every_get_cookies_shape() {
+    let _serial = SERIAL.lock().await;
+    let f = Fixture::start().await;
+    f.open("/").await;
+    const CANARY: &str = "connections-cookie-value-canary-2fbed";
+    f.browser
+        .evaluate(
+            &f.tab,
+            &format!("document.cookie='session={CANARY}; path=/'; null"),
+        )
+        .await
+        .unwrap();
+    for code in [
+        "await page.cdp('Network.getCookies', {})",
+        "await page.cdp('Network.getCookies', {urls:[BASE+'/']})",
+        "await page.cdp('Network.getCookies', {urls:[CHILD+'/child']})",
+    ] {
+        let value = f.value(code).await;
+        assert!(!value.to_string().contains(CANARY));
+        let cookies = value["cookies"].as_array().unwrap();
+        let cookie = cookies
+            .iter()
+            .find(|cookie| cookie["name"] == "session")
+            .unwrap();
+        assert_eq!(cookie["value"], "[REDACTED]");
+        assert_eq!(cookie["path"], "/");
+    }
+    f.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -512,10 +544,12 @@ async fn uploads_pin_verified_bytes_and_refuse_a_parent_swapped_after_admission(
     f.open("/").await;
     let workspace = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
-    std::fs::create_dir(workspace.path().join("parent")).unwrap();
-    let source = workspace.path().join("parent/file.txt");
+    let workspace_root = std::fs::canonicalize(workspace.path()).unwrap();
+    let outside_root = std::fs::canonicalize(outside.path()).unwrap();
+    std::fs::create_dir(workspace_root.join("parent")).unwrap();
+    let source = workspace_root.join("parent/file.txt");
     std::fs::write(&source, b"original").unwrap();
-    std::fs::write(outside.path().join("file.txt"), b"substituted").unwrap();
+    std::fs::write(outside_root.join("file.txt"), b"substituted").unwrap();
     struct SwapGuard {
         root: PathBuf,
         outside: PathBuf,
@@ -536,8 +570,8 @@ async fn uploads_pin_verified_bytes_and_refuse_a_parent_swapped_after_admission(
         }
     }
     let guard = Arc::new(SwapGuard {
-        root: workspace.path().to_owned(),
-        outside: outside.path().to_owned(),
+        root: workspace_root.clone(),
+        outside: outside_root,
         checks: AtomicUsize::new(0),
     });
     let failed = f
@@ -556,12 +590,8 @@ async fn uploads_pin_verified_bytes_and_refuse_a_parent_swapped_after_admission(
             .await,
         0
     );
-    std::fs::remove_file(workspace.path().join("parent")).unwrap();
-    std::fs::rename(
-        workspace.path().join("old"),
-        workspace.path().join("parent"),
-    )
-    .unwrap();
+    std::fs::remove_file(workspace_root.join("parent")).unwrap();
+    std::fs::rename(workspace_root.join("old"), workspace_root.join("parent")).unwrap();
     f.value(&format!(
         "await page.frame('child').locator('#chooser').setInputFiles({:?}); null",
         source.to_str().unwrap()

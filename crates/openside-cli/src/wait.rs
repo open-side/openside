@@ -73,7 +73,9 @@ impl Wait {
             {
                 self.message_done = true;
             }
-            EventKind::RuntimeError { code, message } if current => {
+            EventKind::RuntimeError { code, message, .. }
+                if current && code != "sandbox_unavailable" =>
+            {
                 self.error = Some(format!("{code}: {message}"));
                 self.status = Some("error");
             }
@@ -184,4 +186,52 @@ async fn drive<F: FnMut(&Event)>(
         }
     }
     Err("event stream ended before the session settled or stopped".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_warning_does_not_end_a_wait_or_discard_the_reply() {
+        let mut state = Wait::new(Replay {
+            last_seen: 0,
+            terminal_after: 0,
+            message_id: None,
+        });
+        state.apply(
+            1,
+            &EventKind::runtime_error("sandbox_unavailable", "policy-only isolation"),
+        );
+        assert_eq!(state.status, None);
+        assert_eq!(state.error, None);
+        state.apply(
+            2,
+            &EventKind::AssistantFinal {
+                text: "completed".into(),
+            },
+        );
+        state.apply(3, &EventKind::SessionSettled {});
+        assert_eq!(state.status, Some("settled"));
+        assert_eq!(state.replies, ["completed"]);
+        assert_eq!(state.error, None);
+    }
+
+    #[test]
+    fn actual_runtime_errors_still_end_a_wait() {
+        let mut state = Wait::new(Replay {
+            last_seen: 0,
+            terminal_after: 0,
+            message_id: None,
+        });
+        state.apply(
+            1,
+            &EventKind::runtime_error("auth_unavailable", "credentials missing"),
+        );
+        assert_eq!(state.status, Some("error"));
+        assert_eq!(
+            state.error.as_deref(),
+            Some("auth_unavailable: credentials missing")
+        );
+    }
 }

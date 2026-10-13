@@ -12,8 +12,8 @@
 //! - `OPENSIDE_SCREENS_DIR`: output directory (default `/tmp/openside-qa/redesign/core`).
 //! - `OPENSIDE_SCREENS_ROUTES`: extra comma-separated app paths to capture, such as
 //!   `/skills,/settings`; each is saved as `route-<path>`.
-//! - `OPENSIDE_SCREENS_ONLY`: comma-separated screen names to limit a run to: new-chat,
-//!   model-picker, conversation, long-thread-top, tool-activity, code-response, ticket, agents,
+//! - `OPENSIDE_SCREENS_ONLY`: comma-separated screen names to limit a run to: assistant,
+//!   profile, conversation, long-thread-top, tool-activity, code-response, ticket, agents,
 //!   visuals, files, short-thread, streaming, stop-confirm, working, failed, ask-options, ask-text, secret, otp,
 //!   takeover, device, queue-menu, queue-edit, session-menu, drawer (phone only), archived,
 //!   search, search-empty, settings, appearance, theme-preset (Solarized light / Nord dark
@@ -484,6 +484,7 @@ fn ended_ok<'a>(events: &'a [Event], call: &str) -> &'a Value {
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,
@@ -566,6 +567,8 @@ struct Seeded {
     otp: String,
     takeover: String,
     device: String,
+    suggestion: String,
+    admin: String,
 }
 
 /// A conversation on its own script, its first message submitted.
@@ -574,6 +577,160 @@ async fn seed(harness: &Harness, title: &str, mode: &str, script: Value, message
     let session = create_in(harness, title, mode).await;
     submit(harness, &session, "s1", message, "now").await;
     session
+}
+
+fn proposal(name: &str, role: &str, duty: &str, key: &str) -> Value {
+    json!({"draft":{"name":name,"persona":{"role":role,"responsibilities":[duty]},"proposal_key":key}})
+}
+
+/// A presented result card: `rows` of (model, price, battery) as a table or a product list.
+fn result_card(kind: &str, title: &str, rows: &[(&str, u64, &str)]) -> Value {
+    let blocks = if kind == "table" {
+        json!([{"type":"table","id":"options","layout":"grid",
+            "columns":[{"id":"model","label":"Model"},{"id":"price","label":"Price"},{"id":"battery","label":"Battery"}],
+            "rows":rows.iter().map(|(model, price, battery)| json!([
+                {"type":"text","text":model},
+                {"type":"text","text":format!("${price}")},
+                {"type":"text","text":battery},
+            ])).collect::<Vec<_>>()}])
+    } else {
+        json!([{"type":"list_items","id":"options","items":rows.iter().enumerate().map(|(n, (model, price, battery))| json!({
+            "id":format!("item-{n}"),"name":model,"facts":[battery],
+            "price":{"minor_units":price * 100,"currency":"USD"},"quantity":1
+        })).collect::<Vec<_>>()}])
+    };
+    json!({"card":{
+        "id":"","kind":kind,
+        "site":{"origin":"https://shop.example","name":"shop.example","favicon_ref":null},
+        "title":title,"status":"done","blocks":blocks,"actions":[],"interaction":"none",
+        "collapsed_summary":title
+    },"images":[]})
+}
+
+/// The team behind the people sidebar: teammates, one retired for History, and the assistant's
+/// thread with result cards and a hire suggestion waiting (a pending ticket holds a thread's queue,
+/// so it is the only request there). Returns the open
+/// suggestion's ticket and an admin token, to turn the suggestion off once the capture is done.
+async fn seed_team(harness: &Harness) -> (String, String) {
+    // Hiring and retiring need `admin` on a person's device; the shared fixture person has none.
+    let paired = harness
+        .request(
+            "POST",
+            "/v1/devices/pair",
+            Some(json!({"name":"Team seed","kind":"person_device","scopes":["read","steer","approve","admin","human_step"]})),
+        )
+        .await;
+    assert_eq!(paired.status, 201, "{}", paired.body);
+    let admin = paired.body["token"].as_str().unwrap().to_owned();
+    let mut ids = Vec::new();
+    for (name, role, duty) in [
+        ("Mina", "Price researcher", "Compare prices across shops"),
+        (
+            "Nora",
+            "Travel planner",
+            "Plan trips and keep bookings in one place",
+        ),
+        (
+            "Theo",
+            "Release manager",
+            "Track release checklists and changelogs",
+        ),
+        ("Sam", "Receipts organizer", "File receipts and expenses"),
+    ] {
+        let hired = harness
+            .tcp_request(
+                "POST",
+                "/v1/agents",
+                Some(&admin),
+                Some(json!({"name":name,"mode":"guard","persona":{"role":role,"responsibilities":[duty]}})),
+            )
+            .await;
+        assert_eq!(hired.status, 201, "{}", hired.body);
+        ids.push(hired.body["id"].as_str().unwrap().to_owned());
+    }
+    let retired = harness
+        .tcp_request(
+            "POST",
+            &format!("/v1/agents/{}/retire", ids[3]),
+            Some(&admin),
+            Some(json!({"pause_routines":false,"revert_hire":false})),
+        )
+        .await;
+    assert_eq!(retired.status, 200, "{}", retired.body);
+
+    let chief = harness.request("GET", "/v1/agents/chief", None).await;
+    let home = chief.body["home_session_id"].as_str().unwrap().to_owned();
+    // A suggestion defers the run and the next response is consumed whenever the thread resumes,
+    // so one script covers the thread: result cards, then a suggestion.
+    harness.replace_script(&json!({"responses":[
+        tool("present", result_card("table", "Wireless earbuds under $100", &[
+            ("Everyday Buds", 79, "24 h with case"),
+            ("Studio Pods", 95, "30 h with case"),
+            ("Run Lite", 49, "18 h with case"),
+            ("Quiet Pro", 99, "28 h with case"),
+        ]), "present-table"),
+        tool("present", result_card("product_list", "Best value picks", &[
+            ("Everyday Buds", 79, "Noise cancellation"),
+            ("Run Lite", 49, "Sweat resistant"),
+            ("Quiet Pro", 99, "Spatial audio"),
+            ("Studio Pods", 95, "Wireless charging"),
+        ]), "present-products"),
+        tool("team_propose_hire", proposal("Iris", "Inbox triage", "Sort the inbox and flag what needs you", "inbox-triage"), "propose-inbox"),
+        text("Iris is ready to start."),
+    ]}));
+    let pending = |kind: &'static str, key: Option<&'static str>| {
+        let home = home.clone();
+        async move {
+            let found = tokio::time::timeout(Duration::from_secs(60), async {
+                loop {
+                    let all = harness
+                        .request("GET", "/v1/tickets?status=pending", None)
+                        .await;
+                    let found = all.body["tickets"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|t| {
+                            t["session_id"] == home.as_str()
+                                && t["kind"] == kind
+                                && key.map_or(true, |key| t["hire"]["proposal_key"] == key)
+                        });
+                    if let Some(ticket) = found {
+                        return ticket["id"].as_str().unwrap().to_owned();
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await;
+            match found {
+                Ok(id) => id,
+                Err(_) => {
+                    let mut replay = harness.events(&home, 0).await;
+                    let mut seen = Vec::new();
+                    while let Ok(event) =
+                        tokio::time::timeout(Duration::from_millis(500), replay.next()).await
+                    {
+                        let line = format!("{:?}", event.kind);
+                        seen.push(line[..line.len().min(220)].to_owned());
+                    }
+                    panic!(
+                        "no pending {kind} {key:?} in the chief's thread; events:\n{}",
+                        seen.join("\n")
+                    )
+                }
+            }
+        }
+    };
+    submit(
+        harness,
+        &home,
+        "chief-1",
+        "Compare wireless earbuds under $100.",
+        "now",
+    )
+    .await;
+    let suggestion = pending("hire", Some("inbox-triage")).await;
+    (suggestion, admin)
 }
 
 async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<()>) {
@@ -759,6 +916,8 @@ async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<
         .await;
     assert!(archive.status < 300, "{}", archive.body);
 
+    let (suggestion, admin) = seed_team(harness).await;
+
     (
         Seeded {
             short,
@@ -771,6 +930,8 @@ async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<
             otp,
             takeover,
             device,
+            suggestion,
+            admin,
         },
         server,
     )
@@ -1043,8 +1204,8 @@ async fn web_screens_capture() {
         ui.goto(&conversation).await;
         ui.wait(
             "seeded conversation",
-            "document.querySelectorAll('.queue-item').length === 2 && !!document.querySelector('section.ticket-pending') \
-             && !!document.querySelector('.subagents') && !!document.querySelector('.code-block')",
+            "document.querySelectorAll('.queue-item').length === 2 && !!document.querySelector('.oc-card[data-ticket][data-status=pending]') \
+             && !!document.querySelector('.agents-pill') && !!document.querySelector('.code-block')",
         )
         .await;
     };
@@ -1056,19 +1217,25 @@ async fn web_screens_capture() {
             let file = |screen: &str| out.join(format!("{theme}-{}-{screen}.png", viewport.name));
             let phone = viewport.mobile;
 
-            if wanted("new-chat") || wanted("model-picker") {
+            if wanted("assistant") || wanted("profile") {
                 ui.goto("/").await;
-                ui.wait("new chat", "!!document.querySelector('.composer')")
-                    .await;
-                if wanted("new-chat") {
-                    ui.snap(&file("new-chat")).await;
+                ui.wait(
+                    "assistant thread",
+                    "!!document.querySelector('.person-heading')",
+                )
+                .await;
+                if wanted("assistant") {
+                    ui.snap(&file("assistant")).await;
                 }
-                if wanted("model-picker") {
-                    ui.eval("document.querySelector('.model-picker .tool-pill').click()")
+                if wanted("profile") {
+                    ui.eval("document.querySelector('.person-heading').click()")
                         .await;
-                    ui.wait("model dialog", "!!document.querySelector('.ui-dialog')")
-                        .await;
-                    ui.snap(&file("model-picker")).await;
+                    ui.wait(
+                        "profile sheet",
+                        "!!document.querySelector('.profile-sheet')",
+                    )
+                    .await;
+                    ui.snap(&file("profile")).await;
                 }
             }
             // Composer at rest, one line, three lines and past its height cap.
@@ -1115,10 +1282,14 @@ async fn web_screens_capture() {
             for (screen, selector, block) in [
                 ("tool-activity", ".activity", "start"),
                 ("code-response", ".code-block", "center"),
-                ("ticket", "section.ticket-pending", "center"),
-                ("agents", ".subagents", "center"),
+                (
+                    "ticket",
+                    ".oc-card[data-ticket][data-status=pending]",
+                    "center",
+                ),
+                ("agents", ".agents-pill", "center"),
                 ("visuals", ".visuals figure", "center"),
-                ("files", ".artifacts", "center"),
+                ("files", ".files-pill", "center"),
             ] {
                 if !wanted(screen) {
                     continue;
@@ -1149,18 +1320,19 @@ async fn web_screens_capture() {
                 ("streaming", &seeded.streaming, "document.body.innerText.includes('Seven crates') && !!document.querySelector('.subagent')"),
                 ("working", &seeded.working, "!!document.querySelector('.status-line')"),
                 ("failed", &seeded.failed, "!!document.querySelector('.runtime-error')"),
-                ("ask-options", &seeded.ask_options, "!!document.querySelector('section.ticket-pending')"),
-                ("ask-text", &seeded.ask_text, "!!document.querySelector('section.ticket-pending input')"),
-                ("secret", &seeded.secret, "!!document.querySelector('section.ticket-pending input[type=password]')"),
-                ("otp", &seeded.otp, "!!document.querySelector('section.ticket-otp')"),
-                ("takeover", &seeded.takeover, "!!document.querySelector('section.ticket-pending')"),
-                ("device", &seeded.device, "!!document.querySelector('section.ticket-pending')"),
+                ("ask-options", &seeded.ask_options, "!!document.querySelector('.oc-card[data-ticket][data-status=pending]')"),
+                ("ask-text", &seeded.ask_text, "!!document.querySelector('.oc-card[data-kind=form][data-status=pending]')"),
+                ("secret", &seeded.secret, "!!document.querySelector('.oc-card[data-kind=secret_input][data-status=pending]')"),
+                ("otp", &seeded.otp, "!!document.querySelector('.oc-card[data-kind=otp]')"),
+                ("takeover", &seeded.takeover, "!!document.querySelector('.oc-card[data-kind=takeover][data-status=pending]')"),
+                ("device", &seeded.device, "!!document.querySelector('.oc-card[data-kind=confirmation][data-status=pending]')"),
             ] {
                 if !wanted(screen) || session.is_empty() {
                     continue;
                 }
                 ui.goto(&format!("/sessions/{session}")).await;
                 ui.wait(screen, ready).await;
+                ui.eval("document.querySelectorAll('.oc-card[data-ticket] .oc-pill').forEach(b => b.click()); true").await;
                 if matches!(screen, "failed" | "streaming") {
                     ui.eval("document.querySelectorAll('.activity:not(.status-line-group)').forEach((el) => { el.open = true }); true")
                         .await;
@@ -1199,14 +1371,14 @@ async fn web_screens_capture() {
             }
             if wanted("session-menu") {
                 open_conversation().await;
-                ui.eval("__qs.press(__qs.labelled('Session options'))")
+                ui.eval("__qs.press(__qs.labelled('Conversation options'))")
                     .await;
                 ui.wait("session menu", "!!document.querySelector('.ui-menu')")
                     .await;
                 ui.snap(&file("session-menu")).await;
             }
             let open_drawer = || async {
-                ui.eval("__qs.labelled('Open conversations').click()").await;
+                ui.eval("__qs.labelled('Open menu').click()").await;
                 ui.wait("drawer", "!!document.querySelector('.ui-drawer')")
                     .await;
             };
@@ -1215,49 +1387,114 @@ async fn web_screens_capture() {
                 open_drawer().await;
                 ui.snap(&file("drawer")).await;
             }
-            // The sidebar's archived filter and search, results and none.
-            for (screen, query) in [
-                ("archived", None),
-                ("search", Some("release")),
-                ("search-empty", Some("quarterly tax filing")),
+            if wanted("people") {
+                ui.goto("/").await;
+                ui.wait(
+                    "people sidebar",
+                    "!!document.querySelector('.person-heading') && document.querySelectorAll('.person-row').length >= 4",
+                )
+                .await;
+                if phone {
+                    open_drawer().await;
+                }
+                ui.snap(&file("people")).await;
+            }
+            // The assistant's thread: a result table and list, and a hire suggestion collapsed, then open.
+            if [
+                "chief-pending",
+                "chief-expanded",
+                "result-table",
+                "result-list",
+            ]
+            .iter()
+            .any(|screen| wanted(screen))
+            {
+                ui.goto("/").await;
+                ui.wait(
+                    "assistant thread with cards",
+                    "!!document.querySelector('.oc-card[data-kind=hire][data-status=pending]') \
+                     && !!document.querySelector('.oc-card[data-kind=table]') && !!document.querySelector('.oc-card[data-kind=product_list]') \
+                     && !!document.querySelector('.oc-card[data-kind=hire][data-status=pending]')",
+                )
+                .await;
+                let reveal = |selector: &'static str| {
+                    let ui = &ui;
+                    async move {
+                        ui.eval(&format!(
+                            "document.querySelector({}).scrollIntoView({{ block: 'center' }}); true",
+                            json!(selector)
+                        ))
+                        .await;
+                    }
+                };
+                let expand = |selector: &'static str| {
+                    let ui = &ui;
+                    async move {
+                        ui.eval(&format!(
+                            "document.querySelector({}).querySelector('.oc-pill').click(); true",
+                            json!(selector)
+                        ))
+                        .await;
+                        ui.wait(
+                            "expanded card",
+                            &format!(
+                                "document.querySelector({})?.dataset.open === 'true'",
+                                json!(selector)
+                            ),
+                        )
+                        .await;
+                    }
+                };
+                let approval = ".oc-card[data-kind=hire][data-status=pending]";
+                if wanted("chief-pending") {
+                    reveal(approval).await;
+                    ui.snap(&file("chief-pending")).await;
+                }
+                if wanted("result-table") {
+                    reveal(".oc-card[data-kind=table]").await;
+                    ui.snap(&file("result-table")).await;
+                }
+                if wanted("result-list") {
+                    reveal(".oc-card[data-kind=product_list]").await;
+                    ui.snap(&file("result-list")).await;
+                }
+                if wanted("chief-expanded") {
+                    expand(approval).await;
+                    reveal(approval).await;
+                    ui.snap(&file("chief-expanded")).await;
+                }
+            }
+            if wanted("history") {
+                ui.goto("/history").await;
+                ui.wait(
+                    "history",
+                    "document.querySelectorAll('.history-scroll a').length > 2",
+                )
+                .await;
+                ui.snap(&file("history")).await;
+            }
+            // Workspace sections open as dialogs over the assistant's thread.
+            for (screen, route, title) in [
+                ("team", "/team", "Team"),
+                ("connections", "/connections", "Connections"),
+                ("diagnostics", "/diagnostics", "Diagnostics"),
             ] {
                 if !wanted(screen) {
                     continue;
                 }
-                open_conversation().await;
-                let scope = if phone {
-                    open_drawer().await;
-                    ".ui-drawer"
-                } else {
-                    ".shell-sidebar"
-                };
-                match query {
-                    None => {
-                        ui.eval(&format!(
-                            "(() => {{ const scope = document.querySelector({}); \
-                               (scope.querySelector('[aria-label=\"Show archived\"]') || __qs.text(scope, 'Archived')).click(); return true }})()",
-                            json!(scope)
-                        ))
-                        .await;
-                        ui.wait(
-                            "archived list",
-                            "document.body.innerText.includes('Old onboarding notes')",
-                        )
-                        .await;
-                    }
-                    Some(query) => {
-                        ui.eval(&format!(
-                            "(() => {{ const el = document.querySelector({}).querySelector('input[type=search]'); \
-                               Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, {}); \
-                               el.dispatchEvent(new Event('input', {{ bubbles: true }})); return true }})()",
-                            json!(scope),
-                            json!(query)
-                        ))
-                        .await;
-                        tokio::time::sleep(Duration::from_millis(600)).await;
-                    }
-                }
+                ui.goto(route).await;
+                ui.wait(
+                    screen,
+                    &format!("Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === {})", json!(title)),
+                )
+                .await;
                 ui.snap(&file(screen)).await;
+            }
+            if wanted("welcome-name") {
+                ui.goto("/welcome?step=assistant").await;
+                ui.wait("name step", "!!document.querySelector('.onb-assistant')")
+                    .await;
+                ui.snap(&file("welcome-name")).await;
             }
             if wanted("settings") || wanted("appearance") {
                 open_conversation().await;
@@ -1314,12 +1551,39 @@ async fn web_screens_capture() {
             }
         }
     }
+    // The assistant's open suggestion is turned off for good; Team then lists it as declined.
+    if wanted("team-suppressed") {
+        let declined = harness
+            .tcp_request(
+                "POST",
+                &format!("/v1/tickets/{}/resolve", seeded.suggestion),
+                Some(&seeded.admin),
+                Some(json!({"value":"never"})),
+            )
+            .await;
+        assert_eq!(declined.status, 200, "{}", declined.body);
+        for theme in ["light", "dark"] {
+            ui.emulation.lock().await.scheme(theme).await;
+            for viewport in &VIEWPORTS {
+                ui.emulation.lock().await.viewport(viewport).await;
+                ui.goto("/team").await;
+                ui.wait(
+                    "suppressed suggestions",
+                    "document.body.innerText.includes('Suggestions you turned off') && document.body.innerText.includes('Inbox triage')",
+                )
+                .await;
+                ui.eval("Array.from(document.querySelectorAll('.ui-dialog h3, .ui-dialog h2')).find((h) => h.textContent.includes('Suggestions you turned off')).scrollIntoView({ block: 'center' }); true").await;
+                ui.snap(&out.join(format!("{theme}-{}-team-suppressed.png", viewport.name)))
+                    .await;
+            }
+        }
+    }
     // Last: the daemon goes away under an open conversation (nothing can be navigated after).
     if wanted("offline") {
         ui.goto(&conversation).await;
         ui.wait(
             "seeded conversation",
-            "!!document.querySelector('section.ticket-pending')",
+            "!!document.querySelector('.oc-card[data-ticket][data-status=pending]')",
         )
         .await;
         harness.crash_daemon().await;

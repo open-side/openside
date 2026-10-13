@@ -94,6 +94,11 @@ pub trait RoutineHost: Send + Sync + 'static {
 
     /// Whether the session exists (is not deleted).
     fn session_exists(&self, session: &SessionId) -> impl Future<Output = bool> + Send;
+
+    /// Resolve only active agents; a retired owner must never fall through to the chief.
+    fn agent_session(&self, _agent: &str) -> impl Future<Output = Option<SessionId>> + Send {
+        async { None }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -131,6 +136,13 @@ fn validate_action(action: &RoutineAction) -> std::result::Result<(), Invalid> {
                 .is_some_and(|path| !Path::new(path).is_absolute())
             {
                 return Err(Invalid::Action("workspace must be an absolute path".into()));
+            }
+        }
+        RoutineAction::Agent { agent_id, prompt } => {
+            if blank(agent_id) || blank(prompt) {
+                return Err(Invalid::Action(
+                    "agent action needs an agent id and a prompt".into(),
+                ));
             }
         }
         RoutineAction::Heartbeat { session_id, prompt } => {
@@ -174,6 +186,11 @@ impl<H: RoutineHost> Scheduler<H> {
                 return Err(Invalid::TargetMissing.into());
             }
         }
+        if let RoutineAction::Agent { agent_id, .. } = action {
+            if self.host.agent_session(agent_id).await.is_none() {
+                return Err(Invalid::TargetMissing.into());
+            }
+        }
         Ok(())
     }
 
@@ -199,6 +216,7 @@ impl<H: RoutineHost> Scheduler<H> {
                 None
             },
             schedule: request.schedule,
+            owner_agent_id: request.action.owner_agent_id().map(str::to_owned),
             action: request.action,
             enabled,
             paused_reason: None,
@@ -244,6 +262,7 @@ impl<H: RoutineHost> Scheduler<H> {
         if let Some(action) = request.action {
             validate_action(&action)?;
             self.require_target(&action).await?;
+            routine.owner_agent_id = action.owner_agent_id().map(str::to_owned);
             routine.action = action;
         }
         if let Some(catch_up) = request.catch_up {
@@ -263,6 +282,53 @@ impl<H: RoutineHost> Scheduler<H> {
         }
         self.store.save_routine(&routine)?;
         Ok(routine)
+    }
+
+    /// Persist a lifecycle pause under the same gate as dispatch.
+    pub async fn pause_agent(&self, agent: &str) -> Result<()> {
+        let _gate = self.gate.lock().await;
+        for routine in self.store.routines()? {
+            if routine.action.owner_agent_id() == Some(agent) {
+                self.store
+                    .auto_pause(&routine.id, RoutinePauseReason::AgentRetired)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A saga replay may observe its own new action, but never overwrite a later owner.
+    pub async fn transfer_action(
+        &self,
+        id: &str,
+        expected: &RoutineAction,
+        next: &RoutineAction,
+        pause: bool,
+        restore_enabled: Option<bool>,
+    ) -> Result<()> {
+        let _gate = self.gate.lock().await;
+        let mut routine = self.get(id)?;
+        if &routine.action != expected && &routine.action != next {
+            return Err(Invalid::Action("routine ownership changed".into()).into());
+        }
+        validate_action(next)?;
+        routine.action = next.clone();
+        routine.owner_agent_id = next.owner_agent_id().map(str::to_owned);
+        if pause {
+            routine.enabled = false;
+            routine.paused_reason = Some(RoutinePauseReason::AgentRetired);
+            routine.next_run_at = None;
+        } else if let Some(enabled) = restore_enabled {
+            routine.enabled = enabled;
+            routine.paused_reason = None;
+            if !enabled {
+                routine.next_run_at = None;
+            } else if routine.next_run_at.is_none() {
+                routine.next_run_at =
+                    schedule::next_after(&routine.schedule, self.clock.now(), self.clock.now())?;
+            }
+        }
+        self.store.save_routine(&routine)?;
+        Ok(())
     }
 
     /// Delete a routine and its history, returning the deleted routine. Serialised with
@@ -292,6 +358,7 @@ impl<H: RoutineHost> Scheduler<H> {
             .into_iter()
             .map(|routine| match routine.action {
                 RoutineAction::NewSession { prompt, .. }
+                | RoutineAction::Agent { prompt, .. }
                 | RoutineAction::Heartbeat { prompt, .. } => prompt,
             })
             .collect();
@@ -480,6 +547,17 @@ impl<H: RoutineHost> Scheduler<H> {
         // any later point leaves an open run that names the exact message to look for.
         let dispatch = Dispatch {
             session_id: match &routine.action {
+                RoutineAction::Agent { agent_id, .. } => {
+                    let Some(session) = self.host.agent_session(agent_id).await else {
+                        self.store
+                            .auto_pause(&routine.id, RoutinePauseReason::AgentRetired)?;
+                        run.status = RunStatus::PausedTargetMissing;
+                        run.finished_at = Some(self.clock.now());
+                        run.detail = Some("agent retired or missing; routine paused".into());
+                        return self.store.insert_run(&run);
+                    };
+                    session
+                }
                 RoutineAction::Heartbeat { session_id, .. } => session_id.clone(),
                 RoutineAction::NewSession { .. } => SessionId::new(self.store.new_id()?),
             },
@@ -509,7 +587,9 @@ impl<H: RoutineHost> Scheduler<H> {
                     )
                     .await
             }
-            RoutineAction::Heartbeat { prompt, .. } => self.host.follow_up(&dispatch, prompt).await,
+            RoutineAction::Heartbeat { prompt, .. } | RoutineAction::Agent { prompt, .. } => {
+                self.host.follow_up(&dispatch, prompt).await
+            }
         };
         let error = match dispatched {
             Ok(()) => return Ok(run),
@@ -537,8 +617,14 @@ impl<H: RoutineHost> Scheduler<H> {
                 run.status = RunStatus::PausedTargetMissing;
                 run.message_id = None;
                 run.detail = Some("target session does not exist; routine paused".into());
-                self.store
-                    .auto_pause(&routine.id, RoutinePauseReason::TargetMissing)?;
+                self.store.auto_pause(
+                    &routine.id,
+                    if matches!(routine.action, RoutineAction::Agent { .. }) {
+                        RoutinePauseReason::AgentRetired
+                    } else {
+                        RoutinePauseReason::TargetMissing
+                    },
+                )?;
             }
             HostError::Failed(detail) => {
                 run.status = RunStatus::Failed;

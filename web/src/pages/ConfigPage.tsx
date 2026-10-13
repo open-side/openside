@@ -12,8 +12,9 @@ import {
   type Draft,
   type Field,
 } from "../settings/schemaForm";
-import { Button, Segmented, Switch, useToast } from "../ui";
-import { Badge, ErrorNote, ResourceView } from "./blocks";
+import { Button, Segmented, Select, Switch, useToast } from "../ui";
+import { Badge, Disclosure, ErrorNote, ResourceView } from "./blocks";
+import { RestartNotice } from "./RestartNotice";
 
 function FieldInput({
   field,
@@ -44,14 +45,12 @@ function FieldInput({
       );
     case "enum":
       return (
-        <select {...common} value={String(value)} onChange={(e) => onChange(e.target.value)}>
-          {field.nullable ? <option value="">(not set)</option> : null}
-          {field.options.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
+        <Select
+          {...common}
+          value={String(value)}
+          onChange={onChange}
+          options={[...(field.nullable ? [{ value: "", label: "(not set)" }] : []), ...field.options.map((option) => ({ value: option, label: option }))]}
+        />
       );
     case "list":
     case "json":
@@ -74,6 +73,35 @@ function FieldInput({
         />
       );
   }
+}
+
+/** Why some keys are locked for this browser and how to change them. */
+function LocalOnlyExplanation({ editable }: { editable: string[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="config-notice" role="note">
+      <p>
+        <strong>Some settings can only be changed on the computer that runs openside.</strong> They decide which programs run, which folders and addresses openside can reach and who is trusted, so this
+        browser can read them but not change them. They are marked <Badge>local only</Badge> below. To change one, open openside on that computer with <code>openside-browser</code>.
+      </p>
+      {editable.length ? (
+        <>
+          <Disclosure expanded={open} onToggle={() => setOpen(!open)}>
+            What can I change here?
+          </Disclosure>
+          {open ? (
+            <ul className="config-editable" aria-label="Settings this browser can change">
+              {editable.map((key) => (
+                <li key={key}>
+                  <code>{key.endsWith(".") ? `${key}*` : key}</code>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 type ConfigEditorProps = {
@@ -263,16 +291,16 @@ export function ConfigPage() {
       </ResourceView>
       {!document || settings.forbidden ? null : (
         <>
-          {document.remote ? (
-            <p className="config-notice" role="note">
-              You are connected as a paired device. Keys marked “local only” (commands, paths, listeners, policy, trust lists)
-              can only be changed on the computer running openside.
-            </p>
-          ) : null}
+          {document.remote ? <LocalOnlyExplanation editable={document.remote_editable} /> : null}
           {document.restart_required ? (
-            <p className="config-notice" role="status">
-              Saved settings differ from the running daemon; they apply after the daemon restarts.
-            </p>
+            <RestartNotice
+              onRestarted={() => {
+                setSaved(null);
+                void settings.reload();
+              }}
+            >
+              Saved settings differ from the running daemon. They apply after openside restarts.
+            </RestartNotice>
           ) : null}
           <div className="config-toolbar">
             <Segmented

@@ -80,8 +80,8 @@ impl SlackMessenger {
             Ok(value)
         } else {
             Err(ChannelError::Platform(format!(
-                "{method}: {}",
-                value["error"].as_str().unwrap_or("unknown_error")
+                "{method}: request refused (HTTP {})",
+                status.as_u16()
             )))
         }
     }
@@ -322,7 +322,7 @@ fn unauthorized() -> Response {
     StatusCode::UNAUTHORIZED.into_response()
 }
 
-async fn events(
+pub(crate) async fn events(
     State(receiver): State<Arc<SlackReceiver>>,
     headers: HeaderMap,
     body: Bytes,
@@ -445,7 +445,7 @@ struct Action {
     action_id: String,
 }
 
-async fn interactivity(
+pub(crate) async fn interactivity(
     State(receiver): State<Arc<SlackReceiver>>,
     headers: HeaderMap,
     body: Bytes,

@@ -1,21 +1,22 @@
-import { ChevronRight, Compass, SlidersHorizontal } from "lucide-react";
+import { ChevronRight, Compass, Cpu, MessagesSquare, SlidersHorizontal, Smartphone } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Health } from "../api/types";
 import { AppearanceSettings } from "../components/AppearanceSettings";
 import { useClient } from "../context";
-import { errorMessage } from "../hooks/useResource";
-import { disableNotifications, enableNotifications, pushSupported, storedSubscription, subscriptionActive } from "../push";
+import { desktopActive, desktopRequested, extensionAvailable } from "../desktopNotify";
+import { describeFailure, disableNotifications, enableNotifications, pushSupported, storedSubscription, subscriptionActive } from "../push";
 import { Button, ICON_STROKE } from "../ui";
 import { Badge, ErrorNote, StatusRow } from "./blocks";
 
 /** aside-relay re-checks the connection every five seconds while Settings is open. */
 const HEALTH_INTERVAL_MS = 5_000;
 
-type PushStatus = "checking" | "enabled" | "off" | "denied" | "unavailable" | "install";
+type PushStatus = "checking" | "enabled" | "desktop" | "off" | "denied" | "unavailable" | "install";
 
 const PUSH_LABEL: Record<PushStatus, string> = {
   checking: "Checking…",
   enabled: "Enabled",
+  desktop: "Enabled (desktop)",
   off: "Off",
   denied: "Blocked",
   unavailable: "Unavailable",
@@ -33,6 +34,7 @@ function iosBrowserTab(): boolean {
 
 function initialPushStatus(): PushStatus {
   if (iosBrowserTab()) return "install";
+  if (desktopRequested()) return "checking";
   if (!pushSupported()) return "unavailable";
   if (Notification.permission === "denied") return "denied";
   return storedSubscription() ? "checking" : "off";
@@ -47,34 +49,48 @@ function Notifications() {
   useEffect(() => {
     if (status !== "checking") return;
     let cancelled = false;
-    subscriptionActive(client).then(
-      (active) => {
-        if (!cancelled) setStatus(active ? "enabled" : "off");
-      },
-      () => {
-        if (!cancelled) setStatus("off");
-      },
-    );
+    const settle = (next: PushStatus) => {
+      if (!cancelled) setStatus(next);
+    };
+    if (desktopRequested()) {
+      void desktopActive().then((active) => settle(active ? "desktop" : "off"));
+    } else {
+      subscriptionActive(client).then(
+        (active) => settle(active ? "enabled" : "off"),
+        () => settle("off"),
+      );
+    }
     return () => {
       cancelled = true;
     };
   }, [client, status]);
+
+  // Web Push may be missing or blocked while the extension's desktop notifications still work.
+  useEffect(() => {
+    if (status !== "unavailable" && status !== "denied") return;
+    let cancelled = false;
+    void extensionAvailable().then((found) => {
+      if (found && !cancelled) setStatus("off");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
 
   // Permission is requested only from this explicit click, never on load.
   async function toggle() {
     setBusy(true);
     setError(null);
     try {
-      if (status === "enabled") {
+      if (status === "enabled" || status === "desktop") {
         await disableNotifications(client);
         setStatus("off");
       } else {
-        await enableNotifications(client);
-        setStatus("enabled");
+        setStatus((await enableNotifications(client)) === "desktop" ? "desktop" : "enabled");
       }
     } catch (cause) {
-      setError(cause instanceof Error && !("code" in cause) ? cause.message : errorMessage(cause));
-      if (Notification.permission === "denied") setStatus("denied");
+      setError(describeFailure(cause));
+      if ("Notification" in window && Notification.permission === "denied") setStatus("denied");
     } finally {
       setBusy(false);
     }
@@ -87,7 +103,9 @@ function Notifications() {
         ? "This browser cannot receive push notifications here. Open openside over HTTPS in a browser with Web Push."
         : status === "denied"
           ? "Notifications are blocked for openside. Allow them in this browser's site settings, then come back here."
-          : "Get notified when a task needs you or finishes while openside is in the background. Tap a notification to open its conversation.";
+          : status === "desktop"
+            ? "Using desktop notifications from the openside extension instead of Web Push. You get a notification when a task finishes or needs you, even with every openside tab closed. The conversation you are looking at stays quiet."
+            : "Get notified when a task needs you or finishes while openside is in the background. Tap a notification to open its conversation.";
 
   return (
     <section aria-label="Notifications">
@@ -96,10 +114,10 @@ function Notifications() {
         <StatusRow label="Response notifications">{PUSH_LABEL[status]}</StatusRow>
       </div>
       <p className="settings-text">{text}</p>
-      {status === "off" || status === "enabled" || status === "checking" ? (
+      {status === "off" || status === "enabled" || status === "desktop" || status === "checking" ? (
         <div className="settings-actions-row">
           <Button disabled={busy || status === "checking"} onClick={() => void toggle()}>
-            {busy ? "Updating…" : status === "enabled" ? "Turn off notifications" : "Enable notifications"}
+            {busy ? "Updating…" : status === "enabled" || status === "desktop" ? "Turn off notifications" : "Enable notifications"}
           </Button>
         </div>
       ) : null}
@@ -150,16 +168,46 @@ function Connection() {
 }
 
 /** Content of the Settings dialog (aside-relay `Settings.tsx`). */
-export function SettingsPage({ onWorkspace, onGuide, onSignOut }: { onWorkspace: () => void; onGuide: () => void; onSignOut: () => void }) {
+export function SettingsPage({ onModels, onChannels, onRemote, onWorkspace, onGuide, onSignOut }: { onModels: () => void; onChannels: () => void; onRemote: () => void; onWorkspace: () => void; onGuide: () => void; onSignOut: () => void }) {
   return (
     <div className="manage-body" data-section="settings">
+      <button type="button" className="workspace-entry" onClick={onModels}>
+        <span className="tile-icon" aria-hidden="true">
+          <Cpu size={20} strokeWidth={ICON_STROKE} />
+        </span>
+        <span className="tile-copy">
+          <strong>Models &amp; accounts</strong>
+          <span>Connect providers, add API keys and choose the default model</span>
+        </span>
+        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      </button>
+      <button type="button" className="workspace-entry" onClick={onChannels}>
+        <span className="tile-icon" aria-hidden="true">
+          <MessagesSquare size={20} strokeWidth={ICON_STROKE} />
+        </span>
+        <span className="tile-copy">
+          <strong>Channels</strong>
+          <span>Telegram, Slack and Discord accounts, and who answers on each</span>
+        </span>
+        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      </button>
+      <button type="button" className="workspace-entry" onClick={onRemote}>
+        <span className="tile-icon" aria-hidden="true">
+          <Smartphone size={20} strokeWidth={ICON_STROKE} />
+        </span>
+        <span className="tile-copy">
+          <strong>Remote access</strong>
+          <span>Reach openside from your phone and connect it with a QR code</span>
+        </span>
+        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      </button>
       <button type="button" className="workspace-entry" onClick={onWorkspace}>
         <span className="tile-icon" aria-hidden="true">
           <SlidersHorizontal size={20} strokeWidth={ICON_STROKE} />
         </span>
         <span className="tile-copy">
           <strong>Workspace</strong>
-          <span>Skills, routines, memory, accounts, vault, devices and configuration</span>
+          <span>Skills, routines, memory, vault, devices and configuration</span>
         </span>
         <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
       </button>

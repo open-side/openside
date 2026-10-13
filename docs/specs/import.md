@@ -1,83 +1,92 @@
-# 브라우저 데이터 가져오기 (Import)
+# 브라우저 데이터 가져오기
 
-상태: **구현됨**. 관련: B-1. 코드: `crates/openside-import`(읽기·복호화·쓰기), `crates/openside-cli/src/import.rs`(`openside import`). 테스트: `crates/openside-import/src/tests.rs`, `crates/openside-cli/src/tests/import.rs`, `crates/openside-e2e/tests/import.rs`.
+> 관련 수용 기준: B-1 및 F-5.
 
-Chrome·Chromium·Firefox 프로필 디렉터리에서 기록(history)·북마크·쿠키를 읽어 openside 브라우저 프로필 하나로 옮긴다. 데몬 없이 실행된다.
+## 최초 실행 흐름
 
-## 1. 사용법
-```
-openside import --from <chrome|chromium|firefox>:<프로필 디렉터리> --into <프로필 이름> \
-  [--what history,bookmarks,cookies] [--dry-run] [--keyring-password-cmd '<명령>'] [--config PATH]
-```
-- `--from` 의 디렉터리는 브라우저 프로필 자체다(Chrome 의 `Default`, Firefox 의 `xxxx.default-release`). 이 디렉터리 안의 `History`, `Bookmarks`, `Network/Cookies`(없으면 `Cookies`), `places.sqlite`, `cookies.sqlite` 를 읽는다.
-- `--into` 이름은 영소문자·숫자·`_`·`-` 1–64자, 영소문자나 숫자로 시작한다.
-- `--what` 을 생략하면 소스에 있는 범주를 모두 가져오고, 없는 파일은 건너뛰었다고 알린다(하나도 없으면 오류). 명시하면 없는 파일은 오류다.
-- `--dry-run` 은 읽고 복호화까지 해서 개수만 보고한다. 아무것도 쓰지 않고 브라우저도 띄우지 않는다.
-- `--json` 은 보고서를 JSON 한 줄로 낸다. 쿠키 값과 키링 비밀번호는 어떤 출력에도 나오지 않는다.
+브라우저 데이터 가져오기는 온보딩의 첫 실행 단계다. GUI는 감지된 모든 프로필을 찾고 가져올 수 있는 모든 카테고리를 미리 보여주며, 저장된 비밀번호를 가져오기 전에 Vault를 새로 구성하거나 기존 Vault를 잠금 해제한 뒤 백그라운드 작업을 시작하고 프로필별 수량과 경고를 표시한다. 기본적으로 감지된 모든 프로필의 모든 항목이 선택된다. 사용자는 작업을 시작하기 전에 원하는 프로필이나 카테고리만 골라낼 수 있다. GUI의 어떤 작업도 터미널 명령 입력을 요구하지 않는다.
 
-## 2. 프로필과 저장 위치
-프로필 이름은 데몬 data 디렉터리 아래 다음 위치로 대응한다.
+지원 브라우저 감지 로직은 `crates/openside-import/src/discover.rs`에 데이터 기반으로 정의되어 있다. 지원 대상은 Chrome(stable/beta/dev), Chromium, Brave, Edge, Vivaldi, Opera, Arc, Aside, Firefox, LibreWolf, Zen, Floorp, 그리고 macOS의 Safari다. Linux는 XDG 기본 경로와 명시된 snap/Flatpak 패키지 경로를 확인한다. macOS는 Application Support 및 Safari Library/컨테이너 경로를 사용한다. Windows 브라우저 경로는 플랫폼 독립적으로 열거되지만, 네이티브 데몬 전송 및 심볼릭 링크 안전 검증 등은 플랫폼 고유 제한을 따른다. 경로 감지가 플랫폼 독립적으로 지원된다고 해서 Windows 네이티브 환경의 엔드투엔드 검증까지 마쳤음을 뜻하지는 않는다.
 
-| 대상 | 위치 |
-|---|---|
-| 브라우저 user-data-dir | `<data>/browser-profiles/<이름>`. 이름이 `default` 이면 데몬의 기존 `<data>/browser-profile` |
-| 가져온 기록 | `<data>/browser-imports/<이름>/history.<소스>.jsonl` (방문 한 건이 한 줄: `url`, `title`, `visited_at_ms`) |
-| 가져온 북마크 | `<data>/browser-imports/<이름>/bookmarks.<소스>.json` (`bookmarks[]`: `url`, `title`, `folder[]`, `added_at_ms`) |
+Chromium 프로필 디렉터리에는 `Default`, 번호가 붙은 프로필 디렉터리, 안전한 `Local State/profile/info_cache` 항목 전체, 그리고 프로필 데이터를 포함하는 디렉터리가 포함된다. 표시 이름, 이메일, 로컬 아바타 식별자는 Local State에서 읽어온다. Firefox 프로필에는 `profiles.ini`의 모든 항목과 인덱스에는 없지만 디스크에 존재하는 프로필이 모두 포함된다. 프로필 ID는 불투명(opaque)하고 결정론적이며 충돌 위험이 없고 절대 경로를 포함하지 않는다. 심볼릭 링크인 원본 디렉터리나 파일은 따라가지 않는다.
 
-`<소스>` 는 `chrome`, `chromium`, `firefox`. 같은 소스를 다시 가져오면 파일을 통째로 원자적으로 바꾸므로 중복이 쌓이지 않는다(쿠키도 같은 이름·도메인·경로는 덮어쓴다). 가져오기는 한 프로필만 건드린다: 프로필 A 로 가져와도 B 의 디렉터리·쿠키·기록·북마크는 바뀌지 않는다.
+Safari 프로필은 접근이 제한된 상태에서도 목록에 표시되며, '시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한'으로 안내하는 전체 디스크 접근 권한 경고가 함께 노출된다. Safari 비밀번호는 키체인에 저장되므로 직접 이전할 수 없으며, GUI에서 CSV 파일 내보내기를 통한 대체 방식을 지원한다.
 
-결정(근거):
-- **쿠키**는 대상 프로필의 Chromium 을 헤드리스로 띄워 CDP `Storage.setCookies` 로 넣고 정상 종료해 디스크에 반영한다. 암호화는 대상 Chromium 이 자기 키로 하므로 프로필이 그 브라우저에서 그대로 유효하다. 쿠키 DB 를 직접 쓰지 않는다. 쿠키 범주가 포함되고 `--dry-run` 이 아니면, 소스에 쿠키가 없더라도 읽기 전에 대상 프로필이 사용 중인지 먼저 확인한다. 디버깅 포트 없이 떠 있는 Chromium 도 잡도록 `SingletonLock`(`<호스트>-<pid>` 링크, 살아 있는 pid 만 인정)과 `DevToolsActivePort` 를 모두 보고, 사용 중이면 `profile ... is in use by a running browser` 로 거절한다. 기록·북마크만 가져오려면 `--what history,bookmarks` 로 이 검사를 피한다. 브라우저 실행 파일은 `browser.executable`/`OPENSIDE_BROWSER`/PATH 순으로 찾는다.
-- **기록**은 메모리의 `history` 색인에 넣지 않는다. 그 색인은 프로필 구분이 없어 A 로 가져온 기록이 B 에서도 검색되고, 30일 뒤 만료되며, 에이전트가 검색한다. 프로필별 JSON-lines 로 따로 둔다. http/https 주소만 가져온다(`chrome://`, `about:` 등은 건너뜀).
-- **북마크**는 Chromium 의 `Bookmarks` 파일에 합치지 않는다. Chromium 이 체크섬으로 검증하고 다시 쓰는 파일이기 때문이다. `javascript:` 북마크릿(대소문자 무관)과 Firefox 의 `place:` 질의는 건너뛰고 건너뛴 개수에 센다. Firefox 의 `tags________` 아래 항목은 태그 연결일 뿐이라 북마크로 세지 않는다.
-- 세션 쿠키(만료 없음)는 대상 브라우저가 가져오기 직후 종료되므로 사라진다. 그래서 가져온 시각부터 7일짜리 지속 쿠키로 바꿔 넣는다. 이미 만료된 쿠키는 건너뛴다.
-- 파티션 쿠키(Chrome `top_frame_site_key`)와 Firefox 컨테이너·파티션 쿠키(`originAttributes`)는 대상 프로필에 대응하는 격리 컨텍스트가 없어 건너뛰고 개수만 센다. `Secure` 가 없는 `SameSite=None` 쿠키는 Chromium 이 거절하므로 `SameSite` 속성을 뺀다. 그래도 Chromium 이 거절한 쿠키는 건너뛴 개수에 더하고 호스트와 이름만 보고서에 나온다.
+Arc의 즐겨찾기(Favorites), 폴더, 사이드바 저장 탭은 일반적인 Chromium 북마크와 구조가 다르다. 따라서 브라우저 감지 시 실제 Chromium 프로필 외에 Arc의 `StorableSidebar.json`을 가리키는 `All Spaces (shared sidebar)` 항목을 별도로 노출한다. 이 공유 원본 데이터 경고에는 모든 스페이스가 포함되어 있다는 사실이 명시되며, 일반 Arc 프로필을 하나만 선택했다고 해서 공유 데이터까지 암묵적으로 읽지는 않는다. 사이드바 링크는 폴더나 탭 그룹 계층 구조를 보존한 채 북마크로 변환되며, 공개 웹 링크는 복원 목록으로도 구성된다. 식별자 참조와 순환 참조 또는 누락된 부모 참조는 탐색 상한을 두며, 중복된 항목 ID는 중복을 제거한다. Chromium의 일반 열린 세션 스냅샷은 기존처럼 프로필별로 유지된다. 사이드바 스키마는 [public Arc exporter](https://gist.github.com/cgimenes/08a38c15cbfcd5a9cf240ad72d63027a)를 따르며, 형식이 잘못되었거나 지원하지 않는 파일은 종류별로 안전한 경고를 생성한다.
 
-## 3. 소스를 읽는 방법
-- 소스 SQLite 파일은 `-wal`·`-shm`·`-journal` 과 함께 비공개 임시 디렉터리로 복사한 뒤 복사본을 연다. 복사본은 소스 권한과 무관하게 새로 만든 0600 파일이라, 읽기 전용이거나 world-readable 인 소스도 처리하고 SQLite 가 WAL·저널을 복구할 수 있다. 브라우저가 실행 중이어서 잠겨 있거나 체크포인트 전 WAL 에 쓴 내용이 있어도 읽을 수 있고, 소스 파일은 수정하지 않는다(테스트가 가져오기 전후 파일 내용을 비교한다). 실행 중인 브라우저가 복사 도중 `-wal`·`-journal` 을 지우면 없는 것으로 본다. 소스 파일이 심볼릭 링크이거나 일반 파일이 아니면 따라가지 않고 읽기 오류로 거절하며, 접근 권한 오류는 `찾을 수 없음` 이 아니라 읽기 오류로 보고한다. 임시 복사본은 끝나면 지운다.
-- 모든 범주를 먼저 읽고 복호화한 다음에야 대상에 쓴다. 기록은 읽는 동안 임시 파일에 모았다가, 쿠키 적용까지 끝난 뒤에야 프로필 저장소(`browser-imports/<이름>`)를 만들고 옮긴다. 읽기·복호화·사용 중 검사에서 실패하면 대상에는 아무것도 생기지 않는다. 저장소 디렉터리는 0700, 파일은 `O_EXCL` 0600 임시 파일을 `sync` 한 뒤 `rename` 으로 바꾸므로 고정 이름 임시 파일이나 심볼릭 링크를 따라가지 않고 동시 가져오기가 서로 덮지 않는다.
-- Chrome 시간(1601년 기준 마이크로초)과 Firefox 시간(마이크로초)은 Unix 밀리초로, Firefox 쿠키 만료는 초 또는 밀리초(값이 1e11 이상이면 밀리초)를 초로 맞춘다.
+## 공개 API
 
-### Chrome/Chromium 쿠키 복호화 (Linux)
-`encrypted_value` 의 앞 3바이트가 암호화 방식이다.
+모든 라우트는 `admin` 권한과 로컬 사람 권한을 함께 요구한다. 즉, 로컬 소켓을 통하거나, RemoteBackend가 검증한 로컬 TCP 출처와 현재 부팅 시점의 `X-Openside-Local-Secret`을 갖춰야 한다. 페어링된 관리자 토큰만으로는 로컬 권한으로 인정되지 않으며, 릴레이나 프록시를 경유한 트래픽은 403 `local_access_required`로 거부된다. API는 감지된 프로필 ID만 인자로 받으며 원본 경로나 실행 명령은 절대 받지 않는다.
 
-| 접두 | 키 | 동작 |
-|---|---|---|
-| `v10` | PBKDF2-HMAC-SHA1(`peanuts`, `saltysalt`, 1회, 16바이트), AES-128-CBC, IV 는 공백 16개, PKCS#7 | 자동 복호화 |
-| `v11` | 같은 파생, 비밀번호는 데스크톱 키링의 `Chrome Safe Storage`/`Chromium Safe Storage` | `--keyring-password-cmd` 로 비밀번호를 주어야 복호화 |
-| 그 외(`v20` 등) | — | 오류 `unknown encryption version` |
+| 경로 | 본문 / 응답 |
+| --- | --- |
+| `GET /v1/import/profiles` | 브라우저 및 프로필 메타데이터, 9개 카테고리 전체의 사용 가능 여부, 경고, `cookies_writable`, `vault_needed`, `vault_locked` |
+| `POST /v1/import/preview` | `{profiles?: string[] or null, what?: ImportCategory[] or null}` 전송 시 `dry_run: true`인 `ImportBatchReport` 반환 |
+| `POST /v1/import` | 동일한 선택 본문 전송 시 202 `ImportJob` 반환 |
+| `GET /v1/import/jobs/{id}` | 현재 작업 상태 및 최종/부분 요약 |
+| `GET /v1/import/jobs/{id}/events` | SSE `import_progress`. 단조 증가 ID 사용, `Last-Event-ID` 재생 지원, 완료나 실패 시 종료 |
+| `POST /v1/import/passwords` | `{csv: string}` 전송 시 카테고리별 보고서 반환. CSV는 메모리에서 파싱되어 Vault로 직행하며 파일 업로드 형태로 저장되지 않음 |
+| `GET /v1/import/delivery?target=user\|agent` | 로컬 전용 네이티브 전달 대기 배치. 쿠키 값은 평문 큐를 거치지 않고 실시간으로 조회됨 |
+| `POST /v1/import/delivery/{id}/ack` | `{target: "user" or "agent"}` 전송 후 대상이 변경 사항을 적용하면 204 반환 |
 
-- `--keyring-password-cmd` 는 셸 없이 직접 실행하는 명령줄이다(공백과 따옴표로만 나눈다). 표준 출력 끝의 개행을 뗀 값이 비밀번호이고, 30초 안에 끝나야 한다. `v11` 쿠키를 만났을 때만 실행한다. 명령은 사용자가 정하며(예: `secret-tool` 로 `Chrome Safe Storage` 항목을 조회하는 명령), 테스트는 키링에 닿지 않는다. Vault 의 플랫폼 잠금 추상화는 쓰지 않는다. 브라우저 키링 항목과 Vault 래핑 키는 별개이기 때문이다.
-- 쿠키 DB 스키마 버전(`meta.version`, 정수·문자열 저장 모두 읽는다)이 24 이상이면 복호화한 값 앞에 호스트의 SHA-256(32바이트)이 붙어 있다. 이 값이 맞지 않거나 복호화가 실패하면, 키링 키가 아직 어떤 쿠키도 복호화하지 못한 상태에서는 틀린 비밀번호(`v11`)로 보고, 이미 하나라도 성공했거나 `v10` 이면 손상으로 본다. 암호문 길이가 AES 블록(16바이트) 배수가 아니면 비밀번호와 무관하게 손상이다.
-- 키링 비밀번호, 파생 키, 복호화 중간 버퍼, 쿠키 값은 메모리에서 지운다(`zeroize`, best effort). 키링 명령은 별도 프로세스 그룹으로 실행하고 제한 시간을 넘기면 그룹 전체를 종료한다. 명령이 끝난 뒤에도 자식이 표준 출력을 붙잡고 있으면 제한 시간 안에 실패한다.
-- 복호화할 수 없는 쿠키가 하나라도 있으면 쿠키 범주 전체가 오류로 끝난다. 오류에는 호스트와 쿠키 이름만 나온다.
+가져오기 종류는 `history`, `bookmarks`, `cookies`, `passwords`, `autofill`, `tabs`, `search_engines`, `permissions`, `extensions`다. 선택 항목이 비어 있으면 400 `invalid_value`로 실패한다. 알 수 없는 프로필 ID는 400 `unknown_profile`로 실패한다. 동시 쓰기 시도는 409 `import_in_progress`로 실패한다. 비밀번호 항목이 선택된 상태에서 실제 작업을 시작할 때 Vault가 설정되지 않았거나 잠겨 있으면 쓰기 전에 409 `vault_setup_required` 또는 `vault_locked`로 실패하며, GUI는 기존 Vault 설정 및 잠금 해제 엔드포인트를 거쳐 다시 시도한다. 비밀번호 CSV 가져오기에도 동일한 권한 및 Vault 요건이 적용된다.
 
-플랫폼: 키 파생은 실행 중인 OS 를 따른다. macOS 는 Keychain 비밀번호와 1003회 반복으로 파생하는 경로가 컴파일되지만(`cfg(target_os = "macos")`) 실행해 보지 못했다(`unverified`). Windows(DPAPI·AES-GCM) 쿠키 복호화는 지원하지 않는다. 자세한 내용은 [PLATFORMS.md](../PLATFORMS.md).
+보고서에는 `read`, `imported`, `skipped`, 거부된 쿠키 라벨(값 미포함, 선택 사항), 안전한 영어 안내 문구인 `note`가 포함된다. 미리보기 단계에서는 쿠키와 비밀번호의 원본 행 개수만 집계할 뿐 복호화하거나 OS 키링을 조회하거나 잠금 해제를 요구하거나 실제 사용 가능 여부를 검증하지 않는다. 보호 처리되거나 만료되었거나 중복된 행은 실제 실행 시 제외되므로 최종 개수가 미리보기보다 줄어들 수 있다. 안내 문구에는 가져오기 도중 시스템이 접근 권한을 요청할 수 있다는 점이 설명된다. 미리보기 단계에서는 Vault 설정이 필요하지 않다. 그 외 종류는 미리보기를 위해 파싱 및 살균(sanitize) 처리를 거치며, 특정 카테고리가 누락되거나 손상되어도 다른 카테고리의 처리를 막지 않는다. 보고서, 이벤트, 작업 로그 어디에도 비밀번호, 쿠키 값, Safe Storage 키, 원본 파일 시스템 경로, 명령 실행 결과는 직렬화되어 기록되지 않는다.
 
-## 4. 오류 메시지
-| 상황 | 메시지(요지) |
-|---|---|
-| `--from` 형식 오류 | `invalid source ...: expected <chrome\|chromium\|firefox>:<profile directory>` |
-| 프로필 디렉터리·파일 없음 | `Chrome history not found at <경로>: is this a Chrome profile directory?` |
-| 읽기 권한 없음 | `cannot read history at <경로>: <OS 오류>` |
-| 잠긴 DB | `history database <경로> is locked; close Chrome and import again` |
-| 손상·SQLite/JSON 아님 | `history database <경로> is corrupt or not a SQLite file: ...` |
-| 알 수 없는 스키마 | `unsupported Chrome history format in <경로>: table `visits` is missing` (열이 없을 때도 같은 형식) |
-| 알 수 없는 쿠키 암호화 | `cookie `<이름>` for <호스트> uses unknown encryption version `v20` ...` |
-| `v11` 인데 비밀번호 없음 | `... encrypted with the OS keyring key (v11); pass --keyring-password-cmd ...` |
-| 틀린 키링 비밀번호 | `the keyring password is wrong: it does not decrypt cookie ...` |
-| 손상된 `v10` 쿠키 | `cookie ... is corrupt: its encrypted value does not decrypt` |
-| 키링 명령 실패 | `keyring password command failed: ...` |
-| 대상 프로필 사용 중 | `openside profile `<이름>` is in use by a running browser; stop it before importing cookies` |
-| 쿠키를 쓸 브라우저 없음 | `importing cookies needs a Chromium-compatible browser ...` |
+작업 파일과 진행 기록은 비공개로 유지되며 `<data>/import-jobs/` 아래에서 원자적으로 교체된다. HTTP 클라이언트 연결이 끊어지더라도 이미 접수된 작업은 취소되지 않는다. 실행 도중 중단된 작업은 데몬 재시작 후 상태를 읽을 때 실패로 처리된다. 완료된 프로필의 결과는 부분 실패 요약에 보존된다.
 
-## 5. 테스트와 안전
-- 모든 테스트는 합성 fixture 로만 돌린다. `openside-import` 의 `testing` 기능이 실제 테이블 정의(Chrome `History`·`Cookies`, Firefox `places.sqlite`·`cookies.sqlite`)와 실제 `v10`/`v11` 암호화로 프로필을 만든다. 사용자 프로필은 읽지 않으며 테스트는 HOME 과 XDG 디렉터리를 임시 디렉터리로 바꾼다.
-- E2E(`crates/openside-e2e/tests/import.rs`)는 `openside import` 로 Chrome·Firefox fixture 를 프로필 `alpha`·`beta` 에 가져온 뒤, 각 프로필로 에이전트 브라우저를 띄워 127.0.0.1 페이지가 받는 `Cookie` 헤더를 확인한다. 브라우저가 없으면 이유를 출력하고 건너뛴다.
+## 원본 및 대상
 
-## 6. 범위 밖
-- Safari ZIP 가져오기, Windows 쿠키 복호화, 비밀번호·자동완성·확장 프로그램 가져오기.
-- 가져온 기록을 에이전트가 검색하거나 사용하는 경로. 이 문서는 데이터를 프로필에 옮기는 데까지를 다룬다.
-- 실행 중인 데몬의 브라우저에 대한 쿠키 가져오기(프로필 사용 중으로 거절한다).
+에이전트 대상 디렉터리는 `default`인 `<data>/browser-profile`이다. 이미 관리 중인 Chromium 인스턴스가 전용 CDP `Storage.setCookies` 연결을 통해 쿠키를 기록하고 암호화하며, 이후 에이전트 작업에서도 계속 재사용된다. 동일한 프로필을 두고 경쟁하는 프로세스는 실행되지 않는다. 브라우저는 헤드리스 상태를 유지하며 데스크톱 창을 띄우거나 포커스를 가져가지 않는다. 원본의 세션 쿠키는 7일간 유지되는 영구 쿠키로 변환되어 추후 브라우저를 재시작하더라도 가져온 로그인 세션이 즉시 유실되지 않는다. 만료된 쿠키와 매핑할 수 없는 파티션/컨테이너 쿠키는 건너뛴다. Secure 속성이 없는 SameSite=None 쿠키는 Chromium에서 거부하므로 제외한다.
 
-**웹 UI 가져오기.** 웹 첫 실행 안내는 데몬 API `GET /v1/import/profiles`와 `POST /v1/import`(`admin` 스코프)를 통해 동일한 가져오기 엔진을 실행한다. 이 방식은 표준 위치에서 탐색된 프로필 id만 지정할 수 있으며 openside 기본 프로필로만 데이터를 가져온다. 네트워크 API로는 키링 비밀번호 실행 명령을 전달받을 수 없으므로 키링 암호화(v11) 쿠키는 가져올 수 없다. 자세한 내용은 `docs/specs/onboarding.md`를 참고한다.
+실제 실행 중 네이티브 쓰기를 진행하기 전에, 선택한 프로필들의 쿠키를 host/name/path 기준으로 전역 병합 충돌을 해결한다. 원본의 최종 접근 시각이 가장 최근인 쿠키가 우선하며, 동률이거나 포맷에 최종 접근 메타데이터가 없는 경우에는 생성 시각으로 결정한다. 타임스탬프까지 완전히 같으면 첫 번째 원본을 결정론적으로 유지한다. 만료된 후보는 어떤 경우에도 우선되지 않는다. 프로필별 실행 통계에는 버려진 후보 개수도 포함되며, 안전한 최종 요약 경고에는 쿠키 값 없이 대상 사이트 목록만 표시된다. 미리보기 단계에서는 충돌 해결이나 쿠키 값 조회를 수행하지 않고 원본 행 개수만 집계한다. 이로써 나중에 발견된 브라우저가 아니라 실제로 가장 최근에 사용한 계정의 쿠키를 유지한다.
+
+저장된 비밀번호는 오직 암호화된 openside Vault로만 저장된다. 정규화된 출처(origin)와 사용자 이름을 기준으로 기존 로그인 항목을 식별하며, 다시 가져올 때 중복 항목을 추가하는 대신 비밀번호를 갱신한다. Vault 정책과 감사 로그 규정을 준수하며 저장하기 전에 마스킹 처리가 적용된다. 복호화된 임시 비밀번호/키 버퍼와 소유권을 가진 쿠키 값은 drop 시 best effort로 메모리를 0으로 초기화(zeroize)한다. 원본 암호화 데이터베이스는 비공개 임시 스크래치 디렉터리로 복사될 수 있지만, 복호화된 비밀번호가 그곳에 저장되는 일은 없다.
+
+다른 범주는 프로필별 방문 기록·북마크 저장소 규약에 따라 `<data>/browser-imports/default/sources/<opaque-id-hash>.json` 아래에 소스별 스냅샷으로 보관한다. 소스 프로필이 서로 달라도 기존 데이터를 덮어쓰지 않는다. 선택한 종류만 해당 소스 스냅샷 필드를 대체하며, 선택하지 않은 종류는 그대로 유지한다. 쿠키와 비밀번호 값은 명시적으로 제외한다. 이 레코드는 실제 설치 데이터가 아니라 가져오기 메타데이터다. 확장 프로그램은 이름과 공식 스토어 링크만 남기고, 탭은 `restore_tabs` 목록으로 관리하며 자동으로 열지 않는다. 이 저장소는 네이티브 Chromium 환경설정, 방문 기록, 자동완성 데이터베이스를 변경하지 않는다.
+
+전용 **user** openside-browser 프로필은 확장 프로그램이 지원하는 `chrome.bookmarks.create`, `chrome.history.addUrl`, `chrome.cookies.set` API를 거쳐 네이티브 북마크, 방문 기록, 쿠키를 받는다. 런처 로컬 웹 UI는 기존 로컬 사람 권한으로 전달 배치를 가져와 출처 검증을 마친 확장 프로그램 런타임 메시지로 넘긴 뒤, 적용에 성공했을 때만 완료 처리한다. 이 과정에서 토큰이나 부트 시크릿을 확장 프로그램에 전달하지 않는다. 확장 프로그램이 실행 중이지 않거나 설치되지 않았다면 보류 중인 변경분은 비공개로 유지하며, 이후 로컬 GUI를 시작할 때 다시 시도한다. URL·폴더 경로와 쿠키 키로 중복을 제거하므로 반복 적용해도 안전하다.
+
+네이티브 전달을 기다리는 메타데이터에는 북마크, 방문 기록, **쿠키 키만** 남긴다. 쿠키 값은 에이전트의 암호화된 Chromium 저장소에서 실시간으로 가져온다. **agent** 프로필은 네이티브 CDP 쿠키와 함께 읽기 전용 북마크·방문 기록 조회 기능, 신뢰할 수 있는 자동완성·로그인 도구의 주소 추천만 활용하며, 에이전트 프로필에는 확장 프로그램을 전혀 로드하지 않는다. 검색 엔진, 사이트 권한, 확장 프로그램 링크, 복원 대상 탭은 GUI에 표시하는 인벤토리로만 남고, 자동완성 값은 미리보기에 노출하지 않는다.
+
+네이티브 전달 변경분은 배치마다 범주별로 최대 250개 레코드를 담는다. **user** 대상은 지원하는 API 호출이 모두 성공한 뒤 독립적으로 완료를 확인한다. 확장 프로그램 권한이 빠져 있으면 권한을 임의로 넓히지 않고 작업을 보류 상태로 둔다. `chrome.history.addUrl`은 네이티브 삽입 시점을 기록하며, 원래 방문 타임스탬프는 소스 측 저장소에 남는다. 에이전트의 `browser_import_lookup` 도구는 읽기 전용 소스 데이터만 제공하고, 로그인 이메일·전화번호 추천은 자동으로 채우지 않고 명시적으로 선택해야 입력된다.
+
+네이티브 북마크 스킴은 HTTP, HTTPS, file, FTP만 지원한다. 내부 스킴과 실행 가능 스킴(`chrome`, `about`, `javascript`, `data` 등 지원하지 않는 스킴)은 건너뛰고 전달 전에 개수를 집계한다. 잘못된 항목이 섞여 있어도 전체 배치가 중단되지 않으며, 확장 프로그램 역시 각 항목을 방어적으로 검증한다. 요약 화면에는 건너뛴 내부 링크 개수를 표시하면서 지원하는 모든 북마크와 폴더 계층 구조는 그대로 유지한다.
+
+가져온 비밀이 아닌 URL 필드는 리더, 직렬화 스냅샷, 네이티브 전달 프로젝션, 요약, 모델 조회 단계를 벗어나기 전에 먼저 파싱해 검증한다. `sanitize_import_url`은 HTTP, HTTPS, file, FTP만 허용하며, 방문 기록, 복원 대상 탭, 검색 프로바이더에는 기존의 웹 전용 제한을 그대로 유지한다. URL에서 userinfo를 항상 제거하고, `token`, `access_token`, `id_token`, `refresh_token`, `code`, `key`, `api_key`, `apikey`, `sig`, `signature`, `auth`, `authorization`, `session`, `sessionid`, `sid`, `password`, `pass`, `pwd`, `secret` 이름이 붙거나 `X-Amz-` 또는 `X-Goog-` 접두사가 붙은 쿼리·프래그먼트 파라미터(대소문자 구분 없음, 퍼센트 인코딩 포함)를 지우며, `access_token=`이나 `id_token=`을 포함한 OAuth 암시적 응답 프래그먼트는 통째로 버린다. 일반적인 파라미터 인코딩과 검색 템플릿 마커는 손상 없이 유지한다. URL에서 파생된 대체 제목에도 정제된 주소를 사용한다. 기존에 저장된 소스 스냅샷도 조회 전과 미선택 범주를 새 스냅샷으로 넘기기 전에 정제하며, 레거시 네이티브 전달 URL 역시 전달 전에 정제한다. Chromium 권한 매치 패턴은 범위를 넓히지 않고 두 와일드카드 구성 요소를 모두 유지한다. 이 정책은 식별 가능한 자격 증명을 다루는 규칙일 뿐이며 URL이 공개 데이터라는 뜻은 아니다. 경로, 제목, 식별되지 않은 파라미터에도 개인정보가 포함될 수 있다. 인기 사이트(top-sites) 가져오기 범주는 따로 없으며, 이번 수정으로 새로 추가되지도 않는다.
+
+### Chromium 계열
+
+방문 기록과 북마크에는 스키마를 인식하는 기존 리더를 그대로 쓴다. 쿠키와 Login Data는 플랫폼에서 지원하는 암호화 방식을 따른다. Linux는 Secret Service를 거친 Safe Storage(`v11`)와 고정 Linux `v10` 키를 사용하고, macOS는 일반 Keychain Safe Storage 키(PBKDF2 1003회 반복)를, Windows는 지원하는 비밀번호 스킴을 사용한다. OS 프롬프트나 잠긴 저장소는 우회하지 않는다. 앱 바인딩 방식을 지원하지 않으면 강제로 해독하지 않고 지원 불가 상태로 보고한다. 브랜드별 Safe Storage 조회는 한곳에서 집중 처리하며, 네트워크로 전달받은 셸 명령은 일절 실행하지 않는다.
+
+자격 증명 접근은 사람이 명시적으로 가져오기를 시작한 뒤에만 일어난다. 이때 macOS는 일반 Keychain 권한 요청 창을 띄울 수 있으며, 애플리케이션이 이 창에 대신 응답하지 않는다. Linux는 이미 잠금 해제된 Safe Storage 항목만 읽고 Secret Service `Unlock`을 호출하지 않는다. 항목이 잠겨 있으면 잠금을 해제하고 다시 시도하라는 안내 메시지를 반환하며, 상관없는 다른 데이터 종류는 가져오기를 계속 진행한다.
+
+자동완성은 최신 주소 토큰 테이블과 기존 프로필·주소·이름·이메일·전화번호 레코드를 모두 처리한다. 검색 엔진은 Web Data에서 가져오고, 사이트 권한 패턴과 확장 프로그램 라벨은 Preferences·Secure Preferences에서 읽는다. 암호화되지 않은 세션 스냅샷(`SNSS` v1/v3)으로 선택한 탐색 기록, 닫힘·정리 상태, 탭 순서를 재구성하며, 보호된 세션 포맷은 오래된 세션으로 대체하지 않고 지원 불가로 보고한다. 열린 세션은 Session_* 파일만 나타내며, Tabs_* 닫힌 탭 저장소는 자동으로 복원하지 않는다. 확장 프로그램 바이너리는 복사하거나 설치하지 않는다.
+
+### Firefox 계열
+
+Places와 쿠키 SQLite 리더를 재사용한다. `key4.db`를 동반한 `logins.json`은 Rust에서 기본 빈 마스터 비밀번호(empty-primary-password) 암호화를 지원한다. 마스터 비밀번호가 설정되어 있으면 해당 범주 경고를 표시하며, 사용자는 대신 CSV로 내보낼 수 있다. 자동완성 프로필, mozlz4 세션·검색 엔진, 사이트 권한 데이터베이스, 확장 프로그램 메타데이터는 각 프로필 파일에서 읽는다. 세션 복원은 전체 방문 기록이 아니라 각 탭의 현재 탐색 항목만 선택한다.
+
+### Safari
+
+권한이 허용된 환경에서 방문 기록 SQLite, 북마크 plist, 바이너리 쿠키, 세션 plist를 파싱한다. 전체 디스크 접근 권한(Full Disk Access) 부족 문제는 명시적으로 드러낸다. 접근 가능한 지원 포맷이 없는 범주는 성공으로 처리하지 않고 사용 불가로 보고한다. Keychain 비밀번호는 Safari 및 비밀번호 앱 CSV 헤더를 포함해 GUI CSV 방식으로 대체한다.
+
+### 비밀번호 CSV
+
+Chrome·Edge의 `name,url,username,password`, Firefox의 `url,username,password`(추가 열은 무시), Safari의 `Title,URL,Username,Password`(선택적 추가 열 허용) 형식을 지원한다. 대소문자를 구분하지 않는 헤더, UTF-8 BOM, 따옴표로 감싼 필드, 내장 구분 기호와 줄바꿈을 모두 처리한다. 웹 URL이 아니거나 자격 증명이 포함된 URL, 빈 비밀번호는 건너뛴다. 정규화된 오리진과 사용자 이름이 겹치면 중복을 제거한다. 요청 크기는 제한되어 있으며, 형식이 잘못된 내보내기 파일은 입력값을 출력에 남기지 않고 즉시 실패 처리한다. 내보내기 파일 소유권은 openside 외부의 사용자에게 있으며, openside는 GUI에서 선택한 파일을 보관하거나 삭제하지 않는다.
+
+CSV는 호출자가 관리하는 제로화(zeroizing) 디코드 레코드 버퍼와 함께 빌린 입력을 바탕으로 `csv-core`를 사용한다. 사용한 바이트는 버퍼를 재사용하기 전에 지우며, 최종 자격 증명은 제로화 모델로 옮긴다. 자격 증명 행에 대해 `StringRecord`나 버퍼 리더 복사본을 남기지 않는다. 다만 데이터 삭제는 최선형(best effort) 처리이며 엔드투엔드 완전 소거를 보장하지는 않는다. HTTP·JSON 본문 디코딩, 불변 브라우저·JavaScript 문자열, URL 파싱, 서드파티·OS 버퍼 등 이 파서가 제어할 수 없는 영역에 임시 복사본이 남을 수 있다. 업로드나 디코드된 자격 증명 파일은 디스크에 쓰지 않으며, 로그와 오류에도 행 값을 포함하지 않는다.
+
+## 소스 안전성 및 일관성
+
+소스 SQLite 데이터베이스는 `mode=ro`, `immutable=0`, `readonly_shm=1` 설정의 읽기 전용 연결에서 온라인 백업 API를 사용한다. 읽기 트랜잭션으로 체크포인트되지 않은 WAL 페이지를 포함해 커밋된 단일 뷰를 고정하고, 비공개 대상 파일에는 쓰기가 가능한 상태를 유지한다. 새로 생성하는 임시 스크래치 데이터베이스는 0700 디렉터리 안에 0600 권한으로 만들며 drop 시점에 삭제한다. 기존 데이터베이스·사이드카와 논리 스냅샷은 2 GiB 상한(`MAX_SOURCE_BYTES`)을 적용하며, 크기를 초과한 소스는 타입화된 `ImportError::SourceTooLarge`를 반환한다. busy 타임아웃은 2초이고 백업 busy·잠금 재시도는 최대 3회로 제한하며 백업 단계마다 경과 시간 30초 한도를 둔다.
+
+SQLite는 메인 연결이 읽기 전용이어도 누락된 WAL을 새로 만들 수 있다. 따라서 SQLite 소스 연결을 열기 전에 유효한 WAL 헤더가 있으면서 WAL, SHM, 저널이 모두 없는 데이터베이스는 비공개 스크래치 디렉터리로 메인 파일 복사를 제한적으로 수행한다. 이 예외 처리는 정온 상태(quiescence) 검증을 거쳐야 한다. no-follow 경로로 새로 열었을 때를 포함해 소스 inode, 크기, 수정 시각, 100바이트 헤더가 작업 전후로 일치해야 하고 사이드카가 계속 없어야 한다. 비공개 복사본만 정상적으로 열리며, 새로 생기는 사이드카는 해당 디렉터리 안에만 남는다. 소스가 변경되면 스크래치 스냅샷을 버리고 1회 재시도한다. SHM이나 저널이 있는데 WAL만 없는 소스는 WAL을 새로 만들지 않고 fail-closed 처리한다. 기존 사이드카가 있는 소스는 이 폴백 경로를 타지 않으며, 소스는 어떤 경우에도 `immutable=1`을 사용하지 않는다. 일반적인 쓰기 작업은 감지하지만, 동일 사용자의 악성 프로세스가 메타데이터를 유지한 채 일시적으로 파일을 교체하는 행위까지 보장하지는 못한다.
+
+Linux에서는 심볼릭 링크 순회를 차단하고 검증된 디렉터리 핸들 아래에서 `openat2`로 소스 사전 검사 열기를 수행하며, 인터페이스를 쓸 수 없으면 경로 구성 요소마다 `O_NOFOLLOW`를 적용한다. 일반 파일 여부를 확인하기 전에 넌블로킹 열기를 먼저 시도하여 작성자를 기다리지 않고 정적 FIFO를 걸러낸다. 기본 SQLite VFS는 여전히 소스와 사이드카 경로를 정규화해 다시 열기 때문에, 프로필 트리를 수정하는 동일 사용자 프로세스가 이 경계 시점에 경합할 수 있으며 SQLite busy 타임아웃 밖에서 파일을 FIFO로 교체할 가능성도 있다. 읽기 잠금 때문에 체크포인트가 지연될 수 있고 파일시스템 읽기 작업으로 접근 시간 메타데이터가 갱신될 수도 있다. 경로 경합을 원자적으로 완벽히 제거했다고 보장하는 것은 아니다. macOS는 Linux처럼 상위 디렉터리를 순회하지 않고 리프 경로에 대해서만 no-follow 사전 검사를 수행하며, Windows 소스 접근은 계속 지원하지 않고 fail-closed 처리한다. 자세한 내용은 [플랫폼 잔류 위험](../PLATFORMS.md#browser-import-sqlite-snapshots--todoko)을 참고한다. 추가 메타데이터 및 세션 읽기 작업에는 명시적 크기 제한을 유지한다.
+
+기존 독립형 `openside import --from <chrome|chromium|firefox>:<dir> --into <name>` CLI는 dry-run과 선택적 키링 비밀번호 명령을 지원하는 3개 종류 단일 프로필 가져오기 경로로 유지된다. 기존의 선행 읽기 후 쓰기 실패 시맨틱은 새로운 배치 GUI의 종류별 격리와 분리되어 있다. 이 CLI는 대안 경로이며 GUI 사용의 전제 조건이 아니다.
+
+## 검증
+
+검사 시 합성 픽스처만 사용하며, 사용자의 브라우저 데이터는 절대 읽지 않는다. 집중 가져오기 테스트는 각 계열, 암호화된 비밀번호 파싱, 잠김·보호 소스 실패 안내, 세션 재구성, 감지 충돌, 이동 가능한 위치 테이블을 다룬다. 데몬 검사는 로컬 권한, Vault 설정·잠금 게이팅, CSV-Vault 중복 제거, 민감한 값 비노출 출력을 다룬다. `crates/openside-e2e/tests/import_all.rs`는 전용 데몬과 실제 형태를 본뜬 Chromium·Firefox 픽스처를 복사해 감지, 미리보기, 실행, 지속성 있는 진행률, 요약, 멱등성, 에이전트 프로필로의 로그인 쿠키 전달을 테스트한다.

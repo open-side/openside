@@ -90,15 +90,18 @@ fn routine_row(row: &Row<'_>) -> rusqlite::Result<Routine> {
     let schedule: String = row.get(2)?;
     let action: String = row.get(3)?;
     let paused: Option<String> = row.get(5)?;
+    let action = parse_json::<RoutineAction>(3, &action)?;
     Ok(Routine {
         id: row.get(0)?,
         name: row.get(1)?,
         schedule: parse_json::<RoutineSchedule>(2, &schedule)?,
-        action: parse_json::<RoutineAction>(3, &action)?,
+        owner_agent_id: action.owner_agent_id().map(str::to_owned),
+        action,
         enabled: row.get(4)?,
         paused_reason: paused
             .map(|value| match value.as_str() {
                 "target_missing" => Ok(RoutinePauseReason::TargetMissing),
+                "agent_retired" => Ok(RoutinePauseReason::AgentRetired),
                 other => Err(unknown(5, other)),
             })
             .transpose()?,
@@ -127,6 +130,7 @@ fn run_row(row: &Row<'_>) -> rusqlite::Result<RunRecord> {
 fn pause_text(reason: Option<RoutinePauseReason>) -> Option<&'static str> {
     reason.map(|reason| match reason {
         RoutinePauseReason::TargetMissing => "target_missing",
+        RoutinePauseReason::AgentRetired => "agent_retired",
     })
 }
 

@@ -82,13 +82,19 @@ pub(crate) async fn setup(
     {
         return Err(HttpError(StatusCode::BAD_REQUEST, "weak_passphrase"));
     }
+    let channel_change = s.channels.change_credentials().await;
+    let change = s.models.change_credentials().await;
     let service = &s.registry.vault;
     let mut guard = service.vault.lock().await;
-    service
+    let result = service
         .setup(&s, &mut guard, &who(&caller), passphrase(request))
-        .await
-        .map_err(lifecycle)?;
+        .await;
     drop(guard);
+    drop(change);
+    drop(channel_change);
+    s.models.invalidate(&s).await;
+    result.map_err(lifecycle)?;
+    crate::channels_api::refresh(&s).await;
     Ok(Json(service.status(&s).await))
 }
 
@@ -107,14 +113,25 @@ pub(crate) async fn unlock(
             Err(error) => return error.into_response(),
         }
     };
+    let channel_change = s.channels.change_credentials().await;
+    let change = s.models.change_credentials().await;
     let service = &s.registry.vault;
     let remote = caller.0.is_some();
-    match service
+    let result = service
         .unlock_now(&s, &who(&caller), remote, passphrase(request))
-        .await
-    {
-        Ok(()) => Json(service.status(&s).await).into_response(),
-        Err(UnlockRefusal::Failed(error)) => lifecycle(error).into_response(),
+        .await;
+    drop(change);
+    drop(channel_change);
+    match result {
+        Ok(()) => {
+            s.models.invalidate(&s).await;
+            crate::channels_api::refresh(&s).await;
+            Json(service.status(&s).await).into_response()
+        }
+        Err(UnlockRefusal::Failed(error)) => {
+            s.models.invalidate(&s).await;
+            lifecycle(error).into_response()
+        }
         Err(UnlockRefusal::Throttled(seconds)) => {
             let mut response =
                 HttpError(StatusCode::TOO_MANY_REQUESTS, "too_many_attempts").into_response();
@@ -130,11 +147,14 @@ pub(crate) async fn lock(
     State(s): State<Shared>,
     Extension(caller): Extension<Caller>,
 ) -> Result<Json<VaultStatus>, HttpError> {
-    s.registry
-        .vault
-        .lock(&s, &who(&caller))
-        .await
-        .map_err(lifecycle)?;
+    crate::model_accounts::initialize(&s).await?;
+    let channel_change = s.channels.change_credentials().await;
+    let change = s.models.change_credentials().await;
+    let result = s.registry.vault.lock(&s, &who(&caller)).await;
+    drop(change);
+    drop(channel_change);
+    s.models.invalidate(&s).await;
+    result.map_err(lifecycle)?;
     Ok(Json(s.registry.vault.status(&s).await))
 }
 
@@ -222,6 +242,9 @@ pub(crate) async fn delete(
     let who = who(&caller);
     let mut vault = s.registry.vault.vault.lock().await;
     let vault = vault.as_mut().ok_or_else(unavailable)?;
+    if vault.is_provider_key(&id) || vault.is_channel_secret(&id) || vault.is_subscription(&id) {
+        return Err(HttpError(StatusCode::NOT_FOUND, "unknown_item"));
+    }
     match vault.delete_item(&audit_context(&who), &id) {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(Error::UnknownItem) => Err(HttpError(StatusCode::NOT_FOUND, "unknown_item")),
@@ -289,6 +312,9 @@ pub(crate) async fn update(
     let who = who(&caller);
     let mut vault = s.registry.vault.vault.lock().await;
     let vault = vault.as_mut().ok_or_else(unavailable)?;
+    if vault.is_provider_key(&id) || vault.is_channel_secret(&id) || vault.is_subscription(&id) {
+        return Err(HttpError(StatusCode::NOT_FOUND, "unknown_item"));
+    }
     let override_policy = match request.policy {
         VaultPolicyOverride::Always => Some(AccessPolicy::Always),
         VaultPolicyOverride::WhileUnlocked => Some(AccessPolicy::WhileUnlocked),

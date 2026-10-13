@@ -157,7 +157,7 @@ openside pair --agent --via relay --scope read --scope steer --scope browse
 
 - 코드는 **3분** 동안 **한 번만** 쓸 수 있다. 만료되면 410 `pairing_expired`, 이미 썼거나 없는 코드는 404 `pairing_not_found` 다.
 - 코드는 URL 프래그먼트(`#`)에 실려 프록시 로그에 남지 않는다. 데몬은 해시만 메모리에 두므로 재시작하면 발급한 코드가 모두 무효가 된다.
-- 코드 발급(`POST /v1/pairing`)은 로컬 소켓에서만 된다. TCP 로 오면 admin 토큰이어도 403 `local_socket_required` 다.
+- `POST /v1/pairing`은 비공개 로컬 소켓 또는 소유자 브라우저의 검증된 로컬 사람 증명(소켓에서 발급한 사람/관리자 토큰 + 현재 부팅별 시크릿, 실제 루프백 피어, 리터럴 루프백 Host, 프록시 헤더 없음)을 요구한다. 페어링된 원격 기기나 릴레이/터널 호출자는 관리자 권한이 있어도 페어링 제안을 생성할 수 없다. 자세한 내용은 [`remote-ui.md` §8](specs/remote-ui.md#8-로컬-원격-접속-설정)을 참고한다.
 - 볼트 관리(초기 설정, 잠금 해제, 로그인 또는 인증자 추가, 삭제, 항목별 정책 설정)에는 `admin` 스코프가 필요하다: `openside pair --scope admin --name phone`. 비밀번호와 인증자 키는 모바일 기기에서 입력되어 데몬으로만 전송되며, 어떤 볼트 라우트도 이 값을 다시 반환하지 않는다.
 - 발급, 페어링, 만료, 폐기는 `<data_dir>/audit.jsonl` 에 `tool: "device"` 로 남는다. 코드와 토큰 값은 기록하지 않는다.
 
@@ -188,6 +188,8 @@ openside device revoke <id>     # 즉시 폐기
 - 알림 본문에는 비밀 값이 들어가지 않는다. 티켓 요약과 세션 제목만 담는다.
 
 iOS 는 홈 화면에 추가한 웹 앱(16.4 이상)에서만 Web Push 를 받는다.
+
+> Web Push 없는 데스크톱 알림. 패치된 openside 브라우저는 푸시 서비스 키 없이 배포되므로 `PushManager.subscribe()` 호출 시 `AbortError`로 거부된다. Web Push를 사용할 수 없을 때(Push API 미지원, 사이트 권한 차단, subscribe 호출 거부 등) openside 확장 프로그램이 설치되어 있다면 Settings → Notifications → Enable notifications에서 확장 프로그램 기반 데스크톱 알림으로 전환할 수 있다. 이 토글을 켜면 확장 프로그램과 1회용 페어링 코드로 페어링하며(`read`, `steer`, `approve`, `human_step` 스코프, 기기 이름은 "openside extension"으로 등록되고 알림 끄기 시 다시 해지됨), 확장 프로그램의 백그라운드 워커가 데몬 상태를 평소에는 30초마다, 작업 실행 중에는 5초마다 확인한다. 실행 중인 작업이 끝나면 대화 제목과 함께 "Task finished" 알림을 띄우고, 새로운 대기 요청이 생길 때마다 알림을 표시한다. 포커스된 브라우저 창에 열려 있는 대화는 알림을 띄우지 않고 무음으로 유지된다. 알림을 클릭하면 해당 대화가 열리거나 요청 처리를 위한 사이드 패널이 열린다. 확장 프로그램은 토큰을 세션 스토리지에 보관하므로, 브라우저를 재시작해도 토글이 켜져 있으면 웹 앱이 자동으로 다시 페어링한다. 휴대전화나 다른 브라우저는 기존 Web Push 방식을 그대로 사용한다. 127.0.0.1/localhost의 데몬 UI만 확장 프로그램을 켤 수 있으며(`externally_connectable`), 확장 프로그램은 다른 데몬과의 기존 페어링을 임의로 덮어쓰지 않는다.
 
 iOS 앱 아이콘 배지 역시 홈 화면에 웹 앱을 추가한 상태에서만 지원된다. 앱을 설치하고 나면 모바일 공유 시트에서 링크, 텍스트, 이미지를 openside로 바로 전송할 수 있으며(remote-ui.md 4절 참고), 테일넷 외부 등 데몬과 통신할 수 없는 상태에서 작성한 메시지는 기기에 안전하게 보관되었다가 다시 연결될 때 자동으로 전송된다.
 
@@ -237,3 +239,31 @@ inhibit_sleep = true
 ```
 
 옵션을 켜면 실행 중인 태스크가 있는 동안에만 `systemd-inhibit`(Linux)이나 `caffeinate`(macOS)를 띄워 두고, 마지막 태스크가 끝나면 바로 내린다. 메시지가 전송된 순간부터 처리가 끝날 때까지를 태스크 실행 중으로 간주하며, 모델 요청 사이의 대기 시간이나 도구 및 브라우저가 작업 중인 시간도 여기에 포함된다. 인간 개입 티켓을 기다리는 동안에는 절전 방지를 해제하고 세션을 `waiting_human`으로 표시하며, 티켓에 응답하면 다시 절전을 방지한다. 다른 도구를 쓰려면 `inhibit_cmd`를 설정한다.
+
+## 모바일 엔드투엔드 검증 증거
+
+`crates/openside-e2e/tests/mobile_remote.rs`는 임시 포트에서 비공개 데몬, 스크립트 기반 Python 사이드카, 픽스처 웹사이트, 암호화된 셀프 호스팅 릴레이를 실행한다. 데스크톱 브라우저는 소켓 전용 로컬 접근 권한을 얻어 Remote access 화면을 열고 휴대전화 페어링 제안을 생성한다. `zbarimg`로 렌더링된 스크린샷의 QR 코드를 디코딩하고, 휴대전화는 디코딩된 링크로 접속한다. 이 흐름을 검증할 때 CLI로 만든 페어링 제안이나 미리 주입한 모바일 토큰으로 대체하지 않는다.
+
+두 모바일 프로필은 390×844 CSS 픽셀, DPR 3, 터치 포인트 5개, iPhone Safari 및 Android Chrome과 유사한 User-Agent를 갖춘 헤드리스 Chromium을 사용한다. 프로덕션 매니페스트 및 서비스 워커, 대화 목록, 새로 시작한 채팅, 새로고침 없는 증분 어시스턴트 이벤트 및 실시간 이벤트 갱신, 사람 전용 승인 규칙, 빨간색에서 파란색으로 바뀌는 실제 프리뷰 JPEG 픽셀, 스크립트 모델 입력에 SHA-256이 나타나는 사진을 모두 검증한다.
+
+휴대전화의 대화 메뉴에서 새 대화를 열면 현재 화면이 이미 새 대화 화면이더라도 메뉴가 닫히므로, 메뉴가 메시지 작성 창을 가리지 않는다.
+
+포그라운드 배지 검증은 Chromium의 실제 배지 API 호출을 확인하는 것이며, 설치된 OS 아이콘이 바뀌었음을 증명하지는 않는다. 알림 단계에서는 VAPID를 검증하고 RFC 8291 복호화를 수행하는 로컬 푸시 서비스를 거친 뒤 DevTools를 통해 실제 서비스 워커에 해당 바이트를 온전히 전달한다. 실제 GCM/APNs 전달, 물리 카메라 스캔, 네이티브 앱 설치, iOS WebKit 환경은 테스트하지 않는다. iPhone User-Agent를 사용하더라도 실행 환경은 여전히 Chromium이다.
+
+사전 준비 사항: `web/dist` 빌드, 사이드카 동기화, Chromium 및 `zbar-tools` 설치가 필요하다. 표준 검증 게이트는 비활성화된 릴레이 테스트를 명시적으로 **두 번** 실행하여 로그와 캡처를 모두 보존하며, 두 모바일 프로필의 검증 마커가 모두 확인되지 않으면 단순 Cargo 통과만으로는 승인하지 않는다.
+
+```sh
+python3 tools/qa/mobile_remote.py --results /tmp/openside-qa/round2/MobileE2E/gate --jobs 2
+```
+
+동일한 테스트 과정을 실제 일회용 Cloudflare Quick Tunnel로 실행할 수도 있으나, 공용 네트워크 사용에 명시적으로 동의하고 `cloudflared`가 설치되어 있어야만 한다. 격리된 표준 게이트 환경에서는 절대 활성화되지 않는다.
+
+Cloudflare [공식 문서에 따르면 Quick Tunnel은 SSE를 지원하지 않는다](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/#limitations). 실제 Quick Tunnel 프로브 테스트에서도 1초 간격으로 플러시된 5개 이벤트가 업스트림 스트림이 닫힐 때에만 한꺼번에 전달되는 것을 확인했다. 따라서 웹 수신기는 버퍼링되거나 지연된 SSE 응답을 감지하면 `/v1/sessions/{id}/events/poll`을 통해 마지막 시퀀스 번호부터 다시 이어받는다. Quick Tunnel 기반 모바일 테스트는 해당 폴링 엔드포인트로 실제 브라우저 네트워크 요청이 발생하는지 검증해야 하며, 로컬 SSE의 성공이나 `cloudflared` 감독 프로세스 흉내로는 이 검증을 대체할 수 없다.
+
+```sh
+OPENSIDE_MOBILE_CLOUDFLARE=1 python3 tools/qa/mobile_remote.py \
+  --transport cloudflare --results /tmp/openside-qa/round2/MobileE2E/cloudflare-gate --jobs 2
+```
+
+테스트 하네스는 Tailscale Serve 설정을 절대 임의로 변경하지 않는다. 일회용 데몬용 핸들러가 없는 상태에서 tailnet이 실행 중이라고 해서 이를 Serve를 통한 원격 PWA 접근 증거로 볼 수는 **없다**. 이러한 전송 방식은 루프백 직접 HTTP 통신으로 조용히 대체되지 않으며 실행되지 않은 상태로 남는다.
+

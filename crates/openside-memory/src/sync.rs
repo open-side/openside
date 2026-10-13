@@ -24,7 +24,7 @@ impl MemoryStore {
              WHERE {LIVE} ORDER BY m.created_at, m.id"
         ))?;
         let rows = statement.query_map(params![now], |row| {
-            Ok((read_memory(row)?, row.get::<_, Option<String>>(11)?))
+            Ok((read_memory(row)?, row.get::<_, Option<String>>("sync_id")?))
         })?;
         let mut selected = Vec::new();
         for row in rows {

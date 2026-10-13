@@ -28,6 +28,32 @@ use support::{is_public_route, RecordingProxy};
 const DAEMON: &str = env!("CARGO_BIN_EXE_e2e-opensided");
 const CLI: &str = env!("CARGO_BIN_EXE_e2e-openside");
 
+#[test]
+fn recording_proxy_requires_encoded_artifact_paths_and_exact_fixed_routes() {
+    assert!(is_public_route(
+        "GET",
+        "/v1/sessions/fixture/artifacts/screenshots%2Fshared.png"
+    ));
+    assert!(!is_public_route(
+        "GET",
+        "/v1/sessions/fixture/artifacts/screenshots/shared.png"
+    ));
+    assert!(is_public_route(
+        "GET",
+        "/v1/sessions/fixture/artifacts/shared.png"
+    ));
+    assert!(!is_public_route("GET", "/v1/sessions/fixture/artifacts/"));
+    assert!(!is_public_route(
+        "GET",
+        "/v1/sessions/fixture/artifacts//shared.png"
+    ));
+    assert!(!is_public_route(
+        "POST",
+        "/v1/sessions/fixture/artifacts/shared.png"
+    ));
+    assert!(!is_public_route("GET", "/v1/tools/extra"));
+}
+
 fn text(text: &str) -> Value {
     json!({"parts":[{"type":"text","text":text}]})
 }
@@ -255,6 +281,8 @@ async fn mcp_client_lists_tools_sends_a_message_and_reads_the_reply() {
     assert_eq!(sent["status"], "settled", "{sent}");
     assert_eq!(sent["replies"], json!(["hello from the real sidecar"]));
     assert!(sent["message"]["status"].as_str().is_some());
+    assert_eq!(sent["message"]["author_kind"], "agent_client");
+    assert!(sent["message"]["from_agent"].is_null());
 
     // The reply is also what the daemon recorded, not something the MCP server made up.
     let status = rig.ok("session_status", json!({"session_id":id})).await;
@@ -308,7 +336,19 @@ async fn read_only_token_reads_but_gets_clean_errors_on_every_write_tool() {
     let id = created.body["id"].as_str().unwrap().to_owned();
 
     let listed = rig.ok("session_list", json!({})).await;
-    assert_eq!(listed["sessions"].as_array().unwrap().len(), 1);
+    let sessions = listed["sessions"].as_array().unwrap();
+    assert_eq!(
+        sessions
+            .iter()
+            .filter(|session| session["id"] == id)
+            .count(),
+        1
+    );
+    assert_eq!(
+        sessions.len(),
+        2,
+        "ordinary session plus the chief's durable home"
+    );
     rig.ok("session_status", json!({"session_id":id})).await;
     rig.ok("ticket_list", json!({})).await;
     rig.ok("memory_search", json!({})).await;
@@ -343,7 +383,7 @@ async fn read_only_token_reads_but_gets_clean_errors_on_every_write_tool() {
 
     // Nothing was created or delivered behind the refusals.
     let after = rig.harness.request("GET", "/v1/sessions", None).await;
-    assert_eq!(after.body["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(after.body["sessions"].as_array().unwrap().len(), 2);
     let session = rig
         .harness
         .request("GET", &format!("/v1/sessions/{id}"), None)
@@ -641,7 +681,10 @@ async fn browser_tools_and_a_repl_batch_drive_a_loopback_page() {
     let tabs = rig.ok("browser_tabs", json!({"session_id":id})).await;
     assert!(tabs["result"].to_string().contains("/next"), "{tabs}");
     let shot = rig
-        .ok("browser_screenshot", json!({"session_id":id,"tab_id":tab}))
+        .ok(
+            "browser_screenshot",
+            json!({"session_id":id,"tab_id":tab,"output":true}),
+        )
         .await;
     assert!(
         shot["artifacts"][0].as_str().unwrap().ends_with(".png"),
@@ -829,8 +872,8 @@ async fn delegated_cli_and_mcp_tickets_appear_live_on_desktop_and_phone_and_wait
     let phone = browser.create_agent_tab("external-ui", &origin).await.unwrap().id;
     let _phone_cdp = phone_viewport(&browser, &phone).await;
     assert_eq!(browser.evaluate(&phone, "innerWidth").await.unwrap(), 390);
-    let pending = "!!document.querySelector('section.ticket-pending[aria-label=\"Approval needed\"]')";
-    let approve = "Array.from(document.querySelector('section.ticket-pending').querySelectorAll('button')).find(b => b.textContent.trim() === 'Approve').click(); true";
+    let pending = "!!document.querySelector('.oc-card[data-kind=confirmation][data-status=pending]')";
+    let approve = "(() => { const card = document.querySelector('.oc-card[data-kind=confirmation][data-status=pending]'); card.querySelector('.oc-pill')?.click(); Array.from(card.querySelectorAll('button')).find(b => b.textContent.trim() === 'Approve').click(); return true; })()";
 
     for caller in ["cli", "mcp"] {
         let created = rig.harness.request("POST", "/v1/sessions",
@@ -857,7 +900,7 @@ async fn delegated_cli_and_mcp_tickets_appear_live_on_desktop_and_phone_and_wait
             browser.evaluate(&phone, approve).await.unwrap();
             let output = waiting.await;
             assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-            assert!(String::from_utf8_lossy(&output.stdout).contains("external delegation finished"));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("external delegation finished"), "stdout: {}\nstderr: {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
         } else {
             let run = rig.ok("agent_run",
                 json!({"session_id":id,"goal":"write the file","wait":true,"timeout_secs":25})).await;

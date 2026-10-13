@@ -1,23 +1,27 @@
 import { MonitorSmartphone } from "lucide-react";
 import { useCallback, useState } from "react";
+import { Link, useLocation } from "react-router";
 import { thisDevice } from "../auth";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
 import { Button, Segmented, useToast } from "../ui";
+import "../remote/remote.css";
 import { EmptyState, ResourceCard, ResourceView, SectionList, useConfirm } from "./blocks";
+import { AgentLink } from "./AgentLink";
+import { CliHint } from "./CliHint";
 import { formatDate } from "./format";
 
 /** Paired devices (revocable) and how to pair another one. */
 export function DevicesPage() {
   const client = useClient();
   const toast = useToast();
+  const location = useLocation();
   const load = useCallback(() => client.listDevices(), [client]);
   const devices = useResource(load);
   const [confirm, ask] = useConfirm();
   const self = thisDevice();
   const [purpose, setPurpose] = useState<"person_device" | "agent_client">("person_device");
   const agent = purpose === "agent_client";
-  const pairCommand = agent ? 'openside pair --agent --name "My agent"' : 'openside pair --name "My phone"';
 
   async function revoke(id: string) {
     try {
@@ -35,7 +39,7 @@ export function DevicesPage() {
         <ResourceView resource={devices} what="paired devices">
           {(data) =>
             data.devices.length === 0 ? (
-              <EmptyState icon={MonitorSmartphone} title="No paired devices" detail="Devices you pair with openside pair appear here." />
+              <EmptyState icon={MonitorSmartphone} title="No paired devices" detail="Phones and agents you connect appear here." />
             ) : (
               <ul className="resource-list" aria-label="Devices">
                 {data.devices.map((device) => {
@@ -94,25 +98,21 @@ export function DevicesPage() {
           value={purpose}
           onChange={setPurpose}
         />
-        <p className="section-list-description">
-          {agent
-            ? "An agent must wait for a person’s approval on another paired device. The link fixes this role; the client cannot change it."
-            : "This device conveys your approvals. Keep its token for yourself; do not give it to an agent."}
-        </p>
-        <ol className="pair-steps">
-          <li>
-            On the computer running openside, run <code>{pairCommand}</code>.
-            {agent
-              ? " Its default scopes are read, steer, browse and approve."
-              : <> Its default scopes are read, approve and human_step; add <code>--scope steer</code> to start conversations and <code>--scope admin</code> to manage settings.</>}
-          </li>
-          <li>
-            {agent
-              ? <>On the agent’s computer, run <code>openside connect</code> and paste the printed link at the hidden prompt. Start MCP with <code>openside --remote &lt;name&gt; mcp</code>.</>
-              : "Scan the QR code with the new device, or open the printed link in its browser."}
-          </li>
-          <li>The link signs the device in once; the code expires after 3 minutes. Its role is fixed when the link is issued.</li>
-        </ol>
+        {agent ? null : (
+          <p className="section-list-description">This device conveys your approvals. Keep its token for yourself; do not give it to an agent.</p>
+        )}
+        {agent ? (
+          <AgentLink />
+        ) : (
+          <>
+            <div className="remote-actions">
+              <Link className="ui-button ui-button--primary" to="/remote" replace state={location.state}>
+                Connect a phone with a QR code
+              </Link>
+            </div>
+            <CliHint command='openside pair --name "My phone"' />
+          </>
+        )}
       </SectionList>
       {confirm}
     </div>

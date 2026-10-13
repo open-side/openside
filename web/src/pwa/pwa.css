@@ -20,7 +20,7 @@ body {
   max-width: calc(100% - 24px);
   padding: 8px 8px 8px 14px;
   border: 1px solid var(--glass-border);
-  border-radius: 22px;
+  border-radius: var(--radius-2xl);
   background: var(--glass);
   box-shadow: var(--shadow-glass);
   color: var(--text);
@@ -28,8 +28,8 @@ body {
   font-weight: 550;
   line-height: 1.35;
   translate: -50% 0;
-  -webkit-backdrop-filter: blur(16px) saturate(1.6);
-  backdrop-filter: blur(16px) saturate(1.6);
+  -webkit-backdrop-filter: var(--float-blur);
+  backdrop-filter: var(--float-blur);
 }
 .install-banner > svg {
   flex: none;
@@ -45,7 +45,7 @@ body {
   gap: 8px;
   margin: 0;
   padding: 6px 6px 6px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--glass);
   color: var(--text);
   font-size: 0.875rem;

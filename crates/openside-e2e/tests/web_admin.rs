@@ -88,7 +88,10 @@ impl Page<'_> {
 // directly would be ignored, so test input goes through the prototype setter.
 const HELPERS: &str = r#"(() => {
   window.__violations = [];
-  document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(e.violatedDirective));
+  document.addEventListener('securitypolicyviolation', (e) => window.__violations.push({
+    directive: e.violatedDirective, inline: e.blockedURI === 'inline',
+    source: new URL(e.sourceFile || location.href, location.href).pathname, line: e.lineNumber,
+  }));
   window.__os = {
     fill(el, value) {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
@@ -193,7 +196,10 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
     )
     .await;
     page.eval(HELPERS).await;
-    assert_eq!(page.eval("location.pathname + location.hash").await, "/");
+    assert_eq!(
+        page.eval("location.pathname + location.hash").await,
+        "/agents/chief"
+    );
     let device = page.eval("localStorage.getItem('openside.device')").await;
     let device = device.as_str().expect("device id stored").to_owned();
     assert!(page
@@ -227,19 +233,25 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
     // Vault: a policy change made in the UI is audited by the vault and read back in the UI.
     page.open_section(
         "Vault",
-        "!!document.querySelector('[data-section=vault] article[data-item=fixture] select')",
+        "!!document.querySelector('[data-section=vault] [role=combobox][aria-label=\"Use policy for fixture\"]')",
     )
     .await;
     page.eval(
-        "__os.fill(document.querySelector('[data-section=vault] article[data-item=fixture] select'), 'never')",
+        "document.querySelector('[data-section=vault] [role=combobox][aria-label=\"Use policy for fixture\"]').click()",
     )
     .await;
+    page.wait(
+        "vault policy choices",
+        "Array.from(document.querySelectorAll('[role=option]')).some(option => option.textContent.trim() === 'Never')",
+    )
+    .await;
+    page.eval("Array.from(document.querySelectorAll('[role=option]')).find(option => option.textContent.trim() === 'Never').click()").await;
     // Matching effective policies do not repeat the selector label; verify the saved metadata.
     page.wait(
         "persisted and enforced item policy",
         "fetch('/v1/vault/items', { headers: { Authorization: 'Bearer ' + localStorage.getItem('openside.token') } }) \
          .then((r) => r.json()).then((data) => data.items.some((item) => item.id === 'fixture' && item.policy === 'never' && item.effective_policy === 'never') \
-         && document.querySelector('[data-section=vault] article[data-item=fixture] select').value === 'never')",
+         && document.querySelector('[data-section=vault] [role=combobox][aria-label=\"Use policy for fixture\"]').textContent.trim() === 'Never')",
     )
     .await;
     page.eval(
@@ -276,7 +288,8 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
          window.fetch = async (...args) => { const response = await fetch(...args); \
          if (args[0].endsWith('/v1/settings/config') && args[1]?.method === 'PUT') { \
          const doc = JSON.parse(args[1].body).config; \
-         window.__configSaves.push({ mode: doc.policy.mode, ttl: doc.tickets.confirm_ttl_secs, status: response.status }); \
+         window.__configSaves.push({ mode: doc.policy.mode, ttl: doc.tickets.confirm_ttl_secs, status: response.status, \
+         ...(!response.ok ? { code: (await response.clone().json()).code } : {}) }); \
          const delay = first ? 1000 : 1500; first = false; \
          await new Promise((resolve) => setTimeout(resolve, delay)); \
          } return response; }; return true; })()",
@@ -320,9 +333,10 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
     )
     .await;
     page.wait(
-        "local socket refusal",
-        "Array.from(document.querySelectorAll('[data-section=config] [role=alert]')).some((a) => \
-         a.textContent.includes('Only the computer running openside can make this change'))",
+        "local authority refusal",
+        "window.__configSaves.some(s => s.status === 403 && s.code === 'local_access_required') \
+         && Array.from(document.querySelectorAll('[data-section=config] [role=alert]')).some((a) => \
+         a.textContent.includes('Reopen openside from the computer it runs on'))",
     )
     .await;
     let after = harness.request("GET", "/v1/settings/config", None).await;
@@ -332,11 +346,11 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
         page.eval("window.__configSaves").await,
         json!([
             {"mode":"full","ttl":1234,"status":200},
-            {"mode":"read-only","ttl":600,"status":403},
+            {"mode":"read-only","ttl":600,"status":403,"code":"local_access_required"},
         ])
     );
     assert!(config_file(&harness).contains("mode = \"full\""));
-    assert_eq!(page.eval("window.__violations.length").await, 0);
+    assert_eq!(page.eval("window.__violations").await, json!([]));
 
     browser.shutdown().await.unwrap();
     harness.assert_no_canaries(&[PASSWORD]);
@@ -533,7 +547,7 @@ async fn paired_phone_adds_an_authenticator_to_the_vault() {
         .clone();
     assert_eq!(item["has_totp"], true);
     assert_eq!(item["origins"], json!(["https://github.com:443"]));
-    assert_eq!(page.eval("window.__violations.length").await, 0);
+    assert_eq!(page.eval("window.__violations").await, json!([]));
 
     browser.shutdown().await.unwrap();
     harness.assert_no_canaries(&[SEED, PASSPHRASE]);

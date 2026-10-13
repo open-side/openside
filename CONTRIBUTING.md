@@ -25,6 +25,9 @@ It covers Rust fmt/clippy/tests, the sidecar (ruff, pyright, pytest), web and ex
 Faster loops while working:
 
 ```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -j 2 -- -D warnings
+cargo check --workspace --tests -j 2
 cargo test -p <crate>
 cd agent && uv run pytest -m "not live"
 pnpm -C web test

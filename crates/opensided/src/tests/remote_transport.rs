@@ -346,7 +346,7 @@ async fn relay_pairing_link_carries_the_daemon_key_and_relayed_calls_keep_tcp_au
     .await;
     assert_eq!(
         (status, body["code"].as_str()),
-        (403, Some("local_socket_required"))
+        (403, Some("local_access_required"))
     );
     let (status, remote) = relayed(&tunnel, "GET", "/v1/remote/status", Some(&admin), "").await;
     assert_eq!(status, 200);
@@ -355,7 +355,11 @@ async fn relay_pairing_link_carries_the_daemon_key_and_relayed_calls_keep_tcp_au
 
     // A wrong registration token is reported without revealing the configured one.
     std::fs::write(&token_file, "a-wrong-but-long-enough-token").unwrap();
-    let link = crate::remote::relay::start(&daemon.shared).unwrap();
+    let link = crate::remote::relay::start_config(
+        &daemon.shared,
+        &daemon.shared.config.loaded.config.remote,
+    )
+    .unwrap();
     eventually("the rejected registration", || {
         link.status().last_error.is_some()
     })

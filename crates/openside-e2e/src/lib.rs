@@ -460,6 +460,61 @@ impl Harness {
         (status, text)
     }
 
+    /// Execute the real CLI with stdout and stderr on one pseudo-terminal of `columns` x `rows`,
+    /// as a person's terminal window would show it. `env` is added to the hermetic environment
+    /// (for example `TERM`, `LANG`, `NO_COLOR`); raw bytes are returned, escape codes included.
+    pub async fn cli_on_pty(
+        &self,
+        binary: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+        columns: u16,
+        rows: u16,
+    ) -> (std::process::ExitStatus, Vec<u8>) {
+        use std::io::Read;
+        let size = nix::pty::Winsize {
+            ws_row: rows,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let pty = nix::pty::openpty(Some(&size), None).unwrap_or_else(|e| panic!("openpty: {e}"));
+        let slave = std::fs::File::from(pty.slave);
+        let stderr = slave
+            .try_clone()
+            .unwrap_or_else(|e| panic!("pty clone: {e}"));
+        let mut child = self
+            .command(binary)
+            .envs(env.iter().copied())
+            .arg("--socket")
+            .arg(&self.socket)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(slave))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .unwrap_or_else(|e| panic!("CLI spawn: {e}"));
+        let mut master = std::fs::File::from(pty.master);
+        let reader = tokio::task::spawn_blocking(move || {
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 4096];
+            // Linux reports EIO instead of EOF when the last slave descriptor closes.
+            while let Ok(n) = master.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..n]);
+            }
+            bytes
+        });
+        let status = tokio::time::timeout(Duration::from_secs(60), child.wait())
+            .await
+            .unwrap_or_else(|_| panic!("CLI deadline"))
+            .unwrap_or_else(|e| panic!("CLI wait: {e}"));
+        let bytes = reader.await.unwrap_or_else(|e| panic!("pty reader: {e}"));
+        (status, bytes)
+    }
+
     /// A distinct paired person identity; Unix-socket clients are agent identities.
     pub async fn human_token(&self) -> &str {
         self.human_token

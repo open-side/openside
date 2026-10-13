@@ -58,6 +58,30 @@ pub enum ArtifactSource {
     Visual,
 }
 
+/// Whether a file is a deliverable or an internal observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactPurpose {
+    /// A file available in the user-visible session files listing.
+    Output,
+    /// An internal observation excluded from user deliverables.
+    Working,
+}
+
+impl ArtifactPurpose {
+    /// Legacy captures used a root-level tool-call PNG; explicit deliveries use screenshots/.
+    pub fn classify(path: &str, tool: Option<&str>) -> Self {
+        if !path.contains('/')
+            && path.ends_with(".png")
+            && (tool == Some("browser_screenshot") || path.starts_with("toolu_"))
+        {
+            Self::Working
+        } else {
+            Self::Output
+        }
+    }
+}
+
 /// One file in a session's artifact directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Artifact {
@@ -69,6 +93,8 @@ pub struct Artifact {
     pub mime: String,
     /// Origin of the file.
     pub source: ArtifactSource,
+    /// Delivery classification; working observations are omitted from the list route.
+    pub purpose: ArtifactPurpose,
     /// First recording time.
     pub created_at: DateTime<Utc>,
     /// Latest recording time.
@@ -87,7 +113,7 @@ pub struct Artifact {
 /// `GET /v1/sessions/{id}/artifacts` response, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactList {
-    /// Artifacts in creation order.
+    /// User-visible files in creation order, excluding working observations.
     pub artifacts: Vec<Artifact>,
 }
 
@@ -124,4 +150,37 @@ pub struct Visual {
 pub struct VisualList {
     /// Visual parts, oldest first.
     pub visuals: Vec<Visual>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArtifactPurpose;
+
+    #[test]
+    fn screenshot_purpose_preserves_deliveries_and_hides_legacy_observations() {
+        for (path, tool) in [
+            ("toolu_abc.png", None),
+            ("shot.png", Some("browser_screenshot")),
+            ("api-tool-1.png", Some("browser_screenshot")),
+        ] {
+            assert_eq!(
+                ArtifactPurpose::classify(path, tool),
+                ArtifactPurpose::Working
+            );
+        }
+        for (path, tool) in [
+            ("screenshots/toolu_abc.png", Some("browser_screenshot")),
+            ("files/toolu_abc.png", Some("write")),
+            ("attachments/m1/toolu_abc.png", None),
+            ("downloads/shot.png", None),
+            ("visuals/1-0.svg", None),
+            ("report.png", Some("write")),
+            ("transcript.jsonl", None),
+        ] {
+            assert_eq!(
+                ArtifactPurpose::classify(path, tool),
+                ArtifactPurpose::Output
+            );
+        }
+    }
 }

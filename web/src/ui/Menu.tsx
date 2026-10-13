@@ -20,7 +20,7 @@ export function PopoverMenu({ trigger, label, title, align = "end", side = "bott
       <BaseMenu.Trigger render={trigger} />
       <BaseMenu.Portal>
         <BaseMenu.Positioner className="ui-menu-positioner" side={side} align={align} sideOffset={8} collisionPadding={8}>
-          <BaseMenu.Popup className="ui-menu" aria-label={label}>
+          <BaseMenu.Popup className="ui-menu glass-float" aria-label={label}>
             {title && (
               <div className="ui-menu-title" aria-hidden="true">
                 {title}

@@ -1,0 +1,34 @@
+[package]
+name = "openside-model-fetch"
+description = "Download and atomically install a checksum-verified static embedding model; the only network code on the memory path"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# Exposes the crash-injection hook the migration tests use from other crates.
+testing = []
+
+[dependencies]
+fs2 = "0.4"
+openside-config = { path = "../openside-config" }
+openside-memory = { path = "../openside-memory" }
+openside-policy = { path = "../openside-policy" }
+parking_lot = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tokio-util = "0.7"
+url = "2"
+
+[dev-dependencies]
+axum = "0.8"
+futures-util = "0.3"
+tokio = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

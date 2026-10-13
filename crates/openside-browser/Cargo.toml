@@ -9,10 +9,17 @@ rust-version.workspace = true
 [dependencies]
 base64 = "0.22"
 futures-util = { version = "0.3", features = ["sink"] }
+jpeg-decoder = { version = "0.3", default-features = false }
+jpeg-encoder = "0.6"
 parking_lot = "0.12"
+png = "0.17"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+hmac = "0.12"
+sha2 = "0.10"
+zeroize = "1"
+url = "2"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }

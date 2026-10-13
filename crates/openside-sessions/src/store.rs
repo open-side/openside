@@ -11,7 +11,7 @@ use crate::{Error, Result, SessionState};
 
 const COLUMNS: &str = "session_id, seq, ts, run_id, payload";
 
-/// A user-submitted message with its recording time, as originally queued.
+/// Original queued input; callers must use authority rather than text to identify person messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedMessage {
     /// Session that received the message.
@@ -22,6 +22,10 @@ pub struct QueuedMessage {
     pub text: String,
     /// Time the queue event was recorded.
     pub at: DateTime<Utc>,
+    /// Caller-derived authority for person-only repetition analysis.
+    pub author_kind: openside_proto::MessageAuthorKind,
+    /// Team sender, never inferred from message ids or text.
+    pub from_agent: Option<String>,
 }
 
 /// Outcome of atomically claiming a daemon-owned approval authorization.
@@ -128,6 +132,7 @@ impl Store {
             &id,
             None,
             EventKind::SessionCreated {
+                agent_id: None,
                 title: title.into(),
                 model: model.into(),
                 mode,
@@ -278,7 +283,8 @@ impl Store {
         self.states.get(session_id).filter(|state| !state.deleted)
     }
 
-    /// Most recent `limit` user messages (original text) across live sessions, oldest first.
+    /// Most recent `limit` queued messages across live sessions, oldest first, including
+    /// internal and agent-client input; person-only consumers must filter by authority.
     pub fn queued_messages(&self, limit: usize) -> Result<Vec<QueuedMessage>> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut statement = self.connection.prepare(
@@ -300,7 +306,11 @@ impl Store {
                 continue;
             }
             let Ok(EventKind::MessageQueued {
-                message_id, text, ..
+                message_id,
+                text,
+                author_kind,
+                from_agent,
+                ..
             }) = serde_json::from_str(&payload)
             else {
                 continue;
@@ -313,6 +323,8 @@ impl Store {
                 message_id,
                 text,
                 at: at.with_timezone(&Utc),
+                author_kind,
+                from_agent,
             });
         }
         messages.reverse();
@@ -405,6 +417,58 @@ impl Store {
         )?;
         transaction.commit()?;
         Ok(ApprovalClaim::Claimed)
+    }
+
+    /// External connection grants are separate from action approvals: one cannot authorize
+    /// the other, and the shared binding table makes a one-use grant restart-safe.
+    pub fn connection_grant_available(
+        &self,
+        session: &SessionId,
+        ticket: &TicketId,
+        subagent: Option<&str>,
+        binding: &[u8; 32],
+    ) -> Result<bool> {
+        let state = replay_session(&self.connection, session)?
+            .ok_or_else(|| Error::UnknownSession(session.clone()))?;
+        let valid = state.tickets.get(ticket).is_some_and(|ticket| {
+            ticket.deferral == TicketDeferral::External
+                && ticket.kind == TicketKind::Confirm
+                && ticket.status == TicketStatus::Resolved
+                && ticket.expires_at > chrono::Utc::now()
+                && ticket.origin.subagent_id.as_deref() == subagent
+                && ticket
+                    .resolution
+                    .as_ref()
+                    .is_some_and(|value| value["approved"] == true && value["access"] == "once")
+                && ticket.tool.as_ref().is_some_and(|tool| {
+                    matches!(tool.name.as_str(), "connection_open" | "connection_fetch")
+                        && tool.args["grant"] == true
+                })
+        });
+        if !valid {
+            return Ok(false);
+        }
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM approval_bindings WHERE session_id=?1 AND ticket_id=?2 AND binding=?3 AND consumed=0)",
+            params![session.as_str(), ticket.as_str(), binding.as_slice()], |row| row.get(0),
+        )?)
+    }
+
+    /// Called only after the independent Browse/write policy admission has completed.
+    pub fn claim_connection_grant(
+        &mut self,
+        session: &SessionId,
+        ticket: &TicketId,
+        subagent: Option<&str>,
+        binding: &[u8; 32],
+    ) -> Result<bool> {
+        if !self.connection_grant_available(session, ticket, subagent, binding)? {
+            return Ok(false);
+        }
+        Ok(self.connection.execute(
+            "UPDATE approval_bindings SET consumed=1 WHERE session_id=?1 AND ticket_id=?2 AND binding=?3 AND consumed=0",
+            params![session.as_str(), ticket.as_str(), binding.as_slice()],
+        )? == 1)
     }
 
     /// Marks terminal resolution delivery before runtime I/O; false means it was already sent.

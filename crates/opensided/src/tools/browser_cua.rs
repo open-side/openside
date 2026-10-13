@@ -100,7 +100,7 @@ async fn hit(
         .shared
         .registry
         .browser
-        .for_session(&ctx.shared, &ctx.session)
+        .for_tab(&ctx.shared, &ctx.session, &args.tab_id)
         .await?;
     let origin = Controller::origin(&browser, &ctx.session, &args.tab_id).await?;
     let hit = browser

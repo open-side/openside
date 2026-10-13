@@ -14,15 +14,17 @@ use std::{
 };
 
 use axum::{
+    body::Bytes,
     extract::{Path as UrlPath, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use chrono::{TimeZone, Utc};
 use openside_memory::NewMemory;
 use openside_proto::{
     CreatePinnedTabRequest, MemoryKind, PairSyncRequest, PinnedTab, PinnedTabList, PolicySettings,
-    Retention, SyncBackendKind, SyncReport, SyncSetupResponse, SyncStatus, UpdateMemoryRequest,
+    Retention, SyncBackendKind, SyncReport, SyncSecretSource, SyncSecrets, SyncSetupResponse,
+    SyncStatus, UpdateMemoryRequest, UpdateSyncConfigRequest,
 };
 use openside_sync::{
     AccountId, Applied, ClientState, DirBackend, Error, Kind, LocalStore, PairingCode, SyncKey,
@@ -51,6 +53,18 @@ const POLICY_ID: &str = "policy";
 #[derive(Default)]
 pub(crate) struct Service {
     key: Mutex<Option<SyncKey>>,
+    config: RwLock<Option<openside_config::SyncConfig>>,
+    password: RwLock<Option<Zeroizing<String>>>,
+    last_run: RwLock<Option<SyncReport>>,
+}
+
+pub(crate) fn effective(shared: &Shared) -> openside_config::SyncConfig {
+    shared
+        .sync
+        .config
+        .read()
+        .clone()
+        .unwrap_or_else(|| shared.config.loaded.config.sync.clone())
 }
 
 fn pinned_path(shared: &Shared) -> PathBuf {
@@ -163,7 +177,7 @@ pub(crate) async fn unpin(
 }
 
 fn backend_kind(shared: &Shared) -> Option<SyncBackendKind> {
-    let config = &shared.config.loaded.config.sync;
+    let config = effective(shared);
     if config.webdav_url.is_some() {
         Some(SyncBackendKind::Webdav)
     } else if config.dir.is_some() {
@@ -174,6 +188,7 @@ fn backend_kind(shared: &Shared) -> Option<SyncBackendKind> {
 }
 
 fn status(shared: &Shared, state: Option<&ClientState>, unlocked: bool) -> SyncStatus {
+    let config = effective(shared);
     SyncStatus {
         configured: backend_kind(shared).is_some(),
         backend: backend_kind(shared),
@@ -187,6 +202,26 @@ fn status(shared: &Shared, state: Option<&ClientState>, unlocked: bool) -> SyncS
         records: state.map_or(0, |s| s.records.len() as u64),
         pending: state.map_or(0, |s| s.pending() as u64),
         exhausted: state.is_some_and(ClientState::exhausted),
+        location: config
+            .webdav_url
+            .clone()
+            .or_else(|| config.dir.as_ref().map(|dir| dir.display().to_string())),
+        webdav_username: config.webdav_username.clone(),
+        settings: config.settings,
+        memory_tags: config.memory_tags.clone(),
+        passphrase_source: if config.passphrase_cmd.is_some() {
+            SyncSecretSource::Command
+        } else {
+            SyncSecretSource::Entered
+        },
+        password_source: config.webdav_username.as_ref().map(|_| {
+            if config.webdav_password_cmd.is_some() {
+                SyncSecretSource::Command
+            } else {
+                SyncSecretSource::Entered
+            }
+        }),
+        last_run: shared.sync.last_run.read().clone(),
     }
 }
 
@@ -249,13 +284,21 @@ async fn command_output(argv: Option<&Vec<String>>) -> Option<Zeroizing<Vec<u8>>
 }
 
 /// Run `sync.passphrase_cmd` and derive the key off the async runtime.
-async fn derive(shared: &Shared, account: AccountId) -> Result<SyncKey, HttpError> {
-    let passphrase = command_output(shared.config.loaded.config.sync.passphrase_cmd.as_ref())
-        .await
-        .ok_or(HttpError(
-            StatusCode::CONFLICT,
-            "sync_passphrase_unavailable",
-        ))?;
+async fn derive(
+    shared: &Shared,
+    account: AccountId,
+    entered: Option<Zeroizing<String>>,
+) -> Result<SyncKey, HttpError> {
+    let config = effective(shared);
+    let passphrase = match entered {
+        Some(value) => Zeroizing::new(value.as_bytes().to_vec()),
+        None => command_output(config.passphrase_cmd.as_ref())
+            .await
+            .ok_or(HttpError(
+                StatusCode::CONFLICT,
+                "sync_passphrase_unavailable",
+            ))?,
+    };
     tokio::task::spawn_blocking(move || SyncKey::derive(&passphrase, account))
         .await
         .map_err(|_| HttpError::internal())?
@@ -269,18 +312,22 @@ enum Remote {
 }
 
 async fn remote(shared: &Shared, account: AccountId) -> Result<Remote, HttpError> {
-    let config = &shared.config.loaded.config.sync;
+    let config = effective(shared);
     if let Some(url) = &config.webdav_url {
         let credentials = match &config.webdav_username {
             Some(user) => {
-                let password = command_output(config.webdav_password_cmd.as_ref())
-                    .await
-                    .and_then(|bytes| {
-                        std::str::from_utf8(&bytes)
-                            .ok()
-                            .map(|p| Zeroizing::new(p.to_owned()))
-                    })
-                    .ok_or(HttpError(StatusCode::CONFLICT, "sync_password_unavailable"))?;
+                let entered = shared.sync.password.read().clone();
+                let password = match entered {
+                    Some(password) => password,
+                    None => command_output(config.webdav_password_cmd.as_ref())
+                        .await
+                        .and_then(|bytes| {
+                            std::str::from_utf8(&bytes)
+                                .ok()
+                                .map(|p| Zeroizing::new(p.to_owned()))
+                        })
+                        .ok_or(HttpError(StatusCode::CONFLICT, "sync_password_unavailable"))?,
+                };
                 Some((user.clone(), password))
             }
             None => None,
@@ -326,11 +373,23 @@ fn require_unset(shared: &Shared) -> Result<(), HttpError> {
 
 pub(crate) async fn setup(
     State(s): State<Shared>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
+    body: Bytes,
 ) -> Result<(StatusCode, Json<SyncSetupResponse>), HttpError> {
+    let request: SyncSecrets = if body.is_empty() {
+        SyncSecrets::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| HttpError(StatusCode::BAD_REQUEST, "invalid_request"))?
+    };
+    let (passphrase, password) = entered_secrets(local, request)?;
     let mut slot = s.sync.key.lock().await;
     require_unset(&s)?;
+    if password.is_some() {
+        *s.sync.password.write() = password;
+    }
     let account = AccountId::generate().map_err(|_| HttpError::internal())?;
-    let key = derive(&s, account).await?;
+    let key = derive(&s, account, passphrase).await?;
     let pairing_code = key.pairing_code().encode();
     let state = join(&s, &mut slot, key).await?;
     Ok((
@@ -344,18 +403,127 @@ pub(crate) async fn setup(
 
 pub(crate) async fn pair(
     State(s): State<Shared>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
     Json(request): Json<PairSyncRequest>,
 ) -> Result<Json<SyncStatus>, HttpError> {
+    let (passphrase, password) = entered_secrets(
+        local,
+        SyncSecrets {
+            passphrase: request.passphrase,
+            webdav_password: request.webdav_password,
+        },
+    )?;
     let code = PairingCode::parse(&request.pairing_code)
         .map_err(|_| HttpError(StatusCode::BAD_REQUEST, "invalid_pairing_code"))?;
     let mut slot = s.sync.key.lock().await;
     require_unset(&s)?;
-    let key = derive(&s, code.account).await?;
+    if password.is_some() {
+        *s.sync.password.write() = password;
+    }
+    let key = derive(&s, code.account, passphrase).await?;
     if !key.matches(&code) {
         return Err(HttpError(StatusCode::BAD_REQUEST, "sync_wrong_passphrase"));
     }
     let state = join(&s, &mut slot, key).await?;
     Ok(Json(status(&s, Some(&state), true)))
+}
+
+type EnteredSecrets = (Option<Zeroizing<String>>, Option<Zeroizing<String>>);
+
+fn entered_secrets(
+    local: crate::remote::LocalAuthority,
+    request: SyncSecrets,
+) -> Result<EnteredSecrets, HttpError> {
+    let passphrase = request.passphrase.map(Zeroizing::new);
+    let password = request.webdav_password.map(Zeroizing::new);
+    if passphrase.is_some() || password.is_some() {
+        local.require()?;
+    }
+    if passphrase
+        .as_ref()
+        .is_some_and(|value| value.is_empty() || value.len() > 65_536)
+        || password.as_ref().is_some_and(|value| value.len() > 65_536)
+    {
+        return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_sync_secret"));
+    }
+    Ok((passphrase, password))
+}
+
+pub(crate) async fn unlock(
+    State(s): State<Shared>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
+    Json(request): Json<SyncSecrets>,
+) -> Result<Json<SyncStatus>, HttpError> {
+    let (passphrase, password) = entered_secrets(local, request)?;
+    let mut slot = s.sync.key.lock().await;
+    let state = load_state(&s)?.ok_or(HttpError(StatusCode::CONFLICT, "sync_not_set_up"))?;
+    let account = state.account_id().map_err(|_| HttpError::internal())?;
+    let key = derive(&s, account, passphrase).await?;
+    if !state.accepts(&key) {
+        return Err(HttpError(StatusCode::BAD_REQUEST, "sync_wrong_passphrase"));
+    }
+    if password.is_some() {
+        *s.sync.password.write() = password;
+    }
+    *slot = Some(key);
+    Ok(Json(status(&s, Some(&state), true)))
+}
+
+pub(crate) async fn configure(
+    State(s): State<Shared>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
+    Json(request): Json<UpdateSyncConfigRequest>,
+) -> Result<Json<SyncStatus>, HttpError> {
+    local.require()?;
+    tokio::spawn(async move {
+        let key = s.sync.key.lock().await;
+        let _writer = crate::settings_api::WRITE.lock().await;
+        let state = load_state(&s)?;
+        let mut saved = crate::settings_api::stored(&s).await?;
+        let current = effective(&s);
+        let mut config = current.clone();
+        config.dir = request.dir.map(PathBuf::from);
+        config.webdav_url = request.webdav_url;
+        config.webdav_username = request.webdav_username;
+        config.settings = request.settings;
+        config.memory_tags = request.memory_tags;
+        let changed_backend = config.dir != current.dir
+            || config.webdav_url != current.webdav_url
+            || config.webdav_username != current.webdav_username;
+        if state.is_some() && changed_backend {
+            return Err(HttpError(StatusCode::CONFLICT, "sync_already_set_up"));
+        }
+        if config.webdav_username.is_none() {
+            config.webdav_password_cmd = None;
+        }
+        config
+            .validate()
+            .map_err(|_| HttpError(StatusCode::BAD_REQUEST, "invalid_sync_config"))?;
+        // This screen owns only these fields; keep unrelated command edits pending in the file.
+        saved.sync.dir.clone_from(&config.dir);
+        saved.sync.webdav_url.clone_from(&config.webdav_url);
+        saved
+            .sync
+            .webdav_username
+            .clone_from(&config.webdav_username);
+        saved.sync.settings = config.settings;
+        saved.sync.memory_tags.clone_from(&config.memory_tags);
+        if saved.sync.webdav_username.is_none() {
+            saved.sync.webdav_password_cmd = None;
+        }
+        crate::settings_api::persist(
+            &s,
+            serde_json::to_value(saved).map_err(|_| HttpError::internal())?,
+        )
+        .await?;
+        *s.sync.config.write() = Some(config);
+        if changed_backend {
+            *s.sync.password.write() = None;
+        }
+        Ok(Json(status(&s, state.as_ref(), key.is_some())))
+    })
+    .await
+    .map_err(|_| HttpError::internal())?
 }
 
 /// What a synced memory carries; ids, timestamps and versions stay per device.
@@ -391,14 +559,14 @@ struct Store<'a> {
 }
 
 fn selected(shared: &Shared, tags: &[String]) -> bool {
-    let wanted = &shared.config.loaded.config.sync.memory_tags;
+    let wanted = effective(shared).memory_tags;
     tags.iter().any(|tag| wanted.contains(tag))
 }
 
 // Free functions rather than `Store` methods: `&Store` is not `Send` (the vault lock is not
 // `Sync`), so it must not be held across an await.
 async fn memory_snapshot(shared: &Shared) -> Result<BTreeMap<String, Zeroizing<Vec<u8>>>, Error> {
-    let tags = shared.config.loaded.config.sync.memory_tags.clone();
+    let tags = effective(shared).memory_tags;
     let memories = shared
         .memory
         .run(move |store| store.tagged(&tags))
@@ -579,7 +747,7 @@ impl Store<'_> {
 
 impl LocalStore for Store<'_> {
     fn available(&self, kind: Kind) -> bool {
-        let config = &self.shared.config.loaded.config.sync;
+        let config = effective(&self.shared);
         match kind {
             Kind::PinnedTab => true,
             Kind::VaultItem => self.vault.as_ref().is_some_and(|v| v.is_unlocked()),
@@ -652,7 +820,7 @@ async fn run_to_end(s: Shared) -> Result<Json<SyncReport>, HttpError> {
     let mut state = load_state(&s)?.ok_or(HttpError(StatusCode::CONFLICT, "sync_not_set_up"))?;
     let account = state.account_id().map_err(|_| HttpError::internal())?;
     if slot.is_none() {
-        *slot = Some(derive(&s, account).await?);
+        *slot = Some(derive(&s, account, None).await?);
     }
     let Some(key) = slot.as_ref() else {
         return Err(HttpError::internal());
@@ -692,7 +860,7 @@ async fn run_to_end(s: Shared) -> Result<Json<SyncReport>, HttpError> {
         .save(&state_path(&s))
         .map_err(|_| HttpError::internal())?;
     let report = result.map_err(|e| sync_error(&e))?;
-    Ok(Json(SyncReport {
+    let report = SyncReport {
         pushed: report.pushed,
         pulled: report.pulled,
         applied: report.applied,
@@ -700,5 +868,7 @@ async fn run_to_end(s: Shared) -> Result<Json<SyncReport>, HttpError> {
         rejected: report.rejected,
         deferred: report.deferred,
         vault_available,
-    }))
+    };
+    *s.sync.last_run.write() = Some(report.clone());
+    Ok(Json(report))
 }

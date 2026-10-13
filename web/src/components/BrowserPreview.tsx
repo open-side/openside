@@ -1,4 +1,4 @@
-import { Check, Maximize2, Minimize2, Square, TriangleAlert, X } from "lucide-react";
+import { Check, Globe, Maximize2, Minimize2, Square, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { whilePageShown } from "../api/pageLifecycle";
 import type { PreviewServerMessage } from "../api/types";
@@ -6,8 +6,10 @@ import { useClient } from "../context";
 import { pendingTickets, type BrowserStateView, type SessionView, type SubagentView, type TimelineItem } from "../state/session";
 import { ICON_STROKE, useToast } from "../ui";
 import { BrowserFrame } from "./BrowserFrame";
+import { BrowserPip } from "./BrowserPip";
 import { BrowserSheet, useSessionTabs } from "./BrowserSheet";
 import { StopTaskDialog } from "./StopTaskDialog";
+import { opensPage, safeFavicon } from "./toolCopy";
 import { lastHost, statusPhrase } from "./toolStatus";
 import "./browser.css";
 
@@ -40,6 +42,20 @@ function currentTools(items: readonly TimelineItem[]): ToolItem[] {
     if (item.type === "tool") tools.unshift(item);
   }
   return tools;
+}
+
+/**
+ * The message the live card sits under: the person's message in front of the latest browser
+ * activity (a browser call, or a Task started to browse), so a later browsing turn brings the
+ * card down to its own message. `null` when the log has no such message.
+ */
+export function browserAnchor(items: readonly TimelineItem[]): string | null {
+  const start = items.findLastIndex((item) => item.type === "tool" && (item.name.toLowerCase().startsWith("browser") || item.name === "task_start"));
+  for (let index = start; index >= 0; index -= 1) {
+    const item = items[index]!;
+    if (item.type === "user" && item.author_kind != null && item.author_kind !== "internal") return item.id;
+  }
+  return null;
 }
 
 /** First sentence of `text` without Markdown marks. */
@@ -116,6 +132,9 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
   const [picked, setPicked] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [thumbnail, setThumbnail] = useState<{ id: string; url: string } | null>(null);
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const [away, setAway] = useState(false);
+  const [pipClosed, setPipClosed] = useState(false);
   const tabs = useSessionTabs(sessionId);
   const tasks = taskCards(view);
   // Follows the Task that acted last until the person picks one in the strip.
@@ -182,6 +201,7 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
     if (running) {
       runStart.current ??= Date.now();
       setDone(false);
+      setPipClosed(false);
       return;
     }
     const started = runStart.current;
@@ -205,6 +225,18 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [click?.id]);
 
+  // Scrolled away from the card while the agent still works: the picture follows as a floating
+  // preview. While the card is still on screen or scrolled past downward it stays sticky (browser.css).
+  useEffect(() => {
+    if (!element || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => setAway(!!entry && !entry.isIntersecting), {
+      root: element.closest(".conversation-scroll"),
+      rootMargin: "0px 0px -120px 0px",
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+
   const state =
     status === "failed"
       ? "Preview unavailable. A browse or steer device token is required."
@@ -223,6 +255,16 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
   const liveTabId = message && "tab_id" in message ? message.tab_id : null;
   const liveTab = tabs.tabs?.find((tab) => tab.tab_id === liveTabId);
   const title = task ? task.state.title || task.state.host || "Browser" : liveTab?.title || lastHost(view.items) || "Browser";
+  // The page the card shows: a Task's state, else the session's latest front-agent state.
+  const pageState =
+    task?.state ??
+    Object.values(view.browserStates)
+      .filter((state) => !state.task_id)
+      .reduce<BrowserStateView | undefined>((latest, state) => (!latest || latest.seq < state.seq ? state : latest), undefined);
+  const pageHost = pageState?.host || lastHost(view.items);
+  const pageTitle = (task ? task.state.title : liveTab?.title || pageState?.title)?.trim() ?? "";
+  const favicon = pageState ? safeFavicon(pageState.favicon) : null;
+  const loading = task ? task.state.phase === "loading" : currentTools(view.items).some((tool) => !tool.done && opensPage(tool));
 
   if (expanded) {
     return <BrowserSheet tabs={tabs} liveTabId={liveTabId} frame={frame?.data ?? null} state={state ?? null} onClose={() => setExpanded(false)} />;
@@ -347,7 +389,14 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
   );
 
   return (
-    <section className="browser-card" aria-label="Live browser" data-tone={tone} data-minimized={minimized || undefined}>
+    <section
+      ref={setElement}
+      className="browser-card"
+      aria-label="Live browser"
+      data-tone={tone}
+      data-minimized={minimized || undefined}
+      data-loading={(loading && running) || undefined}
+    >
       {minimized ? (
         <div className="browser-card-bar">
           <button type="button" className="browser-card-thumb" aria-label={`Expand ${title}`} onClick={() => setExpanded(true)}>
@@ -380,6 +429,13 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
               ))}
             </div>
           ) : null}
+          {!facts && tasks.length <= 1 && (pageTitle || pageHost) ? (
+            <span className="browser-card-chip">
+              {favicon ? <img src={favicon} alt="" width={16} height={16} /> : <Globe size={15} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+              <span className="browser-card-chip-title">{pageTitle || pageHost}</span>
+              {pageTitle && pageHost ? <span className="browser-card-chip-host">{pageHost}</span> : null}
+            </span>
+          ) : null}
           <div className="browser-card-bar">
             {statusPill}
             {controls}
@@ -394,6 +450,18 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
           if (cancelling) void client.cancelSubagent(sessionId, cancelling).catch(() => toast.notify("Could not cancel the task", "error"));
         }}
       />
+      {tone === "running" && away && !pipClosed && frame ? (
+        <BrowserPip
+          label="Live browser"
+          title={pageTitle || pageHost || "Browser"}
+          status={tone}
+          live
+          onExpand={() => setExpanded(true)}
+          onClose={() => setPipClosed(true)}
+        >
+          <BrowserFrame data={frame.data} />
+        </BrowserPip>
+      ) : null}
     </section>
   );
 }

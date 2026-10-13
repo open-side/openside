@@ -1,16 +1,19 @@
-import type { Attachment, BrowserState, Event, PolicyMode, QueueMode, SubagentStatus, Ticket } from "../api/types";
+import { isOutputArtifact } from "../api/artifacts";
+import type { Attachment, BrowserState, Card, Event, MessageAuthorKind, PolicyMode, QueueMode, SubagentStatus, Ticket } from "../api/types";
 
 export interface QueuedMessage {
   id: string;
   text: string;
   mode: QueueMode;
   attachments?: Attachment[];
+  author_kind: MessageAuthorKind;
+  from_agent: string | null;
 }
 
 export type MessageOutcome = "completed" | "aborted" | "failed" | "deferred";
 
 export type TimelineItem =
-  | { type: "user"; id: string; text: string; outcome?: MessageOutcome; reason?: string; attachments?: Attachment[] }
+  | { type: "user"; id: string; text: string; outcome?: MessageOutcome; reason?: string; attachments?: Attachment[]; author_kind: MessageAuthorKind; from_agent: string | null }
   /** `finalSeq` is the `assistant.final` sequence that visuals (`Visual.seq`) refer to. */
   | { type: "assistant"; id: string; text: string; final: boolean; finalSeq?: number }
   | {
@@ -23,12 +26,14 @@ export type TimelineItem =
       isError?: boolean;
       done: boolean;
     }
-  | { type: "ticket"; id: string }
-  | { type: "error"; id: string; code: string; message: string };
+  | { type: "card"; id: string }
+  | { type: "error"; id: string; code: string; message: string; userMessage?: string; retryable?: boolean };
 
 export interface SessionView {
   lastSeq: number;
   title: string;
+  titleLocked: boolean;
+  titleProposed: boolean;
   model: string;
   mode: PolicyMode | undefined;
   pinned: boolean;
@@ -37,10 +42,19 @@ export interface SessionView {
   status: "idle" | "running" | "stopped";
   /** Model is producing thinking output and no visible text yet. */
   thinking: boolean;
+  /**
+   * A message accepted while the session was idle and not yet handed to the agent: the
+   * transcript shows it as sent rather than as a queued follow-up.
+   */
+  delivering: string | null;
+  /** The agent run has picked up work (`turn.started`) and has not settled since. */
+  engaged: boolean;
   items: TimelineItem[];
   /** Pending messages in delivery order: steering lane first, then follow-ups. */
   queue: QueuedMessage[];
   tickets: Record<string, Ticket>;
+  /** Every conversation card of the session by card id; the timeline holds `{type:"card", id}` rows. */
+  cards: Record<string, CardEntry>;
   /** Children started by `delegate` or `task_start` (`background`), in start order. */
   subagents: SubagentView[];
   /** Latest `browser.state` per agent tab, keyed by {@link browserStateKey}. */
@@ -78,6 +92,8 @@ export interface SavedArtifact {
 export const emptySessionView: SessionView = {
   lastSeq: 0,
   title: "",
+  titleLocked: false,
+  titleProposed: false,
   model: "",
   mode: undefined,
   pinned: false,
@@ -85,9 +101,12 @@ export const emptySessionView: SessionView = {
   incognito: false,
   status: "idle",
   thinking: false,
+  delivering: null,
+  engaged: false,
   items: [],
   queue: [],
   tickets: {},
+  cards: {},
   subagents: [],
   browserStates: {},
   artifacts: [],
@@ -113,6 +132,34 @@ function patchItem<T extends TimelineItem["type"]>(
   );
 }
 
+/** A card and the seq it first appeared at (a later update patches the card and keeps this). */
+export interface CardEntry {
+  card: Card;
+  firstSeq: number;
+}
+
+/** The card an event carries, if any: a projected ticket, a presented card, or a team/activity card. */
+function cardOf(event: Event): Card | null {
+  if (event.kind === "ticket.opened") return event.ticket.card ?? null;
+  return "card" in event && event.card ? event.card : null;
+}
+
+/**
+ * Places the event's card on the timeline. A card keeps its row and first seq across updates,
+ * except that a settled ticket's card moves to where it settled, so the receipt reads in order
+ * and no second row is added for the answer.
+ */
+function placeCard(view: SessionView, event: Event): SessionView {
+  const card = cardOf(event);
+  if (!card) return view;
+  const known = view.cards[card.id];
+  const cards = { ...view.cards, [card.id]: { card, firstSeq: known?.firstSeq ?? event.seq } };
+  const settled = event.kind === "ticket.resolved" || event.kind === "ticket.rejected" || event.kind === "ticket.expired";
+  const rest = known && settled ? view.items.filter((item) => !(item.type === "card" && item.id === card.id)) : view.items;
+  const items = !known || settled ? [...rest, { type: "card" as const, id: card.id }] : view.items;
+  return { ...view, cards, items };
+}
+
 /**
  * Pure reducer from the durable event log to everything the session screen shows.
  * The screen never keeps state that cannot be rebuilt by replaying events, so a
@@ -120,29 +167,46 @@ function patchItem<T extends TimelineItem["type"]>(
  */
 export function reduceSession(state: SessionView, event: Event): SessionView {
   if (event.seq <= state.lastSeq) return state;
+  return placeCard(reduceEvent(state, event), event);
+}
+
+function reduceEvent(state: SessionView, event: Event): SessionView {
+  if (event.seq <= state.lastSeq) return state;
   const next: SessionView = { ...state, lastSeq: event.seq };
   const last = state.items.at(-1);
   switch (event.kind) {
     case "session.created":
-      return { ...next, title: event.title, model: event.model, mode: event.mode ?? undefined, incognito: event.incognito ?? false };
+      return { ...next, title: event.title, titleLocked: event.title !== "New session", model: event.model, mode: event.mode ?? undefined, incognito: event.incognito ?? false };
     case "session.updated":
       return {
         ...next,
         title: event.title ?? state.title,
+        titleLocked: state.titleLocked || event.title != null,
         pinned: event.pinned ?? state.pinned,
         archived: event.archived ?? state.archived,
       };
+    case "session.title_proposed":
+      if (state.titleLocked || state.titleProposed) return next;
+      return { ...next, title: event.title, titleProposed: true };
     case "message.queued": {
       const attachments = event.attachments?.length ? { attachments: event.attachments } : {};
       // An idle session starts on this message; say so now rather than after the agent
       // process is up, which takes seconds when it is cold.
       const starting = state.status !== "running";
+      // The daemon holds the queue while a ticket waits, so nothing is on its way then.
+      const delivering =
+        starting && !Object.values(state.tickets).some((t) => t.status === "pending");
       return {
         ...next,
         ...(starting ? { status: "running" as const, thinking: true } : {}),
+        ...(delivering ? { delivering: event.message_id } : {}),
         queue: orderQueue([
           ...state.queue,
-          { id: event.message_id, text: event.text, mode: event.mode, ...attachments },
+          {
+            id: event.message_id, text: event.text, mode: event.mode, ...attachments,
+            author_kind: event.author_kind ?? "internal",
+            from_agent: event.from_agent ?? null,
+          },
         ]),
       };
     }
@@ -170,12 +234,18 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
     case "message.dropped": {
       const queue = state.queue.filter((m) => m.id !== event.message_id);
       const busy = queue.length > 0 || state.items.some((item) => item.type === "user" && item.outcome === undefined);
-      return { ...next, queue, ...(busy ? {} : { status: "idle" as const, thinking: false }) };
+      return {
+        ...next,
+        queue,
+        ...(state.delivering === event.message_id ? { delivering: null } : {}),
+        ...(busy ? {} : { status: "idle" as const, thinking: false, engaged: false }),
+      };
     }
     case "message.injected": {
       const sent = state.queue.find((m) => m.id === event.message_id);
       return {
         ...next,
+        ...(state.delivering === event.message_id ? { delivering: null } : {}),
         status: "running",
         queue: state.queue.filter((m) => m.id !== event.message_id),
         items: [
@@ -184,6 +254,8 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
             type: "user",
             id: event.message_id,
             text: sent?.text ?? "",
+            author_kind: sent?.author_kind ?? "internal",
+            from_agent: sent?.from_agent ?? null,
             ...(sent?.attachments ? { attachments: sent.attachments } : {}),
           },
         ],
@@ -200,17 +272,18 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
         ...next,
         status: state.status === "stopped" ? "stopped" : running ? "running" : "idle",
         thinking: running && state.thinking,
+        engaged: running && state.engaged,
         items,
       };
     }
     case "turn.started":
-      return { ...next, status: "running" };
+      return { ...next, status: "running", engaged: true };
     case "turn.ended":
       return { ...next, thinking: false, items: finalizeStreaming(state.items) };
     case "session.settled":
-      return { ...next, status: "idle", thinking: false, items: finalizeStreaming(state.items) };
+      return { ...next, status: "idle", thinking: false, engaged: false, items: finalizeStreaming(state.items) };
     case "session.stopped":
-      return { ...next, status: "stopped", thinking: false, items: finalizeStreaming(state.items) };
+      return { ...next, status: "stopped", thinking: false, engaged: false, items: finalizeStreaming(state.items) };
     case "thinking.delta":
       return { ...next, thinking: true };
     case "assistant.delta":
@@ -275,7 +348,7 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
       return {
         ...next,
         tickets: { ...state.tickets, [event.ticket.id]: event.ticket },
-        items: [...finalizeStreaming(state.items), { type: "ticket", id: event.ticket.id }],
+        items: finalizeStreaming(state.items),
       };
     case "ticket.resolved":
     case "ticket.rejected":
@@ -336,16 +409,20 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
         ),
       };
     case "browser.state": {
+      const previous = state.browserStates[browserStateKey(event)];
+      const favicon = event.favicon ?? (previous?.url === event.url ? previous.favicon : undefined);
       const browser: BrowserStateView = {
         tab_id: event.tab_id, url: event.url, host: event.host, title: event.title,
         phase: event.phase, page_kind: event.page_kind, facts: event.facts, seq: event.seq,
         ...(event.task_id != null ? { task_id: event.task_id } : {}),
         ...(event.action != null ? { action: event.action } : {}),
         ...(event.thumbnail != null ? { thumbnail: event.thumbnail } : {}),
+        ...(favicon != null ? { favicon } : {}),
       };
       return { ...next, browserStates: { ...state.browserStates, [browserStateKey(browser)]: browser } };
     }
     case "artifact.saved": {
+      if (!isOutputArtifact(event)) return next;
       const saved: SavedArtifact = { path: event.path, mime: event.mime, size: event.size, tool: event.tool };
       const known = state.artifacts.some((artifact) => artifact.path === event.path);
       return {
@@ -360,7 +437,7 @@ export function reduceSession(state: SessionView, event: Event): SessionView {
         ...next,
         items: [
           ...finalizeStreaming(state.items),
-          { type: "error", id: `e${event.seq}`, code: event.code, message: event.message },
+          { type: "error", id: `e${event.seq}`, code: event.code, message: event.message, userMessage: event.user_message, retryable: event.retryable },
         ],
       };
     default:

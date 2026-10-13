@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { SettingsDocument } from "../api/types";
 import { ClientContext } from "../context";
 import { remoteEditable, schemaFields } from "../settings/schemaForm";
+import { chooseOption } from "../test/select";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
 import { ConfigPage } from "./ConfigPage";
 
@@ -132,7 +133,7 @@ describe("ConfigPage", () => {
   it("over TCP edits an allowed key and saves only that change; local-only keys are read-only", async () => {
     const user = userEvent.setup();
     const { calls } = setup(true);
-    expect(await screen.findByRole("note")).toHaveTextContent("paired device");
+    expect(await screen.findByRole("note")).toHaveTextContent("can only be changed on the computer that runs openside");
     expect(within(field("agent.command")).getByRole("textbox")).toBeDisabled();
     expect(within(field("agent.command")).getByText("local only")).toBeInTheDocument();
     expect(field("credentials.x")).toBeNull();
@@ -141,10 +142,10 @@ describe("ConfigPage", () => {
     expect(ttl).toBeEnabled();
     await user.clear(ttl);
     await user.type(ttl, "1200");
-    await user.selectOptions(within(field("memory.default_retention")).getByRole("combobox"), "days_90");
+    await chooseOption(user, within(field("memory.default_retention")).getByRole("combobox"), "days_90");
     await user.click(screen.getByRole("button", { name: "Save (2)" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("apply after the daemon restarts");
+    expect(await screen.findByRole("status")).toHaveTextContent("apply after openside restarts");
     const put = calls.find((c) => c.method === "PUT")!.body as { config: typeof CONFIG };
     expect(put.config).toEqual({
       ...CONFIG,

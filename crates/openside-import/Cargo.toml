@@ -1,6 +1,6 @@
 [package]
 name = "openside-import"
-description = "Import history, bookmarks and cookies from Chrome/Chromium/Firefox profiles into an openside browser profile"
+description = "Local browser profile migration with read-only snapshots, encrypted Vault credentials and per-category previews"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,12 +12,19 @@ rust-version.workspace = true
 testing = []
 
 [dependencies]
-aes = "0.8"
+aes = { version = "0.8", features = ["zeroize"] }
+aes-gcm = "0.10"
+base64 = "0.22"
 cbc = { version = "0.1", features = ["alloc", "block-padding"] }
+csv-core = "0.1"
+des = { version = "0.8", features = ["zeroize"] }
 futures-util = { version = "0.3", features = ["sink"] }
+hmac = "0.12"
+lz4_flex = "0.11"
 openside-browser = { path = "../openside-browser" }
 pbkdf2 = "0.12"
-rusqlite = { version = "0.37", features = ["bundled"] }
+plist = "1"
+rusqlite = { version = "0.37", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
@@ -27,10 +34,25 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"] }
 tokio-tungstenite = "0.26"
+url = "2"
 zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", features = ["process", "signal"] }
+nix = { version = "0.29", features = ["fs", "process", "signal"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+zvariant = "5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+parking_lot = "0.12"
 
 [lints]
 workspace = true

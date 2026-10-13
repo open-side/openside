@@ -27,8 +27,8 @@ use crate::{
 
 pub(crate) type Sched = Scheduler<DaemonHost>;
 
-/// Holder that lets `Shared` reference the scheduler without a reference cycle: the tick
-/// loop clears it on shutdown, releasing the host's clone of `Shared`.
+/// The daemon clears this slot even when its runtime cannot finish the scheduler task,
+/// releasing the scheduler host's clone of `Shared` and its database descriptors.
 #[derive(Default)]
 pub(crate) struct Slot(RwLock<Option<Arc<Sched>>>);
 
@@ -39,7 +39,7 @@ impl Slot {
     fn set(&self, scheduler: Arc<Sched>) {
         *self.0.write() = Some(scheduler);
     }
-    fn clear(&self) {
+    pub(crate) fn clear(&self) {
         *self.0.write() = None;
     }
 }
@@ -59,6 +59,17 @@ impl DaemonHost {
     ) -> std::result::Result<(), HostError> {
         let shared = &self.shared;
         let session = &dispatch.session_id;
+        let state = shared
+            .db
+            .state(session)
+            .await
+            .map_err(|_| HostError::TargetMissing)?;
+        if crate::agents::for_session(shared, &state)
+            .map_err(|_| HostError::TargetMissing)?
+            .is_some_and(|agent| agent.status != openside_proto::AgentStatus::Active)
+        {
+            return Err(HostError::TargetMissing);
+        }
         // A session deleted while we were working is the target's absence, not a failure.
         let classify = |reason: &'static str| async move {
             if shared.db.state(session).await.is_err() {
@@ -85,6 +96,8 @@ impl DaemonHost {
                     text: prompt.to_owned(),
                     mode: QueueMode::Queue,
                     attachments: Vec::new(),
+                    author_kind: openside_proto::MessageAuthorKind::Internal,
+                    from_agent: None,
                 },
             )
             .await
@@ -92,9 +105,13 @@ impl DaemonHost {
         {
             return Err(classify("session rejected the prompt").await);
         }
-        if shared.command(session, Action::Deliver).await.is_err() {
-            return Err(classify("could not deliver the prompt to the runtime").await);
-        }
+        // The scheduler gate must not wait for an actor acquiring the registry gate;
+        // lifecycle transfer holds those locks in the opposite order.
+        let shared = shared.clone();
+        let session = session.clone();
+        tokio::spawn(async move {
+            let _ = shared.command(&session, Action::Deliver).await;
+        });
         Ok(())
     }
 }
@@ -109,7 +126,7 @@ impl RoutineHost for DaemonHost {
         let model = spec
             .model
             .clone()
-            .or_else(|| shared.config.loaded.config.models.default.clone())
+            .or_else(|| shared.models.default_model())
             .filter(|model| !model.trim().is_empty())
             .ok_or_else(|| HostError::Failed("model_not_configured".into()))?;
         let mode = spec.mode.unwrap_or_else(|| shared.policy.default_mode());
@@ -166,6 +183,16 @@ impl RoutineHost for DaemonHost {
     async fn session_exists(&self, session: &SessionId) -> bool {
         self.shared.db.state(session).await.is_ok()
     }
+
+    async fn agent_session(&self, id: &str) -> Option<SessionId> {
+        self.shared
+            .agents
+            .get(id)
+            .ok()
+            .flatten()
+            .filter(|agent| agent.status == openside_proto::AgentStatus::Active)
+            .map(|agent| agent.home_session_id)
+    }
 }
 
 /// Open `routines.db`, reconcile what happened while the daemon was down, and start ticking.
@@ -180,6 +207,9 @@ pub(crate) async fn start(shared: &Shared) -> Result<()> {
         },
     ));
     shared.routines.set(scheduler.clone());
+    crate::team::recover_ownership(shared)
+        .await
+        .map_err(|_| "team ownership recovery failed")?;
     if let Err(error) = scheduler.recover().await {
         crate::diag!("opensided: routine recovery failed: {error}");
     }

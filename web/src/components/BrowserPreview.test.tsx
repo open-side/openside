@@ -6,7 +6,7 @@ import type { Ticket } from "../api/types";
 import { ClientContext } from "../context";
 import { emptySessionView, type BrowserStateView, type SessionView, type SubagentView, type TimelineItem } from "../state/session";
 import { json } from "../test/fakeDaemon";
-import { BrowserPreview } from "./BrowserPreview";
+import { BrowserPreview, browserAnchor } from "./BrowserPreview";
 
 class FakeSocket {
   static last: FakeSocket | null = null;
@@ -133,7 +133,7 @@ describe("BrowserPreview", () => {
   it("narrates the run, ripples coordinate clicks, asks for the person and cancels through the caller", async () => {
     const user = userEvent.setup();
     const click: TimelineItem = { type: "tool", id: "c1", name: "browser_pointer", args: { tab_id: "tab1", action: "click", x: 720, y: 225 }, updates: [], done: false };
-    const { update, onCancel, onShowPending } = setup(viewOf({ status: "running", items: [{ type: "user", id: "u1", text: "Buy it" }, OPENED, click] }));
+    const { update, onCancel, onShowPending } = setup(viewOf({ status: "running", items: [{ type: "user", id: "u1", text: "Buy it", author_kind: "person", from_agent: null }, OPENED, click] }));
     open();
     const card = screen.getByRole("region", { name: "Live browser" });
     expect(within(card).getByRole("status")).toHaveTextContent("Clicking on shop.test…");
@@ -156,7 +156,7 @@ describe("BrowserPreview", () => {
 
   it("announces a finished run with the reply's first sentence, then folds to the slim pill", () => {
     vi.useFakeTimers();
-    const running = viewOf({ status: "running", items: [{ type: "user", id: "u1", text: "Sign in" }, OPENED] });
+    const running = viewOf({ status: "running", items: [{ type: "user", id: "u1", text: "Sign in", author_kind: "person", from_agent: null }, OPENED] });
     const { update } = setup(running);
     open();
     act(() => vi.advanceTimersByTime(1500));
@@ -306,5 +306,26 @@ describe("BrowserPreview", () => {
     rendered.unmount();
     expect(revoke).toHaveBeenCalledWith("blob:second");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("browserAnchor", () => {
+  const user = (id: string): Extract<TimelineItem, { type: "user" }> => ({ type: "user", id, text: id, author_kind: "person", from_agent: null });
+  const browse = (id: string, name = "browser_navigate"): TimelineItem => ({ type: "tool", id, name, args: {}, updates: [], done: true });
+  const read: TimelineItem = { type: "tool", id: "r", name: "read", args: {}, updates: [], done: true };
+
+  it("is the person's message in front of the latest browser call, so a later browsing turn moves the card down", () => {
+    expect(browserAnchor([user("m1"), browse("t1"), user("m2"), read, user("m3"), browse("t2")])).toBe("m3");
+    expect(browserAnchor([user("m1"), browse("t1"), user("m2"), read])).toBe("m1");
+  });
+
+  it("follows a Task started to browse, and skips task reports", () => {
+    expect(browserAnchor([user("m1"), browse("t1", "task_start"), { ...user("plain-report"), author_kind: "internal" }])).toBe("m1");
+    expect(browserAnchor([user("task-report-person"), browse("t1")])).toBe("task-report-person");
+  });
+
+  it("is null without a browsing call or a message to hang the card on", () => {
+    expect(browserAnchor([user("m1"), read])).toBeNull();
+    expect(browserAnchor([browse("t1")])).toBeNull();
   });
 });

@@ -27,14 +27,18 @@ pub(crate) const TASK_CANCEL: &str = "task_cancel";
 pub(crate) const TASK_STATUS: &str = "task_status";
 const TASK_TOOLS: [&str; 4] = [TASK_START, TASK_STEER, TASK_CANCEL, TASK_STATUS];
 
-/// What the front agent may call besides the task tools: reading the session's tabs and
-/// memory. Everything that acts (browser actions, shell, files, human steps) runs in Tasks.
-const FRONT_READ_TOOLS: [&str; 5] = [
+/// Front agents may inspect local records and session tabs, but anything that acts
+/// (browser actions, shell, files or human steps) must run in a Task.
+const FRONT_READ_TOOLS: [&str; 9] = [
     "browser_tabs",
     "browser_snapshot",
     "browser_screenshot",
+    "browser_import_lookup",
+    "connections_list",
+    "connection_observe",
     "memory_search",
     "skill",
+    "present",
 ];
 
 /// `message_id` prefix of the report a finished Task leaves in its session's queue.
@@ -44,8 +48,16 @@ pub(crate) const REPORT_MARKER: &str = "[task report]";
 /// The front agent cancelled the Task itself; it needs no report.
 const CANCELLED_BY_AGENT: &str = "cancelled_by_agent";
 
-pub(crate) fn front(shared: &Shared) -> bool {
-    shared.config.loaded.config.agent.orchestration == openside_config::Orchestration::Front
+pub(crate) fn front(shared: &Shared, agent_id: Option<&str>) -> bool {
+    match agent_id {
+        Some(id) => shared.agents.get(id).ok().flatten().is_some_and(|agent| {
+            agent.kind == openside_proto::AgentKind::Chief
+                && agent.status == openside_proto::AgentStatus::Active
+        }),
+        None => {
+            shared.config.loaded.config.agent.orchestration == openside_config::Orchestration::Front
+        }
+    }
 }
 
 pub(crate) fn is_task_tool(name: &str) -> bool {
@@ -53,7 +65,7 @@ pub(crate) fn is_task_tool(name: &str) -> bool {
 }
 
 pub(crate) fn is_front_tool(name: &str) -> bool {
-    is_task_tool(name) || FRONT_READ_TOOLS.contains(&name)
+    is_task_tool(name) || name.starts_with("team_") || FRONT_READ_TOOLS.contains(&name)
 }
 
 /// The front agent's share of the session tools, sent as `open.config.agent.front_tools`.
@@ -69,10 +81,11 @@ pub(crate) fn front_tools(specs: &[ToolSpec]) -> Vec<String> {
 pub(crate) fn front_denial(
     shared: &Shared,
     call: &ToolCall,
+    agent_id: Option<&str>,
 ) -> Option<(&'static str, &'static str)> {
     // API callers (`/repl`, `/tools/{name}`) drive the browser themselves; they are not the
     // front agent.
-    if !front(shared)
+    if !front(shared, agent_id)
         || call.subagent.is_some()
         || is_front_tool(&call.name)
         || call.tool_call_id.starts_with(crate::tools::API_CALL_PREFIX)
@@ -192,7 +205,7 @@ impl DaemonTool for TaskTool {
         }
     }
     fn visible(&self, ctx: &ToolEnv) -> bool {
-        front(&ctx.shared)
+        front(&ctx.shared, ctx.agent_id.as_deref())
     }
     fn actions<'a>(
         &'a self,
@@ -367,10 +380,10 @@ fn report_text(task: &Subagent) -> Option<String> {
 /// so calling this again (after a crash between the end and the report) never adds a
 /// second report. Returns whether anything may have been queued.
 pub(crate) async fn report_ended(shared: &Shared, session: &SessionId) -> Result<bool> {
-    if !front(shared) {
+    let state = shared.db.state(session).await?;
+    if !front(shared, state.agent_id.as_deref()) {
         return Ok(false);
     }
-    let state = shared.db.state(session).await?;
     if state.deleted {
         return Ok(false);
     }
@@ -397,6 +410,8 @@ pub(crate) async fn report_ended(shared: &Shared, session: &SessionId) -> Result
                     text,
                     mode: QueueMode::Steer,
                     attachments: Vec::new(),
+                    author_kind: openside_proto::MessageAuthorKind::Internal,
+                    from_agent: None,
                 },
             )
             .await?;

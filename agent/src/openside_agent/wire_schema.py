@@ -5,7 +5,8 @@
 
 The Python models are the generator; agent/tests/test_wire_schema.py fails when the
 committed file drifts from them, and the Rust crate validates every message it emits
-against it. docs/specs/sidecar-protocol.md stays normative for semantics.
+against it. Bounded TeamContext fields are derived here with every other wire model;
+docs/specs/sidecar-protocol.md stays normative for semantics.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from openside_agent.protocol import Inbound, Outbound
 PROTOCOL = 1
 # Sidecar package versions the daemon accepts in `hello.versions.openside_agent`; equals
 # openside_agent_sidecar::supported_agent_versions() (checked on both sides).
-SUPPORTED_AGENT_VERSIONS = ">=0.1.0,<0.2.0"
+SUPPORTED_AGENT_VERSIONS = ">=0.1.1,<0.2.0"
 
 
 def _require_constants(definition: dict[str, Any]) -> None:

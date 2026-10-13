@@ -66,7 +66,7 @@ pub(crate) fn progress_line(event: &Event) -> Option<String> {
         ),
         EventKind::TicketResolved { ticket_id, .. } => format!("[ticket {ticket_id}] answered"),
         EventKind::TicketRejected { ticket_id, .. } => format!("[ticket {ticket_id}] rejected"),
-        EventKind::TicketExpired { ticket_id } => format!("[ticket {ticket_id}] expired"),
+        EventKind::TicketExpired { ticket_id, .. } => format!("[ticket {ticket_id}] expired"),
         _ => return None,
     })
 }
@@ -144,6 +144,12 @@ pub(crate) async fn run<W: Write, E: Write>(
     }
     let json_output = options.json;
     let mut write_error = None;
+    let web_origin = client.web_origin();
+    let card_context = crate::ui::cards::Context {
+        session_id: &id,
+        web_origin: web_origin.as_deref(),
+        client: Some(client),
+    };
     let result = wait::settle(
         client,
         &id,
@@ -162,6 +168,18 @@ pub(crate) async fn run<W: Write, E: Write>(
             }
             let written = if json_output {
                 emit(&mut *stdout, event)
+            } else if let Some(card) = crate::ui::cards::event_card(&event.kind) {
+                let ui = crate::ui::pretty()
+                    .copied()
+                    .unwrap_or_else(crate::ui::cards::plain_ui);
+                let rendered = crate::ui::cards::render(&ui, card, &card_context);
+                if card.ticket_id.is_some() {
+                    write!(stderr, "{rendered}")
+                        .and_then(|()| stderr.flush())
+                        .map_err(output_error)
+                } else {
+                    write!(stdout, "{rendered}").map_err(output_error)
+                }
             } else if let Some(line) = progress_line(event) {
                 writeln!(stderr, "{line}")
                     .and_then(|()| stderr.flush())
@@ -310,6 +328,9 @@ pub(crate) async fn tasks<W: Write>(
         .await?;
     if json_output {
         return emit(stdout, &list);
+    }
+    if let Some(ui) = crate::ui::pretty() {
+        return write!(stdout, "{}", crate::ui::tasks(ui, &list)).map_err(output_error);
     }
     for task in &list.subagents {
         print_task(false, stdout, task)?;

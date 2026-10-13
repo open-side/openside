@@ -138,11 +138,23 @@ pub(super) fn deliver(inner: &Inner, event: &Value) {
 pub struct Screencast {
     inner: Arc<Inner>,
     session: String,
+    document: Option<String>,
     slot: Arc<Slot>,
     stopped: AtomicBool,
 }
 
 impl Screencast {
+    /// Whether the stream still belongs to the current top-frame document.
+    /// This reads tracked lifecycle state without querying or changing the page.
+    pub fn document_is_current(&self) -> bool {
+        !self.stopped.load(Ordering::Acquire)
+            && self
+                .inner
+                .network
+                .document_is(&self.session, self.document.as_deref())
+                .unwrap_or(false)
+    }
+
     /// Wait for the next frame. Chromium sends no further frame until this one is passed to
     /// [`Screencast::ack`], so pacing the acknowledgement paces the stream.
     pub async fn next(&self) -> ScreencastFrame {
@@ -233,6 +245,8 @@ impl Browser {
         paced: bool,
     ) -> Result<Screencast, BrowserError> {
         let session = self.owned_session(owner, tab_id).await?;
+        self.track_session(&session).await?;
+        let document = self.inner.network.document_loader(&session)?;
         let slot = Arc::new(Slot::default());
         if paced {
             *lock(&slot.policy) = AckPolicy::Paced {
@@ -250,6 +264,7 @@ impl Browser {
         let screencast = Screencast {
             inner: Arc::clone(&self.inner),
             session,
+            document,
             slot,
             stopped: AtomicBool::new(false),
         };
@@ -269,6 +284,7 @@ impl Browser {
         });
         if paced {
             parameters["maxFramesInFlight"] = json!(1);
+            parameters["sendLastFrame"] = json!(true);
         }
         cdp.call(
             Some(&screencast.session),

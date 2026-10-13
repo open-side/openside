@@ -1,7 +1,8 @@
-import { Archive, ArchiveRestore, Copy, Link as LinkIcon, Pencil, Pin, PinOff } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, KeyRound, Link as LinkIcon, Pencil, Pin, PinOff } from "lucide-react";
 import { useRef, useState, type FormEvent, type ReactElement } from "react";
 import { ApiError } from "../api/client";
 import { useClient } from "../context";
+import { SessionAccountDialog } from "../models/SessionAccountDialog";
 import { Button, copyText, Dialog, DialogActions, ICON_STROKE, MenuItem, MenuSeparator, PopoverMenu, useToast } from "../ui";
 
 export interface SessionSummary {
@@ -27,6 +28,7 @@ export function SessionMenu({ session, trigger, label, onChanged }: SessionMenuP
   const client = useClient();
   const toast = useToast();
   const [renaming, setRenaming] = useState(false);
+  const [choosingAccount, setChoosingAccount] = useState(false);
 
   async function update(patch: { title?: string; pinned?: boolean; archived?: boolean }, done: string) {
     try {
@@ -40,9 +42,9 @@ export function SessionMenu({ session, trigger, label, onChanged }: SessionMenuP
     }
   }
 
-  async function copy(text: string, what: string) {
-    if (await copyText(text)) toast.notify(`${what} copied`);
-    else toast.notify(`Could not copy the ${what.toLowerCase()}`, "error");
+  async function copy(text: string, noun: string) {
+    if (await copyText(text)) toast.notify(`${noun[0]!.toUpperCase()}${noun.slice(1)} copied`);
+    else toast.notify(`Could not copy the ${noun}`, "error");
   }
 
   return (
@@ -59,18 +61,22 @@ export function SessionMenu({ session, trigger, label, onChanged }: SessionMenuP
         </MenuItem>
         <MenuItem
           icon={session.archived ? <ArchiveRestore {...icon} /> : <Archive {...icon} />}
-          onClick={() => void update({ archived: !session.archived }, session.archived ? "Conversation restored" : "Conversation archived")}
+          onClick={() => void update({ archived: !session.archived }, session.archived ? "Conversation unarchived" : "Conversation archived")}
         >
           {session.archived ? "Unarchive" : "Archive"}
         </MenuItem>
+        <MenuItem icon={<KeyRound {...icon} />} onClick={() => setChoosingAccount(true)}>
+          Model account…
+        </MenuItem>
         <MenuSeparator />
-        <MenuItem icon={<LinkIcon {...icon} />} onClick={() => void copy(`${window.location.origin}/sessions/${encodeURIComponent(session.id)}`, "Link")}>
+        <MenuItem icon={<LinkIcon {...icon} />} onClick={() => void copy(`${window.location.origin}/sessions/${encodeURIComponent(session.id)}`, "link")}>
           Copy link
         </MenuItem>
-        <MenuItem icon={<Copy {...icon} />} onClick={() => void copy(session.id, "Session ID")}>
+        <MenuItem icon={<Copy {...icon} />} onClick={() => void copy(session.id, "session ID")}>
           Copy session ID
         </MenuItem>
       </PopoverMenu>
+      {choosingAccount ? <SessionAccountDialog open sessionId={session.id} onClose={() => setChoosingAccount(false)} /> : null}
       <RenameDialog
         open={renaming}
         title={session.title}

@@ -11,12 +11,18 @@ Roots follow `Paths::discover` and configured overrides; see `docs/CONFIGURATION
 | data_dir | `devices.db` | Hashed capability tokens and device metadata; SQLite companions |
 | data_dir | `memory.db` | Local memory, history and search indexes; SQLite companions |
 | data_dir | `routines.db` | Schedules and run history; SQLite companions |
+| data_dir | `agents.db` | Team registry, handoffs, transfer progress and metadata-only audit; SQLite companions |
 | data_dir | `policy.json` | Live policy; .policy.json.<nonce>.tmp during atomic replacement |
 | data_dir | `opensided.port` | Selected loopback TCP port |
 | data_dir | `audit.jsonl` | Redacted tool/security audit metadata |
 | data_dir | `vault-audit.jsonl` | Vault-use metadata, never secret values |
+| data_dir | `connections.db` | Sign-in metadata, masked identities, keyed identity hashes and cookie keys only; SQLite companions |
+| data_dir | `connections-audit.jsonl` | Connection-use metadata; never cookie or header values |
+| data_dir | `connections.key` | Private identity HMAC key; never exposed to agents |
+| data_dir | `restart-handoff.json` | Private one-use controlled-exec launcher secret; boot/request-bound, five-minute TTL; never exposed to agents |
 | data_dir | `vault.db` | Encrypted vault when vault.path is unset; created only by vault setup |
 | data_dir | `browser-profile`/** | Daemon-owned Chromium profile and caches; never the user's profile |
+| data_dir | `browser-profiles/accounts`/** | Opt-in persistent account profiles; launched on demand, never restored at daemon startup |
 | data_dir | `browser-state.json` | Private browser endpoint and tab ownership |
 | data_dir | `browser-state.tmp` | Browser-state atomic replacement |
 | data_dir | `secret-fill-intents`/** | <ticket>.json durable at-most-once fill markers, without secret values |
@@ -29,6 +35,8 @@ Roots follow `Paths::discover` and configured overrides; see `docs/CONFIGURATION
 | data_dir | `push-subscriptions.json` | Device-bound push subscriptions; atomic replacement companions |
 | data_dir | `crash-reports`/** | panic-<time>-<pid>.json metadata-only redacted reports; no upload |
 | data_dir | `onboarding.json` | First-run guide state (pending, completed or skipped); atomic replacement companions |
+| data_dir | `browser-imports`/** | Private imported source metadata and durable native delivery revisions; pending cookie keys only |
+| data_dir | `extension-import-keys`/** | Private per-pairing import HMAC authenticators; never exposed to the model or web pages |
 | config_dir | `config.toml` and `.config.toml.<nonce>.tmp` | Configuration and atomic replacement; OPENSIDE_CONFIG can relocate the file |
 | state_dir | `cli/**` | CLI resume cursors; the daemon itself writes no state files |
 | runtime_dir | `opensided.sock`, `sidecar-*/**`, `incognito-browsers/**`, `browser/**` | Private daemon/sidecar/gateway sockets and disposable incognito profiles; explicit socket overrides may relocate the socket |

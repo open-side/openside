@@ -58,6 +58,8 @@ pub enum Capability {
     VaultUse,
     /// Payment, publishing a post, sending a message. Target: origin or description.
     Sensitive,
+    /// Access private imported records. The tool additionally requires a session person grant.
+    PrivacyRead,
 }
 
 /// One requested action.
@@ -67,6 +69,8 @@ pub struct Action {
     pub capability: Capability,
     /// Path, origin or URL the action touches.
     pub target: String,
+    /// Current page label for descriptions only; policy and approval bindings use the target.
+    pub label: Option<String>,
 }
 
 impl Action {
@@ -75,6 +79,7 @@ impl Action {
         Self {
             capability,
             target: target.into(),
+            label: None,
         }
     }
 }
@@ -243,12 +248,12 @@ impl Policy {
         use Capability::*;
         match self.mode {
             Mode::ReadOnly => match action.capability {
-                FsRead | Browse | Fetch => Effect::Allow,
+                FsRead | Browse | Fetch | PrivacyRead => Effect::Allow,
                 FsWrite | Exec | VaultUse => Effect::Deny,
                 Sensitive => Effect::Deny,
             },
             Mode::Guard => match action.capability {
-                Browse | Fetch | VaultUse => Effect::Allow,
+                Browse | Fetch | VaultUse | PrivacyRead => Effect::Allow,
                 FsRead | FsWrite | Exec => {
                     if self.within_approved_roots(&action.target) {
                         Effect::Allow
@@ -352,16 +357,27 @@ pub fn path_within(root: &Path, target: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn fixture_path(path: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{path}")
+        } else {
+            path.to_owned()
+        }
+    }
+
     fn guard(roots: &[&str], layers: Vec<RuleLayer>) -> Policy {
         Policy {
             mode: Mode::Guard,
-            approved_roots: roots.iter().map(PathBuf::from).collect(),
+            approved_roots: roots
+                .iter()
+                .map(|root| PathBuf::from(fixture_path(root)))
+                .collect(),
             layers,
             origins: OriginLists::default(),
         }
     }
 
-    const ALL: [Capability; 7] = [
+    const ALL: [Capability; 8] = [
         Capability::FsRead,
         Capability::FsWrite,
         Capability::Exec,
@@ -369,13 +385,18 @@ mod tests {
         Capability::Fetch,
         Capability::VaultUse,
         Capability::Sensitive,
+        Capability::PrivacyRead,
     ];
 
-    fn target(capability: Capability, inside: bool) -> &'static str {
+    fn target(capability: Capability, inside: bool) -> String {
         match (capability, inside) {
-            (Capability::FsRead | Capability::FsWrite | Capability::Exec, true) => "/work/a",
-            (Capability::FsRead | Capability::FsWrite | Capability::Exec, false) => "/elsewhere/a",
-            _ => "https://site.example",
+            (Capability::FsRead | Capability::FsWrite | Capability::Exec, true) => {
+                fixture_path("/work/a")
+            }
+            (Capability::FsRead | Capability::FsWrite | Capability::Exec, false) => {
+                fixture_path("/elsewhere/a")
+            }
+            _ => "https://site.example".into(),
         }
     }
 
@@ -386,11 +407,11 @@ mod tests {
         use Effect::*;
         let expected = |mode: Mode, capability: Capability, inside: bool| match mode {
             Mode::ReadOnly => match capability {
-                FsRead | Browse | Fetch => Allow,
+                FsRead | Browse | Fetch | PrivacyRead => Allow,
                 FsWrite | Exec | VaultUse | Sensitive => Deny,
             },
             Mode::Guard => match capability {
-                Browse | Fetch | VaultUse => Allow,
+                Browse | Fetch | VaultUse | PrivacyRead => Allow,
                 FsRead | FsWrite | Exec if inside => Allow,
                 FsRead | FsWrite | Exec | Sensitive => Ask,
             },
@@ -659,18 +680,27 @@ mod tests {
     fn guard_allows_inside_root_and_asks_outside() {
         let p = guard(&["/work/proj"], vec![]);
         assert_eq!(
-            p.decide(&Action::new(Capability::FsWrite, "/work/proj/a.txt"))
-                .effect,
+            p.decide(&Action::new(
+                Capability::FsWrite,
+                fixture_path("/work/proj/a.txt"),
+            ))
+            .effect,
             Effect::Allow
         );
         assert_eq!(
-            p.decide(&Action::new(Capability::FsWrite, "/etc/passwd"))
-                .effect,
+            p.decide(&Action::new(
+                Capability::FsWrite,
+                fixture_path("/etc/passwd"),
+            ))
+            .effect,
             Effect::Ask
         );
         assert_eq!(
-            p.decide(&Action::new(Capability::FsRead, "/work/project2/x"))
-                .effect,
+            p.decide(&Action::new(
+                Capability::FsRead,
+                fixture_path("/work/project2/x"),
+            ))
+            .effect,
             Effect::Ask
         );
     }
@@ -679,8 +709,11 @@ mod tests {
     fn dotdot_and_relative_targets_never_count_as_inside() {
         let p = guard(&["/work/proj"], vec![]);
         assert_eq!(
-            p.decide(&Action::new(Capability::FsRead, "/work/proj/../secret"))
-                .effect,
+            p.decide(&Action::new(
+                Capability::FsRead,
+                fixture_path("/work/proj/../secret"),
+            ))
+            .effect,
             Effect::Ask
         );
         assert_eq!(

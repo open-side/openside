@@ -111,7 +111,14 @@ async fn popup_download_and_closed_tab_reach_the_running_agent_as_steer() {
     let steered: Vec<String> = events
         .iter()
         .filter_map(|event| match &event.kind {
-            EventKind::MessageQueued { text, .. } if text.starts_with("[browser event]") => {
+            EventKind::MessageQueued {
+                text,
+                author_kind,
+                from_agent,
+                ..
+            } if text.starts_with("[browser event]") => {
+                assert_eq!(*author_kind, openside_proto::MessageAuthorKind::Internal);
+                assert_eq!(*from_agent, None);
                 Some(text.clone())
             }
             _ => None,

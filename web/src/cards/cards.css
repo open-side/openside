@@ -1,0 +1,920 @@
+/*
+ * Conversation cards (cards/render.ts): sign-in, code, payment and form asks, read-only results,
+ * and activity/hand-off rows. Shared by the web app and the extension side panel, which copies
+ * this file next to its panel. Cards are strong glass in both themes (dark translucent navy,
+ * white text, white primary pill) so their text keeps contrast on any backdrop. Every token has a
+ * fallback because the side panel does not define the web app's glass tokens.
+ */
+.oc-root {
+  --oc-fg: var(--glass-strong-fg, #f5f6fb);
+  --oc-muted: var(--glass-strong-muted, rgb(245 246 251 / 0.66));
+  --oc-line: var(--glass-strong-border, rgb(255 255 255 / 0.1));
+  --oc-field: var(--glass-input-bg, rgb(255 255 255 / 0.08));
+  --oc-field-line: rgb(255 255 255 / 0.14);
+  --oc-wash: rgb(255 255 255 / 0.07);
+  --oc-wash-strong: rgb(255 255 255 / 0.12);
+  --oc-pill-bg: var(--pill-primary-bg, #fff);
+  --oc-pill-fg: var(--pill-primary-fg, #111318);
+  --oc-focus: rgb(255 255 255 / 0.6);
+  --oc-success: #47cd89;
+  --oc-warn: #fdb022;
+  --oc-danger: #ff9b91;
+  --oc-info: #9fc0ff;
+  --oc-ease: var(--ease, cubic-bezier(0.2, 0, 0, 1));
+  --oc-fast: var(--fast, 140ms);
+  display: grid;
+  gap: 8px;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  color: var(--oc-fg);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+.oc-root *,
+.oc-root *::before,
+.oc-root *::after {
+  box-sizing: border-box;
+}
+.oc-root :focus-visible {
+  outline: 2px solid var(--oc-focus);
+  outline-offset: 2px;
+}
+.oc-root [hidden] {
+  display: none !important;
+}
+.oc-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- surface ------------------------------------------------------------------------------ */
+.oc-card {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--oc-line);
+  border-radius: var(--radius-pill, 9999px);
+  background: var(--glass-strong-bg, rgb(28 34 58 / 0.94));
+  box-shadow: 0 12px 40px rgb(10 14 30 / 0.22);
+  -webkit-backdrop-filter: var(--blur-glass, blur(24px) saturate(1.5));
+  backdrop-filter: var(--blur-glass, blur(24px) saturate(1.5));
+}
+.oc-card[data-open="false"] {
+  width: fit-content;
+  max-width: min(100%, 424px);
+}
+.oc-card[data-open="true"] {
+  width: min(100%, 424px);
+  padding: 20px;
+  border-radius: var(--radius-2xl, 24px);
+}
+.oc-card[data-variant="result"][data-open="true"] {
+  width: min(100%, 512px);
+}
+.oc-card[data-layout="sheet"][data-open="true"] {
+  width: 100%;
+}
+.oc-morphing {
+  overflow: hidden;
+}
+.oc-card[data-open="true"] > .oc-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+/* ---- collapsed bubble --------------------------------------------------------------------- */
+.oc-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 0 20px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+button.oc-pill {
+  cursor: pointer;
+}
+button.oc-pill:hover {
+  background: var(--oc-wash);
+}
+.oc-pill-text {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oc-pill-chevron {
+  display: grid;
+  flex: none;
+  color: var(--oc-muted);
+}
+.oc-card[data-ask="pending"][data-open="false"] {
+  border-color: rgb(255 255 255 / 0.2);
+}
+
+/* ---- header ------------------------------------------------------------------------------- */
+.oc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.oc-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.oc-title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.oc-subtitle {
+  margin: 2px 0 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.oc-origin {
+  margin: 2px 0 0;
+  color: var(--oc-muted);
+  font-family: var(--font-code, ui-monospace, monospace);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oc-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin: -4px -6px -4px 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill, 9999px);
+  background: transparent;
+  color: var(--oc-muted);
+  cursor: pointer;
+  transform: rotate(180deg);
+}
+.oc-close:hover {
+  background: var(--oc-wash-strong);
+  color: var(--oc-fg);
+}
+
+/* ---- marks -------------------------------------------------------------------------------- */
+.oc-mark {
+  --oc-mark-size: 20px;
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--oc-mark-size);
+  height: var(--oc-mark-size);
+  overflow: hidden;
+  border-radius: calc(var(--oc-mark-size) * 0.3);
+  background: rgb(255 255 255 / 0.16);
+  color: var(--oc-fg);
+  font-size: calc(var(--oc-mark-size) * 0.55);
+  font-weight: 600;
+  line-height: 1;
+}
+.oc-mark-fallback {
+  display: grid;
+  place-items: center;
+}
+.oc-mark img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity var(--oc-fast) var(--oc-ease);
+}
+.oc-mark[data-loaded] img {
+  opacity: 1;
+}
+.oc-mark[data-loaded] .oc-mark-fallback {
+  visibility: hidden;
+}
+.oc-status {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--oc-wash-strong);
+}
+.oc-head .oc-status {
+  width: 28px;
+  height: 28px;
+}
+.oc-status[data-status="done"] {
+  background: rgb(71 205 137 / 0.2);
+  color: var(--oc-success);
+}
+.oc-status[data-status="failed"] {
+  background: rgb(255 155 145 / 0.2);
+  color: var(--oc-danger);
+}
+.oc-status[data-status="expired"] {
+  color: var(--oc-muted);
+}
+.oc-spinner {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgb(255 255 255 / 0.25);
+  border-top-color: var(--oc-fg);
+  border-radius: 50%;
+  animation: oc-spin 0.9s linear infinite;
+}
+@keyframes oc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- blocks ------------------------------------------------------------------------------- */
+.oc-blocks {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.oc-form {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+}
+.oc-scroll {
+  min-width: 0;
+}
+/* Only the first three rows show in the preview; the rest are removed, not just masked, so they are not read or tabbed to either. */
+.oc-scroll[data-clipped] [data-preview-hidden] {
+  display: none;
+}
+.oc-more {
+  justify-self: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--oc-field-line);
+  border-radius: var(--radius-pill, 9999px);
+  background: transparent;
+  color: var(--oc-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.oc-more:hover {
+  background: var(--oc-wash);
+  color: var(--oc-fg);
+}
+.oc-kv {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.oc-kv > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.oc-kv dt {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.oc-kv dd {
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.oc-foot {
+  padding-top: 12px;
+  border-top: 1px solid var(--oc-line);
+}
+.oc-total dt {
+  color: var(--oc-fg);
+  font-weight: 600;
+}
+.oc-total dd {
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+.oc-money,
+.oc-rating,
+.oc-qty {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.oc-rating {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.oc-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 255 255 / 0.4);
+  text-underline-offset: 3px;
+}
+.oc-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Lists */
+.oc-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.oc-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+.oc-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.oc-item-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-weight: 500;
+}
+.oc-item-name {
+  overflow-wrap: anywhere;
+}
+/* Which helper raised the request; the pill keeps it to one muted line before the summary. */
+.oc-asker {
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.oc-pill > .oc-asker {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The label of a link is the model's words; the host it goes to is always shown beside it. */
+.oc-linkwrap {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  min-width: 0;
+}
+.oc-host {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.oc-btn .oc-host {
+  margin-left: 2px;
+  color: inherit;
+  opacity: 0.7;
+}
+.oc-qty {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.oc-item-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin: 2px 0 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.oc-item-side {
+  flex: none;
+  font-weight: 500;
+}
+.oc-thumb {
+  position: relative;
+  display: block;
+  flex: none;
+  overflow: hidden;
+  border-radius: var(--radius-md, 12px);
+  background: var(--oc-wash-strong);
+}
+.oc-thumb[data-size="lg"] {
+  width: 77px;
+  height: 77px;
+}
+.oc-thumb[data-size="sm"] {
+  width: 40px;
+  height: 40px;
+}
+.oc-thumb[data-size="wide"] {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 240px;
+}
+.oc-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity var(--oc-fast) var(--oc-ease);
+}
+.oc-thumb[data-loaded] img {
+  opacity: 1;
+}
+.oc-media {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.oc-media figcaption {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+
+/* Tables */
+.oc-table-scroll {
+  overflow-x: auto;
+  border-radius: var(--radius-md, 12px);
+  background: var(--oc-wash);
+  overscroll-behavior-x: contain;
+}
+.oc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.oc-table[data-layout="scroll"] {
+  min-width: max-content;
+}
+.oc-table th,
+.oc-table td {
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+.oc-table th {
+  color: var(--oc-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.oc-table tbody tr + tr td {
+  border-top: 1px solid var(--oc-line);
+}
+.oc-table [data-align="end"] {
+  text-align: right;
+}
+.oc-site-cell {
+  width: 1%;
+  padding-right: 0 !important;
+}
+
+/* Notices */
+.oc-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.oc-notice > svg,
+.oc-notice > .oc-spinner {
+  flex: none;
+  margin-top: 2px;
+}
+.oc-notice[data-tone="info"] > svg {
+  color: var(--oc-info);
+}
+.oc-notice[data-tone="success"] > svg {
+  color: var(--oc-success);
+}
+.oc-notice[data-tone="attention"] {
+  color: var(--oc-warn);
+}
+.oc-notice[data-tone="danger"] {
+  color: var(--oc-danger);
+}
+.oc-bubbles:empty {
+  display: none;
+}
+.oc-bubbles {
+  display: grid;
+  gap: 6px;
+}
+.oc-bubbles .oc-notice {
+  width: fit-content;
+  max-width: min(100%, 424px);
+  padding: 8px 14px;
+  border: 1px solid var(--oc-line);
+  border-radius: var(--radius-lg, 16px);
+  background: var(--glass-strong-bg, rgb(28 34 58 / 0.94));
+  color: var(--oc-fg);
+}
+
+/* People */
+.oc-people {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.oc-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.oc-person-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.3;
+}
+.oc-person-text span {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.oc-people-arrow {
+  display: grid;
+  color: var(--oc-muted);
+}
+
+/* ---- fields ------------------------------------------------------------------------------- */
+.oc-fields {
+  display: grid;
+  gap: 12px;
+}
+.oc-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.oc-field > label {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.oc-field-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.oc-control {
+  position: relative;
+}
+.oc-control input,
+.oc-control textarea {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 0 20px;
+  border: 1px solid var(--oc-field-line);
+  border-radius: var(--radius-pill, 9999px);
+  background: var(--oc-field);
+  color: var(--oc-fg);
+  font: inherit;
+  font-size: 0.9375rem;
+  transition: border-color var(--oc-fast) var(--oc-ease);
+}
+.oc-control textarea {
+  padding: 12px 20px;
+  border-radius: var(--radius-lg, 16px);
+  resize: vertical;
+}
+.oc-control input[type="password"] + .oc-eye,
+.oc-eye {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill, 9999px);
+  background: transparent;
+  color: var(--oc-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+.oc-eye:hover {
+  color: var(--oc-fg);
+}
+.oc-control:has(.oc-eye) input {
+  padding-right: 48px;
+}
+.oc-control input::placeholder {
+  color: var(--oc-muted);
+}
+.oc-control input:focus-visible,
+.oc-control textarea:focus-visible {
+  border-color: var(--oc-focus);
+  outline: 0;
+}
+.oc-field[data-otp="true"] input {
+  font-size: 1.375rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+.oc-hint {
+  margin: 0;
+  color: var(--oc-muted);
+  font-family: var(--font-code, ui-monospace, monospace);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+.oc-check,
+.oc-radio {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.oc-check input,
+.oc-radio input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: #fff;
+}
+.oc-radio {
+  padding: 8px 14px;
+  border: 1px solid var(--oc-line);
+  border-radius: var(--radius-md, 12px);
+  background: var(--oc-wash);
+}
+.oc-radio:has(input:checked) {
+  border-color: var(--oc-focus);
+  background: var(--oc-wash-strong);
+}
+.oc-details {
+  border-top: 1px solid var(--oc-line);
+  padding-top: 10px;
+}
+.oc-details > summary {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.oc-details[open] {
+  display: grid;
+  gap: 12px;
+}
+
+/* Choices */
+.oc-choices {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.oc-choices > legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.oc-choices > legend + * {
+  clear: both;
+}
+.oc-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.oc-provider {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--oc-field-line);
+  border-radius: var(--radius-md, 12px);
+  background: var(--oc-wash);
+  color: var(--oc-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.oc-provider:hover:not(:disabled) {
+  background: var(--oc-wash-strong);
+}
+.oc-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 14px;
+  border: 1px solid var(--oc-line);
+  border-radius: var(--radius-md, 12px);
+  background: var(--oc-wash);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.oc-option:hover:not(:disabled) {
+  background: var(--oc-wash-strong);
+}
+.oc-option-text {
+  display: grid;
+  min-width: 0;
+}
+.oc-option-note {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+
+/* Suggestions (ui/suggest.ts). Opaque: the card is itself a backdrop-filter element, so a nested
+   blur would only see the card, not the page behind it. */
+.oc-suggest-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  z-index: 3;
+  display: grid;
+  gap: 2px;
+  max-height: 220px;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  border: 1px solid var(--oc-line);
+  border-radius: var(--radius-lg, 16px);
+  background: rgb(28 34 58);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.4);
+  list-style: none;
+}
+.oc-suggest-list[hidden] {
+  display: none;
+}
+.oc-suggest-option {
+  padding: 10px 14px;
+  overflow: hidden;
+  border-radius: var(--radius-md, 12px);
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oc-suggest-option[data-active] {
+  background: var(--oc-wash-strong);
+}
+
+/* ---- actions ------------------------------------------------------------------------------ */
+.oc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.oc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  gap: 6px;
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill, 9999px);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--oc-fast) var(--oc-ease);
+}
+.oc-btn--primary {
+  flex-grow: 2;
+  background: var(--oc-pill-bg);
+  color: var(--oc-pill-fg);
+}
+.oc-btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--oc-pill-bg) 88%, #6b7280);
+}
+.oc-btn--secondary {
+  border-color: var(--oc-field-line);
+  background: var(--oc-wash);
+}
+.oc-btn--secondary:hover:not(:disabled) {
+  background: var(--oc-wash-strong);
+}
+.oc-btn--destructive {
+  border-color: rgb(255 155 145 / 0.4);
+  background: transparent;
+  color: var(--oc-danger);
+}
+.oc-btn:disabled,
+.oc-option:disabled,
+.oc-provider:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.oc-btn[data-pending] {
+  position: relative;
+  color: transparent;
+}
+.oc-btn[data-pending]::after {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgb(0 0 0 / 0.25);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: oc-spin 0.9s linear infinite;
+  content: "";
+}
+.oc-btn--primary[data-pending]::after {
+  border-color: rgb(17 19 24 / 0.25);
+  border-top-color: var(--oc-pill-fg);
+}
+.oc-error {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-md, 12px);
+  background: rgb(255 155 145 / 0.14);
+  color: var(--oc-danger);
+  font-size: 0.8125rem;
+}
+.oc-slot:empty {
+  display: none;
+}
+.oc-secure {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+
+/* ---- phone -------------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  .oc-control input,
+  .oc-control textarea {
+    font-size: 16px;
+  }
+  .oc-card[data-open="true"] {
+    padding: 18px;
+  }
+  .oc-btn {
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-root *,
+  .oc-root *::before,
+  .oc-root *::after {
+    transition: none !important;
+  }
+  .oc-spinner,
+  .oc-btn[data-pending]::after {
+    animation-duration: 3s;
+  }
+}

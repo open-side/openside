@@ -130,6 +130,7 @@ impl Browser {
                     backend_node_id,
                     document_id: document_id.clone(),
                     origin: origin.clone(),
+                    frame: None,
                 })
                 .collect(),
         ))

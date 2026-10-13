@@ -5,9 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openside_core::{
-    AgentState, ApprovalTier, DeferKind, HostToolHandler, MessageId, QueueMode, RunOutcome,
-    RuntimeError, RuntimeEvent, SessionId, SessionSpec, TicketId, TicketResolution, ToolCall,
-    ToolOutcome, ToolSpec,
+    AgentState, ApprovalTier, CredentialAction, CredentialAuth, CredentialAuthKind,
+    CredentialError, CredentialOutcome, CredentialReport, CredentialReportAck, CredentialRequest,
+    CredentialSnapshot, DeferKind, HostToolHandler, MessageId, ModelAccountRef, QueueMode,
+    RunOutcome, RuntimeError, RuntimeEvent, SessionId, SessionSpec, TicketId, TicketResolution,
+    ToolCall, ToolOutcome, ToolSpec,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -40,6 +42,7 @@ pub(crate) fn spec() -> SessionSpec {
         }),
         credentials_json: r#"{"order":{"test":["env"]}}"#.into(),
         agent_json: r#"{"tool_retries":2}"#.into(),
+        team: None,
     }
 }
 
@@ -90,7 +93,7 @@ impl Peer {
 
     pub(crate) async fn hello(&mut self, nonce: &str) {
         self.send(json!({"v":1,"type":"hello","protocol":1,"nonce":nonce,"pid":std::process::id(),
-            "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.0"}})).await;
+            "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.1"}})).await;
     }
 
     pub(crate) async fn ready(&mut self) {
@@ -172,10 +175,11 @@ async fn hello_open_and_ready_preserve_the_authoritative_fields() {
 #[tokio::test]
 async fn nonce_hello_protocol_and_agent_version_mismatch_are_unavailable() {
     for (nonce, protocol, agent) in [
-        ("wrong-nonce", 1, "0.1.0"),
-        (NONCE, 2, "0.1.0"),
+        ("wrong-nonce", 1, "0.1.1"),
+        (NONCE, 2, "0.1.1"),
         (NONCE, 1, "0.2.0"),
         (NONCE, 1, "0.0.9"),
+        (NONCE, 1, "0.1.0"),
         (NONCE, 1, "test"),
     ] {
         let (host, peer) = UnixStream::pair().unwrap();
@@ -186,8 +190,8 @@ async fn nonce_hello_protocol_and_agent_version_mismatch_are_unavailable() {
         let Err(RuntimeError::Unavailable(message)) = result else {
             panic!("{nonce} {protocol} {agent} must be refused");
         };
-        if agent != "0.1.0" {
-            assert!(message.contains(">=0.1.0,<0.2.0"), "{message}");
+        if agent != "0.1.1" {
+            assert!(message.contains(">=0.1.1,<0.2.0"), "{message}");
         }
     }
 }
@@ -251,6 +255,12 @@ async fn every_observation_maps_to_the_runtime_boundary() {
         (
             json!({"kind":"assistant.final","text":"b"}),
             RuntimeEvent::AssistantFinal { text: "b".into() },
+        ),
+        (
+            json!({"kind":"session.title_proposed","title":"Compare Acme plans"}),
+            RuntimeEvent::SessionTitleProposed {
+                title: "Compare Acme plans".into(),
+            },
         ),
         (
             json!({"kind":"thinking.delta","text":"c"}),
@@ -673,7 +683,7 @@ async fn event_flood_stalls_the_sidecar_instead_of_growing_the_queue() {
             format!(
                 "{}\n",
                 json!({"v":1,"type":"hello","protocol":1,"nonce":NONCE,"pid":1,
-                "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.0"}})
+                "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.1"}})
             )
             .as_bytes(),
         )
@@ -791,7 +801,7 @@ async fn shutdown_does_not_deadlock_behind_a_blocked_tool_result_write() {
     let (read, mut write) = tokio::io::split(peer);
     let mut read = BufReader::new(read);
     let hello = json!({"v":1,"type":"hello","protocol":1,"nonce":NONCE,"pid":1,
-        "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.0"}});
+        "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.1"}});
     write
         .write_all(format!("{hello}\n").as_bytes())
         .await
@@ -1285,4 +1295,164 @@ async fn steering_waits_for_admission_and_rejects_a_finished_destination_without
             matches!(connection.next_event().await, Some(RuntimeEvent::SubagentLifecycle { status, .. }) if status == "completed")
         );
     }
+}
+
+struct CredentialHost {
+    requests: mpsc::UnboundedSender<CredentialRequest>,
+    reports: mpsc::UnboundedSender<CredentialReport>,
+    account: AtomicUsize,
+}
+
+impl HostToolHandler for CredentialHost {
+    fn call(&self, call: ToolCall) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + '_>> {
+        Box::pin(async move {
+            ToolOutcome::Done {
+                for_model_json: call.arguments_json,
+            }
+        })
+    }
+
+    fn credentials(
+        &self,
+        request: CredentialRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<CredentialSnapshot, CredentialError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let request_id = request.request_id.clone();
+            let index = self.account.load(Ordering::SeqCst);
+            self.requests.send(request).unwrap();
+            Ok(CredentialSnapshot {
+                request_id,
+                lease_id: format!("lease-{index}"),
+                generation: index as u64,
+                account: ModelAccountRef {
+                    source: "vault".into(),
+                    account_id: format!("opaque-{index}"),
+                },
+                auth: CredentialAuth {
+                    kind: CredentialAuthKind::ApiKey,
+                    value: "synthetic-rust-wire-secret-canary".into(),
+                    upstream_account_id: None,
+                    expires_at_ms: None,
+                },
+            })
+        })
+    }
+
+    fn credential_report(
+        &self,
+        report: CredentialReport,
+    ) -> Pin<Box<dyn Future<Output = Result<CredentialReportAck, CredentialError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let action = if report.stream_started {
+                CredentialAction::Stop
+            } else if report.outcome == CredentialOutcome::RateLimit {
+                self.account.store(2, Ordering::SeqCst);
+                CredentialAction::Rotate
+            } else {
+                CredentialAction::Complete
+            };
+            let ack = CredentialReportAck {
+                request_id: report.request_id.clone(),
+                lease_id: report.lease_id.clone(),
+                generation: self.account.load(Ordering::SeqCst) as u64,
+                action,
+                retry_at_ms: None,
+                reason: None,
+            };
+            self.reports.send(report).unwrap();
+            Ok(ack)
+        })
+    }
+}
+
+#[tokio::test]
+async fn credential_rpc_is_private_and_reports_commit_before_reacquisition() {
+    let (request_tx, mut requests) = mpsc::unbounded_channel();
+    let (report_tx, mut reports) = mpsc::unbounded_channel();
+    let handler = Arc::new(CredentialHost {
+        requests: request_tx,
+        reports: report_tx,
+        account: AtomicUsize::new(1),
+    });
+    let (mut connection, mut peer) = connected(handler).await;
+    assert_eq!(connection.info().tools, ["echo"]);
+    peer.send(
+        json!({"v":1,"type":"credential_request","id":"rpc-credential-1",
+        "request_id":"logical-1","provider":"anthropic","model":"anthropic:fake",
+        "attempt":0,"subagent":"known-child"}),
+    )
+    .await;
+    let first = peer.recv().await;
+    assert_eq!(first["type"], "credential_response");
+    assert_eq!(first["account"]["account_id"], "opaque-1");
+    assert_eq!(first["auth"]["value"], "synthetic-rust-wire-secret-canary");
+    assert!(first["auth"].get("refresh_token").is_none());
+    assert!(first["auth"].get("credential_home").is_none());
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request.subagent.as_deref(), Some("known-child"));
+    assert_eq!(request.attempt, 0);
+
+    peer.send(json!({"v":1,"type":"credential_report","id":"rpc-report-1",
+        "request_id":"logical-1","lease_id":"lease-1","outcome":"rate_limit",
+        "stream_started":false,"retry_after_ms":23000,"scope":"account",
+        "usage":null,"usage_windows":[]}))
+        .await;
+    let ack = peer.recv().await;
+    assert_eq!(ack["type"], "credential_reported");
+    assert_eq!(ack["action"], "rotate");
+    assert_eq!(reports.recv().await.unwrap().retry_after_ms, Some(23_000));
+
+    peer.send(
+        json!({"v":1,"type":"credential_request","id":"rpc-credential-2",
+        "request_id":"logical-1","provider":"anthropic","model":"anthropic:fake",
+        "attempt":1,"subagent":"known-child"}),
+    )
+    .await;
+    let second = peer.recv().await;
+    assert_eq!(second["account"]["account_id"], "opaque-2");
+    assert_eq!(requests.recv().await.unwrap().attempt, 1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), connection.next_event())
+            .await
+            .is_err()
+    );
+
+    peer.send(
+        json!({"v":1,"type":"tool_call","rpc_id":"tool-credential-spoof",
+        "tool_call_id":"spoof","name":"credential_request","args":{},"subagent":null,
+        "approval_ticket":null}),
+    )
+    .await;
+    let denied = peer.recv().await;
+    assert_eq!(denied["type"], "tool_result");
+    assert_eq!(denied["outcome"]["status"], "denied");
+    assert!(!denied
+        .to_string()
+        .contains("synthetic-rust-wire-secret-canary"));
+}
+
+#[tokio::test]
+async fn credential_rpc_unconfigured_host_fails_closed_and_attempts_are_bounded() {
+    let (_connection, mut peer) = connected(Arc::new(Echo)).await;
+    peer.send(
+        json!({"v":1,"type":"credential_request","id":"missing-policy",
+        "request_id":"logical-1","provider":"anthropic","model":"anthropic:fake",
+        "attempt":0,"subagent":null}),
+    )
+    .await;
+    let error = peer.recv().await;
+    assert_eq!(error["type"], "credential_error");
+    assert_eq!(error["code"], "auth_unavailable");
+    assert!(error.get("auth").is_none());
+
+    peer.send(
+        json!({"v":1,"type":"credential_request","id":"excess-attempt",
+        "request_id":"logical-2","provider":"anthropic","model":"anthropic:fake",
+        "attempt":64,"subagent":null}),
+    )
+    .await;
+    let error = peer.recv().await;
+    assert_eq!(error["code"], "invalid_credential_request");
 }

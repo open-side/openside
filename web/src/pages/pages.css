@@ -37,7 +37,7 @@
 .pair-steps code,
 .resource-card code {
   padding: 1px 5px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
   font-family: var(--font-code);
@@ -55,7 +55,7 @@
 .settings-group {
   padding: 0 16px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
   background: var(--glass-inset-bg);
 }
 .status-row {
@@ -99,7 +99,7 @@
 .workspace-entry {
   min-height: 68px;
   padding: 12px 14px 12px 16px;
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
 }
 .workspace-entry:hover,
 .workspace-tile:hover {
@@ -143,7 +143,7 @@
 .workspace-tile {
   min-height: 76px;
   padding: 14px 16px;
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
 }
 .tile-icon,
 .resource-card-icon,
@@ -151,7 +151,7 @@
   display: inline-grid;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
 }
@@ -211,7 +211,7 @@
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
   background: var(--glass-inset-bg);
   list-style: none;
 }
@@ -222,7 +222,7 @@
   min-width: 0;
   padding: 14px 16px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
   background: var(--glass-inset-bg);
 }
 .resource-list .resource-card {
@@ -296,7 +296,7 @@
   align-items: center;
   min-height: 20px;
   padding: 0 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--muted);
   font-size: 0.6875rem;
@@ -321,7 +321,7 @@
   max-width: 100%;
   padding: 3px 8px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--muted);
   font-size: 0.75rem;
@@ -345,7 +345,7 @@
   margin: 6px 0 -6px -6px;
   padding: 0 8px 0 4px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   font-size: 0.8125rem;
@@ -368,7 +368,7 @@
   gap: 10px;
   margin: 10px 0 0;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--text) 4%, transparent);
   list-style: none;
 }
@@ -398,13 +398,11 @@
   margin: 0;
 }
 
-/* A compact native select at the end of a row (vault item policy). */
-.inline-select {
+/* A compact select at the end of a row (vault item policy). */
+.ui-select.inline-select {
   width: auto;
   max-width: 13rem;
   min-height: 36px;
-  padding: 0 10px;
-  border-radius: 10px;
   font-size: 0.8125rem;
 }
 /* On a phone the policy select would squeeze the item name; it moves to its own line. */
@@ -420,7 +418,7 @@
   .resource-card-header:has(.resource-card-icon) > .resource-card-trailing:has(.inline-select) {
     padding-left: 48px;
   }
-  .resource-card-trailing .inline-select {
+  .resource-card-trailing .ui-select.inline-select {
     flex: 1;
     max-width: none;
   }
@@ -434,7 +432,7 @@
   gap: 6px;
   padding: 32px 24px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
   background: var(--glass-inset-bg);
   color: var(--muted);
   text-align: center;
@@ -443,7 +441,7 @@
   width: 44px;
   height: 44px;
   margin-bottom: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 .empty-state strong {
   color: var(--text);
@@ -482,7 +480,7 @@
   align-items: center;
   gap: 10px 12px;
   padding: 12px 12px 12px 16px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 .load-error > svg {
@@ -533,7 +531,7 @@
 .usage-bar {
   height: 6px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 .usage-bar > span {
@@ -604,7 +602,7 @@
 .config-notice {
   margin: 0;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--text) 6%, transparent);
   font-size: 0.8125rem;
   line-height: 1.5;
@@ -636,7 +634,7 @@
   margin: 0;
   padding: 0 16px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
   background: var(--glass-inset-bg);
 }
 .config-field {
@@ -681,11 +679,15 @@
   justify-content: flex-end;
   min-width: 0;
 }
-.config-field-control > :is(input, textarea, select) {
+.config-field-control > :is(input, textarea) {
   width: 100%;
   min-height: 40px;
   padding: 8px 12px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
+  font-size: 0.875rem;
+}
+.config-field-control > .ui-select {
+  min-height: 40px;
   font-size: 0.875rem;
 }
 .config-field textarea {
@@ -710,12 +712,11 @@
   }
 }
 @media (max-width: 700px) {
-  .config-field-control > :is(input, select) {
+  .config-field-control > :is(input, .ui-select) {
     min-height: 44px;
   }
-  /* iOS Safari zooms the page when a focused control's text is under 16px. */
-  .config-field-control > :is(input, textarea, select),
-  .inline-select {
+  /* iOS Safari zooms the page when a focused field's text is under 16px. */
+  .config-field-control > :is(input, textarea) {
     font-size: 16px;
   }
 }
@@ -782,7 +783,7 @@
   margin: 0;
   padding: 14px 16px 14px 36px;
   border: 1px solid var(--glass-inset-border);
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
   background: var(--glass-inset-bg);
   font-size: 0.875rem;
   line-height: 1.6;
@@ -803,37 +804,34 @@
   border-bottom: 1px solid var(--glass-inset-border);
   font-size: 0.9375rem;
 }
-.appearance-select {
+.appearance .ui-select--inline {
+  max-width: 14rem;
+}
+.theme-swatch {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  color: var(--muted);
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--swatch-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--swatch-fg) 22%, transparent);
+  color: var(--swatch-fg);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
 }
-/* Scoped under .appearance so it outranks the sheet's glass-inset field style. */
-.appearance .appearance-select select {
-  max-width: 12rem;
-  min-height: 44px;
-  padding: 0 24px 0 8px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: right;
-  text-align-last: right;
-  appearance: none;
-  cursor: pointer;
-}
-@media (max-width: 700px) {
-  /* After the rule above: its `font: inherit` would otherwise undo the iOS 16px floor. */
-  .appearance .appearance-select select {
-    font-size: 16px;
-  }
-}
-.appearance-select svg {
+.theme-swatch::after {
   position: absolute;
-  right: 0;
-  pointer-events: none;
+  right: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--swatch-bg);
+  border-radius: var(--radius-pill);
+  background: var(--swatch-accent);
+  content: "";
 }
 .appearance-accent {
   display: inline-flex;
@@ -844,7 +842,7 @@
   min-height: 44px;
   padding: 0 10px;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -865,7 +863,7 @@
   height: 36px;
   padding: 3px;
   border: 1px solid var(--control-border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: transparent;
   cursor: pointer;
 }
@@ -884,14 +882,14 @@
   min-height: 0;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   cursor: pointer;
 }
 .accent-swatch::before {
   position: absolute;
   inset: 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--swatch);
   content: "";
 }
@@ -910,8 +908,8 @@
   .manage-body .ui-button--compact,
   .ui-dialog .dialog-form .ui-button--compact,
   .row-disclosure,
-  .inline-select,
-  .config-field > :is(input, select) {
+  .ui-select.inline-select,
+  .config-field > input {
     min-height: 44px;
   }
   .row-disclosure {
@@ -974,7 +972,7 @@
   min-height: 48px;
   padding-inline: 18px;
   border-color: var(--glass-strong-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--glass-input-bg);
   color: var(--glass-strong-fg);
 }
@@ -992,7 +990,7 @@
 }
 .token-card code {
   padding: 1px 5px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--glass-input-bg);
   color: var(--glass-strong-fg);
   font-size: 0.8125rem;
@@ -1040,4 +1038,240 @@
 .not-found p {
   margin: 0;
   color: var(--muted);
+}
+
+.cli-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.cli-hint code {
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+  font-family: var(--font-code);
+  overflow-wrap: anywhere;
+}
+.agent-link,
+.agent-link-result {
+  display: grid;
+  gap: 12px;
+}
+.agent-link-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+.agent-link-form .field {
+  flex: 1 1 14rem;
+}
+
+/* ---- Operator screens: restart, model download, diagnostics, policy, sync ---- */
+
+.restart-notice {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.restart-notice-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--glass-inset-border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.restart-notice-row p {
+  flex: 1 1 14rem;
+  margin: 0;
+}
+.restart-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.model-progress {
+  display: grid;
+  gap: 6px;
+}
+.model-progress progress {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  appearance: none;
+}
+.model-progress progress::-webkit-progress-bar {
+  background: transparent;
+}
+.model-progress progress::-webkit-progress-value {
+  border-radius: var(--radius-pill);
+  background: var(--text);
+  transition: width var(--normal) var(--ease);
+}
+.model-progress progress::-moz-progress-bar {
+  border-radius: var(--radius-pill);
+  background: var(--text);
+}
+.model-progress p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.model-card .resource-card {
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-2xl);
+  background: var(--glass-inset-bg);
+}
+.model-card .restart-notice {
+  margin-top: 4px;
+}
+
+.diagnostics-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.diagnostics-summary[data-state="ok"] svg {
+  color: var(--success);
+}
+.diagnostics-summary[data-state="warn"] {
+  color: var(--warn);
+}
+.diagnostics-summary[data-state="fail"] {
+  color: var(--danger);
+}
+
+.policy-form {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.policy-form .field > span,
+.policy-form .field > label > span {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.policy-form .settings-text {
+  margin: 0;
+}
+.policy-form textarea {
+  resize: vertical;
+}
+.policy-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.policy-switch label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.policy-rules {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.policy-rule {
+  display: grid;
+  grid-template-columns: 8.5rem 13rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.policy-rule input {
+  min-width: 0;
+}
+.policy-try {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.policy-problems,
+.policy-row-problem {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--danger);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.policy-problems code {
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+.policy-decision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.9375rem;
+}
+@media (max-width: 700px) {
+  .policy-rule {
+    grid-template-columns: 1fr 1fr auto;
+  }
+  .policy-rule input {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .policy-rule > .ui-icon-button,
+  .policy-rule > button:last-child {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .policy-try {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sync-report {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-inset-bg);
+}
+.sync-report .settings-text {
+  margin: 4px 0 0;
+}
+.agent-path {
+  overflow-wrap: normal;
+}
+.config-notice p {
+  margin: 0 0 6px;
+}
+.config-notice > :last-child {
+  margin-bottom: 0;
+}
+.config-editable {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
 }

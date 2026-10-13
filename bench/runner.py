@@ -1,4 +1,4 @@
-"""Run real daemon/sidecar/browser tasks and export Aside-compatible artifacts."""
+"""Run real daemon/sidecar/browser tasks and export artifacts in the BU Bench V1 result format."""
 
 from __future__ import annotations
 

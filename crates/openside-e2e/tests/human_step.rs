@@ -143,6 +143,7 @@ fn result<'a>(events: &'a [Event], call: &str) -> &'a Value {
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,
@@ -396,7 +397,7 @@ async fn hs1_vault_login_secret_ticket_survives_daemon_restart_without_canary_le
         );
     }
     let resumed = stream.settled().await;
-    assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution } if ticket_id == &ticket.id && resolution["status"] == "filled")));
+    assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &ticket.id && resolution["status"] == "filled")));
     assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "login completed")));
     assert!(
         !result(&resumed, "post-otp-snapshot")
@@ -549,7 +550,7 @@ async fn sensitive_payment_ask_expires_and_denies_original_call_without_clicking
             break;
         }
     }
-    assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::TicketExpired { ticket_id } if ticket_id == &ticket.id)));
+    assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::TicketExpired { ticket_id, .. } if ticket_id == &ticket.id)));
     assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text } if text == "payment denied")));
     assert_eq!(
         site.state.payments.load(Ordering::SeqCst),

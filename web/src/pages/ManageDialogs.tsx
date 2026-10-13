@@ -1,24 +1,37 @@
 import { useState, type ComponentType } from "react";
 import { Link, useNavigate, type Location } from "react-router";
+import { ChannelsPanel } from "../channels/ChannelsPanel";
+import { ModelsPanel } from "../models/ModelsPanel";
+import { RemoteAccess } from "../remote/RemoteAccess";
 import { Dialog, ICON_STROKE } from "../ui";
-import { AccountsPage } from "./AccountsPage";
+import { ConnectionsPage } from "./ConnectionsPage";
+import { AgentsPage } from "./AgentsPage";
 import { ConfigPage } from "./ConfigPage";
 import { DevicesPage } from "./DevicesPage";
+import { DiagnosticsPage } from "./DiagnosticsPage";
 import { backgroundOf, manageTarget, WORKSPACE_SECTIONS, type WorkspacePath } from "./manageRoutes";
 import { MemoryPage } from "./MemoryPage";
+import { PolicyPage } from "./PolicyPage";
 import { RoutinesPage } from "./RoutinesPage";
 import { SettingsPage } from "./SettingsPage";
 import { SkillsPage } from "./SkillsPage";
+import { SyncPage } from "./SyncPage";
+import { TeamPage } from "./TeamPage";
 import { VaultPage } from "./VaultPage";
 import "./pages.css";
 
 const SECTION_BODY: Record<WorkspacePath, ComponentType> = {
+  "/team": TeamPage,
   "/skills": SkillsPage,
   "/routines": RoutinesPage,
   "/memory": MemoryPage,
-  "/accounts": AccountsPage,
+  "/connections": ConnectionsPage,
   "/vault": VaultPage,
   "/devices": DevicesPage,
+  "/agents": AgentsPage,
+  "/sync": SyncPage,
+  "/policy": PolicyPage,
+  "/diagnostics": DiagnosticsPage,
   "/config": ConfigPage,
 };
 
@@ -48,7 +61,37 @@ export function ManageDialogs({ location, onSignOut }: { location: Location; onS
   return (
     <>
       <Dialog open={target?.kind === "settings"} onClose={close} title="Settings">
-        <SettingsPage onWorkspace={() => go("/workspace")} onGuide={() => navigate("/welcome", { replace: true })} onSignOut={onSignOut} />
+        <SettingsPage onModels={() => go("/models")} onChannels={() => go("/channels")} onRemote={() => go("/remote")} onWorkspace={() => go("/workspace")} onGuide={() => navigate("/welcome", { replace: true })} onSignOut={onSignOut} />
+      </Dialog>
+      <Dialog
+        open={target?.kind === "models"}
+        onClose={close}
+        size="wide"
+        title="Models & accounts"
+        description="Connect providers, choose the default model and see what each one makes available."
+        back={{ label: "Back to settings", onClick: () => go("/settings") }}
+      >
+        <ModelsPanel />
+      </Dialog>
+      <Dialog
+        open={target?.kind === "channels"}
+        onClose={close}
+        size="wide"
+        title="Channels"
+        description="Chat accounts your teammates answer on. Each account stays separate."
+        back={{ label: "Back to settings", onClick: () => go("/settings") }}
+      >
+        <ChannelsPanel onRemote={() => go("/remote")} />
+      </Dialog>
+      <Dialog
+        open={target?.kind === "remote"}
+        onClose={close}
+        size="wide"
+        title="Remote access"
+        description="Reach openside from your phone, and connect it with a QR code."
+        back={{ label: "Back to settings", onClick: () => go("/settings") }}
+      >
+        <RemoteAccess />
       </Dialog>
       <Dialog
         open={target?.kind === "workspace"}

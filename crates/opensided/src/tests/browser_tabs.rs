@@ -106,12 +106,32 @@ async fn incognito_session(daemon: &Daemon, name: &str) -> SessionId {
 }
 
 /// A process that exited is gone even while it waits to be reaped.
-fn alive(pid: u32) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(stat) => stat
-            .rsplit_once(") ")
-            .is_some_and(|(_, rest)| !rest.starts_with('Z')),
-        Err(_) => false,
+pub(super) fn alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat
+                .rsplit_once(") ")
+                .is_some_and(|(_, rest)| !rest.starts_with('Z')),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let output = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "state="])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success()
+                || (output.status.code() == Some(1) && output.stderr.is_empty()),
+            "process state probe failed: {output:?}"
+        );
+        output
+            .stdout
+            .iter()
+            .find(|byte| !byte.is_ascii_whitespace())
+            .is_some_and(|state| *state != b'Z')
     }
 }
 
@@ -700,7 +720,7 @@ async fn incognito_browser_events_steer_and_human_steps_bind_incognito_tabs() {
         .await
         .unwrap();
     wait_event(&daemon, &private, |kind| {
-        matches!(kind, EventKind::TicketResolved { ticket_id, resolution } if ticket_id == &device && resolution["status"] == "done")
+        matches!(kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &device && resolution["status"] == "done")
     })
     .await;
     assert_eq!(

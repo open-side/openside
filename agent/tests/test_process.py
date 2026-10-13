@@ -3,7 +3,10 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
+import pytest
 from runtime_helpers import FakeDaemon, install_script, text_response
 
 
@@ -57,11 +60,22 @@ def test_diagnostics_do_not_initialize_the_session_runtime(monkeypatch):
         json.loads(process.stdout)
 
 
-async def test_real_sidecar_process_handshake_run_shutdown(tmp_path, monkeypatch):
+@pytest.fixture
+def socket_directory():
+    with tempfile.TemporaryDirectory(prefix="osrpc-", dir="/tmp") as directory:
+        yield Path(directory)
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="sidecar transport requires Unix sockets"
+)
+async def test_real_sidecar_process_handshake_run_shutdown(
+    tmp_path, monkeypatch, socket_directory
+):
     install_script(tmp_path, monkeypatch, [text_response("real process answer")])
     canary = "vault-canary-real-sidecar-581239"
     monkeypatch.setenv("OPENSIDE_BROKER_TOKEN", canary)
-    socket_path = tmp_path / "sidecar.sock"
+    socket_path = socket_directory / "rpc.sock"
     connected = asyncio.get_running_loop().create_future()
 
     def accept(reader, writer):

@@ -715,3 +715,66 @@ fn tokenizer_transformations_it_cannot_reproduce_are_rejected() {
         assert!(error.to_string().contains(kind), "{error}");
     }
 }
+
+#[test]
+fn team_memory_scope_precedes_limit_and_transfer_replays_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path(), Options::default());
+    let shared = store
+        .create(NewMemory::note("shared project"), "test")
+        .unwrap();
+    let own = store
+        .create_owned(NewMemory::note("owned project"), "test", Some("mina"))
+        .unwrap();
+    for _ in 0..60 {
+        store
+            .create_owned(NewMemory::note("other project"), "test", Some("other"))
+            .unwrap();
+    }
+    for query in ["", "project"] {
+        let hits = store
+            .search_scoped(query, None, 2, Some(Some("mina")), true)
+            .unwrap()
+            .hits;
+        assert_eq!(hits.len(), 2);
+        assert!(hits
+            .iter()
+            .all(|hit| hit.memory.id == own.id || hit.memory.id == shared.id));
+    }
+    store
+        .transfer_owner(&own.id, Some("mina"), Some("chief"))
+        .unwrap();
+    drop(store);
+    let store = open(dir.path(), Options::default());
+    store
+        .transfer_owner(&own.id, Some("mina"), Some("chief"))
+        .unwrap();
+    assert_eq!(store.get(&own.id).unwrap().owner.as_deref(), Some("chief"));
+    assert!(store
+        .transfer_owner(&own.id, Some("mina"), Some("other"))
+        .is_err());
+}
+
+#[test]
+fn team_memory_owner_column_migrates_existing_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path(), Options::default());
+    let memory = store
+        .create(NewMemory::note("old shared note"), "test")
+        .unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(dir.path().join("memory.db")).unwrap();
+    conn.execute_batch("ALTER TABLE memories DROP COLUMN owner")
+        .unwrap();
+    drop(conn);
+    let store = open(dir.path(), Options::default());
+    assert_eq!(store.get(&memory.id).unwrap().owner, None);
+    drop(store);
+    assert_eq!(
+        open(dir.path(), Options::default())
+            .get(&memory.id)
+            .unwrap()
+            .owner,
+        None
+    );
+}

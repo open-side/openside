@@ -16,7 +16,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -163,8 +163,15 @@ pub fn parse_public_key(hex_key: &str) -> Result<VerifyingKey> {
         .ok_or_else(|| {
             ChannelError::Config("discord public_key must be 64 hex characters".into())
         })?;
-    VerifyingKey::from_bytes(&bytes)
-        .map_err(|_| ChannelError::Config("discord public_key is not a valid Ed25519 key".into()))
+    let key = VerifyingKey::from_bytes(&bytes).map_err(|_| {
+        ChannelError::Config("discord public_key is not a valid Ed25519 key".into())
+    })?;
+    if key.is_weak() {
+        return Err(ChannelError::Config(
+            "discord public_key must not be a low-order key".into(),
+        ));
+    }
+    Ok(key)
 }
 
 /// Verify `X-Signature-Ed25519` over `X-Signature-Timestamp ++ body`.
@@ -181,7 +188,7 @@ pub fn verify_signature(
     let mut message = Vec::with_capacity(timestamp.len() + body.len());
     message.extend_from_slice(timestamp.as_bytes());
     message.extend_from_slice(body);
-    key.verify(&message, &signature).is_ok()
+    key.verify_strict(&message, &signature).is_ok()
 }
 
 /// HTTP receiver state.
@@ -289,7 +296,7 @@ impl Data {
     }
 }
 
-async fn interactions(
+pub(crate) async fn interactions(
     State(receiver): State<Arc<DiscordReceiver>>,
     headers: HeaderMap,
     body: Bytes,

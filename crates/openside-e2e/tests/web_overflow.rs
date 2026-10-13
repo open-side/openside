@@ -12,10 +12,10 @@ const OVERFLOWING: &str = r#"(() => {
   const failures = [];
   if (document.documentElement.scrollWidth > innerWidth)
     failures.push(`document: ${document.documentElement.scrollWidth} > ${innerWidth}`);
-  const innerScroller = '.table-scroll, .code-block pre, .tool-body pre, .ticket-tool pre, .subagent-events';
+  const innerScroller = '.table-scroll, .oc-table-scroll, .code-block pre, .tool-body pre, .subagent-events';
   for (const el of document.querySelectorAll('body *')) {
     if (!el.getClientRects().length || !el.checkVisibility({visibilityProperty:true,contentVisibilityAuto:true}) ||
-        el.closest('.sr-only, .ui-offscreen, [hidden]') || el.matches('svg *')) continue;
+        el.closest('.sr-only, .oc-sr, .ui-offscreen, [hidden]') || el.matches('svg *')) continue;
     const scroller = el.closest(innerScroller);
     if (scroller && scroller !== el) continue;
     const r = el.getBoundingClientRect();
@@ -37,6 +37,17 @@ async fn check(ui: &mut Ui, place: &str, failures: &mut Vec<String>) {
 async fn every_route_and_surface_fits_all_supported_widths() {
     let mut fixture = Fixture::start().await;
     fixture.cards().await;
+    let long_name: String = KOREAN_TITLE.chars().take(24).collect();
+    let renamed = fixture
+        .harness
+        .tcp_request(
+            "PATCH",
+            "/v1/agents/chief",
+            Some(&fixture.token),
+            Some(json!({"name":long_name})),
+        )
+        .await;
+    assert_eq!(renamed.status, 200, "{}", renamed.body);
     let mut ui = Ui::open(
         fixture.executable.clone(),
         &fixture.harness,
@@ -51,7 +62,8 @@ async fn every_route_and_surface_fits_all_supported_widths() {
         ui.cdp
             .viewport(width, if width <= 390 { 844 } else { 900 }, "light")
             .await;
-        ui.goto(&conversation, "document.querySelectorAll('.ticket-pending').length === 5 && !!document.querySelector('.bubble.assistant') && !!document.querySelector('.task')").await;
+        ui.goto(&conversation, "document.querySelectorAll('.oc-card[data-ticket][data-status=pending]').length === 5 && !!document.querySelector('.bubble.assistant') && !!document.querySelector('.task')").await;
+        ui.cdp.eval("document.querySelectorAll('.oc-card[data-ticket] .oc-pill').forEach(b => b.click()); true").await;
         check(
             &mut ui,
             &format!("{width}px conversation with login/choice/OTP/approval/confirm"),
@@ -108,6 +120,7 @@ async fn every_route_and_surface_fits_all_supported_widths() {
         ui.cdp
             .wait("!!document.querySelector('.browser-card-screen, .browser-card-thumb')")
             .await;
+        ui.cdp.wait("Array.from(document.querySelectorAll('.browser-card-screen img, .browser-card-thumb img')).some(i => i.complete && i.naturalWidth > 0)").await;
         ui.cdp
             .eval(
                 "document.querySelector('.browser-card-screen, .browser-card-thumb').click(); true",
@@ -133,7 +146,7 @@ async fn every_route_and_surface_fits_all_supported_widths() {
             &mut failures,
         )
         .await;
-        ui.cdp.wait("!!document.querySelector('.otp-dock')").await;
+        ui.cdp.wait("!!document.querySelector('.card-dock')").await;
         check(
             &mut ui,
             &format!("{width}px code-request dock"),
@@ -141,10 +154,10 @@ async fn every_route_and_surface_fits_all_supported_widths() {
         )
         .await;
         ui.cdp
-            .eval("document.querySelector('.otp-dock-toggle').click(); true")
+            .eval("document.querySelector('.card-dock .oc-pill').click(); true")
             .await;
         ui.cdp
-            .wait("!!document.querySelector('.otp-dock[data-expanded] .auth-card')")
+            .wait("!!document.querySelector('.card-dock .oc-card[data-open=true]')")
             .await;
         check(
             &mut ui,
@@ -159,9 +172,13 @@ async fn every_route_and_surface_fits_all_supported_widths() {
             ("/devices", "Devices"),
             ("/routines", "Routines"),
             ("/memory", "Memory"),
-            ("/accounts", "Accounts"),
+            ("/models", "Models & accounts"),
             ("/vault", "Vault"),
             ("/config", "Configuration"),
+            ("/agents", "Agents"),
+            ("/sync", "Sync"),
+            ("/policy", "Policy"),
+            ("/diagnostics", "Diagnostics"),
         ] {
             ui.goto(path, &format!("Array.from(document.querySelectorAll('.ui-dialog-title')).some(e => e.textContent === {}) && !document.querySelector('[data-starting-style]')", json!(title))).await;
             ui.cdp
@@ -169,7 +186,9 @@ async fn every_route_and_surface_fits_all_supported_widths() {
                 .await;
             check(&mut ui, &format!("{width}px {path}"), &mut failures).await;
         }
-        for step in ["welcome", "agents", "import", "vault", "pair", "done"] {
+        for step in [
+            "welcome", "models", "agents", "import", "vault", "pair", "done",
+        ] {
             ui.goto(
                 &format!("/welcome?step={step}"),
                 "!!document.querySelector('.onb-body h1')",
@@ -186,22 +205,24 @@ async fn every_route_and_surface_fits_all_supported_widths() {
         if width <= 768 {
             ui.goto(
                 &conversation,
-                "document.querySelectorAll('.ticket-pending').length === 5",
+                "document.querySelectorAll('.oc-card[data-ticket][data-status=pending]').length === 5",
             )
             .await;
-            ui.cdp.eval("Array.from(document.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === 'Open conversations' && b.getClientRects().length).click(); true").await;
-            ui.cdp.wait(&format!("!!document.querySelector('.ui-drawer') && document.querySelector('.ui-drawer').innerText.includes({}) && !document.querySelector('[data-starting-style]')", json!(KOREAN_TITLE))).await;
+            ui.cdp.eval("Array.from(document.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === 'Open menu' && b.getClientRects().length).click(); true").await;
+            ui.cdp.wait(&format!("!!document.querySelector('.ui-drawer[aria-label=\"Team menu\"]') && document.querySelector('.ui-drawer').innerText.includes({}) && !document.querySelector('[data-starting-style]')", json!(long_name))).await;
+            check(&mut ui, &format!("{width}px team drawer"), &mut failures).await;
+            ui.goto("/history", &format!("!!document.querySelector('.history-page') && document.querySelector('.history-list')?.innerText.includes({})", json!(KOREAN_TITLE))).await;
             check(
                 &mut ui,
-                &format!("{width}px conversation drawer"),
+                &format!("{width}px history long titles"),
                 &mut failures,
             )
             .await;
-            ui.cdp.eval("(() => { const el=document.querySelector('.ui-drawer input[type=search]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,'example'); el.dispatchEvent(new Event('input',{bubbles:true})); return true; })()").await;
+            ui.cdp.eval("(() => { const el=document.querySelector('.history-search input[type=search]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,'example'); el.dispatchEvent(new Event('input',{bubbles:true})); return true; })()").await;
             ui.cdp
-                .wait("document.querySelectorAll('.ui-drawer [data-session]').length === 1")
+                .wait("document.querySelectorAll('.history-list [data-session]').length === 1")
                 .await;
-            check(&mut ui, &format!("{width}px drawer search"), &mut failures).await;
+            check(&mut ui, &format!("{width}px history search"), &mut failures).await;
         }
     }
     ui.browser.shutdown().await.unwrap();

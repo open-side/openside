@@ -10,7 +10,9 @@ use serde_json::{Map, Value};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::{JoinError, JoinHandle, JoinSet};
+use zeroize::Zeroizing;
 
+use crate::credential_rpc;
 use crate::framing::Lines;
 use crate::protocol::{
     self, DaemonMessage, Envelope, ErrorCode, Event, Outcome, Resolution, SidecarMessage,
@@ -19,7 +21,7 @@ use crate::{MAX_LINE_BYTES, MAX_USER_TEXT_BYTES};
 
 type Writer = Arc<Mutex<Box<dyn AsyncWrite + Unpin + Send>>>;
 
-/// Host tool calls the daemon runs concurrently for one sidecar; excess calls are rejected.
+/// Host RPC calls run concurrently for one sidecar; tools and credential calls share the cap.
 pub(crate) const MAX_IN_FLIGHT_CALLS: usize = 32;
 /// Runtime events buffered ahead of the consumer before the reader stops reading the socket.
 pub(crate) const EVENT_CAPACITY: usize = 256;
@@ -67,9 +69,7 @@ fn finish_call(finished: Option<CallResult>, ids: &mut RpcIds) -> Result<(), Run
             ids.complete(id);
             Ok(())
         }
-        _ => Err(RuntimeError::Unavailable(
-            "host tool response failed".into(),
-        )),
+        _ => Err(RuntimeError::Unavailable("host RPC response failed".into())),
     }
 }
 
@@ -92,8 +92,8 @@ pub struct Connection {
 impl Connection {
     /// Authenticate hello, send open, and validate ready against the exact tool gate.
     ///
-    /// The caller supplies a deadline covering this handshake. No credentials are
-    /// resolved here; the opaque credential-source configuration crosses unchanged.
+    /// The caller supplies a deadline covering this handshake. Only non-secret
+    /// request-shaping configuration crosses open; model attempts resolve credentials later.
     pub async fn open<S>(
         stream: S,
         nonce: &str,
@@ -468,6 +468,13 @@ impl AgentSession for Connection {
 }
 
 fn open_message(spec: SessionSpec) -> Result<DaemonMessage, RuntimeError> {
+    if spec.team.as_ref().is_some_and(|team| {
+        team.persona.chars().count() > 1500 || team.roster.chars().count() > 2000
+    }) {
+        return Err(RuntimeError::Rejected(
+            "team prompt exceeds character limits".into(),
+        ));
+    }
     let tools = spec
         .tools
         .into_iter()
@@ -485,8 +492,9 @@ fn open_message(spec: SessionSpec) -> Result<DaemonMessage, RuntimeError> {
             })
         })
         .collect::<Result<Vec<_>, RuntimeError>>()?;
+    let credentials_json = Zeroizing::new(spec.credentials_json);
     let credentials =
-        serde_json::from_str::<Map<String, Value>>(&spec.credentials_json).map_err(|_| {
+        serde_json::from_str::<Map<String, Value>>(&credentials_json).map_err(|_| {
             RuntimeError::Rejected("credential configuration must be a JSON object".into())
         })?;
     let agent = serde_json::from_str::<Map<String, Value>>(&spec.agent_json)
@@ -504,6 +512,7 @@ fn open_message(spec: SessionSpec) -> Result<DaemonMessage, RuntimeError> {
             data: state.data,
         }),
         config: protocol::Config { credentials, agent },
+        team: spec.team,
     })
 }
 
@@ -519,8 +528,10 @@ pub(crate) fn disconnected() -> RuntimeError {
 }
 
 async fn write_message(writer: &Writer, message: DaemonMessage) -> Result<(), RuntimeError> {
-    let mut bytes = serde_json::to_vec(&Envelope::new(message))
-        .map_err(|_| RuntimeError::Rejected("could not encode sidecar message".into()))?;
+    let mut bytes = Zeroizing::new(
+        serde_json::to_vec(&Envelope::new(message))
+            .map_err(|_| RuntimeError::Rejected("could not encode sidecar message".into()))?,
+    );
     if bytes.len() > MAX_LINE_BYTES {
         return Err(RuntimeError::Rejected(
             "sidecar message exceeds 4 MiB".into(),
@@ -661,6 +672,61 @@ async fn drive<R: AsyncRead + Unpin>(
                         startup_ms,
                     }));
                 }
+            }
+            message @ (SidecarMessage::CredentialRequest { .. }
+            | SidecarMessage::CredentialReport { .. }) => {
+                let Some((id, request_id)) = credential_rpc::correlation(&message) else {
+                    if protocol_error(&writer, "invalid credential correlation id")
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                };
+                let id = id.to_owned();
+                let request_id = request_id.to_owned();
+                let mut reap_failed = None;
+                while let Some(finished) = calls.try_join_next() {
+                    if let Err(error) = finish_call(Some(finished), &mut ids) {
+                        reap_failed = Some(error);
+                        break;
+                    }
+                }
+                if let Some(error) = reap_failed {
+                    let _ = events.send(RuntimeEvent::Error { error }).await;
+                    break;
+                }
+                if ids.seen(&id) {
+                    if protocol_error(&writer, "duplicate credential rpc id")
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                if calls.len() >= MAX_IN_FLIGHT_CALLS {
+                    ids.remember(id.clone());
+                    let mut error = openside_core::CredentialError::unavailable();
+                    error.code = openside_core::CredentialErrorCode::ProviderUnavailable;
+                    error.reason = "Too many concurrent host RPC calls".into();
+                    if write_message(&writer, credential_rpc::denial(id, request_id, error))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                ids.start(id.clone());
+                let handler = tools.clone();
+                let response_writer = writer.clone();
+                calls.spawn(async move {
+                    let response = credential_rpc::reply(handler.as_ref(), message).await;
+                    let result = write_message(&response_writer, response).await;
+                    (id, result)
+                });
             }
             SidecarMessage::ToolCall {
                 rpc_id,
@@ -850,6 +916,7 @@ fn runtime_event(message: SidecarMessage) -> Option<RuntimeEvent> {
             Event::TurnEnded => RuntimeEvent::TurnEnded,
             Event::AssistantDelta { text } => RuntimeEvent::AssistantDelta { text },
             Event::AssistantFinal { text } => RuntimeEvent::AssistantFinal { text },
+            Event::SessionTitleProposed { title } => RuntimeEvent::SessionTitleProposed { title },
             Event::ThinkingDelta { text } => RuntimeEvent::ThinkingDelta { text },
             Event::SubagentLifecycle {
                 subagent_id,

@@ -1,0 +1,207 @@
+/*
+ * Tool activity rows: sentences in the agent's voice hanging off a thin spine, not boxes.
+ * Page visits nest their steps one level deeper; JSON sits behind "Technical details".
+ */
+
+.activity-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  margin: 6px 0 2px 11px;
+  padding: 2px 0 2px 10px;
+  border-left: 1px solid var(--border);
+  list-style: none;
+  animation: status-in var(--normal) var(--ease);
+}
+.tool-details > summary.tool-line {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-row);
+  font-size: 0.8125rem;
+  list-style: none;
+  cursor: pointer;
+}
+.tool-details > summary.tool-line:hover {
+  background: var(--hover);
+}
+.tool-details > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  color: var(--muted);
+}
+.tool-favicon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-xs);
+}
+.tool-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-state {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+.tool-failed .tool-icon,
+.tool-failed .tool-state {
+  color: var(--danger);
+}
+.tool-chevron {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  opacity: 0;
+  transition:
+    opacity var(--fast) var(--ease),
+    transform var(--fast) var(--ease);
+}
+.tool-details > summary:is(:hover, :focus-visible) .tool-chevron {
+  opacity: 0.8;
+}
+.tool-details[open] > summary .tool-chevron {
+  opacity: 0.8;
+  transform: rotate(90deg);
+}
+@media (pointer: coarse) {
+  .tool-details > summary.tool-line {
+    min-height: 44px;
+  }
+  .tool-chevron {
+    opacity: 0.5;
+  }
+}
+
+/* A page visit: what the agent did on the page, one step deeper than the page itself. */
+.tool-steps-item {
+  list-style: none;
+}
+.tool-steps {
+  display: grid;
+  gap: 1px;
+  margin: 0 0 4px 17px;
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--border);
+  list-style: none;
+}
+.tool-step .tool-details > summary.tool-line {
+  min-height: 28px;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+}
+@media (pointer: coarse) {
+  .tool-step .tool-details > summary.tool-line {
+    min-height: 44px;
+  }
+}
+
+/* A navigation in flight: a 2px bar slides along the bottom edge of its row. */
+.tool-progress {
+  position: absolute;
+  inset: auto 8px 0;
+  height: 2px;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+.tool-progress::before {
+  content: "";
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: var(--radius-xs);
+  background: var(--primary);
+  animation: tool-progress 1.2s ease-in-out infinite;
+}
+@keyframes tool-progress {
+  from {
+    translate: -100% 0;
+  }
+  to {
+    translate: 270% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-progress::before {
+    width: 40%;
+    animation: none;
+  }
+}
+
+.tool-body {
+  padding: 0 8px 6px 34px;
+}
+.tool-tech > summary {
+  width: fit-content;
+  min-height: 24px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  list-style: none;
+  cursor: pointer;
+}
+.tool-tech > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-tech > summary:hover {
+  color: var(--text);
+}
+.tool-tech h4 {
+  margin: 8px 0 4px;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 650;
+}
+.tool-tech pre {
+  max-height: 240px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--glass-inset-bg);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool-tech pre + pre {
+  margin-top: 4px;
+}
+
+/*
+ * One reply, one bubble: the agent's words before and after its tool calls read as a single
+ * message, with the calls as quiet lines between the paragraphs.
+ */
+.reply-activity {
+  margin: 8px 0;
+}
+.reply-activity:first-child {
+  margin-top: 0;
+}
+.reply-activity:last-child {
+  margin-bottom: 0;
+}
+.bubble.assistant > .markdown + .markdown {
+  margin-top: 0.8em;
+}

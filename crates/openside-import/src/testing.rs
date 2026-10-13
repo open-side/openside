@@ -133,6 +133,65 @@ pub fn encrypt_cookie(
     blob
 }
 
+/// Add encrypted synthetic sign-ins for daemon fixture tests; never enabled in product builds.
+pub fn write_saved_passwords(dir: &Path, logins: &[(&str, &str, &str)]) {
+    fs::create_dir_all(dir).unwrap();
+    let db = Connection::open(dir.join("Login Data")).unwrap();
+    db.execute_batch("CREATE TABLE logins (origin_url TEXT NOT NULL, username_value TEXT, password_value BLOB, blacklisted_by_user INTEGER NOT NULL DEFAULT 0)").unwrap();
+    #[cfg(not(target_os = "macos"))]
+    let key = b"peanuts".as_slice();
+    #[cfg(target_os = "macos")]
+    let key = MAC_V10_PASSWORD.as_bytes();
+    for (origin, username, password) in logins {
+        let encrypted = encrypt_cookie("v10", key, "", password, 0);
+        db.execute(
+            "INSERT INTO logins(origin_url, username_value, password_value) VALUES (?1,?2,?3)",
+            params![origin, username, encrypted],
+        )
+        .unwrap();
+    }
+}
+
+/// Set synthetic cookie recency in each family's native timestamp units.
+pub fn set_cookie_times(
+    dir: &Path,
+    kind: crate::BrowserKind,
+    name: &str,
+    accessed_at_ms: i64,
+    created_at_ms: i64,
+) {
+    match kind {
+        crate::BrowserKind::Chrome | crate::BrowserKind::Chromium => {
+            let path = if dir.join("Network/Cookies").exists() {
+                dir.join("Network/Cookies")
+            } else {
+                dir.join("Cookies")
+            };
+            Connection::open(path)
+                .unwrap()
+                .execute(
+                    "UPDATE cookies SET last_access_utc=?1,creation_utc=?2 WHERE name=?3",
+                    params![webkit_us(accessed_at_ms), webkit_us(created_at_ms), name],
+                )
+                .unwrap();
+        }
+        crate::BrowserKind::Firefox => {
+            Connection::open(dir.join("cookies.sqlite"))
+                .unwrap()
+                .execute(
+                    "UPDATE moz_cookies SET lastAccessed=?1,creationTime=?2 WHERE name=?3",
+                    params![
+                        accessed_at_ms.saturating_mul(1000),
+                        created_at_ms.saturating_mul(1000),
+                        name
+                    ],
+                )
+                .unwrap();
+        }
+        crate::BrowserKind::Safari => panic!("Safari recency fixtures use binary-cookie records"),
+    }
+}
+
 /// A Chrome/Chromium profile directory.
 #[derive(Debug, Clone)]
 pub struct ChromeProfile {

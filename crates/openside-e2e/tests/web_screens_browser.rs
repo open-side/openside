@@ -444,6 +444,7 @@ fn ended_ok<'a>(events: &'a [Event], call: &str) -> &'a Value {
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,
@@ -936,8 +937,9 @@ async fn web_screens_browser_capture() {
             let phone = viewport.mobile;
             if wanted("otp-inline") {
                 ui.goto(&format!("/sessions/{login}")).await;
-                ui.wait("inline code form", "!!document.querySelector('main section.ticket-otp input[autocomplete=one-time-code]') && !!document.querySelector('.otp-dock section.ticket')").await;
-                ui.eval("document.querySelector('main section.ticket-otp').scrollIntoView({ block: 'center' }); document.activeElement?.blur(); true").await;
+                ui.wait("inline code card", "!!document.querySelector('main .oc-card[data-kind=otp]') && !!document.querySelector('.card-dock .oc-card')").await;
+                ui.eval("const card = document.querySelector('main .oc-card[data-kind=otp]'); card.querySelector('.oc-pill')?.click(); card.scrollIntoView({ block: 'center' }); document.activeElement?.blur(); true").await;
+                ui.wait("inline code form", "!!document.querySelector('main .oc-card[data-kind=otp] input[autocomplete=one-time-code]')").await;
                 ui.snap(&file("otp-inline")).await;
             }
             if wanted("card-action") {
@@ -951,20 +953,21 @@ async fn web_screens_browser_capture() {
                     .await;
                 ui.wait(
                     "code sheet",
-                    "!!document.querySelector('.otp-sheet input[autocomplete=one-time-code]')",
+                    "!!document.querySelector('.card-sheet input[autocomplete=one-time-code]')",
                 )
                 .await;
                 ui.snap(&file("otp-sheet")).await;
             }
             if wanted("otp-dock") {
                 ui.goto(&format!("/sessions/{browse}")).await;
-                ui.wait("dock over the transcript", "!!document.querySelector('.otp-dock section.ticket') && !!document.querySelector('.bubble.assistant')").await;
+                ui.wait("dock over the transcript", "!!document.querySelector('.card-dock .oc-card') && !!document.querySelector('.bubble.assistant')").await;
                 ui.snap(&file("otp-dock")).await;
                 if phone {
-                    ui.click(".otp-dock", "Enter code").await;
+                    ui.eval("document.querySelector('.card-dock .oc-pill').click(); true")
+                        .await;
                     ui.wait(
                         "open dock",
-                        "!!document.querySelector('.otp-dock[data-expanded] input')",
+                        "!!document.querySelector('.card-dock .oc-card[data-open=true] input')",
                     )
                     .await;
                     ui.snap(&file("otp-dock-open")).await;
@@ -973,21 +976,21 @@ async fn web_screens_browser_capture() {
             if wanted("otp-dock-settings") {
                 ui.goto(&format!("/sessions/{browse}")).await;
                 if phone {
-                    ui.click("body", "Open conversations").await;
+                    ui.click("body", "Open menu").await;
                     ui.wait("drawer", "!!document.querySelector('.ui-drawer')")
                         .await;
                     ui.click(".ui-drawer", "Settings").await;
                 } else {
                     ui.click(".shell-sidebar", "Settings").await;
                 }
-                ui.wait("settings and dock", "Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === 'Settings') && !!document.querySelector('.otp-dock section.ticket')").await;
+                ui.wait("settings and dock", "Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === 'Settings') && !!document.querySelector('.card-dock .oc-card')").await;
                 ui.snap(&file("otp-dock-settings")).await;
                 // A press inside the dock is outside the modal Settings sheet; it must not close it.
-                // On a phone the press is the real "Enter code" tap, which opens the folded dock.
+                // Opening the collapsed card must preserve the surrounding Settings dialog.
                 let kept = ui
                     .eval(
-                        "(async () => { const t = document.querySelector('.otp-dock-toggle:not([aria-expanded=true])'); \
-                         const el = t && getComputedStyle(t).display !== 'none' ? t : document.querySelector('.otp-dock input'); \
+                        "(async () => { const t = document.querySelector('.card-dock .oc-pill'); \
+                         const el = t || document.querySelector('.card-dock input'); \
                          const at = el.getBoundingClientRect(); \
                          const init = { bubbles: true, cancelable: true, button: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: at.left + 4, clientY: at.top + 4 }; \
                          el.dispatchEvent(new PointerEvent('pointerdown', init)); el.dispatchEvent(new MouseEvent('mousedown', init)); \
@@ -1006,8 +1009,13 @@ async fn web_screens_browser_capture() {
             }
             if wanted("takeover-card") || wanted("takeover") || wanted("takeover-pip") {
                 ui.goto(&format!("/sessions/{checkout}")).await;
-                let card = "section.ticket-pending[aria-label=\"Hands-on step\"]";
-                ui.wait("takeover card", &format!("!!document.querySelector({}) && !!document.querySelector('.otp-dock section.ticket')", json!(card))).await;
+                let card = ".oc-card[data-kind=takeover][data-status=pending]";
+                ui.wait("takeover card", &format!("!!document.querySelector({}) && !!document.querySelector('.card-dock .oc-card')", json!(card))).await;
+                ui.eval(&format!(
+                    "document.querySelector({}).querySelector('.oc-pill')?.click(); true",
+                    json!(card)
+                ))
+                .await;
                 ui.eval(&format!(
                     "document.querySelector({}).scrollIntoView({{ block: 'center' }}); true",
                     json!(card)
@@ -1043,8 +1051,13 @@ async fn web_screens_browser_capture() {
             }
             if wanted("register-card") {
                 ui.goto(&format!("/sessions/{setup}")).await;
-                let card = "section.ticket-pending[aria-label=\"Save authenticator\"]";
-                ui.wait("register card", &format!("!!document.querySelector({}) && !!document.querySelector('.otp-dock section.ticket')", json!(card))).await;
+                let card = ".oc-card[data-kind=confirmation][data-status=pending]";
+                ui.wait("register card", &format!("!!document.querySelector({}) && !!document.querySelector('.card-dock .oc-card')", json!(card))).await;
+                ui.eval(&format!(
+                    "document.querySelector({}).querySelector('.oc-pill')?.click(); true",
+                    json!(card)
+                ))
+                .await;
                 ui.eval(&format!(
                     "document.querySelector({}).scrollIntoView({{ block: 'center' }}); true",
                     json!(card)

@@ -1,5 +1,5 @@
-import { ChevronDown } from "lucide-react";
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { Monitor, Moon, Sun } from "lucide-react";
+import { useState, type CSSProperties } from "react";
 import {
   ACCENT_COLORS,
   applyAccent,
@@ -15,24 +15,35 @@ import {
   type Palettes,
   type ThemePreference,
 } from "../theme";
-import { ICON_STROKE } from "../ui";
+import { ICON_STROKE, Select, type SelectOption } from "../ui";
 
-const MODES: { value: ThemePreference; label: string }[] = [
-  { value: "system", label: "System" },
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
+const MODE_ICON = { size: 16, strokeWidth: ICON_STROKE } as const;
+const MODES: SelectOption[] = [
+  { value: "system", label: "System", icon: <Monitor {...MODE_ICON} /> },
+  { value: "light", label: "Light", icon: <Sun {...MODE_ICON} /> },
+  { value: "dark", label: "Dark", icon: <Moon {...MODE_ICON} /> },
 ];
 
-function SelectRow({ id, label, value, onChange, children }: { id: string; label: string; value: string; onChange: (value: string) => void; children: ReactNode }) {
+// The built-in palette has no preset entry; these are its canvas, text and accent from styles.css.
+const DEFAULT_SWATCH = {
+  light: { background: "#ffffff", foreground: "#171717", accent: DEFAULT_ACCENT },
+  dark: { background: "#000000", foreground: "#f3f3f3", accent: DEFAULT_ACCENT },
+} as const;
+
+/** A palette preview: its canvas with an "Aa" in its text colour and a dot in its accent. */
+function ThemeSwatch({ background, foreground, accent }: { background: string; foreground: string; accent: string }) {
+  return (
+    <span className="theme-swatch" style={{ "--swatch-bg": background, "--swatch-fg": foreground, "--swatch-accent": accent } as CSSProperties}>
+      Aa
+    </span>
+  );
+}
+
+function SelectRow({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }) {
   return (
     <div className="appearance-row">
       <label htmlFor={id}>{label}</label>
-      <span className="appearance-select">
-        <select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
-          {children}
-        </select>
-        <ChevronDown size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </span>
+      <Select id={id} variant="inline" value={value} options={options} onChange={onChange} />
     </div>
   );
 }
@@ -64,33 +75,29 @@ export function AppearanceSettings() {
         id="appearance-mode"
         label="Theme mode"
         value={theme}
+        options={MODES}
         onChange={(value) => {
           const next = value as ThemePreference;
           applyTheme(next);
           setTheme(next);
         }}
-      >
-        {MODES.map((mode) => (
-          <option key={mode.value} value={mode.value}>
-            {mode.label}
-          </option>
-        ))}
-      </SelectRow>
+      />
       {(["light", "dark"] as const).map((which) => (
         <SelectRow
           key={which}
           id={`appearance-${which}`}
           label={which === "light" ? "Light theme" : "Dark theme"}
           value={palettes[which]}
+          options={[
+            { value: DEFAULT_PALETTE, label: "openside", icon: <ThemeSwatch {...DEFAULT_SWATCH[which]} /> },
+            ...presetsFor(which).map((preset) => ({
+              value: preset.id,
+              label: preset.name,
+              icon: <ThemeSwatch background={preset.background} foreground={preset.foreground} accent={preset.accent} />,
+            })),
+          ]}
           onChange={(id) => choosePalette(which, id)}
-        >
-          <option value={DEFAULT_PALETTE}>openside</option>
-          {presetsFor(which).map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.name}
-            </option>
-          ))}
-        </SelectRow>
+        />
       ))}
       <div className="appearance-row">
         <label htmlFor="appearance-accent">Primary color</label>

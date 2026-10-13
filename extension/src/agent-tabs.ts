@@ -3,6 +3,8 @@ export function ownedChromeTabs(ledger: TabLedger, targets: chrome.debugger.Targ
   const owned = new Set(ledger.tabs.filter(tab => tab.opened_by === "agent" && tab.owner_session_id).map(tab => tab.tab_id));
   return targets.filter(target => owned.has(target.id) && target.tabId !== undefined).map(target => target.tabId!);
 }
+// Grey is the quietest chip colour in Chromium's fixed palette, so it does not fight the tab strip's sky-gradient theme. The patched browser's own gateway creates a group with this title; keep the two in step.
+const GROUP_STYLE = { title: "Agent Tabs", color: "grey" } as const;
 export async function groupAgentTabs(tabs: TabLedger): Promise<void> {
   const owned = new Set(ownedChromeTabs(tabs, await chrome.debugger.getTargets()));
   const windows = new Map<number, number[]>();
@@ -24,7 +26,8 @@ export async function groupAgentTabs(tabs: TabLedger): Promise<void> {
     const existing = groups[windowId];
     const alive = existing !== undefined && await chrome.tabGroups.get(existing).then(() => true, () => false);
     const groupId = await chrome.tabs.group(alive ? { tabIds, groupId: existing } : { tabIds, createProperties: { windowId } });
-    await chrome.tabGroups.update(groupId, { title: "Agent Tabs", color: "blue" });
+    // Only a new group is styled, so a rename, recolour or collapse the person made sticks across the periodic syncs.
+    if (!alive) await chrome.tabGroups.update(groupId, GROUP_STYLE);
     groups[windowId] = groupId;
   }
   await chrome.storage.session.set({ agentGroups: groups });

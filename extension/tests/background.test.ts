@@ -11,7 +11,7 @@ it("rejects malformed/foreign/iframe requests before opening a panel or creating
   const open = vi.fn(async () => undefined);
   vi.stubGlobal("__TEST_MATCHES__", false);
   vi.stubGlobal("chrome", {
-    runtime: { id: "extension-id", getURL: () => "chrome-extension://extension-id/", onInstalled: listener, onMessage: { addListener: (callback: typeof onMessage) => { onMessage = callback; } }, openOptionsPage: vi.fn() },
+    runtime: { id: "extension-id", getURL: () => "chrome-extension://extension-id/", onInstalled: listener, onMessageExternal: listener, onMessage: { addListener: (callback: typeof onMessage) => { onMessage = callback; } }, openOptionsPage: vi.fn() },
     storage: { session: { get: vi.fn(async () => ({ pairing: { url: "http://localhost:43210", token: "scoped-token" } })), set: vi.fn(async () => undefined), remove: vi.fn(async () => undefined), setAccessLevel: accessLevel }, onChanged: listener },
     sidePanel: { open, setPanelBehavior: vi.fn(async () => undefined) },
     contextMenus: { create: vi.fn(), onClicked: { addListener: (callback: typeof onMenu) => { onMenu = callback; } } },
@@ -33,6 +33,7 @@ it("rejects malformed/foreign/iframe requests before opening a panel or creating
   expect(onMessage(message, sender, reply)).toBe(true);
   await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ id: "new-session" }));
   expect(api.createSession).toHaveBeenCalledTimes(1);
+  expect(api.createSession).toHaveBeenCalledWith({ agent_id: null, title: null, model: null, mode: null, workspace: null });
   expect(open).toHaveBeenCalledWith({ tabId: 4 });
   expect(api.submitMessage.mock.calls[0][1].text).toContain("Selected text");
 });
@@ -45,7 +46,7 @@ it("opens the side panel inside the omnibox gesture before any async work", asyn
   const query = vi.fn(async () => [{ id: 7 }]);
   vi.stubGlobal("__TEST_MATCHES__", false);
   vi.stubGlobal("chrome", {
-    runtime: { id: "extension-id", getURL: () => "chrome-extension://extension-id/", onInstalled: listener, onMessage: listener, openOptionsPage: vi.fn() },
+    runtime: { id: "extension-id", getURL: () => "chrome-extension://extension-id/", onInstalled: listener, onMessageExternal: listener, onMessage: listener, openOptionsPage: vi.fn() },
     storage: { session: { get: vi.fn(async () => ({ pairing: { url: "http://localhost:43210", token: "scoped-token" } })), set: vi.fn(async () => undefined), remove: vi.fn(async () => undefined), setAccessLevel: vi.fn(async () => undefined) }, onChanged: listener },
     sidePanel: { open, setPanelBehavior: vi.fn(async () => undefined) },
     contextMenus: { create: vi.fn(), onClicked: listener },

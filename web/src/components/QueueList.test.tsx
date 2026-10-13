@@ -15,8 +15,8 @@ function setup({ status = 200, running = false } = {}) {
         sessionId="s1"
         running={running}
         queue={[
-          { id: "m1", text: "steer this", mode: "steer" },
-          { id: "m2", text: "follow up", mode: "queue" },
+          { id: "m1", text: "steer this", mode: "steer", author_kind: "person", from_agent: null },
+          { id: "m2", text: "follow up", mode: "queue", author_kind: "person", from_agent: null },
         ]}
       />
     </ClientContext.Provider>,
@@ -34,6 +34,20 @@ async function choose(user: ReturnType<typeof userEvent.setup>, text: string, it
 }
 
 describe("QueueList", () => {
+  it("uses daemon authority rather than message-id prefixes to hide internal deliveries", () => {
+    const daemon = fakeClient(() => json(200, {}));
+    render(<ClientContext.Provider value={daemon.client}>
+      <QueueList sessionId="s1" queue={[
+        { id: "task-report-person", text: "person text", mode: "queue", author_kind: "person", from_agent: null },
+        { id: "plain-internal", text: "internal text", mode: "queue", author_kind: "internal", from_agent: "chief" },
+        { id: "api", text: "api text", mode: "queue", author_kind: "agent_client", from_agent: null },
+      ]} />
+    </ClientContext.Provider>);
+    expect(screen.getByText("person text")).toBeInTheDocument();
+    expect(screen.getByText("api text")).toBeInTheDocument();
+    expect(screen.queryByText("internal text")).toBeNull();
+  });
+
   it("labels each lane and keeps delivery order", () => {
     setup();
     const items = within(screen.getByRole("region", { name: "Queued messages" })).getAllByRole("listitem");

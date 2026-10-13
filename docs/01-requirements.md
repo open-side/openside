@@ -16,7 +16,7 @@ openside의 기능 요구사항을 정리한 문서다. 완료 기준과 측정 
 | ID | 전제 | 
 | --- | --- |
 | G-1 | 구현 언어는 Rust (데몬, CLI, 브라우저 컨트롤러, Vault, 정책, 스케줄러). 웹 UI/브라우저 확장만 TypeScript. |
-| G-2 | 에이전트 런타임은 Pydantic AI Python 사이드카(`agent/`, 세션당 프로세스 1개, 유닉스 소켓 JSONL 프로토콜 v1; `docs/08`, `docs/specs/sidecar-protocol.md`). 모델 자격증명은 플러그인 소스(`omp-broker`(선택), `env`, `command`, `codex-cli`, `builtin`)에서 사이드카가 읽고, openside 는 제공자 자격증명을 저장하지 않는다. broker 소스가 선택됐는데 쓸 수 없으면 다른 소스로 낮추지 않고 세션을 중지한다(fail-closed). |
+| G-2 | Pydantic AI 사이드카는 모델 요청 시도마다 새로운 비공개 자격 증명 스냅샷을 가져온다. 명시적 프로바이더 풀, 어피니티, 사용량 및 차단, 갱신은 데몬이 소유한다. API 키와 관리형 구독 OAuth 상태는 OS 키체인 기반 Vault를 정본으로 삼는다. 사이드카에는 액세스 키와 토큰만 전달되며, 리프레시 토큰이나 공개·설정·로그 출력에는 절대 노출되지 않는다. 관리형 CLI 홈은 비공개 자격 증명 파일을 직접 생성하며, 더 최신의 외부 로그인 상태는 리비전과 mtime을 기준으로 반영하고 삭제된 계정은 완전히 지운다. 기본 사용자 홈은 읽기 전용으로 유지된다. 브로커 장애가 발생해도 목록에 없는 소스로 넘어가지 않으며, 여러 소스가 혼합된 페일오버는 사람이 직접 구성한 풀에서만 동작한다. `docs/specs/models-accounts.md`를 참고한다. |
 | G-3 | Linux 우선(Wayland/X11). macOS/Windows 는 같은 코드베이스의 후속 타깃(플랫폼 추상화 계층을 처음부터 둔다). |
 | G-4 | 로컬 우선. 기본값에서 외부로 나가는 데이터는 LLM 제공자 요청뿐. 텔레메트리 기본 OFF. |
 | G-5 | 모든 클라이언트(CLI, MCP, 웹, 모바일, 채널봇)는 같은 공개 데몬 API 의 클라이언트다. 숨은 경로 없음. |
@@ -31,11 +31,11 @@ openside의 기능 요구사항을 정리한 문서다. 완료 기준과 측정 
 | A-5 | 서브에이전트: task 안에서 그룹, 라이브 팔로우, 모델 선택, 승인이 부모로 올라옴, fork 는 완료된 컨텍스트만 상속 | AC: ① 서브에이전트 목록/진행/이벤트 스트림을 UI·API 로 제공 ② 서브에이전트별 모델 지정 ③ 서브에이전트의 승인·질문이 항상 부모 세션 승인함에 표시 ④ 개별 취소/steer ⑤ fork 시 미완료 tool-call batch 제외 테스트. BLOCKED-1(harness `SubAgents` 가 자식 보류를 부모로 올리지 못함)은 ADR-020 으로 해소했다. harness 대신 `delegate` 데몬 툴과 사이드카 자체 어댑터로 서브에이전트를 실행하며, ①~⑤ 가 모두 통과한다(`crates/openside-e2e/tests/subagents.rs`) | 🔴 자체 어댑터(ADR-020) | M3 (구현됨) |
 | A-6 | 스킬: 커스텀 스킬 관리, 대화 중 스킬 생성, `/` 멘션, CLI를 통한 스킬 설치 | AC: ① 스킬 목록/보기/생성/편집/토글 API ② 채팅 입력에서 스킬 멘션(칩) ③ `openside skills install <agent>` 로 openside 브라우저 스킬을 Claude Code/Codex 등에 설치 ④ 잘못된 frontmatter 가 설정 화면을 깨지 않음(퍼징 테스트). harness `skills` 는 연결하지 않고(S-9 `later`, `docs/08` §E) 데몬이 직접 구현한다: `openside-skills` 크레이트, `/v1/skills` API, `skill` 도구, 프리셋 `claude`·`codex`·`omp` 의 `openside skills install <agent>`(`docs/specs/skills.md`) | 🔴 관리 API/설치기(harness skills 는 미연결) | M3 (구현됨) |
 | A-7 | 훅, 샌드박스 | AC: 승인 게이트·시크릿 redaction 을 모델 호출 경로가 아니라 데몬 호출 파이프라인(`docs/09` §2)에서 강제하고, 사이드카는 Pydantic AI hook(`SessionHooks`)으로 이벤트·steer 를 처리. 샌드박스는 D-3 | 🟡 데몬 정책 + Pydantic AI hooks | M2 (구현됨) |
-| A-8 | 제공자 3종: 플랜 모델 / 구독 재사용(ChatGPT, Claude, Copilot) / BYO API 키 | **openside 는 제공자 로그인 UI 를 만들지 않는다.** 자격증명 소스(`credentials.order`)의 계정을 그대로 사용(→ `docs/08`). `omp-broker` 소스를 쓰면 broker 에 등록된 계정·사용량(`/v1/usage`)·rate-limit block 을 활용한다. AC: 설정된 소스로 모델을 호출하고, 사용 가능한 소스가 없으면 `openside doctor` 가 원인을 보이며 세션은 fail-closed 로 중지. `GET /v1/accounts`, `openside accounts`, 웹 `/accounts` 화면이 계정·모델·사용량 윈도우·rate-limit block 을 보인다(이메일·자격증명은 노출하지 않는다) | 🟢 Pydantic AI provider, 🟡 소스 플러그인 | M1 (구현됨) |
+| A-8 | 모델 및 다중 계정 | 프로바이더 및 자격 증명 준비 상태별로 모델을 그룹화하고, 재시작 없이 API로 기본 모델과 fallback을 설정한다. 일반 및 History 세션은 저장된 모델을 유지하고, Team 홈은 다음 유휴 턴에 Agent 재정의나 현재 기본값을 적용하며, 진행 중인 요청은 캡처된 모델로 완료한다. 라벨이 지정된 N개의 API 키와 격리된 N개의 Claude Code/Codex CLI 계정을 관리하며, 계정별 활성화·삭제와 정확한 외부 로그인 명령을 지원한다. 순서가 지정된 각 프로바이더 풀은 사람이 직접 구성하며, 데몬이 담당하는 선택 로직은 스티키(sticky) 어피니티, 인증·속도·할당량(auth/rate/quota) 분류별 로테이션, 사용량 윈도우 및 리셋 시각을 활용한다. 읽기(read) 스코프의 모바일 기기는 키를 조회하거나 자격 증명·풀을 변경할 수 없으며, 변경 작업에는 Admin 권한과 사람 기기(person device) 또는 로컬 소켓이 필요하다. openside 자체 OAuth 로그인 흐름은 두지 않는다. | 소유자 승인을 거치는 다중 계정 전환 규약이며, 집중 검증 결과는 별도로 추적한다 | M1 |
 | A-9 | Ultrabrowse (리서치 모드, 출처 인용) | 별도 `ultrabrowse` 프로필(더 높은 thinking, 계획 단계, 인용 강제). AC: 응답의 모든 사실 주장에 출처 URL 링크, 인용 없는 주장 비율 측정 harness. `ultrabrowse` 프로필이 구현돼 있다(`docs/specs/ultrabrowse.md`): 높은 추론, 계획 단계, 인용 강제(인용 없는 주장은 재시도 후 `[citation needed]` 로 표시). 인용 없는 주장 비율은 `tools/citation-harness.py` 로 측정한다 | 🟡 프로필+프롬프트 | M3 (구현됨) |
 | A-10 | Routines: cron(새 태스크) / heartbeat(기존 채팅 재개), 겹침 스킵, 대상 소멸 시 일시정지, 제안 | AC: ① cron 표현식 스케줄 ② heartbeat = 기존 세션 큐에 메시지 주입 ③ 이전 실행 진행 중이면 스킵+기록 ④ 대상 세션 삭제 시 pause ⑤ "지금 실행" ⑥ 반복 작업 후보를 찾아 초안 생성. `openside-sched` 와 `/v1/routines` 로 구현돼 있다(`docs/specs/routines.md`). ⑥ 은 `GET /v1/routines/suggestions` 이며, 비슷한 사용자 메시지가 규칙적인 간격으로 3번 이상 반복되면 초안을 돌려준다 | 🔴 스케줄러 | M3 (구현됨) |
 | A-11 | Memory: 브라우징 기록·채팅·태스크에서 로컬 임베딩 기억, 보존기간, 열람·편집·이력 | AC: ① 로컬 SQLite+벡터 검색 ② 보존 정책(영구/90일/30일) 적용 ③ 기억 CRUD + 변경 이력 ④ 네트워크로 나가는 임베딩 호출 0 (로컬 모델) ⑤ 시크릿 패턴이 기억에 저장되지 않음. harness `memory` 는 연결하지 않고(S-9 `later`) 데몬의 `openside-memory`(`memory.db`)로 직접 구현했다(`docs/specs/memory.md`). 벡터 검색은 로컬 정적 임베딩 모델(model2vec)이 설치돼 있을 때만 동작하고, 없으면 FTS5 어휘 검색(`lexical_only`)으로 대신한다. 모델은 `openside memory model fetch` 로 명시적으로 받으며, 이것이 유일한 네트워크 경로다(임베딩 계산은 네트워크를 쓰지 않는다) | 🔴 히스토리 인덱서 | M4 (구현됨) |
-| A-12 | 태스크 산출물: 태스크 폴더에 transcript·파일 보관, 이미지/PDF/HTML/텍스트 미리보기 | AC: 태스크별 디렉토리, 생성/변경 파일 목록, 안전한 sandbox iframe 미리보기, 태스크 삭제 시 정리 | 🟡 | M3 (구현됨) |
+| A-12 | 태스크 산출물: 태스크 폴더에 transcript·파일 보관, 이미지/PDF/HTML/텍스트 미리보기 | AC: 태스크별 디렉토리, 생성/변경 파일 목록, 안전한 sandbox iframe 미리보기, 태스크 삭제 시 정리. 내부 관찰용 스크린샷은 출력 개수 및 파일 목록에서 제외하며, 명시적으로 전달된 스크린샷만 표시한다. 기존 스크린샷은 디스크에 유지하되 출력물로 노출하지 않는다. docs/specs/artifacts.md 참조. | 🟡 | M3 (구현됨) |
 | A-13 | Channels: Slack/Telegram/Discord 원격 제어, 음성 메모 전사, `/stop` `/model` `/sessions` `/usage` `/new`, 승인 카드 | AC: 각 채널 어댑터가 데몬 API 의 클라이언트로 동작(별도 로직 없음). 스레드=세션 매핑, 승인 카드, 음성 전사(로컬 STT 옵션). `openside-channels` 로 구현돼 있고 가짜 Telegram·Slack·Discord 서버로 검증했다. 실제 플랫폼 계정으로는 확인하지 않았다(`docs/specs/channels.md`) | 🔴 어댑터 | M5 (구현됨) |
 | A-14 | Gmail이나 Slack 메시지를 사이드패널 세션으로 전달한다 | 확장의 컨텍스트 메뉴 + 사이트별 버튼 주입 프레임워크. AC: Gmail/Slack 웹에서 선택한 메시지가 새 세션 컨텍스트로 열림 | 🔴 확장 | M5 (구현됨) |
 | A-15 | 에이전트가 채팅에 차트·시각화를 인라인 렌더링 | AC: sandbox iframe 에서 HTML/SVG/차트 렌더링, 소스 보기 토글 | 🟡 UI | M4 (구현됨) |
@@ -46,7 +46,7 @@ Task 완료 인도의 정확히 한 번(exactly-once) 보장 대상은 영속화
 ## B. 브라우저
 | ID | 기능 | openside 요구사항 / 수용 기준 | 기반 | 단계 |
 | --- | --- | --- | --- | --- |
-| B-1 | 로그인된 실제 브라우저 프로필에서 동작, 브라우저 데이터 import(기록·쿠키·북마크, Safari ZIP) | AC: Chrome/Chromium/Firefox 프로필에서 history·bookmarks·cookies import, 프로필별 분리, 실패 시 원인 메시지. CLI `openside import` 로 구현돼 있다(`docs/specs/import.md`). Safari ZIP·비밀번호·자동 완성·확장 프로그램·Windows 쿠키 복호화는 지원하지 않고 UI 프롬프트도 없다 | 🔴 | M5 (부분 구현) |
+| B-1 | 다른 최초 실행 설정보다 먼저 기존 브라우저 프로필을 모두 가져온다 | Chrome, Chromium, Brave, Edge, Vivaldi, Opera, Arc, Aside, Firefox 및 파생 브라우저와 허용된 환경의 Safari를 감지한다. GUI에서 방문 기록, 북마크, 쿠키, 비밀번호, 자동완성, 복원 탭, 검색엔진, 권한, 확장 프로그램 메타데이터의 항목 수를 미리 보여주며, 기본값으로 모든 프로필과 종류를 선택한다. 로컬 사람 권한 원칙을 따르며, 비밀번호는 설정 및 잠금 해제 후에만 암호화된 Vault로 가져오고 인메모리 CSV 대안도 지원한다. 복사된 원본 DB만 읽고, 암호화 실패는 종류별로 격리하며, 원본별 멱등한 쓰기와 작업 진행 상태의 영속적 저장을 보장한다. 쿠키는 에이전트 프로필로 전달되고, 다른 레코드는 프로필 범위 메타데이터를 유지한다. 플랫폼별 제한 사항과 검증 근거는 docs/specs/import.md를 참고한다. | 기존 가져오기 도구 | M5 |
 | B-2 | Playwright와 완벽히 호환되는 얇은 CDP 래퍼. 비동기 이벤트는 steer로 전달한다 | AC: ① 모델이 쓰는 코드가 Playwright 문법 그대로 동작(호환 스위트 통과율 공개) ② 팝업/다운로드/탭닫힘 이벤트가 steer 로 주입 ③ 페이지 스크립트 허용: `page.evaluate`, `$eval`/`$$eval`, `locator.evaluate`, `addInitScript` 및 원시 `page.cdp`(ADR-022). `browser_repl`(QuickJS, ADR-021)과 `openside repl` 이 구현돼 있다. Playwright 호환 통과율은 `docs/specs/browser-repl.md` 에 공개하고, 공개한 수치가 계산값과 같은지 테스트가 확인한다. 팝업·다운로드·탭 닫힘은 소유 세션에 `steer` 로 주입한다. ③ 은 새로 추가된 기준이며 아직 구현되지 않았다(현재 REPL 은 페이지 스크립트를 주입하지 않으며 `evaluate*` 호출 시 `NotSupported` 예외를 던진다) | 🔴 자체 CDP 래퍼 | M1 (부분 구현) |
 | B-3 | 개량 접근성 트리: ref ID, 중간 노드 제거, focus·iframe·clickable, diff, agent-browser 대비 70% 작게 | AC: 스냅샷 크기 벤치(고정 페이지 세트)에서 agent-browser 대비 ≤ 0.35x, 연속 호출은 diff 만 반환, ref 는 REPL locator 와 동일, truncation 금지 경고. `browser_snapshot` 은 `eN` ref, `since` diff, 잘라내지 않고 예산 초과를 경고하는 페이징을 제공하고, REPL(`page.snapshot()`, `aria-ref=eN`)이 같은 ref 를 쓴다. 크기 벤치(`bench/snapshot/`)는 여러 번 호출하는 작업 흐름 기준으로 agent-browser 대비 ≤ 0.35x 를 만족하며, 스냅샷 한 장만 비교하면 이 기준에 미치지 못한다(`bench/snapshot/README.md`) | 🔴 접근성 스냅샷 + diff | M1 (구현됨) |
 | B-4 | CUA 폴백 (스크린샷+좌표) | AC: DOM 으로 못 쓰는 페이지에서 스크린샷·좌표 클릭 도구, 뷰포트 1440x900 고정 | 🟡 | M2 (구현됨) |
@@ -76,6 +76,8 @@ Task 완료 인도의 정확히 한 번(exactly-once) 보장 대상은 영속화
 | C-8 | 결제/게시/메시지 등 민감 행동 사람 승인 | → D-4 | | M2 (구현됨) |
 | C-9 | 안전한 로그인 폼 도구 `request_login` 과 페이지 선택지 도구 `request_choice` | 실제 페이지 양식을 바탕으로 생성된 카드에서 사용자가 로그인하면, 데몬이 입력값을 페이지에 대신 채워 넣고 도구 결과에서는 마스킹한다. AC: ① `request_login` 은 페이지의 실제 로그인 폼(필드 라벨·종류, 페이지가 제공하는 다른 로그인 수단)으로 입력 카드를 만든다 ② Vault 를 먼저 조회해, 그 origin 에 맞는 저장된 로그인이 하나면 묻지 않고 로그인하고 여럿이면 고르게 한다 ③ 입력값이 이벤트, 로그, 메모리, transcript에 남지 않고 도구 결과에서 마스킹된다(canary 테스트). 단, 에이전트가 실행한 페이지 스크립트는 페이지 데이터를 직접 읽을 수 있다(ADR-022) ④ 로그인 저장은 `human_step` 과 `approve` 범위를 모두 가진 기기의 응답이 있어야 하며 `login_save` 로 감사에 남는다 ⑤ 제출 뒤 다음 단계를 `done`·`otp`·`choice`·`captcha`·`error`·`unknown` 으로 분류한다 ⑥ `request_choice` 는 페이지가 쓰는 라벨 그대로 선택지를 보여주고, 고르려면 `approve` 범위가 필요하며 데몬이 선택한 항목을 클릭한다 ⑦ 채팅 채널은 로그인을 웹 UI 로 가는 링크로만 안내하고 선택지는 버튼으로 답할 수 있다. ①~⑥ 은 구현·테스트돼 있다. ⑦ 은 `openside-channels` 에 선택지 버튼은 있지만 로그인 링크를 검증하는 테스트가 없다 | 🟡 데몬 툴 | M8 (부분 구현) |
 | C-10 | 로그인 시나리오: 사용자가 채팅 카드로만 응답하면서 에이전트가 각 로그인을 완결한다. | 로컬 루프백에서 여러 페이지로 구성된 실제 로그인 환경을 제공하는 픽스처 서버(사이트별 독립 상태 관리, 상태 확인용 `/__fixture/state`, 사용자 휴대폰 역할을 흉내 내는 `/__fixture/push/<verdict>` 엔드포인트 포함)를 띄워 CI에서 검증한다. 사용자가 에이전트의 브라우저를 직접 조작할 필요는 없으며, 브라우저 제어권을 넘겨받지 않고 모든 입력을 채팅의 티켓 카드로만 처리한다. AC: ① S1 이메일·비밀번호 로그인, S7 잘못된 비밀번호 입력 시 재시도 카드에 사이트 오류 메시지 노출, S10 카드의 "볼트에 저장" 선택 시 로그인 정보를 보관하고 다음 로그인부터는 카드 없이 볼트 정보로 자동 입력 ② S2 사용자명 입력 후 비밀번호를 입력하는 2단계 페이지는 카드를 두 번 띄우며, 비밀번호 카드에서도 계정 정보를 함께 저장 가능 ③ S3 로그인 카드의 "<provider>(으)로 계속하기" 버튼 지원 및 제공자 측 계정 선택·동의 페이지의 선택지 카드 처리 ④ S4 사이트 대기 상태에 맞춰 `Approve on your phone` 카드가 실시간 대기하고, 승인 시 로그인 진행, 거부나 시간 초과 시 사이트 오류 메시지로 반환 ⑤ S5 `request_otp` 카드로 SMS 인증번호와 OTP 앱 인증번호 입력 ⑥ S6 인증 방식, 계정·프로필, "이 기기를 신뢰합니까?", 약관 동의를 각각 `request_choice` 카드로 처리 ⑦ S8 사이트가 인증기 등록을 제안하면 볼트 저장 여부를 카드로 묻고, 승인했을 때만 `register_authenticator`가 정보를 저장한 뒤 페이지에서 인증번호 확인 절차 완료 ⑧ S9 이후 동일 사이트 로그인 시 카드 표시 없이 볼트 정보로 인증번호 자동 입력 ⑨ 비밀번호, 인증번호, 등록 키가 대화 기록, 이벤트 로그, 어떤 파일에도 남지 않음 (crates/openside-e2e/tests/login_scenarios.rs) | 🟡 데몬 툴 | M8 (구현됨) |
+| C-11 | 에이전트가 로그인한 사이트 관리 | 로그인 메타데이터(사이트, 마스킹된 계정, 유효 상태, 출처, 최근 사용 시각, 에이전트별 권한 부여)만 저장한다. 사이트별 어댑터 없이 완료된 login·Vault·OTP·takeover·import 흐름을 감지하며, 불확실한 후보는 별도로 분리한다. chief는 기본 허용되고 teammate는 확인을 요청하며, 항상 승인은 지정된 teammate에게만 허용된다. 인증된 동일 출처(same-origin) fetch는 쿠키와 헤더 값을 API, 도구, 이벤트, 감사 로그에 절대 노출하지 않는다. revoke는 해당 사이트의 모든 공유 프로필 계정을 로그아웃하고 모든 권한을 삭제하지만, forget-only는 공유 로그인 상태를 유지한다. AC: 로컬 Login 티켓으로 활성 행이 생성되고, teammate가 사용할 때 확인을 요청하며, 사람의 항상 승인으로 GET이 허용되고, 로그아웃 시 쿠키와 스토리지가 삭제되어 이후 사용 시 찾을 수 없음(not found)으로 처리된다. | `docs/specs/connections.md`; 격리된 Connections e2e 테스트 | M2 |
+| C-12 | 별도 계정 공간 분리 | 사이트 자체 계정 전환 기능을 기본값으로 유지한다. 사람은 추가 계정당 하나의 영속 프로필을 선택(opt-in)하여 사용할 수 있으며, 필요할 때 실행되고 유휴 상태가 되면 닫히며 데몬 재시작 시에는 복원되지 않는다. 사이트당 한 번에 하나의 별도 공간만 실행된다. 전환 시 이전 공간을 닫고 공유 프로필은 전혀 건드리지 않는다. RAM, 콜드 스타트, 디스크, 별도 로그인·2FA 비용을 문서화한다. 두 revoke 모드 모두 해당 별도 프로필을 중지한 후 삭제한다. | `docs/specs/connections.md`; 계정 공간 데몬/브라우저 회귀 테스트 | M2 |
 
 ## D. 권한 / 보안 / 프라이버시
 | ID | 기능 | openside 요구사항 / AC | 기반 | 단계 |
@@ -90,13 +92,14 @@ Task 완료 인도의 정확히 한 번(exactly-once) 보장 대상은 영속화
 ## E. 개발자 표면
 | ID | 기능 | openside 요구사항 / AC | 기반 | 단계 |
 | --- | --- | --- | --- | --- |
-| E-1 | CLI: 작업 실행, 세션 지정, 지정한 모델로 비대화형 실행, 세션 중지, 계정 조회 및 선택 | `openside "task"`, `openside session resume\|stop\|list`, `openside --model provider/model "task"`(`exec` 하위 명령은 없다). 계정 조회는 `openside accounts` 이고, 선택은 자격증명 소스 쪽이 소유하며 openside 는 `openside doctor` 로 상태를 보인다. AC: TTY 없이 파이프로 구조화 출력(JSONL) 가능 | 🟡 | M1 (구현됨) |
+| E-1 | CLI 태스크, 모델 및 다중 계정 | 기존 task/session 및 비-TTY(non-TTY) JSONL 명령어는 유지된다. `openside accounts`는 라벨이 지정된 계정, 사용량, 차단 상태를 표시하고, `openside models`는 카탈로그 및 풀 준비 상태를 표시한다. `key set <provider> --label <label>`은 숨김 처리된 표준 입력(stdin)으로만 값을 읽으며 `--key-id`로 키 하나를 교체한다. `accounts add claude-code/codex-cli`는 격리된 홈을 생성하고 해당 로그인 명령을 출력한다. 계정별 활성화·비활성화·삭제, 풀, 세션 선호도 설정은 CLI에서도 동일하게 지원한다. 키와 토큰은 argv, 출력, 로그에 절대 나타나지 않는다. | 다중 계정 규약이 적용되었으며, 검증 결과는 별도로 추적한다 | M1 |
 | E-2 | MCP 서버 | `openside mcp`: 브라우저 도구 노출. AC: Claude Code/Codex 등에서 `mcp.json` 로 연결해 탭 열기·스냅샷. 구현돼 있다(`docs/specs/mcp.md`). e2e 는 `mcp.json` 항목과 같은 stdio 전송으로 rmcp 클라이언트를 연결해 검증했고, Claude Code·Codex 자체는 실행하지 않았다 | 🔴 | M2 (구현됨) |
 | E-3 | REPL | `openside repl` 결정적 브라우저 제어. AC: 에이전트가 쓰는 스냅샷·ref 와 동일 | 🟡 | M1 (구현됨) |
 | E-4 | 퍼블릭 HTTP/WS API 및 SDK | OpenAPI 스펙+JSON Schema 에서 Rust/TS 클라이언트 생성. AC: 모든 UI 기능이 API 호출로만 구현됨. OpenAPI 3.1 스냅샷 `docs/specs/openapi.json` 은 `openside-proto` 의 라우트 표 `ROUTES` 에서 생성하고, 웹 UI 는 이 스냅샷에서 TS 타입을 생성한다(`pnpm -C web gen:api`). Rust 클라이언트(CLI·채널·MCP)는 `openside-proto` 타입을 직접 공유하며 따로 생성한 Rust 클라이언트는 없다 | 🔴 | M1 (구현됨) |
-| E-5 | 벤치마크 | `openside-bench`: Online-Mind2Web/BU-Bench/Odysseys 러너 (aside-benchmarks 포맷 호환). AC: 결과 JSON 이 aside-benchmarks 스키마로 출력. `bench/` 에 로컬 루프백 합성 태스크 5개(폼 입력, 3페이지 탐색, 표 추출, 2FA 가짜 로그인, 파일 다운로드)가 있고 픽스처 상태로 채점해 Aside BU Bench V1 스키마로 결과를 쓴다. 공개 Online-Mind2Web·BU Bench·Odysseys 데이터셋 러너는 없고, 실제 모델(live) 모드는 문서만 있을 뿐 실행하지 않았다. `openside-bench` 라는 크레이트도 없다 | 🔴 | M6 (부분 구현) |
+| E-5 | 벤치마크 | `openside-bench`: Online-Mind2Web/BU-Bench/Odysseys 러너 (BU Bench V1 결과 형식 호환). AC: 결과 JSON 이 BU Bench V1 결과 스키마로 출력. `bench/` 에 로컬 루프백 합성 태스크 5개(폼 입력, 3페이지 탐색, 표 추출, 2FA 가짜 로그인, 파일 다운로드)가 있고 픽스처 상태로 채점해 BU Bench V1 결과 스키마로 결과를 쓴다. 공개 Online-Mind2Web·BU Bench·Odysseys 데이터셋 러너는 없고, 실제 모델(live) 모드는 문서만 있을 뿐 실행하지 않았다. `openside-bench` 라는 크레이트도 없다 | 🔴 | M6 (부분 구현) |
 | E-6 | 외부 에이전트의 CLI 및 MCP 연동 | 코딩 어시스턴트 같은 외부 에이전트가 CLI나 MCP를 통해 전체 작업을 openside 에이전트에 위임하거나 브라우저를 직접 제어할 수 있다. AC: ① 위임 실행: CLI에서 `openside run --follow`, steer, 취소, 작업 목록 조회를 지원하고, MCP에서 `agent_run`, `agent_status`, `agent_steer`, `agent_cancel`, `agent_result` 도구를 제공한다 ② 앱 내부 브라우저 도구는 모두 `openside browser <verb>` CLI와 동등한 MCP 도구로 직접 제어할 수 있다 ③ `openside repl`은 표준 입력(stdin)으로 코드 조각 여러 개를 일괄 실행할 수 있다 ④ 위임 실행 중 발행된 티켓은 웹 UI와 모바일 화면에 즉시 표시되며, CLI와 MCP에서 승인 대기할 수 있다 ⑤ 설치된 스킬에서 작업을 위임할 상황과 브라우저를 직접 제어할 상황을 구분해 안내한다. 동일한 데몬 퍼블릭 API를 통해 CLI 및 MCP 위임과 브라우저 직접 제어를 구현했다. 실제 프로세스 기반 인수 테스트는 외부 호출자의 승인 티켓이 데스크톱 및 390x844 모바일 UI에 실시간으로 표시되고, 사용자가 승인하면 대기 중이던 CLI/MCP 호출이 재개되는 동작을 검증한다. 설치된 스킬은 작업을 위임할 시점과 직접 브라우저를 구동할 시점을 구분한다. 관련 검증 코드는 `crates/openside-e2e/tests/mcp.rs` 및 `crates/openside-e2e/tests/skills.rs`에 작성했다. | 🟡 | M8 (구현됨) |
 | E-7 | 원격 CLI 및 MCP 접속 | 다른 머신에서 실행 중인 데몬에도 CLI와 MCP로 원격 접속해 동일한 에이전트 및 브라우저 기능을 쓸 수 있다. AC: ① `openside connect <pairing link>`로 원격 데몬 정보를 등록하고, `--remote`, `OPENSIDE_REMOTE`, `openside mcp --remote`로 대상을 지정한다 ② CLI와 MCP가 릴레이, Tailscale, Cloudflare Tunnel을 통해 원격 데몬에 접속해 에이전트 및 브라우저 기능을 그대로 사용한다 ③ 원격 연결 시 발급된 토큰 스코프에 맞춰 권한을 제한한다 ④ 관리자는 사전 검토된 동작 관련 설정만 원격으로 변경할 수 있다. 보안에 민감한 설정 변경, 보안 정책 수정, 세션 모드나 워크스페이스 권한 확대는 로컬 소켓을 통해서만 허용한다. `connect` 페어링 링크로 원격 프로필을 저장하며, `--remote`, `OPENSIDE_REMOTE`, `openside mcp --remote`로 해당 프로필을 지정한다. `crates/openside-e2e/tests/mcp_remote.rs`의 테스트는 실제 릴레이와 루프백 TCP(실제 외부 서비스 대신 Tailscale/Cloudflare HTTPS 프런트 역할을 대신하도록 구성)를 거쳐 CLI/MCP 에이전트 위임, 브라우저 스냅샷, 스코프, 로컬 전용 보안 설정 변경을 검증한다. Cloudflare 관리 감독 및 페어링 동작은 `crates/opensided/src/tests/remote_transport.rs`에서 별도로 검증하며, 실제 외부 Tailscale/Cloudflare 환경에 직접 연결하여 검증하지는 않는다. | 🟡 | M8: 구현 완료. 실제 외부 Tailscale/Cloudflare 연결은 아직 검증하지 않음. |
+| E-8 | 표준 CLI 및 API 기능 동등성 | `openside connections`는 정확한 사이트 필터를 지원하는 list, show, check, relogin, 선택적 keep-signed-in 플래그를 갖춘 revoke, 위치 인자 기반 에이전트별 권한 부여, connection·agent·action 결합 감사 필터, 별도 공간 add·remove를 지원한다. JSONL은 기존 요약과 함께 표준 API 객체를 출력하며, 204 응답 시 임의의 객체를 꾸며내지 않는다. needs_you 상태의 relogin은 티켓과 엔드포인트 보존 티켓 해결 힌트를 stderr로 출력하고, signed-in이 아닌 waiting_human을 보고한다. | `crates/openside-cli/src/tests/connections.rs`; `crates/openside-e2e/tests/connections.rs` | M1 |
 
 ## F. 원격 / 모바일
 | ID | 기능 | AC | 단계 |
@@ -105,38 +108,38 @@ Task 완료 인도의 정확히 한 번(exactly-once) 보장 대상은 영속화
 | F-2 | Web Push (VAPID): 완료/실패/승인 필요, 포커스된 기기 제외, 알림 클릭 시 해당 대화 | AC: iOS 홈 화면 앱/Android/Desktop 에서 수신. Desktop 은 순정 Chromium 에서 실제 Google 푸시 서비스로 수신을 확인했다(서비스 워커 알림 테스트 통과). iOS·Android 는 실기기가 필요하다(사용자가 PWA 를 설치하고 페어링·구독해야 한다). 패치 Chromium 은 GCM 키가 없어 푸시 구독이 실패한다 | M4 (blocked-external) |
 | F-3 | 인증: 로컬 loopback 기본, QR 페어링(3분 만료), 기기별 토큰, 폐기 | AC: 토큰 스코프(read/steer/approve/admin) | M4 (구현됨) |
 | F-4 | 원격 접속: Tailscale Serve 가이드, 선택적 reverse proxy | 문서+doctor 점검. Cloudflare Tunnel, 자체 릴레이, 통합 페어링은 F-8에서 확장한다. | M4 (구현됨) |
-| F-5 | 웹 UI 첫 실행 온보딩 | AC: ① 첫 실행 때 웹 UI 가 설치된 에이전트(`claude`·`codex`·`omp` 프리셋)를 감지한다 ② 감지된 에이전트에 openside 브라우저 스킬을 설치할 수 있게 한다(`openside skills install <agent>`) ③ Chrome·Chromium·Firefox 프로필 가져오기를 제공하고, 쓰기 전에 dry-run 미리보기를 보여준다 ④ Vault 설정으로 안내한다 ⑤ 모든 단계는 데몬의 공개 API 엔드포인트만으로 동작한다. 첫 실행 안내는 `/welcome` 화면(에이전트 감지, dry-run 미리보기를 포함한 브라우저 데이터 가져오기, Vault 설정, 휴대폰 페어링; 건너뛰기 가능, Settings에서 다시 열기 지원, 데몬에 완료 플래그 보관)으로 구현되어 있으며 동작 방식은 `docs/specs/onboarding.md`에 정리되어 있다. | M8 (구현됨) |
+| F-5 | 웹 UI 첫 실행 온보딩 | AC: ① 첫 실행 때 웹 UI 가 설치된 에이전트(`claude`·`codex`·`omp` 프리셋)를 감지한다 ② 감지된 에이전트에 openside 브라우저 스킬을 설치할 수 있게 한다(`openside skills install <agent>`) ③ Chrome·Chromium·Firefox 프로필 가져오기를 제공하고, 쓰기 전에 dry-run 미리보기를 보여준다 ④ Vault 설정으로 안내한다 ⑤ 모든 단계는 데몬의 공개 API 엔드포인트만으로 동작한다. 첫 실행 안내는 `/welcome` 화면(에이전트 감지, dry-run 미리보기를 포함한 브라우저 데이터 가져오기, Vault 설정, 휴대폰 페어링; 건너뛰기 가능, Settings에서 다시 열기 지원, 데몬에 완료 플래그 보관)으로 구현되어 있으며 동작 방식은 `docs/specs/onboarding.md`에 정리되어 있다. 이제 안내 가이드는 이 컴퓨터에 이미 설치된 브라우저에서 모든 항목을 가져오는 과정(인라인 Vault 설정, 진행 상황, 요약)부터 시작하여 모델, 에이전트, 휴대폰 순으로 진행한다. 웹 UI에서는 사람에게 CLI 명령어를 실행하라는 안내를 일절 표시하지 않으며(명령어는 보조 힌트로만 제공), admin 스코프가 없는 기기는 화면에서 접근 권한을 요청하고 컴퓨터에서 승인받도록 한다(onboarding.md 1, 5, 8절). | M8 (구현됨) |
 | F-6 | 웹 UI·PWA·확장이 함께 쓰는 글래스 시각 체계 | AC: ① 웹 UI·PWA·확장은 그라디언트 배경, 반투명 흐림 처리한 헤더와 입력창, 불투명도가 높은 글래스 어시스턴트 말풍선과 채팅 안 카드(흰색 기본 알약 버튼), 잠깐 나타나는 상태 알약으로 이루어진 하나의 글래스 시각 체계를 쓴다 ② 320~1440 px 의 모든 너비에서 가로 스크롤이 생기지 않는다(`web_overflow` e2e 테스트). 그라데이션 배경, 블러 처리된 헤더와 입력창, 고불투명도 유리 말풍선과 기본 흰색 알약 버튼을 포함한 카드, 일시 상태 알약으로 이루어진 글래스 시각 시스템은 웹 앱, PWA, 확장 프로그램에 적용되어 있으며 디자인 토큰과 규칙은 `web/DESIGN.md`에 정리되어 있다. `web_overflow` e2e 테스트는 1440x900, 390x844, 최소 지원 너비인 320x640을 검증하지만 대화 1건과 모바일 서랍만 다루며, 설정, 워크스페이스, 새 대화, `/welcome`, 코드 요청 독, 카드 등 다른 화면은 모든 너비에서 확인하지 않는다 | M8 (부분 구현) |
 | F-7 | 네이티브 수준의 PWA 사용성 | 설치형 PWA가 모바일 앱처럼 자연스럽게 동작한다(외부 공유 수신, 바로가기, 배지, 제스처, 오프라인 전송). AC: ① Web Share Target: PWA로 텍스트, URL, 파일을 공유하면 해당 내용을 담아 새 대화 초안을 시작한다 ② 매니페스트 바로가기에 'New chat'과 'Needs you' 항목을 제공한다 ③ 앱 아이콘 배지에 대기 중인 티켓 수를 표시하고, 처리할 티켓이 없으면 배지를 지운다 ④ 안전 영역(safe area) 여백을 지켜 노치나 홈 바에 화면 요소가 가려지지 않는다 ⑤ 바텀시트는 아래로 끌어내려 닫을 수 있다 ⑥ 화면 가장자리를 쓸어 넘기면 사이드바가 열린다 ⑦ Android 환경에서 티켓을 승인할 때 햅틱 피드백을 제공한다 ⑧ 오프라인에서 작성한 메시지는 IndexedDB 보관함에 저장해 두고, 네트워크가 복구되면 중복 없이 전송한다 ⑨ 설치 안내: Android에는 설치 버튼을 띄우고 iOS에는 최초 1회 힌트를 표시한다. | M8 (구현됨) |
-| F-8 | 원격 전송 방식 지원 (Tailscale, Cloudflare Tunnel, 자체 릴레이) | Tailscale Serve(F-4) 외에도 Cloudflare Tunnel이나 인바운드 포트 개방이 필요 없는 자체 릴레이를 통해 스마트폰에서 데몬에 접속할 수 있다. AC: ① Tailscale Serve 전송 방식을 그대로 유지한다 (F-4) ② Cloudflare Tunnel: 데몬이 `cloudflared` 프로세스를 관리하며, 퀵 터널과 네임드 터널을 모두 지원한다 ③ 자체 호스팅 릴레이 서버: 데몬이 외부로 직접 연결하므로 인바운드 포트를 열지 않아도 된다. CLI와 MCP의 릴레이 연결은 Noise 프로토콜로 종단간 암호화(E2EE)되며 페어링 QR 코드나 링크에 포함된 데몬 공개키를 고정(pinning)하여 검증한다. 릴레이에서 내려받은 PWA는 수동적 도청자(passive observer)로부터 트래픽을 보호하지만 HTML과 JS를 제공하는 릴레이 운영자를 신뢰해야 하므로, 자체 호스팅 릴레이를 구축하거나 릴레이 대신 데몬 또는 Tailscale 오리진에 직접 연결하여 PWA를 불러오는 구성을 권장한다. ④ `[remote] mode` 설정값, `openside remote setup <mode>` 명령어, 모드별 진단(doctor) 검사를 제공한다 ⑤ 페어링 QR 코드나 링크 하나에 전송 방식, 접속 주소(또는 릴레이), 데몬 공개키를 모두 담는다 ⑥ 어떤 전송 방식을 쓰더라도 SSE, takeover, screencast가 정상 동작한다. 모든 전송 방식의 구현이 존재하며, 자동화 검증은 일회용 로컬 릴레이와 헤드리스 Chromium, 가짜 cloudflared를 대상으로 수행하고 실제 Tailscale이나 Cloudflare 상용 서비스 라우팅 및 계정 연동은 테스트에 포함하지 않는다. 네트워크 종단간 암호화(E2EE)는 전송 구간의 기밀성을 보장하지만 릴레이 서버가 제공하는 PWA를 쓸 때는 릴레이를 실행 코드의 배포처로서 신뢰해야 하며, 상세한 보안 경계는 docs/specs/threat-model.md에 기술되어 있다. | M8 (구현됨) |
+| F-8 | 원격 전송 방식 지원 (Tailscale, Cloudflare Tunnel, 자체 릴레이) | Tailscale Serve(F-4) 외에도 Cloudflare Tunnel이나 인바운드 포트 개방이 필요 없는 자체 릴레이를 통해 스마트폰에서 데몬에 접속할 수 있다. AC: ① Tailscale Serve 전송 방식을 그대로 유지한다 (F-4) ② Cloudflare Tunnel: 데몬이 `cloudflared` 프로세스를 관리하며, 퀵 터널과 네임드 터널을 모두 지원한다 ③ 자체 호스팅 릴레이 서버: 데몬이 외부로 직접 연결하므로 인바운드 포트를 열지 않아도 된다. CLI와 MCP의 릴레이 연결은 Noise 프로토콜로 종단간 암호화(E2EE)되며 페어링 QR 코드나 링크에 포함된 데몬 공개키를 고정(pinning)하여 검증한다. 릴레이에서 내려받은 PWA는 수동적 도청자(passive observer)로부터 트래픽을 보호하지만 HTML과 JS를 제공하는 릴레이 운영자를 신뢰해야 하므로, 자체 호스팅 릴레이를 구축하거나 릴레이 대신 데몬 또는 Tailscale 오리진에 직접 연결하여 PWA를 불러오는 구성을 권장한다. ④ `[remote] mode` 설정값, `openside remote setup <mode>` 명령어, 모드별 진단(doctor) 검사를 제공한다 ⑤ 페어링 QR 코드나 링크 하나에 전송 방식, 접속 주소(또는 릴레이), 데몬 공개키를 모두 담는다. AC ⑥ 실시간 이벤트 전달은 스트리밍이 지원될 때 SSE를 사용하고, Quick Tunnel을 비롯해 전송 구간에서 SSE를 버퍼링할 때는 단독 시퀀스 JSON 롱 폴링을 사용한다. 제어권 인수와 화면 중계는 계속 지원한다. 증적에서는 가짜 cloudflared 감시와 실제 릴레이 및 등록된 공개 Quick 라우팅을 구분한다. MobileE2E는 매회 헤드리스 Chromium에서 iPhone과 Android를 에뮬레이션하여 전체 릴레이 흐름 2회와 실제 Quick 흐름 2회를 통과했다: 데스크톱 QR 픽셀, 페어링, 새 대화, 동일 태스크 내 사람 승인, PiP 픽셀, 사진/모델 SHA, 배지 API 호출, 실제 서비스 워커 알림 처리를 확인했다. Quick은 사람의 확인을 기다리며 멈춘 시점에 events/poll 전달이 정상 완료되어야 하고 새로고침 없이 터치로 재개해야 한다. 원본 SSE나 토큰 단위 Quick DOM 스트리밍을 지원한다고 보장하지 않는다. 물리 기기 설치, 카메라 스캔, OS 배지, WebKit, GCM/APNs, 실제 Tailscale 라우팅, 네임드 Cloudflare 계정 연동은 미검증 상태로 남는다. E2EE는 네트워크 전송만 보호하며 릴레이가 제공한 PWA 코드 무결성은 보호하지 않는다. 신뢰 경계는 docs/specs/threat-model.md를 따른다. | M8 (구현됨) |
 
 ## B-16: 콜드·웜 수치 기록
 
 B16 성능 측정은 동일한 스크립트 데몬과 헤드리스 Chromium 기반의 격리된 픽스처 환경에서 기준 단일 모드(baseline single), 프론트 모드(front), 프론트 사전 예열 모드(front prewarm)를 비교하며, 실제 LLM API 호출 없이 진행한다. 콜드 및 웜 측정값에는 사이드카 기동 시간, 브라우저 탭 준비 시간, 메시지 전송 시점부터의 첫 어시스턴트 토큰 도달 시간, 그리고 예열에 든 준비 시간이 가려지지 않도록 세션 생성 시점부터의 첫 토큰 도달 시간을 모두 포함한다.
 
-`docs/specs/responsive-results.json`: baseline single 6/6, front without prewarm 6/6, front with prewarm 6/6. All tables below are milliseconds.
+`docs/specs/responsive-results.json`: 단일 실행 베이스라인 6/6, 프런트 프리웜 미적용 6/6, 프런트 프리웜 적용 6/6. 아래 표의 수치는 모두 밀리초 단위다.
 
-| Case | single before: first token / first navigation end | front without prewarm | front with prewarm | prewarm lead before send |
+| 케이스 | 단일 실행 변경 전: 첫 토큰 / 첫 내비게이션 완료 | 프런트 프리웜 미적용 | 프런트 프리웜 적용 | 전송 전 프리웜 선행 시간 |
 | --- | ---: | ---: | ---: | ---: |
-| Cold daemon/browser | 11815 / 11805 | 1006 / 1345 | 30 / 106 | 898 |
-| Warm browser, new session | 2325 / 2314 | 1016 / 1211 | 30 / 95 | 888 |
-| Warm sidecar, same session | 1 / 161 (legacy recorder) | 25 / 175 | 95 / 183 | — |
+| 콜드 데몬/브라우저 | 11815 / 11805 | 1006 / 1345 | 30 / 106 | 898 |
+| 웜 브라우저, 새 세션 | 2325 / 2314 | 1016 / 1211 | 30 / 95 | 888 |
+| 웜 사이드카, 동일 세션 | 1 / 161 (기존 레코더) | 25 / 175 | 95 / 183 | — |
 
-| New session | front without prewarm: startup / create-to-token / create-to-navigation end | front with prewarm: startup / create-to-token / create-to-navigation end |
+| 새 세션 | 프런트 프리웜 미적용: 시작 / 생성부터 첫 토큰까지 / 생성부터 내비게이션 완료까지 | 프런트 프리웜 적용: 시작 / 생성부터 첫 토큰까지 / 생성부터 내비게이션 완료까지 |
 | --- | ---: | ---: |
-| Cold | 971 / 1008 / 1347 | 877 / 928 / 1004 |
-| Warm browser | 896 / 1020 / 1215 | 864 / 918 / 983 |
+| 콜드 | 971 / 1008 / 1347 | 877 / 928 / 1004 |
+| 웜 브라우저 | 896 / 1020 / 1215 | 864 / 918 / 983 |
 
-| Experiment | single before | front without prewarm | front with prewarm |
+| 실험 | 단일 실행 변경 전 | 프런트 프리웜 미적용 | 프런트 프리웜 적용 |
 | --- | ---: | ---: | ---: |
-| E1 correction: front acknowledgement / Task steer accepted | no separate front / Task | 39 / 30 | 26 / 22 |
-| E1 actual next-model steer injection | 13017 (parent) | 13033 (Task) | 13044 (Task) |
-| E2 quick-question reply | 13638 | 23 | 23 |
-| E3 cancel observed / next-message reply | 668 / 1217 (whole-session stop) | 7 / 4 (one Task) | 6 / 4 (one Task) |
-| E4 replay: first event / running tool | 4 / 4 | 2 / 2 | 1 / 2 |
-| E4 resumed completion, no duplicates | 13022 | 13009 | 13020 |
-| E5 second Task's tool start after its message | 14022 | 20 | 23 |
-| E5 all work settled from first send | 31572 | 17111 | 16101 |
+| E1 보정: 프런트 확인 응답 / Task steer 수락 | 프런트 / Task 분리 없음 | 39 / 30 | 26 / 22 |
+| E1 실제 다음 모델 steer 주입 | 13017 (부모) | 13033 (Task) | 13044 (Task) |
+| E2 빠른 질문 응답 | 13638 | 23 | 23 |
+| E3 취소 확인 / 다음 메시지 응답 | 668 / 1217 (세션 전체 중단) | 7 / 4 (단일 Task) | 6 / 4 (단일 Task) |
+| E4 재생: 첫 이벤트 / 도구 실행 중 | 4 / 4 | 2 / 2 | 1 / 2 |
+| E4 중복 없는 재개 완료 | 13022 | 13009 | 13020 |
+| E5 메시지 이후 두 번째 Task의 도구 시작 | 14022 | 20 | 23 |
+| E5 첫 전송 시점부터 모든 작업 완료까지 | 31572 | 17111 | 16101 |
 
 모든 수치의 단위는 밀리초(ms)이며, 실제 LLM 공급자나 모델의 지연 시간이 아니라 스크립트 기반 모의 모델과 헤드리스 Chromium을 사용한 격리된 픽스처 환경에서 측정한 값이다. 단일 모드의 첫 콜드 측정에는 Python과 uv 환경, 머신 캐시가 아직 웜업되지 않은 상태가 반영되어 있으므로, 초기 콜드 지연 시간 차이 전부를 프론트 모드 구조 자체의 차이로 볼 수는 없다. 또한 Front 에이전트가 steer 입력을 빠르게 접수하더라도, 백그라운드 Task는 실행 중인 블로킹 도구가 끝난 뒤 다음 모델 요청 시점에 이르러서야 steer 메시지를 받는다. 사전 예열(prewarm)은 메시지를 보내기 전에 기동 작업을 먼저 처리하는 방식이므로, 준비 소요 시간과 전송 기준 지연 시간, 그리고 세션 생성 기준 총 소요 시간을 함께 기록한다. 즉 예열은 초기화 비용을 없애는 것이 아니라 발생 시점을 앞으로 당기는 방식이다.
 
@@ -161,3 +164,19 @@ flock --close /tmp/openside-heavy.lock nice -n 10 env OPENSIDE_RESPONSIVE_PREWAR
 ```bash
 flock --close /tmp/openside-heavy.lock nice -n 10 env OPENSIDE_QA_OUT=/tmp/openside-qa/polish/responsive/prewarm-focus tools/qa/headed-ux.sh sway stock --prewarm-only --daemon-bin "$PWD/target/debug/e2e-opensided"
 ```
+
+## F-9: 대화 메타데이터
+
+브라우저 카드에는 민감 정보가 마스킹된 페이지 제목과 최대 32×32 픽셀, 8 KiB로 정규화된 PNG 파비콘이 제공된다. 공유 아이콘 서비스는 소유한 탭 내부에서 쿠키나 리다이렉트 없이 동일 출처(same-origin) 아이콘을 먼저 추출한다. 데몬의 유일한 대체 경로는 Fetch 및 egress 정책을 준수하는 정확한 HTTPS 오리진의 `/favicon.ico`다. 읽기 스코프의 아이콘 제공은 캐시 전용으로 이루어지며, 캐시에 없거나 누락된 아이콘은 원격 브라우저 fetch 없이 이니셜 타일을 표시한다.
+
+티켓은 기존 `tool_call_id`를 통해 도구 호출과 연결된다. 정책 승인 요청 시 호출 세부 정보는 기술 상세 영역에 유지하면서, 확인된 액션·오리진·접근성 대상 라벨을 바탕으로 구성한 한 문장의 쉬운 영어 질문을 사람에게 제시한다. 세션 목록에는 브라우징, 사람 입력 대기, 완료 등 이벤트 기반의 실시간 활동 상태가 표시된다. 첫 어시스턴트 응답이 끝나면 모델이 URL 형식이 아닌 최대 6개 단어의 제목을 제안하며, 사용자가 직접 변경한 이름이 항상 우선한다. 런타임 오류는 차분한 기본 문구와 명시적인 재시도 가능 여부 플래그를 제공하고, 기술 진단 정보는 펼침 메뉴 뒤에 숨겨둔다. 재시도 시에는 새 메시지 ID를 부여해 마지막 사용자 메시지와 첨부파일을 다시 제출하며, 이미 처리된 승인은 절대 다시 실행하지 않는다.
+
+승인 질문에는 진입 시점에 검사한 최신 대상 요소에서 캡처한 접근성 라벨을 사용하며, 이전에 전달된 브라우저 스냅샷은 보조 수단으로만 사용한다. 이 설명 라벨은 정책 매칭이나 승인 바인딩에 영향을 주지 않는다. 실행 중이 아닌 세션을 텍스트 없이 CLI로 재개할 때도 마지막 태스크 마커 이후부터 확인된 로그 끝까지 메타데이터를 재생하고, 해당 커서를 저장한 뒤 다른 태스크 완료를 기다리지 않고 바로 반환한다.
+
+## 공유 대화 Card
+
+단일 표준 Card 스키마와 렌더러가 상품, 장소, 표, 주문 요약, 로그인, OTP, 결제 양식, 승인, 팀 제안, 핸드오프를 처리한다. 읽기 전용 결과는 고정된 캡처 합계와 "Show all"을 포함해 3개 행을 미리 보여준다. 대기 중인 요청은 48픽셀 버블에서 펼쳐지며, 최종 결과는 동일한 Card를 대체한다. CLI 출력은 이미지를 다운로드하지 않고도 이에 상응하는 타입화된 정보를 보존한다.
+
+프로바이더 선택은 실제로 캡처된 페이지 액션을 사용하며, 이후의 모든 로그인은 정확히 일치하는 해당 오리진에 바인딩된다. 계정 힌트는 마스킹된다. 결제 양식 응답은 검증된 최상위 문서나 프레임(top-document/frame) 필드에만 채워지며, 이후 결제를 최종 제출하려면 별도의 Confirm이 필요하다. 페이지 변경, 만료, 거부, 기기 간 경합이 발생해도 입력이나 승인을 재실행(replay)할 수 없다.
+
+제안된 teammate는 Hire Card가 필요하며, 사람이 직접 명시적으로 요청한 채용은 대기 중인 Hire Card를 생성하지 않는다. 명시적 채용 영수증에는 타입화된 Undo와 Retire가 노출되고, 승인된 제안 영수증에는 Retire만 노출된다. Handoff Card는 대화에 참여한 두 스레드 모두에 표시된다. chief 화면에서는 teammate 사이드바의 "Needs you" 배지와 접힌 어텐션 독(attention dock)이 단일 권한을 갖는 안전한 요청으로 연결된다. 새로고침, 재연결, 과거 로그 투영에서도 안정적인 식별자가 정확히 한 번만 유지된다. 수용 기준 검증에는 가상 자격 증명 및 결제 값, 스크립트 기반 프로바이더, 루프백 페이지만 사용한다.

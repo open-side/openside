@@ -1,12 +1,12 @@
 # 08. 하네스: Pydantic AI 사이드카 + 모델 자격증명 소스(선택적 omp broker)
 
-작성: 2026-10-11, 구현 후 갱신. 상태: **채택·구현됨** (사용자 결정, 2026-10-11). 에이전트 루프는 Pydantic AI(Python 사이드카)가 맡고, 모델 자격증명은 플러그인 소스(`omp-broker`(선택), `env`, `command`, `codex-cli`, `builtin`)에서 사이드카가 직접 읽는다. omp 를 에이전트 런타임으로 쓰는 안과 omp auth-gateway 경유안은 기각했다(§F). 실행 증거는 `docs/spikes/S-8`·`S-9`·`S-14`·`S-15`·`S-16`에 있다.
+Pydantic AI 사이드카 아키텍처를 채택했다. Models & accounts 제품 결정에 따라 프로바이더 키 저장을 전면 금지하던 이전 방침을 대체한다. 현재 지원하는 소스에는 Vault API 키와 외부에서 관리하는 Claude Code 및 Codex 구독 자격 증명이 포함된다. 아래에 기술된 과거 브로커 및 실시간 호출 결과는 기록으로 유지되며, 현재 자격 증명과 API 동작 방식은 `docs/specs/models-accounts.md`에 정의되어 있다.
 표기: 검증 = 이 머신에서 실제 실행, 문서 = 소스·문서로만 확인, `unverified` = 확인하지 못함.
 
 ## 1. 결정 요지
 - 에이전트 루프, 모델 호출, 보류 도구 재개, compaction 은 **Pydantic AI**(`pydantic-ai-slim 2.55.0`)와 **`pydantic-ai-harness`**(`0.55.0`) 위의 Python 사이드카(`agent/`, 패키지 `openside_agent`)가 맡는다. 데몬이 세션당 프로세스 1개를 띄운다.
 - Rust 데몬 `opensided` 는 세션(이벤트 소싱)·큐·정책·Vault·브라우저·티켓·푸시를 소유하고 **모든 툴을 실행**한다. 사이드카의 툴은 reverse RPC 로 데몬을 부르는 얇은 프록시다(docs/09, `docs/specs/sidecar-protocol.md`).
-- 모델 자격증명은 제공자별 소스 우선순위 목록(`config.toml` 의 `[credentials]`, Rust 는 내용을 해석하지 않고 사이드카·doctor 에 그대로 전달)으로 정한다. 기본 순서는 `anthropic` = `omp-broker`, `env`, `command` / `openai-codex` = `omp-broker`, `codex-cli` / 그 외 = `env`, `command`. openside 는 자격증명을 저장하지 않는다. 쓸 수 있는 소스가 없으면 fail-closed(`AuthUnavailable`)다.
+- 데몬이 프로바이더별로 순서가 지정된 명시적 계정 풀을 관리하며, 외부 요청을 시도할 때마다 유효한 비공개 자격 증명을 공급한다. 마이그레이션 시에는 현재 선택된 소스만 유지하며, 사람이 직접 계정을 추가한 경우에만 여러 소스 간 장애 전환(failover)을 허용한다. API 키와 관리 대상 구독 OAuth 상태는 Vault에 암호화하여 저장하고 갱신은 사이드카에서 결코 실행하지 않는다. 기본 사용자 CLI 홈은 읽기 전용으로 유지된다. `docs/specs/models-accounts.md`를 참고한다.
 - omp 는 `omp-broker` 소스를 고른 사용자에게만 필요한 **선택적** 의존이다. 기본 엔드포인트·토큰 파일 후보와 설정 키는 `agent/README.md` 에 있다.
 
 ## A. 최종안: 사이드카 직결 Provider (게이트웨이 비경유)
@@ -14,12 +14,12 @@
 Rust opensided ──(unix socket JSONL)── Python agent sidecar (Pydantic AI, 세션당 1 프로세스)
                                          ├ tools: 데몬 호스트 툴 프록시 (docs/09)
                                          └ models: OpenAICodexModel / AnthropicModel / …
-                                              └ Provider ← CredentialSource (omp-broker · env · command · codex-cli · builtin)
-                                                   └ omp-broker 선택 시: omp auth-broker 스냅샷(멀티 계정·refresh·사용량)을 읽음
-                                                   └ 업스트림(제공자)으로는 사이드카가 직접 요청·스트리밍
+                                              └ Provider ← fresh private daemon request lease
+Rust credential owner ← explicit provider pool (omp-broker · vault · env · command · claude-code · codex-cli · builtin)
+                                              └ sidecar streams directly to the upstream provider
 ```
 - `omp-broker` 소스는 broker 에서 **access token 만** 받는다(refresh token 은 broker 가 sentinel 로 가린다). 갱신은 broker 의 백그라운드 refresher(60초 주기, 만료 5분 전, 문서)가 한다.
-- 계정 등록, 로그인, 비활성화, 삭제는 `omp auth-broker`와 로테이션 서비스가 담당한다. openside는 스냅샷과 사용량을 읽고 범위 한정 레이트 리밋 차단(`POST /v1/credential/:id/block`)만 전송한다. 자격 증명을 업로드·갱신·비활성화·삭제하거나 저장하지는 않는다 (비활성화된 계정은 스냅샷에서 자동으로 빠진다).
+- 브로커 로그인과 갱신은 브로커가 전담한다. 로컬 관리 대상 구독 계정은 기존의 메모리 전용 보관 규칙을 의도적으로 대체한다. 즉 정식 토큰은 Vault에 암호화하여 저장하고, 데몬만 갱신을 수행하며, 비공개 CLI 자격 증명 파일은 리비전과 수정 시간(mtime)에 따라 반영하거나 가져온다. 계정을 삭제하면 관리 파일은 완전히 지워지지만 기본 사용자 홈은 절대 건드리지 않는다. 독자적인 OAuth 로그인 흐름이나 외부로의 리프레시 토큰 전달은 추가하지 않는다.
 - 사이드카가 제공자에 직접 스트리밍하므로 게이트웨이 `serve` 가 필요 없다(§F 의 stdio 스트리밍 제약 해소).
 
 ## B. 검증 결과 (이 머신, 실제 호출 — S-14)
@@ -39,9 +39,9 @@ Rust opensided ──(unix socket JSONL)── Python agent sidecar (Pydantic AI
 
 | 항목 | 초안 계획 | 구현 결과 |
 | --- | --- | --- |
-| 자격증명 소스 | `openside-providers` 패키지, `BrokerClient`(스냅샷 폴링 + SSE, 단일 비행 refresh), 제공자별 Provider | 별도 패키지 없이 `agent/src/openside_agent/providers/`. `CredentialSource` 플러그인 5종(`omp-broker`, `env`, `command`, `codex-cli`, `builtin`). `BrokerClient` 는 스냅샷 메모리 캐시(TTL 15초), 선택적 SSE(`credentials.omp_broker.sse`), 요청 타임아웃 10초. **refresh 는 broker 전담**: 사이드카는 만료·401 시 스냅샷을 다시 읽을 뿐 refresh 엔드포인트·OAuth 서버를 부르지 않는다 |
-| 계정 선택 | 세션 핀, `/v1/usage` 여유, 429 시 block 후 재시도, 전부 차단이면 `AuthUnavailable` | 구현됨. 활성 OAuth 계정 중 차단 계정 제외 → 사용량이 있으면 잔여 쿼터가 가장 큰 계정, 세션 핀 유지(Anthropic 핀은 1시간 유휴 시 해제), 429/`rate_limit` 시 `BrokerClient.block` 후 다른 계정으로 재시도. 핀은 `CredentialPins` JSON(provider/세션 키, credential id, 요청 시각만, 토큰·계정 식별자·이메일 없음)으로 사이드카 상태 스냅샷(`openside-agent-state/1`)에 실려 재개 시 복원. block·로테이션은 가상 broker 로만 테스트했고 실제 broker 대상은 `unverified` |
-| fail-closed (P-1) | 모두 차단이면 `AuthUnavailable`, 다른 소스 폴백 금지 | 확정. broker 소스가 선택됐고 토큰이 있는데 broker 에 닿지 못하거나 해당 제공자의 OAuth 계정이 모두 차단이면 `AuthUnavailable` — `env`·`command` 로 강등하지 않는다. broker 스냅샷에 제공자 자체가 없을 때, 또는 토큰 파일이 없어 broker 소스가 비활성일 때만 다음 소스로 넘어간다. 실행 중 broker 가 끊겨도 중간에 로컬 소스로 바꾸지 않으며, `AuthUnavailable` 은 `FallbackModel` 의 폴백 조건이 아니다. 프로토콜에서는 `error{code:"auth_unavailable", fatal:true}` → 데몬이 `runtime.error{code:"auth_unavailable"}` + `session.stopped` 로 처리(`docs/specs/sidecar-protocol.md` §3) |
+| 자격 증명 계정 | 데몬 주관 풀 및 갱신 | 계정 메타데이터는 7가지 소스 종류를 지원하며, API 키와 CLI 구독은 라벨이 지정된 항목을 여러 개 둘 수 있다. 데몬은 요청마다 비공개 접근 자격 증명을 확인하고 어피니티/사용량/차단을 주관하며, 사람이 명시한 풀 내에서만 장애 조치를 허용한다. Python 진단 정보에는 자격 증명을 포함하지 않으며, 리프레시 토큰은 정본 소유자에게만 유지된다. |
+| 계정 선택 | 영속 세션 어피니티 및 귀속 사용량 | 명시적 전역/에이전트 제한 내에서 데몬이 고정/선호 계정을 관리하며, 분류된 인증/속도/할당량/정책 결과에 따라 목록에 등록된 적격 형제 계정만 로테이션한다. 사용량 초기화/예약 정책이 재진입 여부를 제어하며, 확인되지 않은 초기화 시점은 미정 상태로 유지한다. 사이드카 스냅샷에는 자격 증명 고정값을 두지 않는다. 집중적인 데몬/SDK 모의 경계 테스트로 정책을 검증하며, 실서버 브로커 연동을 전제하지 않는다. |
+| Fail-closed (P-1) | 풀 소진/불가 시 자격 증명 거부 | 마이그레이션 시 선택한 소스만 유지한다. 브로커 장애가 발생해도 목록에 없는 로컬 소스를 임의로 끌어오지 않으며, 이종 소스 간 장애 조치는 사전에 사람이 직접 소속을 지정해야만 허용된다. AuthUnavailable 상태가 모델 fallback 허용을 의미하지는 않는다. 이후의 모든 아웃바운드 시도는 최신 자격 증명을 새로 조회하므로, warm 상태의 SDK 클라이언트를 재시작하지 않아도 계정 비활성화/삭제/교체가 즉시 적용된다. |
 | Codex refresh (S-16) | provider 가 스스로 refresh 하면 `save()` 예외로 발견 | **방식 변경.** 기본 `OpenAICodexProvider(credential_source=…)` 는 sentinel 을 일반 refresh token 으로 보고 OAuth 요청을 보냈다(`oauth-hits=1`, `sentinel-submitted=True`; `save()` 예외는 요청이 나간 뒤라 늦다). `OpenAICodexProvider(openai_client=AsyncOpenAI(http_client=<앱 소유 httpx Auth>))` 로 provider 의 refresh 경로를 끄고, 만료·401 시 소스(broker 스냅샷)를 재조회한다. 검증(MockTransport, 네트워크 없음): `broker 401 source rotated: outcomes=200 loads=2 saves=0 oauth-hits=0`, 동시 401 은 단일 비행(`oauth-hits=0`) |
 | Anthropic 셰이핑 | 설정 가능한 버전, `*_too_old` 시 1회 재시도 | 구현됨(`providers/anthropic.py`). 헤더 3종 + 첫 시스템 프롬프트 문장. 기본 버전 `2.1.280`, 재정의는 `OPENSIDE_CLAUDE_CODE_VERSION` 또는 `credentials.anthropic.claude_code_version`. `claude_code_version_too_old` 응답이면 요구 버전을 채택하고 요청당 1회 재시도 |
 | 모델 폴백 | `FallbackModel` 체인 | 구현됨(`models.fallback`). 모델 ID 는 설정값 `provider:model` 이고 코드에 하드코딩하지 않는다(미설정이면 세션 생성이 `model_not_configured`, D5) |

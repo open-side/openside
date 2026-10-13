@@ -1,0 +1,66 @@
+/* Requests from paired devices, floated above the app on the computer that runs openside. */
+.access-dock {
+  position: fixed;
+  right: 16px;
+  bottom: max(env(safe-area-inset-bottom), 16px);
+  z-index: 40;
+  display: grid;
+  gap: 8px;
+  width: min(380px, calc(100vw - 32px));
+}
+.access-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 14px 14px 12px;
+  border-radius: var(--radius-2xl);
+  animation: access-in var(--normal) var(--ease);
+}
+@keyframes access-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .access-card {
+    animation: none;
+  }
+}
+.access-card-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.access-card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 0.9375rem;
+}
+.access-card-copy > span {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.access-card-copy > .access-card-error {
+  color: var(--danger);
+}
+.access-card-actions {
+  grid-column: 2;
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+@media (max-width: 700px) {
+  .access-dock {
+    right: 16px;
+    left: 16px;
+    width: auto;
+    bottom: max(env(safe-area-inset-bottom), 12px);
+  }
+}

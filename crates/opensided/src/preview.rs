@@ -32,12 +32,14 @@ const SIZE: (u32, u32) = (720, 450);
 struct Item {
     message: PreviewServerMessage,
     generation: u64,
+    capture: Option<Arc<Screencast>>,
 }
 impl Item {
     fn control(message: PreviewServerMessage) -> Arc<Self> {
         Arc::new(Self {
             message,
             generation: 0,
+            capture: None,
         })
     }
 }
@@ -181,7 +183,7 @@ pub(crate) async fn capture_thumbnail(
     {
         return None;
     }
-    let browser = s.registry.browser.session_browser(session).await?;
+    let browser = s.registry.browser.tab_browser(session, tab).await?;
     let document = browser.document_lifetime_id(tab).await.ok()?;
     let (generation, tainted) = s.previews.generation(tab);
     if tainted {
@@ -262,7 +264,7 @@ pub(crate) async fn thumbnail(
     let browser = s
         .registry
         .browser
-        .session_browser(&session)
+        .tab_browser(&session, &image.0)
         .await
         .ok_or_else(HttpError::not_found)?;
     if s.registry.browser.tab_tainted(&image.0).await
@@ -435,6 +437,7 @@ async fn produce(s: Shared, session: SessionId, feed: Arc<Feed>) {
     let mut capture: Option<Capture> = None;
     let mut check = tokio::time::interval(INTERVAL);
     check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Redirects can replace a capture faster than the cadence; only consuming a frame advances it.
     let mut next_frame = Instant::now() + INTERVAL;
     loop {
         if feed.end.lock().is_some() {
@@ -470,14 +473,16 @@ async fn produce(s: Shared, session: SessionId, feed: Arc<Feed>) {
                     Some(PreviewServerMessage::Withheld { code: "screenshot_unavailable_after_secret_fill".into(), tab_id: tab.clone() })
                 } else { None };
                 if let Some(status) = status { capture = None; feed.publish(Item::control(status)); continue; }
+                // Old Chromium drops static repaints while its ACK credits are exhausted.
+                // A new document must not inherit that old capture's frames or credits.
                 if capture.as_ref().is_some_and(|capture| capture.tab == tab && capture.generation == generation
+                    && capture.cast.document_is_current()
                     && s.previews.captures.lock().get(&(session.clone(), tab.clone())).is_some_and(|cast| Arc::ptr_eq(cast, &capture.cast))) { continue; }
                 capture = None;
                 if let Ok(cast) = browser.screencast_scaled(session.as_str(), &tab, 40, SIZE).await {
                     let cast = Arc::new(cast);
                     s.previews.captures.lock().insert((session.clone(), tab.clone()), Arc::clone(&cast));
                     capture = Some(Capture { session: session.clone(), tab, generation, cast, registry: Arc::clone(&s.previews) });
-                    next_frame = Instant::now() + INTERVAL;
                 } else { feed.publish(Item::control(PreviewServerMessage::NoTab)); }
             }
             frame = async {
@@ -486,8 +491,8 @@ async fn produce(s: Shared, session: SessionId, feed: Arc<Feed>) {
             } => {
                 let Some(current) = capture.as_ref() else { continue; };
                 current.cast.ack(&frame);
-                if !s.registry.browser.tab_tainted(&current.tab).await && !paused(&s, &session, &current.tab).await {
-                    feed.publish(Arc::new(Item { generation: current.generation, message: PreviewServerMessage::Frame {
+                if current.cast.document_is_current() && !s.registry.browser.tab_tainted(&current.tab).await && !paused(&s, &session, &current.tab).await {
+                    feed.publish(Arc::new(Item { generation: current.generation, capture: Some(Arc::clone(&current.cast)), message: PreviewServerMessage::Frame {
                         data: frame.data, width: SIZE.0, height: SIZE.1, tab_id: current.tab.clone(),
                     } }));
                 }
@@ -539,7 +544,11 @@ async fn admit(
             let generations = s.previews.generations.lock();
             if !generations.get(tab_id).is_some_and(|generation| {
                 generation.value == item.generation && !generation.tainted
-            }) || feed.end.lock().is_some()
+            }) || !item
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.document_is_current())
+                || feed.end.lock().is_some()
                 || device
                     .as_deref()
                     .is_some_and(|device| s.remote.is_revoked(device))

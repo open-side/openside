@@ -135,6 +135,7 @@ fn result<'a>(events: &'a [Event], call: &str) -> (&'a Value, bool) {
         .iter()
         .find_map(|event| match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error,
@@ -242,6 +243,7 @@ async fn browser_sigkill_during_active_task_recovers_without_resubmitting_or_res
         let event = stream.next().await;
         let opened = match &event.kind {
             EventKind::ToolEnded {
+                card: _,
                 tool_call_id,
                 result,
                 is_error: false,

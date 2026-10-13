@@ -158,6 +158,9 @@ pub(crate) async fn execute<W: Write>(
             if json {
                 return emit(stdout, &list);
             }
+            if let Some(ui) = crate::ui::pretty() {
+                return write!(stdout, "{}", crate::ui::skills(ui, &list)).map_err(output_error);
+            }
             for skill in &list.skills {
                 writeln!(
                     stdout,

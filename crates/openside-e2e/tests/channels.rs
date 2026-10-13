@@ -35,6 +35,8 @@ struct Rig {
     harness: Harness,
     proxy: RecordingProxy,
     token_file: PathBuf,
+    agent_id: String,
+    home_session_id: String,
 }
 
 impl Rig {
@@ -61,6 +63,23 @@ impl Rig {
             harness.replace_script(&script);
         }
         harness.launch().await;
+        // The chief delegates acting tools; channel round trips exercise an assigned teammate.
+        let agent = harness
+            .request(
+                "POST",
+                "/v1/agents",
+                Some(json!({
+                    "name": "Channel worker",
+                    "persona": {
+                        "role": "Chat inbox assistant",
+                        "responsibilities": ["Handle messages received by this channel"]
+                    }
+                })),
+            )
+            .await;
+        assert_eq!(agent.status, 201, "teammate fixture: {}", agent.body);
+        let agent_id = agent.body["id"].as_str().unwrap().to_owned();
+        let home_session_id = agent.body["home_session_id"].as_str().unwrap().to_owned();
         let port = std::fs::read_to_string(harness.data_dir.join("opensided.port")).unwrap();
         let upstream: SocketAddr = format!("127.0.0.1:{}", port.trim()).parse().unwrap();
         let proxy = RecordingProxy::start(upstream).await;
@@ -89,6 +108,8 @@ impl Rig {
             harness,
             proxy,
             token_file,
+            agent_id,
+            home_session_id,
         })
     }
 
@@ -106,7 +127,11 @@ impl Rig {
         );
         let path = dir.join("bot.toml");
         std::fs::write(&path, config).unwrap();
-        openside_config::load(Some(&path)).unwrap_or_else(|e| panic!("{e}"))
+        let mut loaded = openside_config::load(Some(&path)).unwrap_or_else(|e| panic!("{e}"));
+        for account in &mut loaded.config.channels.accounts {
+            account.agent_id = Some(self.agent_id.clone());
+        }
+        loaded
     }
 
     async fn bot(&self, top: &str, tables: &str, env: &[(&str, &str)]) -> Bot {
@@ -130,7 +155,16 @@ impl Rig {
         let response = self.harness.request("GET", "/v1/sessions", None).await;
         response.body["sessions"]
             .as_array()
-            .cloned()
+            .map(|sessions| {
+                sessions
+                    .iter()
+                    .filter(|session| {
+                        session["agent_id"].as_str() == Some(self.agent_id.as_str())
+                            && session["id"].as_str() != Some(self.home_session_id.as_str())
+                    })
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -168,8 +202,17 @@ impl Rig {
         let mut texts = Vec::new();
         loop {
             let event = stream.next().await;
-            if let EventKind::MessageQueued { text, .. } = event.kind {
-                texts.push(text);
+            if let EventKind::MessageQueued {
+                text,
+                author_kind,
+                from_agent,
+                ..
+            } = event.kind
+            {
+                if author_kind == openside_proto::MessageAuthorKind::Person {
+                    assert_eq!(from_agent, None);
+                    texts.push(text);
+                }
             }
             if event.seq >= last {
                 return texts;
@@ -960,7 +1003,10 @@ async fn check_validates_without_serving_and_works_next_to_a_running_bot() {
     let error = openside_channels::check(&loaded, &lookup)
         .await
         .expect_err("bad token must fail");
-    assert!(error.to_string().contains("daemon check failed"), "{error}");
+    assert!(
+        matches!(error, openside_channels::ChannelError::Daemon { status: 401, ref code } if code == "unauthorized"),
+        "{error}"
+    );
     // A missing secret fails too.
     let missing = openside_channels::check(&loaded, &|_: &str| None)
         .await

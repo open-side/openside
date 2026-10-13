@@ -8,10 +8,10 @@ import { idbStore, OUTBOX_STORE, type RecordStore } from "./idb";
  */
 export interface OutboxEntry {
   message_id: string;
-  /** `null` for a new chat: the conversation is created when the entry is delivered. */
+  /** `null` for an entry queued on the former new-chat screen: delivery creates its conversation. */
   session_id: string | null;
-  /** Only meaningful while `session_id` is `null`. */
-  create?: CreateSessionRequest;
+  /** Only meaningful while `session_id` is `null`; written before conversations had owners, so `agent_id` may be absent. */
+  create?: Partial<CreateSessionRequest>;
   text: string;
   attachments: AttachmentUpload[];
   queued_at: number;
@@ -84,7 +84,7 @@ export function createOutbox(store: RecordStore<OutboxEntry>, channel?: Broadcas
     let target = entry.session_id;
     try {
       if (target === null) {
-        const session = await client.createSession(entry.create ?? {});
+        const session = await client.createSession({ agent_id: null, ...entry.create });
         target = session.id;
         // Remember the conversation before submitting: a lost response must not create a second one.
         await save({ ...entry, session_id: target });

@@ -72,6 +72,16 @@ impl<M: Messenger> Core<M> {
     pub async fn resume_all(self: &Arc<Self>) {
         for state in self.store.sessions(M::PLATFORM) {
             if let Some(session) = &state.session_id {
+                // Rebinding must not replay another owner's replies before the next inbound.
+                if self.daemon.has_owner()
+                    && !self
+                        .daemon
+                        .session(session)
+                        .await
+                        .is_ok_and(|session| self.daemon.owns_session(&session))
+                {
+                    continue;
+                }
                 self.ensure_watcher(&state.key, session);
             }
         }
@@ -191,9 +201,13 @@ impl<M: Messenger> Core<M> {
                 self.finish(thread, reply).await;
                 durable = true;
             }
-            EventKind::RuntimeError { code, message } => {
-                self.say(thread, &format!("Runtime error {code}: {message}"))
-                    .await;
+            EventKind::RuntimeError { user_message, .. } => {
+                let text = if user_message.is_empty() {
+                    "Something went wrong on my side."
+                } else {
+                    &user_message
+                };
+                self.say(thread, text).await;
                 durable = true;
             }
             EventKind::TicketOpened { ticket } => {
@@ -210,7 +224,7 @@ impl<M: Messenger> Core<M> {
                     .await;
                 durable = true;
             }
-            EventKind::TicketExpired { ticket_id } => {
+            EventKind::TicketExpired { ticket_id, .. } => {
                 self.settle_card(thread, ticket_id.as_str(), "Expired")
                     .await;
                 durable = true;

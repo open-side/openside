@@ -1,0 +1,207 @@
+/* Connections: cards reuse the Workspace list pattern in pages.css; only what is specific to a signed-in site lives here. */
+
+.site-mark {
+  overflow: hidden;
+}
+.site-mark--36 {
+  width: 36px;
+  height: 36px;
+}
+.site-mark--24 {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+.site-mark img {
+  display: block;
+  border-radius: var(--radius-xs);
+  object-fit: contain;
+}
+.site-mark-letter {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.conn-unknown {
+  font-style: italic;
+}
+.conn-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.conn-note {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--text);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.conn-agents {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  min-height: 36px;
+  margin-top: 8px;
+  padding: 4px 10px 4px 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+.conn-agents:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.conn-agent-stack {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.conn-agent {
+  position: relative;
+  display: inline-flex;
+  margin-left: -6px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--canvas, transparent);
+}
+.conn-agent:first-child {
+  margin-left: 0;
+}
+.conn-agent::after {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--canvas, #fff);
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+}
+.conn-agent[data-access="allowed"]::after {
+  background: var(--success);
+}
+.conn-agent[data-access="ask"]::after {
+  background: var(--warn);
+}
+.conn-agent[data-access="denied"]::after {
+  background: var(--danger);
+}
+.conn-agent[data-access="denied"] .avatar {
+  opacity: 0.45;
+}
+.conn-agent-more {
+  margin-left: 6px;
+  font-size: 0.75rem;
+}
+.conn-agents-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conn-candidates .row-disclosure {
+  align-self: flex-start;
+  margin-bottom: 0;
+}
+
+.conn-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.conn-access-list {
+  margin-bottom: 4px;
+}
+.conn-access-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 16px;
+}
+.conn-access-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conn-access-identity {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+.conn-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 0.875rem;
+}
+.conn-check input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
+.conn-costs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 12px 14px 12px 30px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 700px) {
+  .conn-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .conn-agents {
+    min-height: 44px;
+  }
+  [data-connection] .row-menu-trigger {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

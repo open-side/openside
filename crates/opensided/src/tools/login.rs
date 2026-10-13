@@ -225,26 +225,6 @@ const siteName = () => {
     const title = clean(document.title, 60);
     return meta('og:site_name') || meta('application-name') || (title.length <= 40 ? title : '') || location.hostname;
 };
-const siteIcon = async () => {
-    try {
-        const link = [...document.querySelectorAll('link[rel~=icon]')].map((l) => new URL(l.getAttribute('href') || '', location.href))
-            .find((u) => u.origin === location.origin);
-        const url = link || new URL('/favicon.ico', location.origin);
-        const abort = new AbortController();
-        const timer = setTimeout(() => abort.abort(), 1500);
-        try {
-            const response = await fetch(url.href, {credentials: 'omit', signal: abort.signal, cache: 'force-cache'});
-            if (!response.ok || new URL(response.url).origin !== location.origin) return null;
-            const mime = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-            if (!['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) return null;
-            const bytes = new Uint8Array(await response.arrayBuffer());
-            if (!bytes.length || bytes.length > 8192) return null;
-            let binary = '';
-            for (const b of bytes) binary += String.fromCharCode(b);
-            return `data:${mime};base64,${btoa(binary)}`;
-        } finally { clearTimeout(timer); }
-    } catch (_) { return null; }
-};
 "#;
 
 /// Finds the login form; resolves to `{data, nodes}` for [`Browser::locate`].
@@ -273,7 +253,7 @@ const ac = (el, fallback) => {
 const required = (el) => el.required || el.getAttribute('aria-required') === 'true';
 const placeholder = (el) => clean(el.getAttribute('placeholder'), 80) || null;
 if (identifier) fields.push({kind: 'identifier', label: fieldLabel(identifier) || 'Username', placeholder: placeholder(identifier),
-    autocomplete: ac(identifier, 'username'), masked: false, required: true, node: pin(identifier)});
+    autocomplete: identifier.type === 'email' ? 'email' : identifier.type === 'tel' ? 'tel' : ac(identifier, 'username'), masked: false, required: true, node: pin(identifier)});
 if (password) fields.push({kind: 'password', label: fieldLabel(password) || 'Password', placeholder: placeholder(password),
     autocomplete: 'current-password', masked: true, required: true, node: pin(password)});
 const KEEP = /keep|stay|remember|signed in|로그인 ?상태|자동 ?로그인|기억/i;
@@ -320,7 +300,7 @@ for (const el of document.querySelectorAll('a[href],button,[role=button],[role=t
     alternatives.push({label: label || provider || kind, kind, provider, node: pin(el)});
 }
 const errors = alerts();
-const data = {found: true, site_name: siteName(), icon: await siteIcon(), fields, alternatives,
+const data = {found: true, site_name: siteName(), fields, alternatives,
     error_text: errors.length ? errors[0] : null,
     submit: submit ? {label: nameOf(submit) || 'Log in', node: pin(submit)} : null};
 return {data, nodes};
@@ -329,16 +309,16 @@ return {data, nodes};
 /// Finds the page's choice; resolves to `{data, nodes}` for [`Browser::locate`].
 const CHOICE_JS: &str = r#"
 const found = findChoice();
-const site = {site_name: siteName(), icon: await siteIcon()};
+const site = {site_name: siteName()};
 if (!found) return {data: Object.assign({found: false}, site), nodes: []};
 return {data: Object.assign({found: true, question: found.question,
     options: found.options.map((o) => ({label: o.label, description: o.description || null}))}, site),
     nodes: found.options.map((o) => o.el)};
 "#;
 
-/// Only the page's name and icon, for a choice built from the model's refs.
+/// Only the page's name, for a choice built from the model's refs.
 const SITE_JS: &str = r#"
-return {data: {site_name: siteName(), icon: await siteIcon()}, nodes: []};
+return {data: {site_name: siteName()}, nodes: []};
 "#;
 
 /// Classifies the page after a submit or click. `login` is a sign-in form (password, or an
@@ -382,7 +362,7 @@ for (const el of scope.querySelectorAll('*')) {
     const t = clean(el.innerText, 8);
     if (/^\d{1,3}$/.test(t) && parseFloat(getComputedStyle(el).fontSize) >= 24) { number = t; break; }
 }
-return {data: {found: true, site_name: siteName(), icon: await siteIcon(),
+return {data: {found: true, site_name: siteName(),
     message: clean([heading, line].filter(Boolean).join(' — '), 240), number}, nodes: []};
 "#;
 
@@ -546,8 +526,6 @@ struct FoundForm {
     #[serde(default)]
     site_name: String,
     #[serde(default)]
-    icon: Option<String>,
-    #[serde(default)]
     fields: Vec<FoundField>,
     #[serde(default)]
     alternatives: Vec<FoundAlternative>,
@@ -587,16 +565,6 @@ impl Form {
     }
 }
 
-fn icon(value: Option<String>) -> Option<String> {
-    // The page script built it; only a small data URL of a raster image type is passed on.
-    value.filter(|icon| {
-        icon.len() <= 12 * 1024
-            && ["png", "x-icon", "vnd.microsoft.icon", "jpeg", "gif", "webp"]
-                .iter()
-                .any(|kind| icon.starts_with(&format!("data:image/{kind};base64,")))
-    })
-}
-
 /// A built login ticket, the pins by ticket id, and the pinned nodes by role.
 type BuiltLogin = (TicketLogin, Vec<(String, NodeHandle)>, Form);
 
@@ -622,6 +590,7 @@ fn build_login(found: FoundForm, nodes: &[NodeHandle], origin: &str) -> Option<B
             autocomplete: field.autocomplete.filter(|token| {
                 ["username", "email", "tel", "current-password"].contains(&token.as_str())
             }),
+            suggestions: Vec::new(),
             masked: field.masked,
             required: field.required,
         });
@@ -660,7 +629,7 @@ fn build_login(found: FoundForm, nodes: &[NodeHandle], origin: &str) -> Option<B
         TicketLogin {
             origin: origin.to_owned(),
             site_name,
-            icon: icon(found.icon),
+            icon: None,
             fields,
             alternatives,
             accounts: None,
@@ -776,12 +745,18 @@ impl DaemonTool for RequestLogin {
         json!({"tab_id":args["tab_id"],"reason":args["reason"]})
     }
     fn call<'a>(&'a self, args: Value, ctx: &'a ToolEnv) -> BoxFuture<'a, ToolExec> {
+        Self::call_with_vault(args, ctx, true)
+    }
+}
+
+impl RequestLogin {
+    fn call_with_vault(args: Value, ctx: &ToolEnv, allow_vault: bool) -> BoxFuture<'_, ToolExec> {
         Box::pin(async move {
             let result = async {
                 let args: LoginRequestArgs = parse(&args)?;
                 let origin = approved_origin(ctx)?;
                 let controller = &ctx.shared.registry.browser;
-                let browser = controller.for_session(&ctx.shared, &ctx.session).await?;
+                let browser = controller.for_tab(&ctx.shared, &ctx.session, &args.tab_id).await?;
                 let owner = ctx.session.as_str();
                 let tab = args.tab_id.as_str();
                 if Controller::origin(&browser, &ctx.session, tab).await? != origin {
@@ -801,6 +776,16 @@ impl DaemonTool for RequestLogin {
                 }
                 let (mut login, pins, form) = build_login(found, &nodes, &origin)
                     .ok_or_else(|| ToolError("Login form could not be read".into()))?;
+                login.icon = crate::favicons::for_tab(&browser, owner, tab, &origin).await;
+                let root = ctx.shared.config.data_dir.clone();
+                let addresses = tokio::task::spawn_blocking(move || crate::import_delivery::source_addresses(&root))
+                    .await.map_err(|_| ToolError("Imported address suggestions could not be read".into()))?
+                    .map_err(|_| ToolError("Imported address suggestions could not be read".into()))?;
+                for field in &mut login.fields {
+                    if !field.masked {
+                        field.suggestions = super::imports::address_suggestions(&addresses, field.autocomplete.as_deref().unwrap_or_default());
+                    }
+                }
                 let (accounts, refusal) = {
                     let guard = ctx.shared.registry.vault.vault.lock().await;
                     match guard.as_ref() {
@@ -815,7 +800,8 @@ impl DaemonTool for RequestLogin {
                     .into_iter()
                     .filter(|account| account.effective_policy != AccessPolicy::Never)
                     .collect();
-                if let [account] = usable.as_slice() {
+                let _ = crate::connections::begin_login(&ctx.shared, &browser, &ctx.session, tab, &origin).await;
+                if let [account] = if allow_vault { usable.as_slice() } else { &[] } {
                     let audit = AuditContext {
                         who: "opensided",
                         session_id: Some(owner),
@@ -835,10 +821,14 @@ impl DaemonTool for RequestLogin {
                     .await?;
                     let _ = controller.persist(&ctx.shared).await;
                     return Ok(match outcome {
-                        LoginOutcome::Filled => done(with_next(
-                            json!({"status":"filled_from_vault","item_id":account.site}),
-                            next_step(&browser, owner, tab, before.as_deref()).await,
-                        )),
+                        LoginOutcome::Filled => {
+                            crate::connections::remember_login_item(&ctx.shared, &ctx.session, tab, &account.site).await;
+                            let next = next_step(&browser, owner, tab, before.as_deref()).await;
+                            if next.0 == Next::Done {
+                                let _ = crate::connections::complete_login(&ctx.shared, &browser, &ctx.session, tab, openside_proto::ConnectionSource::Vault, Some(&account.site)).await;
+                            }
+                            done(with_next(json!({"status":"filled_from_vault","item_id":account.site}), next))
+                        },
                         LoginOutcome::Denied(denial) => ToolExec::Denied {
                             reason: format!("vault_{}", denial.wire()),
                             hint: Some("The vault refused the saved login for this page; the refusal is audited.".into()),
@@ -870,24 +860,22 @@ impl DaemonTool for RequestLogin {
                     instructions.push_str("\nWhy this was requested: ");
                     instructions.push_str(&reason);
                 }
-                Ok(ToolExec::Defer(Box::new(TicketRequest {
-                    kind: TicketKind::Login,
-                    summary,
-                    instructions: Some(instructions),
-                    options: Vec::new(),
-                    target: Some(TicketTarget {
-                        tab_id: Some(args.tab_id),
-                        origin: Some(origin),
-                        field_ref: None,
-                    }),
-                    resume_when: None,
-                    otp: None,
-                    otp_register: None,
-                    login: Some(login),
-                    choice: None,
-                    approval: None,
-                    pins,
-                })))
+                Ok(ToolExec::Defer(Box::new(TicketRequest { hire: None, form: None, kind: TicketKind::Login,
+                summary,
+                instructions: Some(instructions),
+                options: Vec::new(),
+                target: Some(TicketTarget {
+                    tab_id: Some(args.tab_id),
+                    origin: Some(origin),
+                    field_ref: None,
+                }),
+                resume_when: None,
+                otp: None,
+                otp_register: None,
+                login: Some(login),
+                choice: None,
+                approval: None,
+                pins, })))
             }
             .await;
             result.unwrap_or_else(|error: ToolError| ToolExec::Denied {
@@ -895,6 +883,82 @@ impl DaemonTool for RequestLogin {
                 hint: None,
             })
         })
+    }
+}
+
+pub(crate) async fn relogin_continuation(ctx: &ToolEnv, tab: &str, next: &str) -> ToolExec {
+    let detected = if matches!(next, "unknown" | "error") {
+        match ctx
+            .shared
+            .registry
+            .browser
+            .for_tab(&ctx.shared, &ctx.session, tab)
+            .await
+        {
+            Ok(browser) => browser
+                .evaluate_isolated(ctx.session.as_str(), tab, &sync_script(NEXT_STEP_JS))
+                .await
+                .ok()
+                .and_then(|value| value["step"].as_str().map(str::to_owned)),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let outcome = match detected.as_deref().unwrap_or(next) {
+        "login" | "error" => RequestLogin::call_with_vault(json!({"tab_id":tab}), ctx, false).await,
+        "push_approval" => WaitForApproval.call(json!({"tab_id":tab}), ctx).await,
+        "otp" => {
+            let found = async {
+                let browser = ctx.shared.registry.browser.for_tab(&ctx.shared, &ctx.session, tab).await?;
+                let owner = ctx.session.as_str();
+                let snapshot = browser.snapshot(tab).await.map_err(browser_error)?;
+                let probe = format!("function() {{ {COMMON_JS}\nreturn otpField(this) || (usable(this) && this.maxLength === 1 && [...document.querySelectorAll('input')].filter((el) => usable(el) && el.maxLength === 1).length >= 4); }}");
+                for node in &snapshot.nodes {
+                    if !matches!(node.role.as_str(), "textbox" | "spinbutton") {
+                        continue;
+                    }
+                    let Some(reference) = &node.reference else { continue; };
+                    let pinned = browser.resolve_ref(owner, tab, reference).await.map_err(browser_error)?;
+                    if browser.inspect_node(owner, tab, &pinned, &probe).await.map_err(browser_error)? == Value::Bool(true) {
+                        return Ok::<_, ToolError>(reference.clone());
+                    }
+                }
+                Err(ToolError("otp_field_not_found".into()))
+            }.await;
+            match found {
+                Ok(field) => {
+                    super::otp::RequestOtp::call_with_vault(
+                        json!({"tab_id":tab,"field_ref":field}),
+                        ctx,
+                        false,
+                    )
+                    .await
+                }
+                Err(error) => ToolExec::Denied {
+                    reason: error.0,
+                    hint: None,
+                },
+            }
+        }
+        _ => ToolExec::Denied {
+            reason: "connection_takeover_required".into(),
+            hint: None,
+        },
+    };
+    match outcome {
+        ToolExec::Denied { ref reason, .. }
+            if matches!(
+                reason.as_str(),
+                "otp_field_not_found" | "login_form_not_found"
+            ) =>
+        {
+            ToolExec::Denied {
+                reason: "connection_takeover_required".into(),
+                hint: None,
+            }
+        }
+        outcome => outcome,
     }
 }
 
@@ -926,7 +990,7 @@ async fn browse_action(ctx: &ToolEnv, tab: &str) -> std::result::Result<Vec<Acti
         .shared
         .registry
         .browser
-        .for_session(&ctx.shared, &ctx.session)
+        .for_tab(&ctx.shared, &ctx.session, tab)
         .await?;
     let origin = Controller::origin(&browser, &ctx.session, tab).await?;
     Ok(vec![Action::new(Capability::Browse, origin)])
@@ -943,8 +1007,6 @@ struct FoundChoice {
     found: bool,
     #[serde(default)]
     site_name: String,
-    #[serde(default)]
-    icon: Option<String>,
     #[serde(default)]
     question: String,
     #[serde(default)]
@@ -1004,7 +1066,7 @@ impl DaemonTool for RequestChoice {
                     .find(|action| action.capability == Capability::Browse)
                     .map(|action| action.target.clone())
                     .ok_or_else(|| ToolError("Missing approved tool target".into()))?;
-                let browser = ctx.shared.registry.browser.for_session(&ctx.shared, &ctx.session).await?;
+                let browser = ctx.shared.registry.browser.for_tab(&ctx.shared, &ctx.session, &args.tab_id).await?;
                 let owner = ctx.session.as_str();
                 let tab = args.tab_id.as_str();
                 if Controller::origin(&browser, &ctx.session, tab).await? != origin {
@@ -1057,7 +1119,6 @@ impl DaemonTool for RequestChoice {
                             FoundChoice {
                                 found: true,
                                 site_name: data["site_name"].as_str().unwrap_or_default().to_owned(),
-                                icon: data["icon"].as_str().map(str::to_owned),
                                 question: String::new(),
                                 options: found,
                             },
@@ -1092,36 +1153,35 @@ impl DaemonTool for RequestChoice {
                     .filter(|text| !text.trim().is_empty())
                     .or(args.question.filter(|text| !text.trim().is_empty()))
                     .unwrap_or_else(|| "Choose an option".into());
+                let site_icon = crate::favicons::for_tab(&browser, owner, tab, &origin).await;
                 let site_name = if found.site_name.trim().is_empty() {
                     origin.clone()
                 } else {
                     found.site_name
                 };
-                Ok(ToolExec::Defer(Box::new(TicketRequest {
-                    kind: TicketKind::Choice,
-                    summary: question.clone(),
-                    instructions: None,
-                    options: Vec::new(),
-                    target: Some(TicketTarget {
-                        tab_id: Some(args.tab_id),
-                        origin: Some(origin.clone()),
-                        field_ref: None,
-                    }),
-                    resume_when: None,
-                    otp: None,
-                    otp_register: None,
-                    login: None,
-                    choice: Some(TicketChoice {
-                        origin,
-                        site_name,
-                        icon: icon(found.icon),
-                        question,
-                        options,
-                        multiple: false,
-                    }),
-                    approval: None,
-                    pins,
-                })))
+                Ok(ToolExec::Defer(Box::new(TicketRequest { hire: None, form: None, kind: TicketKind::Choice,
+                summary: question.clone(),
+                instructions: None,
+                options: Vec::new(),
+                target: Some(TicketTarget {
+                    tab_id: Some(args.tab_id),
+                    origin: Some(origin.clone()),
+                    field_ref: None,
+                }),
+                resume_when: None,
+                otp: None,
+                otp_register: None,
+                login: None,
+                choice: Some(TicketChoice {
+                    origin,
+                    site_name,
+                    icon: site_icon,
+                    question,
+                    options,
+                    multiple: false,
+                }),
+                approval: None,
+                pins, })))
             }
             .await;
             result.unwrap_or_else(|error: ToolError| ToolExec::Denied {
@@ -1144,8 +1204,6 @@ struct FoundApproval {
     found: bool,
     #[serde(default)]
     site_name: String,
-    #[serde(default)]
-    icon: Option<String>,
     #[serde(default)]
     message: String,
     #[serde(default)]
@@ -1194,7 +1252,7 @@ impl DaemonTool for WaitForApproval {
                     .find(|action| action.capability == Capability::Browse)
                     .map(|action| action.target.clone())
                     .ok_or_else(|| ToolError("Missing approved tool target".into()))?;
-                let browser = ctx.shared.registry.browser.for_session(&ctx.shared, &ctx.session).await?;
+                let browser = ctx.shared.registry.browser.for_tab(&ctx.shared, &ctx.session, &args.tab_id).await?;
                 let owner = ctx.session.as_str();
                 let tab = args.tab_id.as_str();
                 if Controller::origin(&browser, &ctx.session, tab).await? != origin {
@@ -1212,37 +1270,36 @@ impl DaemonTool for WaitForApproval {
                         hint: Some("This page does not ask to approve the sign-in on a phone. Take a snapshot; for a code field use request_otp, for a choice request_choice.".into()),
                     });
                 }
+                let site_icon = crate::favicons::for_tab(&browser, owner, tab, &origin).await;
                 let site_name = if found.site_name.trim().is_empty() {
                     origin.clone()
                 } else {
                     found.site_name
                 };
-                Ok(ToolExec::Defer(Box::new(TicketRequest {
-                    kind: TicketKind::DeviceApproval,
-                    summary: format!("Approve the sign-in to {} on your phone", origin.split_once("://").map_or(origin.as_str(), |(_, host)| host)),
-                    instructions: Some(format!("Approve the sign-in for {} in the site's app on your phone. openside continues by itself once the page moves on.", origin.split_once("://").map_or(origin.as_str(), |(_, host)| host))),
-                    options: Vec::new(),
-                    target: Some(TicketTarget {
-                        tab_id: Some(args.tab_id),
-                        origin: Some(origin.clone()),
-                        field_ref: None,
+                Ok(ToolExec::Defer(Box::new(TicketRequest { hire: None, form: None, kind: TicketKind::DeviceApproval,
+                summary: format!("Approve the sign-in to {} on your phone", origin.split_once("://").map_or(origin.as_str(), |(_, host)| host)),
+                instructions: Some(format!("Approve the sign-in for {} in the site's app on your phone. openside continues by itself once the page moves on.", origin.split_once("://").map_or(origin.as_str(), |(_, host)| host))),
+                options: Vec::new(),
+                target: Some(TicketTarget {
+                    tab_id: Some(args.tab_id),
+                    origin: Some(origin.clone()),
+                    field_ref: None,
+                }),
+                resume_when: None,
+                otp: None,
+                otp_register: None,
+                login: None,
+                choice: None,
+                approval: Some(TicketApproval {
+                    origin,
+                    site_name,
+                    icon: site_icon,
+                    message: found.message,
+                    number: found.number.filter(|number| {
+                        !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
                     }),
-                    resume_when: None,
-                    otp: None,
-                    otp_register: None,
-                    login: None,
-                    choice: None,
-                    approval: Some(TicketApproval {
-                        origin,
-                        site_name,
-                        icon: icon(found.icon),
-                        message: found.message,
-                        number: found.number.filter(|number| {
-                            !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
-                        }),
-                    }),
-                    pins: Vec::new(),
-                })))
+                }),
+                pins: Vec::new(), })))
             }
             .await;
             result.unwrap_or_else(|error: ToolError| ToolExec::Denied {
@@ -1256,7 +1313,13 @@ impl DaemonTool for WaitForApproval {
 /// The outcome of a phone-approval wait once its page moved on, for the browser poll; `None`
 /// while the page still waits (or cannot be read mid-navigation). The caller holds the
 /// browser gate.
-pub(crate) async fn approval_outcome(browser: &Browser, owner: &str, tab: &str) -> Option<Value> {
+pub(crate) async fn approval_outcome(
+    shared: &Shared,
+    browser: &Browser,
+    session: &SessionId,
+    tab: &str,
+) -> Option<Value> {
+    let owner = session.as_str();
     let reading = browser
         .evaluate_isolated(owner, tab, &sync_script(NEXT_STEP_JS))
         .await
@@ -1264,11 +1327,20 @@ pub(crate) async fn approval_outcome(browser: &Browser, owner: &str, tab: &str) 
     if reading["step"] == "push_approval" {
         return None;
     }
-    Some(with_next(
-        json!({"status":"done"}),
-        next_step(browser, owner, tab, None).await,
-    ))
-    .filter(|result| result["next"] != "push_approval")
+    let next = next_step(browser, owner, tab, None).await;
+    if next.0 == Next::Done {
+        let _ = crate::connections::complete_login(
+            shared,
+            browser,
+            session,
+            tab,
+            openside_proto::ConnectionSource::Login,
+            None,
+        )
+        .await;
+    }
+    Some(with_next(json!({"status":"done"}), next))
+        .filter(|result| result["next"] != "push_approval")
 }
 
 /// A person's answer to a `login` ticket.
@@ -1422,7 +1494,7 @@ fn http(error: SecretSinkError) -> HttpError {
 /// Where a `login` or `choice` answer acts: the ticket's tab, still showing the pinned
 /// document to this session without a takeover, and its pinned nodes. The caller holds the
 /// browser gate.
-async fn pinned_target(
+pub(super) async fn pinned_target(
     shared: &Shared,
     ticket: &Ticket,
 ) -> Result<(std::sync::Arc<Browser>, String, Vec<(String, NodeHandle)>), HttpError> {
@@ -1581,12 +1653,31 @@ pub(crate) async fn resolve_login(
                 }
             }
             // An unchanged form, CAPTCHA or another login page does not prove acceptance.
-            let saved =
-                save && matches!(
+            let (saved, item) = if save
+                && matches!(
                     next.0,
                     Next::Done | Next::Otp | Next::Choice | Next::PushApproval | Next::EnrollTotp
-                ) && save_login(shared, ticket, login, &text, &operation, who).await;
+                ) {
+                save_login(shared, ticket, login, &text, &operation, who).await
+            } else {
+                (false, None)
+            };
             let _ = controller.persist(shared).await;
+            if let Some(item) = &item {
+                crate::connections::remember_login_item(shared, &ticket.session_id, &tab, item)
+                    .await;
+            }
+            if next.0 == Next::Done {
+                let _ = crate::connections::complete_login(
+                    shared,
+                    &browser,
+                    &ticket.session_id,
+                    &tab,
+                    openside_proto::ConnectionSource::Login,
+                    item.as_deref(),
+                )
+                .await;
+            }
             let mut result = with_next(json!({"status":"submitted"}), next);
             if save {
                 result["saved"] = json!(saved);
@@ -1595,14 +1686,46 @@ pub(crate) async fn resolve_login(
         }
     };
     let _ = controller.persist(shared).await;
-    Ok(with_next(
-        result,
-        next_step(&browser, owner, &tab, before.as_deref()).await,
-    ))
+    if let Some(item) = result.get("item_id").and_then(Value::as_str) {
+        crate::connections::remember_login_item(shared, &ticket.session_id, &tab, item).await;
+    }
+    let next = next_step(&browser, owner, &tab, before.as_deref()).await;
+    if next.0 == Next::Done {
+        let _ = crate::connections::complete_login(
+            shared,
+            &browser,
+            &ticket.session_id,
+            &tab,
+            openside_proto::ConnectionSource::Login,
+            result.get("item_id").and_then(Value::as_str),
+        )
+        .await;
+    }
+    Ok(with_next(result, next))
 }
 
-/// Keep the typed identifier and password for exactly the ticket's origin. True when the
-/// vault holds them afterwards (an incomplete completion audit still saved them).
+pub(super) async fn complete_vault_login(
+    shared: &Shared,
+    browser: &Browser,
+    session: &SessionId,
+    tab: &str,
+    before: Option<&str>,
+    item: &str,
+) {
+    if next_step(browser, session.as_str(), tab, before).await.0 == Next::Done {
+        let _ = crate::connections::complete_login(
+            shared,
+            browser,
+            session,
+            tab,
+            openside_proto::ConnectionSource::Vault,
+            Some(item),
+        )
+        .await;
+    }
+}
+
+/// An incomplete completion audit still saved the item, but does not return its id.
 async fn save_login(
     shared: &Shared,
     ticket: &Ticket,
@@ -1610,7 +1733,7 @@ async fn save_login(
     text: &[(String, Zeroizing<String>)],
     operation: &str,
     who: &str,
-) -> bool {
+) -> (bool, Option<String>) {
     let value = |kind: LoginFieldKind| {
         login
             .fields
@@ -1627,12 +1750,12 @@ async fn save_login(
         }),
         value(LoginFieldKind::Password),
     ) else {
-        return false;
+        return (false, None);
     };
     ACCOUNT_STEP.lock().remove(&step);
     let mut guard = shared.registry.vault.vault.lock().await;
     let Some(vault) = guard.as_mut() else {
-        return false;
+        return (false, None);
     };
     let audit = AuditContext {
         who,
@@ -1640,8 +1763,9 @@ async fn save_login(
         tool_call_id: Some(&ticket.tool_call_id),
     };
     match vault.save_login(&audit, &login.origin, username, password, operation) {
-        Ok(Ok(_)) | Err(openside_vault::Error::AuditIncomplete) => true,
-        Ok(Err(_)) | Err(_) => false,
+        Ok(Ok(saved)) => (true, Some(saved.site)),
+        Err(openside_vault::Error::AuditIncomplete) => (true, None),
+        Ok(Err(_)) | Err(_) => (false, None),
     }
 }
 
@@ -1677,8 +1801,17 @@ pub(crate) async fn resolve_choice(
         .click_node(owner, &tab, node)
         .await
         .map_err(|_| refused("target_unavailable"))?;
-    Ok(with_next(
-        json!({"status":"chosen","option":id}),
-        next_step(&browser, owner, &tab, None).await,
-    ))
+    let next = next_step(&browser, owner, &tab, None).await;
+    if next.0 == Next::Done {
+        let _ = crate::connections::complete_login(
+            shared,
+            &browser,
+            &ticket.session_id,
+            &tab,
+            openside_proto::ConnectionSource::Login,
+            None,
+        )
+        .await;
+    }
+    Ok(with_next(json!({"status":"chosen","option":id}), next))
 }

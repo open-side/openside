@@ -32,6 +32,8 @@ struct WriteArgs {
     tags: Option<Vec<String>>,
     /// `permanent`, `days_90` or `days_30`; defaults to the configured retention.
     retention: Option<Retention>,
+    #[serde(default)]
+    shared: bool,
 }
 
 fn no_actions<'a>() -> BoxFuture<'a, Result<Vec<Action>, ToolError>> {
@@ -83,10 +85,23 @@ impl DaemonTool for MemorySearch {
                 Err(error) => return ToolExec::Failed(error.0),
             };
             let limit = args.limit.unwrap_or(5).clamp(1, TOOL_LIMIT);
+            let state = match ctx.shared.db.state(&ctx.session).await {
+                Ok(state) => state,
+                Err(_) => return ToolExec::Failed("Session state is unavailable".into()),
+            };
+            let owner = state.agent_id;
             let result = ctx
                 .shared
                 .memory
-                .run(move |store| store.search(&args.query, args.kind, limit))
+                .run(move |store| {
+                    store.search_scoped(
+                        &args.query,
+                        args.kind,
+                        limit,
+                        owner.as_deref().map(Some),
+                        true,
+                    )
+                })
                 .await;
             match result {
                 Ok(response) => ToolExec::Done {
@@ -161,17 +176,41 @@ impl DaemonTool for MemoryWrite {
                 Err(error) => return ToolExec::Failed(error.0),
             };
             let actor = format!("agent:{}", ctx.session.as_str());
+            let state = match ctx.shared.db.state(&ctx.session).await {
+                Ok(state) => state,
+                Err(_) => return ToolExec::Failed("Session state is unavailable".into()),
+            };
+            let _gate = ctx.shared.agents.gate.lock().await;
+            if let Some(id) = state.agent_id.as_deref() {
+                match ctx.shared.agents.get(id) {
+                    Ok(Some(agent)) if agent.status == openside_proto::AgentStatus::Active => {}
+                    _ => {
+                        return ToolExec::Denied {
+                            reason: "agent_retired".into(),
+                            hint: None,
+                        }
+                    }
+                }
+            }
+            let owner = state.agent_id.filter(|id| id != "chief");
+            if args.shared && owner.is_some() {
+                return ToolExec::Denied {
+                    reason: "forbidden".into(),
+                    hint: None,
+                };
+            }
             let result = ctx
                 .shared
                 .memory
                 .write(move |store| {
-                    store.create(
+                    store.create_owned(
                         NewMemory {
                             tags: args.tags.unwrap_or_default(),
                             retention: args.retention,
                             ..NewMemory::note(args.content)
                         },
                         &actor,
+                        owner.as_deref(),
                     )
                 })
                 .await;
