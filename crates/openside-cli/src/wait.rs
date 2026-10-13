@@ -2,6 +2,7 @@
 //! session's SSE stream is replayed from a known sequence and read until the run settles,
 //! stops, fails, or the timeout passes.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use http_body_util::BodyExt;
@@ -38,6 +39,11 @@ struct Wait {
     started: bool,
     replies: Vec<String>,
     message_done: bool,
+    /// Tickets this stream saw opened but not yet closed. A settle boundary is terminal only
+    /// while this is empty: the daemon commits a resolution before its `ticket.resolved`
+    /// event reaches this stream, so a `GET /v1/tickets` snapshot taken at the boundary can
+    /// already miss a ticket whose resolution event is still in flight.
+    open_tickets: BTreeSet<String>,
     status: Option<&'static str>,
     error: Option<String>,
 }
@@ -51,6 +57,7 @@ impl Wait {
             message_id: replay.message_id,
             replies: Vec::new(),
             message_done: false,
+            open_tickets: BTreeSet::new(),
             status: None,
             error: None,
         }
@@ -61,6 +68,19 @@ impl Wait {
     }
 
     fn apply(&mut self, seq: u64, kind: &EventKind) {
+        // Ticket bookkeeping tracks every event in the window, not only the terminal
+        // candidates, so the settle check never consults a snapshot that can race the stream.
+        match kind {
+            EventKind::TicketOpened { ticket } => {
+                self.open_tickets.insert(ticket.id.as_str().to_owned());
+            }
+            EventKind::TicketResolved { ticket_id, .. }
+            | EventKind::TicketRejected { ticket_id, .. }
+            | EventKind::TicketExpired { ticket_id, .. } => {
+                self.open_tickets.remove(ticket_id.as_str());
+            }
+            _ => {}
+        }
         let current = seq > self.terminal_after;
         match kind {
             EventKind::AssistantFinal { text, .. } if self.started => {
@@ -153,6 +173,16 @@ async fn drive<F: FnMut(&Event)>(
     through_human: bool,
     on_event: &mut F,
 ) -> Result<(), String> {
+    // A ticket whose `ticket.opened` predates the replay cursor never reappears in the
+    // stream, so seed the open set once before reading. Resolutions committed after this
+    // point arrive as `ticket.resolved` events on the stream itself.
+    if through_human && state.last_seq > 0 {
+        for ticket in pending_tickets(client, session).await? {
+            if let Some(id) = ticket["id"].as_str() {
+                state.open_tickets.insert(id.to_owned());
+            }
+        }
+    }
     let mut response = client.events(session, state.last_seq).await?;
     let mut decoder = Decoder::default();
     while let Some(frame) = response.body_mut().frame().await {
@@ -175,11 +205,12 @@ async fn drive<F: FnMut(&Event)>(
             state.last_seq = event.seq;
             on_event(&event);
             state.apply(event.seq, &event.kind);
-            if state.status == Some("settled")
-                && through_human
-                && !pending_tickets(client, session).await?.is_empty()
-            {
-                // Suspended on a person's answer; the run resumes once it is given.
+            // Suspended on a person's answer; the run resumes once the ticket is closed.
+            // The stream's own bookkeeping must decide this: a resolution is committed
+            // before its `ticket.resolved` event is published, so a `GET /v1/tickets`
+            // snapshot taken here can already miss the ticket while its resolution is
+            // still in flight to us.
+            if state.status == Some("settled") && through_human && !state.open_tickets.is_empty() {
                 state.status = None;
             }
             if state.status.is_some() {
