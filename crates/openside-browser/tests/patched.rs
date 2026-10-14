@@ -577,6 +577,8 @@ async fn gateway_hello_publishes_private_discovery_and_rejects_bad_clients() {
         assert!(frame(&mut stream).await.is_none());
     }
 
+    // EOF above must also release the controller slot, even if the browser
+    // defers destroying the previous connection. Do not sleep before reconnecting.
     let mut stream = UnixStream::connect(&socket).await.unwrap();
     let mut versions = hello(token.trim());
     versions["versions"] = json!([2]);

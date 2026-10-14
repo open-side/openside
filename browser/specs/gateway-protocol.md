@@ -16,6 +16,8 @@
 
 브라우저가 `AF_UNIX/SOCK_STREAM`으로 수신하고 데몬이 연결한다. 인스턴스당 인증된 제어 연결은 하나다.
 
+When the gateway closes a connection, it releases the single-controller slot before the peer observes EOF. An immediate reconnect after EOF must not be rejected because deferred destruction still holds the old connection.
+
 | 항목 | 계약 |
 | --- | --- |
 | 소켓 | `<runtime>/openside/browser/<instance_id>/gateway.sock` (`<runtime>`은 `--openside-gateway-runtime-dir` 값이며, 스위치가 없을 때만 `$XDG_RUNTIME_DIR` 사용) |

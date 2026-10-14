@@ -1064,6 +1064,9 @@ class Connection {
   ~Connection() {
     read_watch_.reset();
     write_watch_.reset();
+    // Publish EOF only when the gateway releases its single-controller slot.
+    // Otherwise an immediate reconnect can race the deferred Drop task.
+    shutdown(fd_, SHUT_RDWR);
     close(fd_);
   }
 
@@ -1107,7 +1110,6 @@ class Connection {
     handshake_timer_.Stop();
     read_watch_.reset();
     write_watch_.reset();
-    shutdown(fd_, SHUT_RDWR);
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Connection::Drop, weak_factory_.GetWeakPtr()));
   }
