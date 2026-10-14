@@ -452,7 +452,7 @@ impl Controller {
         };
         if self.warm_tab(&browser, session).await.is_some() {
             if browser
-                .close_agent_tab(session.as_str(), &tab)
+                .close_agent_tab_silently(session.as_str(), &tab)
                 .await
                 .is_err()
             {

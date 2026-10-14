@@ -206,7 +206,9 @@ pub(crate) fn steer_text(event: &BrowserEvent) -> Option<String> {
                 "cancelled"
             }
         ),
-        BrowserEvent::TabOpened { .. } | BrowserEvent::TooManyTabs { .. } | BrowserEvent::OriginCommitted { .. } => return None,
+        BrowserEvent::TabOpened { .. }
+        | BrowserEvent::TooManyTabs { .. }
+        | BrowserEvent::OriginCommitted { .. } => return None,
     })
 }
 
@@ -229,7 +231,24 @@ pub(crate) async fn steer_browser_event(
     event: &BrowserEvent,
 ) {
     if let Some(text) = steer_text(event) {
-        steer_notice(shared, session, text).await;
+        if let Some(task) = shared
+            .registry
+            .browser
+            .task_tabs
+            .event_owner(session, event)
+        {
+            let _ = shared
+                .command(
+                    session,
+                    crate::engine::Action::Subagent(
+                        task,
+                        openside_core::SubagentControl::Steer { text },
+                    ),
+                )
+                .await;
+        } else {
+            steer_notice(shared, session, text).await;
+        }
     }
 }
 

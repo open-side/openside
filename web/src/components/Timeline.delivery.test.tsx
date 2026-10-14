@@ -46,6 +46,16 @@ describe("delivery states in the transcript", () => {
     expect(screen.queryByText("Team delivery")).toBeNull();
   });
 
+  it("never renders injected internal browser notices as person bubbles", () => {
+    mount([
+      { ...queued, text: "[browser event] Tab closed", author_kind: "internal" },
+      injected,
+      started,
+    ]);
+    expect(screen.queryByText("[browser event] Tab closed")).toBeNull();
+    expect(screen.queryByText("Read")).toBeNull();
+  });
+
   it("shows Sent, then Read and typing dots until a completed reply arrives", () => {
     const sent = mount([queued]);
     expect(screen.getByText("Hi there")).toBeInTheDocument();

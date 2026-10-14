@@ -86,6 +86,7 @@ struct TestState {
     delivery_store: Option<std::path::PathBuf>,
     discarded: usize,
     parts: Vec<(MessageId, Vec<openside_core::ContentPart>)>,
+    controls: Vec<(String, openside_core::SubagentControl)>,
 }
 #[derive(Clone, Default)]
 struct TestRuntime(Arc<Mutex<TestState>>);
@@ -182,6 +183,14 @@ impl AgentSession for TestSession {
     }
     async fn discard_deferred(&mut self) -> std::result::Result<(), RuntimeError> {
         self.runtime.0.lock().discarded += 1;
+        Ok(())
+    }
+    async fn control_subagent(
+        &mut self,
+        subagent: String,
+        control: openside_core::SubagentControl,
+    ) -> std::result::Result<(), RuntimeError> {
+        self.runtime.0.lock().controls.push((subagent, control));
         Ok(())
     }
     async fn next_event(&mut self) -> Option<RuntimeEvent> {

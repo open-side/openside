@@ -49,6 +49,12 @@ tool's language does not override it; identifiers and quotations stay verbatim.
 Only `assistant.final` text is rendered in the transcript, including non-front
 sessions. Provisional deltas remain internal and are not translated into replies.
 
+Browser notices for Task-owned tabs steer that Task, never the front agent.
+Terminal Tasks receive no notices, including late download completion or close
+events. Daemon cleanup closes disposable tabs silently, without generating browser
+close events. Internal-author messages are not rendered as person bubbles, whether
+queued or already injected into a model turn.
+
 After a takeover or person step resolves, the continuation starts with a fresh
 `browser_snapshot` of its tab (or `browser_repl`'s `page.snapshot()` when that is
 the exposed capture tool), checks whether the requested outcome occurred and

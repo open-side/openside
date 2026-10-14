@@ -14,7 +14,7 @@ import { MessageDocuments } from "./MessageDocument";
 import { TaskUnit } from "./TaskUnit";
 import { Activity, StatusLine } from "./ToolActivity";
 import { collectToolFacts, type ToolItem } from "./toolCopy";
-import { lastHost, outcomeNote, statusPhrase, TASK_REPORT_PREFIX } from "./toolStatus";
+import { lastHost, outcomeNote, statusPhrase } from "./toolStatus";
 import { separatorLabel, separatorNeeded } from "./timeStamp";
 import { VisualFrame } from "./VisualFrame";
 
@@ -366,9 +366,8 @@ export function Timeline({
     if (item.type !== "assistant" || front) closeReply();
     switch (item.type) {
       case "user": {
-        // The daemon hands a finished Task's result to the front agent as a message; it is not
-        // the person's words, and the Task's own row already says how it ended.
-        if (item.author_kind === "internal" && item.id.startsWith(TASK_REPORT_PREFIX)) break;
+        // Internal notices steer models; they are never the person's words.
+        if (item.author_kind === "internal") break;
         stamp(item.id, item.at);
         // The runtime took the message up (`message.injected`), so the person's newest one reads
         // "Read" and keeps it, as in a messenger; "Sent" belongs to the queued bubble before that.

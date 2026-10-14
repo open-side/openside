@@ -522,6 +522,74 @@ async fn start_browser_task(daemon: &Daemon, session: &SessionId, task: &str) {
 }
 
 #[tokio::test]
+async fn browser_notices_steer_only_the_owning_task_and_ignore_terminal_tasks() {
+    use openside_browser::{BrowserEvent, DownloadStatus, OpenedBy, TabInfo};
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = front_daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "task-notices", PolicyMode::Full, None).await;
+    crate::engine::prewarm_runtime(&daemon.shared, &session).await;
+    start_browser_task(&daemon, &session, "task").await;
+    let ledger = &daemon.shared.registry.browser.task_tabs;
+    ledger.claim(&session, "tab", "task");
+    let tab = TabInfo {
+        id: "tab".into(),
+        url: "https://example.test/".into(),
+        title: String::new(),
+        opened_by: OpenedBy::Agent,
+        owner_session_id: Some(session.to_string()),
+        discarded: false,
+        unloaded: false,
+        browser_context_id: None,
+    };
+    let events = [
+        BrowserEvent::DownloadStarted {
+            guid: "download".into(),
+            url: tab.url.clone(),
+            suggested_filename: "file".into(),
+            tab_id: Some(tab.id.clone()),
+        },
+        BrowserEvent::TabClosed { tab: tab.clone() },
+        BrowserEvent::DownloadFinished {
+            guid: "download".into(),
+            status: DownloadStatus::Completed,
+        },
+    ];
+    for event in &events {
+        crate::browser::steer_browser_event(&daemon.shared, &session, event).await;
+    }
+    {
+        let state = runtime.0.lock();
+        assert_eq!(state.controls.len(), 3);
+        assert!(state.controls.iter().all(|(task, control)| task == "task"
+            && matches!(control, openside_core::SubagentControl::Steer { text } if text.starts_with("[browser event]"))));
+        assert!(
+            state.sent.is_empty(),
+            "browser notices must not reach the chief"
+        );
+    }
+    ledger.claim(&session, "tab", "task");
+    crate::subagents::end(
+        &daemon.shared,
+        &session,
+        "task",
+        SubagentStatus::Completed,
+        "completed",
+    )
+    .await
+    .unwrap();
+    crate::tasks::report_updates(&daemon.shared, &session)
+        .await
+        .unwrap();
+    crate::browser::steer_browser_event(&daemon.shared, &session, &BrowserEvent::TabClosed { tab })
+        .await;
+    assert_eq!(runtime.0.lock().controls.len(), 3);
+    assert!(!daemon.shared.db.events(&session, 0).await.unwrap().iter().any(|event|
+        matches!(&event.kind, EventKind::MessageQueued { text, .. } if text.starts_with("[browser event]"))));
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn repl_claim_retires_warm_lease_and_neither_open_nor_ttl_can_steal_the_tab() {
     let site = task_site().await;
     let root = tempfile::tempdir().unwrap();
@@ -665,6 +733,9 @@ async fn delayed_browser_probes_cannot_overwrite_newer_or_terminal_task_state() 
                 assert!(person_tabs.iter().all(|id| remaining.iter().any(|info| &info.id == id)),
                     "Task cleanup must preserve person tabs");
                 assert!(ledger.holder(&session, tab).is_none());
+                assert!(!daemon.shared.db.events(&session, 0).await.unwrap().iter().any(|event|
+                    matches!(&event.kind, EventKind::TabClosed { tab_id } if tab_id == tab)),
+                    "daemon cleanup must not generate a browser close event");
             }
         }
     }).catch_unwind().await;

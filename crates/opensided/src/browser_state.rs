@@ -55,6 +55,10 @@ struct Generation {
 #[derive(Default)]
 pub(crate) struct TabLedger {
     owners: parking_lot::Mutex<HashMap<(SessionId, String), String>>,
+    // Admission is released at Task termination, but already queued events must not fall
+    // through to the front agent when their consumer catches up.
+    event_owners: parking_lot::Mutex<HashMap<(SessionId, String), String>>,
+    download_owners: parking_lot::Mutex<HashMap<(SessionId, String), String>>,
     generations: tokio::sync::Mutex<HashMap<(SessionId, Option<String>), Generation>>,
     #[cfg(test)]
     pub(crate) probe_gate: tokio::sync::Mutex<()>,
@@ -72,6 +76,9 @@ impl TabLedger {
             .cloned()
     }
     pub(crate) fn claim(&self, session: &SessionId, tab: &str, task: &str) {
+        self.event_owners
+            .lock()
+            .insert((session.clone(), tab.to_owned()), task.to_owned());
         self.owners
             .lock()
             .insert((session.clone(), tab.to_owned()), task.to_owned());
@@ -87,6 +94,39 @@ impl TabLedger {
             ledger.remove(&(session.clone(), tab.clone()));
         }
         tabs
+    }
+    pub(crate) fn event_owner(
+        &self,
+        session: &SessionId,
+        event: &openside_browser::BrowserEvent,
+    ) -> Option<String> {
+        use openside_browser::BrowserEvent;
+        let key = |id: &str| (session.clone(), id.to_owned());
+        match event {
+            BrowserEvent::PopupOpened { tab, opener_id } => {
+                let mut owners = self.event_owners.lock();
+                let task = owners.get(&key(opener_id)).cloned()?;
+                owners.insert(key(&tab.id), task.clone());
+                Some(task)
+            }
+            BrowserEvent::TabClosed { tab } => self.event_owners.lock().remove(&key(&tab.id)),
+            BrowserEvent::DialogOpened { tab_id, .. } => {
+                self.event_owners.lock().get(&key(tab_id)).cloned()
+            }
+            BrowserEvent::DownloadStarted { guid, tab_id, .. } => {
+                let task = self
+                    .event_owners
+                    .lock()
+                    .get(&key(tab_id.as_deref()?))
+                    .cloned()?;
+                self.download_owners.lock().insert(key(guid), task.clone());
+                Some(task)
+            }
+            BrowserEvent::DownloadFinished { guid, .. } => {
+                self.download_owners.lock().remove(&key(guid))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -187,7 +227,10 @@ pub(crate) async fn release_ended(shared: &Shared, session: &SessionId, tasks: &
             });
             if !referenced {
                 // The browser rejects person tabs even if a stale ledger claims ownership.
-                if let Err(error) = browser.close_agent_tab(session.as_str(), &tab).await {
+                if let Err(error) = browser
+                    .close_agent_tab_silently(session.as_str(), &tab)
+                    .await
+                {
                     ledger.claim(session, &tab, &task.id);
                     crate::diag!("opensided: task tab cleanup failed: {error}");
                 }
