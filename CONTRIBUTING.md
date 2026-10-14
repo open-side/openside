@@ -4,7 +4,7 @@ openside is pre-alpha; expect large changes. Open an issue before starting on an
 
 ## Setup
 
-You need the tools from the [README](README.md#build-and-run): Rust stable, a C compiler, uv, Node.js 22+ with pnpm 9, and a Chromium-based browser (browser tests print a skip reason without one). The full gate also needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) on `PATH` or in `CARGO_DENY`; [actionlint](https://github.com/rhysd/actionlint) is used when present.
+You need the tools from the [README](README.md#build-and-run): Rust stable, a C compiler, uv, Node.js 22+ with pnpm 9, and a Chromium-based browser (browser tests print a skip reason without one). The full gate also needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) on `PATH` or in `CARGO_DENY`.
 
 ```bash
 uv sync --project agent
@@ -14,7 +14,7 @@ pnpm -C web install && pnpm -C extension install
 
 ## Checks
 
-Run the whole gate before sending a change. It is what CI runs:
+Run the whole gate before sending a change; there is no hosted CI, so this is the check:
 
 ```bash
 tools/gate.sh

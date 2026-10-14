@@ -1,8 +1,8 @@
 # Quality and operations checks
 
-## Canonical gate and CI (PP-1)
+## Canonical gate (PP-1)
 
-`.github/workflows/ci.yml` runs `tools/gate.sh` on Linux x86_64 for pushes and pull requests. The gate includes Rust fmt/clippy/tests, sidecar ruff/pyright/non-live pytest, web/extension install/lint/typecheck/test/build, portability, Python tool tests, generated docs/API checks, language/license/browser-UX checks and acceptance evidence. Missing Chromium/live dependencies use the existing explicit test skip conditions; no live model credentials are configured in CI. CI uploads `target/gate` even after failure.
+`tools/gate.sh` is the only required check; hosted CI was removed on 2026-10-14. It runs on Linux x86_64 and covers Rust fmt/clippy/tests, sidecar ruff/pyright/non-live pytest, web/extension install/lint/typecheck/test/build, portability, Python tool tests, generated docs/API checks, language/license/browser-UX checks and acceptance evidence. Missing Chromium/live dependencies use the existing explicit test skip conditions. Evidence goes to `target/gate`, which is kept even after a failure.
 
 The gate invokes Vitest with default worker concurrency and both default and JSON
 reporters. UI tests must wait for the state they assert, not just the element's
@@ -81,8 +81,6 @@ as passed. Screenshots, compositor focus changes and JSON results are retained
 under `target/gate/sway/stock`. CI installs Podman with bubblewrap; the stock-only
 run does not require a patched browser build. Local Chromium/Cargo invocations
 must still use the workstation's `/tmp/openside-heavy-run` wrapper.
-
-The same workflow has native `macos-latest` and `windows-latest` matrix runners invoking `cargo check --workspace --all-targets --locked -j 8`. Local workflow validation uses `tools/check-ci.py`: uv-managed PyYAML loading and dependency-free structure/canonical-contract validation always run, and actionlint adds syntax validation when installed. Either validator's failure fails the check; absent actionlint is explicitly reported and syntax certification is not claimed. The contract function is directly importable by pytest without PyYAML or jsonschema. Workflow syntax is not proof of a successful hosted run; this checkout has not been pushed or committed by the quality slot.
 
 ## Languages and platform boundaries (G-1, G-3)
 

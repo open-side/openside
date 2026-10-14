@@ -6,7 +6,7 @@
 ## 구조/플랫폼
 | ID | 문제 | openside 해결 | AC | 단계 |
 | --- | --- | --- | --- | --- |
-| PP-1 | Linux를 1급 지원 플랫폼으로 다루지 않는다 | Linux 1순위 타깃. 플랫폼 의존 코드(Vault 잠금, 샌드박스, 창 포커스 검증)는 trait 뒤로 격리 | CI 에서 Linux x86_64 빌드·테스트 상시 통과, macOS/Windows 는 컴파일 체크 | M0~ |
+| PP-1 | Linux를 1급 지원 플랫폼으로 다루지 않는다 | Linux 1순위 타깃. 플랫폼 의존 코드(Vault 잠금, 샌드박스, 창 포커스 검증)는 trait 뒤로 격리 | 로컬 게이트(`tools/gate.sh`)에서 Linux x86_64 빌드 및 테스트 상시 통과, macOS/Windows 컴파일 검증 통과 | M0~ |
 | PP-2 | 브라우저 본체와 패치 코드가 오픈소스가 아니다 | 전부 오픈소스(MIT/Apache-2.0 중 택일, ADR-009). Chromium 패치는 패치 시리즈로 공개 | 라이선스·NOTICE 자동 점검(cargo-deny, 확장 의존성 점검) | M0 |
 | PP-3 | 데스크톱 브라우저에 종속되어 있어 서버나 클라우드에서 실행할 수 없다 | 데몬은 헤드리스로 동작 가능. 관리형 브라우저 프로필(전용 user-data-dir)을 데몬이 기동·감시. 데스크톱/서버 동일 코드 | 디스플레이 없는 서버에서 Xvfb/headless 로 태스크 완주 E2E | M1 |
 | PP-4 | 스마트폰에서 쓰려면 데스크톱 컴퓨터를 계속 켜 두어야 한다 | 데몬이 systemd user service 로 상주, 절전 inhibit(`systemd-inhibit`) 옵션, 서버 이전 가능 | 재부팅 후 자동 복구, 중단된 세션 resume | M4 |

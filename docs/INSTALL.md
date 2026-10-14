@@ -215,7 +215,7 @@ Windows 에서는 `openside service` 가 systemd unit 대신 미지원 오류(`d
 
 ## 8. 개발 검증
 
-CI 와 같은 명령은 `.github/workflows/ci.yml` 에 있다.
+전체 검증은 `tools/gate.sh`로 수행하며, 아래 명령어는 그중 핵심 단계만 모은 것이다.
 
 ```bash
 cargo fmt --check
@@ -227,7 +227,7 @@ cd agent && uv run ruff check && uv run ruff format --check && uv run pyright &&
 - 브라우저 테스트는 브라우저를 찾지 못하면 `skip` 을 출력하고 건너뛴다.
 - `openside-e2e` 는 `agent/.venv/bin/python` 이 없으면 건너뛰므로 `uv sync --project agent` 를 먼저 실행한다.
 - live 테스트(`@pytest.mark.live`)는 `OPENSIDE_LIVE_MODEL` 이 없으면 건너뛴다.
-- `tools/gate.sh`는 전체 게이트 검사를 한 번에 실행한다. 위에 적힌 명령 외에 웹 및 확장 프로그램 검사, 워크플로 유효성 검증, 언어 검사, 라이선스 및 `NOTICE` 확인, 브라우저 UX 근거 점검, 이식성 검사를 함께 진행한다. 실행하려면 PATH 환경 변수에 `cargo-deny`가 있거나 `CARGO_DENY` 환경 변수를 지정해야 한다. `actionlint`가 있으면(`ACTIONLINT`) 워크플로 검증에 쓴다. 자세한 내용은 `docs/specs/quality-operations.md`를 참고한다.
+- `tools/gate.sh`는 전체 게이트 검사를 한 번에 실행한다. 위에 적힌 명령 외에 웹 및 확장 프로그램 검사, 언어 검사, 라이선스 및 `NOTICE` 확인, 브라우저 UX 근거 점검, 이식성 검사를 함께 진행한다. 실행하려면 PATH 환경 변수에 `cargo-deny`가 있거나 `CARGO_DENY` 환경 변수를 지정해야 한다. 자세한 내용은 `docs/specs/quality-operations.md`를 참고한다.
 - `tools/e2e-scenarios.sh`는 `docs/specs/e2e-scenarios.md`에 정의된 엔드투엔드 시나리오 스위트(실제 데몬, 스크립트 기반 모델, 로컬 테스트 사이트)를 실행하고 PASS/FAIL 표를 출력한다.
 - `bench/run.sh`는 로컬 벤치마크 스위트를 명령 하나로 재현한다(`bench/README.md` 참고).
 - `tools/soak.sh`는 압축된 소크(soak) 테스트를 실행한다(기본 15분). 24시간 실행 시: `OPENSIDE_SOAK_SECONDS=86400 OPENSIDE_SOAK_SESSIONS=100 tools/soak.sh`.

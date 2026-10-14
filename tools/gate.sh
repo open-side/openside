@@ -104,7 +104,6 @@ step "portability" tools/check-portability.sh
 step "tools tests" uv run --no-project --with pytest pytest -q tools/tests --junitxml="$DIR/tools-pytest.xml"
 step "bench dependencies" uv sync --frozen --project bench
 step "bench tests" uv run --offline --frozen --project bench pytest bench/tests -m 'not live' --junitxml="$DIR/bench-pytest.xml"
-step "CI workflow" tools/check-ci.py
 step "component languages" tools/check-languages.py
 step "Rust/npm/Python licenses and NOTICE" tools/check-licenses.py
 step "browser UX evidence" browser_ux_checks

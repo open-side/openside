@@ -1,5 +1,4 @@
 import importlib.util
-import copy
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +17,6 @@ LICENSES = module('check-licenses')
 LANGUAGES = module('check-languages')
 PLATFORMS = module('check-platforms')
 UX = module('check-browser-ux')
-CI = module('check-ci')
 
 
 def component_tree(tmp_path):
@@ -278,80 +276,6 @@ def test_browser_ux_exceptions_require_user_action(tmp_path):
     text = '\n'.join(f'| {identifier} | Item | AC | UI | blocked-external | Browser unavailable |' for identifier in sorted(UX.REQUIRED))
     assert any('User action' in error for error in UX.check(tmp_path, text))
     assert not UX.check(tmp_path, text.replace('Browser unavailable', 'Browser unavailable. User action: install browser and run test'))
-
-
-def ci_document():
-    return {
-        'name': 'ci', 'on': {'push': {}, 'pull_request': {}}, 'permissions': {'contents': 'read'},
-        'jobs': {
-            'linux': {'runs-on': 'ubuntu-latest', 'steps': [{'run': 'tools/gate.sh'}]},
-            'platform-check': {
-                'runs-on': '${{ matrix.os }}', 'strategy': {'matrix': {'os': ['macos-latest', 'windows-latest']}},
-                'steps': [{'run': 'cargo check --workspace --all-targets --locked -j 8'}],
-            },
-        },
-    }
-
-
-def test_ci_schema_rejects_missing_canonical_gate_native_runners_and_compile_command():
-    valid = ci_document()
-    assert not CI.schema_errors(valid)
-    for change, expected in [
-        (lambda doc: doc['jobs']['linux']['steps'][0].update(run='echo bypass'), 'canonical tools/gate.sh'),
-        (lambda doc: doc['jobs']['linux'].update({'runs-on': 'macos-latest'}), 'ubuntu-latest'),
-        (lambda doc: doc['jobs']['platform-check']['strategy']['matrix'].update(os=['macos-latest']), 'Both native platform runners'),
-        (lambda doc: doc['jobs']['platform-check'].update({'runs-on': 'ubuntu-latest'}), 'native matrix runner'),
-        (lambda doc: doc['jobs']['platform-check']['steps'][0].update(run='cargo check -p one'), 'same workspace'),
-        (lambda doc: doc['jobs']['platform-check']['strategy']['matrix'].update(os=[{}]), 'Both native platform runners'),
-    ]:
-        document = copy.deepcopy(valid)
-        change(document)
-        assert any(expected in error for error in CI.schema_errors(document))
-
-
-def test_ci_schema_rejects_invalid_workflow_job_and_step_structure():
-    assert CI.schema_errors([])
-    assert CI.schema_errors({'jobs': {}})
-    for job in [[], {}, {'runs-on': 'ubuntu-latest', 'steps': []},
-                {'runs-on': 'ubuntu-latest', 'steps': 'not a list'},
-                {'runs-on': 'ubuntu-latest', 'steps': [None]},
-                {'runs-on': 'ubuntu-latest', 'steps': [{}]},
-                {'runs-on': 'ubuntu-latest', 'steps': [{'run': 7}]},
-                {'runs-on': 'ubuntu-latest', 'steps': [{'run': 'echo ok', 'uses': 'action@v1'}]}]:
-        document = ci_document()
-        document['jobs']['linux'] = job
-        assert CI.schema_errors(document)
-
-
-def test_ci_actionlint_never_bypasses_contract_validation_and_either_failure_fails(monkeypatch):
-    monkeypatch.setenv('ACTIONLINT', 'fixture-actionlint')
-    monkeypatch.setattr(CI.sys, 'argv', ['check-ci.py'])
-    for lint_status, schema_status in [(0, 0), (1, 0), (0, 1)]:
-        calls = []
-        statuses = iter([lint_status, schema_status])
-        def run(command, **kwargs):
-            calls.append(command)
-            return SimpleNamespace(returncode=next(statuses))
-        monkeypatch.setattr(CI.subprocess, 'run', run)
-        assert CI.main() == int(bool(lint_status or schema_status))
-        assert len(calls) == 2
-        assert calls[0][0] == 'fixture-actionlint'
-        assert calls[1][0] == 'uv' and calls[1][-1] == '--schema'
-        assert 'jsonschema' not in calls[1]
-
-
-def test_ci_missing_actionlint_is_explicit_and_still_runs_contracts(monkeypatch, capsys):
-    monkeypatch.delenv('ACTIONLINT', raising=False)
-    monkeypatch.setattr(CI.shutil, 'which', lambda name: None)
-    monkeypatch.setattr(CI.sys, 'argv', ['check-ci.py'])
-    calls = []
-    def run(command, **kwargs):
-        calls.append(command)
-        return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(CI.subprocess, 'run', run)
-    assert CI.main() == 0
-    assert len(calls) == 1 and calls[0][-1] == '--schema'
-    assert 'actionlint is unavailable' in capsys.readouterr().err
 
 
 def test_license_main_rejects_stale_notice_and_cargo_deny_failure(tmp_path, monkeypatch):

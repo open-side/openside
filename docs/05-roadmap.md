@@ -17,7 +17,7 @@
 ## 2. 마일스톤
 
 ### M0 — 기반 (S~M)
-- ✅ 저장소·CI: `tools/gate.sh`에서 fmt, clippy, test, cargo-deny, 에이전트 검사 및 잔여 검증 통과. CI 워크플로(`.github/workflows/ci.yml`)에서도 동일한 게이트를 실행(actionlint 검증 완료, 호스팅 CI 실행은 PP-1 외부 의존성 차단 상태). ✅ 라이선스 고지(ADR-009, 워크스페이스 `MIT OR Apache-2.0`, NOTICE). ✅ 데이터 디렉터리 및 설정 스키마(`openside-config`: XDG 경로, `config.toml`, 환경변수 재정의). ✅ `openside doctor [--json]`(설정, 브라우저, 샌드박스, Vault, 자격 증명 소스 진단).
+- ✅ 저장소·검증: `tools/gate.sh`에서 fmt, clippy, test, cargo-deny, 에이전트 검사 및 잔여 검증 통과. 2026-10-14 오너 결정으로 호스티드 CI를 걷어냈으며, 로컬에서 `tools/gate.sh`를 직접 돌리는 것을 표준 검증 기준으로 삼는다. ✅ 라이선스 고지(ADR-009, 워크스페이스 `MIT OR Apache-2.0`, NOTICE). ✅ 데이터 디렉터리 및 설정 스키마(`openside-config`: XDG 경로, `config.toml`, 환경변수 재정의). ✅ `openside doctor [--json]`(설정, 브라우저, 샌드박스, Vault, 자격 증명 소스 진단).
 - ✅ `openside-policy`(D-2), ✅ `openside-core` 타입·trait(사이드카 계약으로 재작성).
 - ✅ 스파이크: omp 시절 S-1~S-6, 사이드카 전환 S-8/S-9/S-14/S-15/S-16(`docs/spikes/`). 결과는 ADR 로 기록(docs/06).
 - ✅ 수용 AC 목록(`docs/specs/acceptance.csv`), ✅ 테스트 harness(`crates/openside-e2e`: 실제 Python 사이드카 + 스크립트 모델).
@@ -33,7 +33,7 @@
 ### 현황표 (2026-10-12)
 | 마일스톤/트랙 | 상태 | 근거 |
 | --- | --- | --- |
-| M0 | 완료 | 스파이크, acceptance.csv 및 검사기, `tools/gate.sh`, CI 워크플로(actionlint 검증 완료; 호스팅 실행은 PP-1 외부 차단), cargo-deny, licenses/NOTICE |
+| M0 | 완료 | 스파이크, acceptance.csv 및 검사기, `tools/gate.sh` (로컬 표준 게이트; 2026-10-14 호스티드 CI 제거), cargo-deny, licenses/NOTICE |
 | M1 | 완료 | 데몬·세션·사이드카 런타임, CLI, 브라우저 도구, WebSocket, `browser_repl`, 계정 API; 타일링 창 관리자 활성 창 불변 조건(B-5) 컴포지터 IPC 검증 완료; 로컬 가상 브로커 기반 브로커 속도 제한 시 계정 로테이션 E2E(PP-18) 검증 완료 |
 | M2 | 완료 | 정책 및 티켓, Vault(`vault_login`/`vault_otp`, 패스키, 플랫폼 잠금 해제), MCP 서버, 시크릿 모드, 레드팀 테스트 스위트, 샌드박스, 스코프 토큰 |
 | M3 | 완료 | 서브에이전트(A-5, 전용 어댑터, ADR-020), 스킬, Ultrabrowse, 루틴, 태스크 아티팩트, 첨부 파일, 대화 압축 |
