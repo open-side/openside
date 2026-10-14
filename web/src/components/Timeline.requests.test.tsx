@@ -180,4 +180,14 @@ describe("a failed turn", () => {
     expect(screen.getByText("Something went wrong on my side.")).toBeInTheDocument();
     expect(document.querySelector(".runtime-error button")).toBeNull();
   });
+
+  it("points a stored auth failure at Models & accounts and offers Retry", () => {
+    mount([
+      { kind: "message.queued", message_id: "m1", text: "Hi", mode: "queue", author_kind: "person", from_agent: null },
+      { kind: "message.injected", message_id: "m1" },
+      { kind: "runtime.error", code: "auth_unavailable", message: "pool exhausted", user_message: "Your model connection needs attention. Check Settings.", retryable: false },
+    ]);
+    expect(screen.getByText(/Models & accounts/)).toBeInTheDocument();
+    expect(document.querySelector(".runtime-error button")).not.toBeNull();
+  });
 });

@@ -2291,43 +2291,62 @@ async fn process_crash_closes_inflight_and_lazily_reopens_with_snapshot() {
 }
 
 #[tokio::test]
-async fn authentication_failure_is_permanent_and_fail_closed() {
+async fn authentication_failure_is_fail_closed_until_a_send_finds_credentials_again() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();
     runtime.0.lock().auth_failure = true;
     let daemon = daemon(root.path(), &runtime).await;
     let session = create_session(&daemon, "session", PolicyMode::Guard, None).await;
     let router = api::router(daemon.shared.clone(), true);
-    let body = json!({"text":"task","mode":"queue"});
-    assert_eq!(
-        router
-            .clone()
-            .oneshot(request(
-                "POST",
-                "/v1/sessions/session/messages",
-                body.clone(),
-                None
-            ))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::CONFLICT
-    );
+    let send = |id: &'static str| {
+        let router = router.clone();
+        async move {
+            let response = router
+                .oneshot(request(
+                    "POST",
+                    "/v1/sessions/session/messages",
+                    json!({"message_id":id,"text":"task","mode":"queue"}),
+                    None,
+                ))
+                .await
+                .unwrap();
+            (response.status(), json_body(response).await)
+        }
+    };
+    // Credentials unavailable: the send says so instead of a generic conflict, repeatedly.
+    for id in ["first", "second"] {
+        let (status, body) = send(id).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["code"], "auth_unavailable");
+    }
     assert!(daemon.shared.auth_failed(&session).await.unwrap());
     assert_eq!(
         daemon.shared.db.state(&session).await.unwrap().status,
         SessionStatus::Stopped
     );
-    runtime.0.lock().auth_failure = false;
-    assert_eq!(
-        router
-            .oneshot(request("POST", "/v1/sessions/session/messages", body, None))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::CONFLICT
-    );
     assert!(runtime.0.lock().opened.is_empty());
+    // Credentials are back: the next send restarts the runtime and clears the latch.
+    runtime.0.lock().auth_failure = false;
+    assert_eq!(send("third").await.0, StatusCode::ACCEPTED);
+    assert!(!daemon.shared.auth_failed(&session).await.unwrap());
+    assert_eq!(runtime.0.lock().opened.len(), 1);
+    // A failure reported by a running sidecar latches again and a later send recovers too.
+    runtime.emit(
+        &session,
+        RuntimeEvent::Error {
+            error: RuntimeError::AuthUnavailable("pool exhausted".into()),
+        },
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !daemon.shared.auth_failed(&session).await.unwrap() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(send("fourth").await.0, StatusCode::ACCEPTED);
+    assert!(!daemon.shared.auth_failed(&session).await.unwrap());
+    assert_eq!(runtime.0.lock().opened.len(), 2);
     daemon.shutdown().await;
 }
 

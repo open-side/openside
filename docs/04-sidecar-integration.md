@@ -70,7 +70,7 @@ model tool call
 | `ready.pending_deferred` 중 데몬 쪽에서 이미 해결된 티켓 | 즉시 `ticket_resolved` 재전송, 사이드카가 중복을 걸러 1회만 반영 | 프로토콜 §8 |
 | 데몬 재시작 | 이벤트 로그에서 세션·큐 복원, 진행 중 메시지는 `failed/interrupted`, 만료 검사. 열린 티켓은 유지되고 그 세션은 dispatch 하지 않음. 해결 시 같은 tool call 로 재개 | `engine.rs` `Daemon::open`, e2e `hs1_vault_login_secret_ticket_survives_daemon_restart_without_canary_leaks` |
 | 데몬 재시작 + 브라우저 | 종료 시 열린 브라우저 티켓이 있으면 Chromium 을 남긴다. 기동 시 `browser-state.json` 의 엔드포인트로 재연결하고 탭 소유권·티켓 노드 핸들을 복원. 관리 프로필이 아니면 거부, 연결 실패면 상태 파일 삭제, 참조하는 티켓이 없으면 종료 | `tools/browser.rs` `recover()` |
-| `auth_unavailable` | `runtime.error{auth_unavailable}` + `session.stopped`. 세션은 영구 중지(fail-closed), 다른 자격증명으로 폴백하지 않음 | 프로토콜 §3, `engine.rs` `fail()` |
+| `auth_unavailable` | `runtime.error{auth_unavailable}` + `session.stopped`, no fallback to other credential sources. Background paths (restart recovery, routines, tickets) stay fail-closed while the latest `auth_unavailable` is newer than the latest `runtime.started`. An explicit send or Retry starts a fresh runtime, which asks for credentials again: a successful start clears the latch, a failed start answers `409 auth_unavailable` (web: "Check Settings → Models & accounts"). | protocol §3, `engine.rs` `auth_failed()` / `command_unlatched()` |
 
 브라우저 유지 정책(항상 유지/항상 종료)은 사용자 결정 대기다. systemd 로 돌릴 때는 `KillMode=process` 를 권장한다.
 

@@ -13,6 +13,8 @@ const COPY: Record<string, string> = {
   browser_tab_limit: "Too many tabs are open, so I stopped.",
 };
 
+const AUTH_LINE = "No model account is available. Check Settings → Models & accounts, then retry.";
+
 const FALLBACK = "Something went wrong on my side.";
 
 export interface RuntimeErrorItem {
@@ -50,8 +52,11 @@ export function RuntimeErrorRow({
   const client = useClient();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const retryable = error.retryable ?? error.code === "interrupted";
-  const line = error.userMessage?.trim() || COPY[error.code] || FALLBACK;
+  // Sessions stopped by an earlier auth failure carry older wording and no Retry flag; a send
+  // recovers them now, so both are decided here from the code.
+  const auth = error.code === "auth_unavailable";
+  const retryable = auth || (error.retryable ?? error.code === "interrupted");
+  const line = auth ? AUTH_LINE : error.userMessage?.trim() || COPY[error.code] || FALLBACK;
 
   async function again() {
     if (!retry) return;

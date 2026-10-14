@@ -11,6 +11,13 @@ describe("API client", () => {
     expect((error as ApiError).message).toMatch(/no longer possible/);
   });
 
+  it("tells the person where to fix an unavailable model account when a send is refused", async () => {
+    const { client } = fakeClient(() => json(409, { code: "auth_unavailable", message: "auth unavailable" }));
+    const error = await client.resolveTicket("t1", true).catch((e: unknown) => e);
+    expect(error).toMatchObject({ status: 409, code: "auth_unavailable" });
+    expect((error as ApiError).message).toMatch(/Models & accounts/);
+  });
+
   it("keeps the daemon message for unknown codes and tolerates non-JSON bodies", async () => {
     const { client } = fakeClient(() => json(400, { code: "brand_new", message: "brand new failure" }));
     await expect(client.health()).rejects.toMatchObject({ code: "brand_new", message: "brand new failure" });

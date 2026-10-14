@@ -620,18 +620,24 @@ impl Shared {
         let _ = self.events.send(event.clone());
         Ok(event)
     }
+    /// True when the latest `auth_unavailable` is newer than the latest `runtime.started`: a
+    /// fresh runtime is what proves the credentials work again.
     pub(crate) async fn auth_failed(&self, id: &SessionId) -> Result<bool> {
         let mut after = 0;
+        let mut failed = false;
         loop {
             let events = self.db.events(id, after).await?;
             if events.is_empty() {
-                return Ok(false);
+                return Ok(failed);
             }
             for event in events {
                 after = event.seq;
-                if matches!(event.kind, EventKind::RuntimeError { code, .. } if code == "auth_unavailable")
-                {
-                    return Ok(true);
+                match event.kind {
+                    EventKind::RuntimeError { code, .. } if code == "auth_unavailable" => {
+                        failed = true;
+                    }
+                    EventKind::RuntimeStarted { .. } => failed = false,
+                    _ => {}
                 }
             }
         }
@@ -643,6 +649,12 @@ impl Shared {
         {
             return Err("session authentication is unavailable".into());
         }
+        self.command_unlatched(id, action).await
+    }
+    /// Like `command`, for an explicit send: after an auth failure it starts a fresh runtime
+    /// (and so asks for credentials again) instead of refusing.
+    pub(crate) async fn command_unlatched(&self, id: &SessionId, action: Action) -> Result<()> {
+        self.db.state(id).await?;
         let sender = {
             let mut actors = self.actors.lock().await;
             match actors.get(id) {
@@ -1227,8 +1239,14 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
     let mut session = match opened {
         Ok(session) => session,
         Err(error) => {
-            fail(shared, id, live, error).await?;
-            return Err("runtime startup failed".into());
+            let auth = matches!(error, RuntimeError::AuthUnavailable(_));
+            fail(shared, id, live, error.clone()).await?;
+            // The API turns this into an actionable `auth_unavailable` response.
+            return Err(if auth {
+                error.into()
+            } else {
+                "runtime startup failed".into()
+            });
         }
     };
     shared
@@ -1598,7 +1616,7 @@ async fn fail(shared: &Shared, id: &SessionId, live: &mut Live, error: RuntimeEr
                     "runtime_unavailable"
                 },
                 if auth {
-                    "Configured credential sources are unavailable; the session is stopped."
+                    "Configured credential sources are unavailable; send again after checking Models & accounts."
                 } else {
                     "Agent runtime unavailable; retrying a queued message will start a new process."
                 },

@@ -94,6 +94,12 @@ impl From<Error> for HttpError {
         if storage_full(error.as_ref()) {
             return Self(StatusCode::INSUFFICIENT_STORAGE, "storage_full");
         }
+        if matches!(
+            error.downcast_ref::<openside_core::RuntimeError>(),
+            Some(openside_core::RuntimeError::AuthUnavailable(_))
+        ) {
+            return Self(StatusCode::CONFLICT, "auth_unavailable");
+        }
         Self::conflict()
     }
 }
@@ -1027,9 +1033,8 @@ async fn submit(
         }
     }
     caller.record_driver(&s, &id).await?;
-    if s.auth_failed(&id).await? {
-        return Err(HttpError::conflict());
-    }
+    // An earlier auth failure does not block a new send: delivery starts a fresh runtime,
+    // which asks the credential broker again.
     let mid = request
         .message_id
         .unwrap_or_else(|| MessageId::new(random_id()));
@@ -1058,7 +1063,7 @@ async fn submit(
     .await?;
     drop(gate);
     drop(agent_gate);
-    s.command(&id, Action::Deliver).await?;
+    s.command_unlatched(&id, Action::Deliver).await?;
     Ok((StatusCode::ACCEPTED, Json(s.message(&id, &mid).await?)))
 }
 async fn edit(
