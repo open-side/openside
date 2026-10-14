@@ -11,7 +11,7 @@ import { ErrorNote, ResourceCard, ResourceView, SectionList, type BadgeTone } fr
 import { Button, copyText, ICON_STROKE, Segmented, Spinner, useToast } from "../ui";
 import { ConnectPhone } from "./ConnectPhone";
 import { LocalOnlyNotice } from "./LocalOnlyNotice";
-import { recommendation, TRANSPORT_NAMES, transportViews, type TransportId, type TransportPhase, type TransportView } from "./transports";
+import { midSentence, recommendation, TRANSPORT_NAMES, transportViews, type TransportId, type TransportPhase, type TransportView } from "./transports";
 import "./remote.css";
 
 const POLL_MS = 4_000;
@@ -129,7 +129,7 @@ function TransportCard({
       {view.url && (
         <div className="remote-url">
           <code>{view.url}</code>
-          <Button size="compact" variant="ghost" aria-label={`Copy the ${name} address`} onClick={() => void copy(view.url!)}>
+          <Button size="compact" variant="ghost" aria-label={`Copy the ${midSentence(name)} address`} onClick={() => void copy(view.url!)}>
             <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
             Copy
           </Button>
@@ -202,13 +202,13 @@ function TransportCard({
                 </Button>
               )}
               <Button variant="secondary" size="compact" disabled={busy} onClick={() => void apply(false)}>
-                Turn off {name}
+                Turn off {midSentence(name)}
               </Button>
             </>
           ) : (
             <Button variant={recommended ? "primary" : "secondary"} size="compact" disabled={busy} onClick={() => void apply(true)}>
               {busy && <Spinner size={14} />}
-              Turn on {name}
+              Turn on {midSentence(name)}
             </Button>
           )}
         </div>

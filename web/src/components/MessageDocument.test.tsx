@@ -36,7 +36,10 @@ describe("documents attached to a message", () => {
     const daemon = mount();
     const bubble = document.querySelector<HTMLElement>(".bubble.assistant")!;
     const inline = within(bubble).getByRole("region", { name: "Trip notes" });
+    // Before its text arrives the document is a placeholder, never an empty box.
+    expect(within(inline).getByRole("status", { name: "Loading document" })).toBeInTheDocument();
     expect(await within(inline).findByRole("heading", { name: "Trip notes" })).toBeInTheDocument();
+    expect(within(inline).queryByRole("status")).toBeNull();
     expect(within(inline).getByText("passport")).toBeInTheDocument();
     expect(bubble.firstElementChild).toHaveClass("message-documents");
     expect(within(bubble).getByText("Here are both.")).toBeInTheDocument();

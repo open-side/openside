@@ -21,6 +21,9 @@ export const TRANSPORT_NAMES: Record<TransportId, string> = {
   relay: "Your own relay",
 };
 
+/** A name inside a sentence ("Turn on your own relay"); it stays as is where it starts one or stands alone. */
+export const midSentence = (name: string) => name.replace(/^Your /, "your ");
+
 /** Daemon errors arrive without a final full stop; the fix hint after them needs one. */
 const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 
@@ -140,7 +143,7 @@ export function connectionProblem(status: RemoteStatus, via: TransportId | null)
   if (starting) {
     const message = retrying(status, starting.id)
       ? `${UNREACHABLE[starting.id]} Retrying…`
-      : `Starting ${TRANSPORT_NAMES[starting.id]}… The QR code appears as soon as it is ready.`;
+      : `Starting ${midSentence(TRANSPORT_NAMES[starting.id])}… The QR code appears as soon as it is ready.`;
     return { kind: "starting", id: starting.id, message };
   }
   const failed = views.find((view) => view.phase === "error");

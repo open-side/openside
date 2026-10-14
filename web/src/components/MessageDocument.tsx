@@ -54,7 +54,15 @@ function InlineDocument({ sessionId, document }: { sessionId: string; document: 
         <p className="doc-failed">{FAILED}</p>
       ) : (
         <div className="doc-inline-body" ref={body} aria-busy={text === null}>
-          {text === null ? null : <Markdown text={text} />}
+          {text === null ? (
+            <span className="doc-skeleton" role="status" aria-label="Loading document">
+              <span className="doc-skeleton-bar" aria-hidden="true" />
+              <span className="doc-skeleton-bar" aria-hidden="true" />
+              <span className="doc-skeleton-bar" aria-hidden="true" />
+            </span>
+          ) : (
+            <Markdown text={text} />
+          )}
         </div>
       )}
       {clipped ? (

@@ -151,6 +151,17 @@ describe("ConnectPhone with a connection", () => {
     expect(pairingRequests(daemon.calls)).toHaveLength(1);
   });
 
+  it("names the relay in lower case inside the sentence that says which connection is used", async () => {
+    const base = offStatus();
+    const status = offStatus({
+      configuration: { ...base.configuration, relay: { enabled: true, url: "https://relay.example.com", token_file: null } },
+      relay: { state: "connected", url: "https://relay.example.com", daemon_id: "id", daemon_key: "k", clients: 0, last_error: null, e2ee: true },
+    });
+    open(remoteDaemon({ status }), status);
+    await screen.findByRole("img");
+    expect(screen.getByText(/^Through/)).toHaveTextContent("Through your own relay");
+  });
+
   it("starts with the connection the daemon prefers and switches under Change connection", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const status = tailscaleOn({

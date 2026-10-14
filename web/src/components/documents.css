@@ -30,6 +30,37 @@
 .doc-inline-body[aria-busy="true"] {
   min-height: 3.2em;
 }
+/* No text yet: a calm outline of a few lines, never an empty box. Tinted from the text colour so it reads on both themes. */
+.doc-skeleton {
+  display: grid;
+  gap: 10px;
+}
+.doc-skeleton-bar {
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, color-mix(in srgb, currentColor 9%, transparent) 0%, color-mix(in srgb, currentColor 16%, transparent) 50%, color-mix(in srgb, currentColor 9%, transparent) 100%) 0 0 / 200% 100%;
+  animation: doc-skeleton 1.4s ease-in-out infinite;
+}
+.doc-skeleton-bar:nth-child(1) {
+  width: 42%;
+  height: 16px;
+}
+.doc-skeleton-bar:nth-child(2) {
+  width: 88%;
+}
+.doc-skeleton-bar:nth-child(3) {
+  width: 64%;
+}
+@keyframes doc-skeleton {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .doc-skeleton-bar {
+    animation: none;
+  }
+}
 .doc-inline[data-open="true"] .doc-inline-body {
   max-height: none;
 }

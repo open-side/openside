@@ -29,7 +29,10 @@ const TIER_LABEL: Record<ModelTier, string> = { fast: "Fast", reasoning: "Reason
 function ModelRoles({ catalog, readOnly, busy, onSave }: { catalog: ModelCatalog; readOnly: boolean; busy: boolean; onSave: (next: Roles) => void }) {
   const reasoning = catalog.default_model ?? null;
   const fast = catalog.fast_model ?? null;
-  const known = (id: string | null) => catalog.providers.some((provider) => provider.models.some((model) => model.id === id));
+  const find = (id: string | null) => catalog.providers.flatMap((provider) => provider.models).find((model) => model.id === id);
+  const known = (id: string | null) => find(id) !== undefined;
+  /** The picker's name for a model, so a chip reads the same as the list it was chosen from. */
+  const nameOf = (id: string) => find(id)?.label ?? id;
   const taken = new Set([reasoning, ...catalog.fallback_models]);
   const save = (patch: Partial<Roles>) => onSave({ reasoning: reasoning ?? "", fast, fallbacks: catalog.fallback_models, ...patch });
 
@@ -65,7 +68,7 @@ function ModelRoles({ catalog, readOnly, busy, onSave }: { catalog: ModelCatalog
             <p>Answers quickly and hands bigger work to the reasoning model.</p>
           </div>
           {readOnly ? (
-            <span className="default-model-value">{fast ?? "Same as reasoning model"}</span>
+            <span className="default-model-value">{fast ? nameOf(fast) : "Same as reasoning model"}</span>
           ) : (
             <Select
               id="fast-model"
@@ -82,7 +85,7 @@ function ModelRoles({ catalog, readOnly, busy, onSave }: { catalog: ModelCatalog
             <p>Does the thinking for tasks and teammates.</p>
           </div>
           {readOnly ? (
-            <span className="default-model-value">{reasoning ?? "Not set"}</span>
+            <span className="default-model-value">{reasoning ? nameOf(reasoning) : "Not set"}</span>
           ) : (
             <Select
               id="reasoning-model"
@@ -101,9 +104,9 @@ function ModelRoles({ catalog, readOnly, busy, onSave }: { catalog: ModelCatalog
               <ul className="fallback-list">
                 {catalog.fallback_models.map((id) => (
                   <li key={id} className="fallback-chip">
-                    <span title={id}>{id}</span>
+                    <span title={id}>{nameOf(id)}</span>
                     {readOnly ? null : (
-                      <IconButton label={`Remove fallback ${id}`} size="small" disabled={busy} onClick={() => save({ fallbacks: catalog.fallback_models.filter((other) => other !== id) })}>
+                      <IconButton label={`Remove fallback ${nameOf(id)}`} size="small" disabled={busy} onClick={() => save({ fallbacks: catalog.fallback_models.filter((other) => other !== id) })}>
                         <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
                       </IconButton>
                     )}

@@ -122,11 +122,16 @@ export function TaskUnit(props: TaskUnitProps) {
 }
 
 function StepTask({ task, onShowPending }: TaskUnitProps) {
-  const steps = taskSteps(task.progress).map((step) => step.text);
+  const steps = taskSteps(task.progress);
   const tone = toneOf(task, false);
-  const line =
-    tone === "running" ? (steps.at(-1) ?? (task.progress.length ? "Thinking" : "Starting")) : tone === "warn" ? "Waiting for you" : taskLine(task);
-  const earlier = (tone === "running" ? steps.slice(0, -1) : steps).slice(-2).filter((entry) => entry !== line).reverse();
+  const running = tone === "running";
+  const line = running ? (steps.at(-1)?.text ?? (task.progress.length ? "Thinking" : "Starting")) : tone === "warn" ? "Waiting for you" : taskLine(task);
+  // A call still open when the Task ended was never finished; its present-tense phrase must not outlive the Task.
+  const earlier = (running ? steps.slice(0, -1) : steps.filter((step) => step.state !== "running"))
+    .slice(-2)
+    .map((step) => step.text)
+    .filter((entry) => entry !== line)
+    .reverse();
   return (
     <div className="task-browser" data-tone={tone} data-task={task.id} data-status={task.status}>
       <StepBubble tone={tone} line={line} label={`${task.task}: ${line}`} {...(tone === "warn" ? { onClick: onShowPending } : {})} />
@@ -154,8 +159,9 @@ function BrowserTask({ sessionId, task, state, newest, onShowPending }: TaskUnit
 
   const tone = toneOf(task, state.phase === "waiting_human");
   const line = tone === "running" ? browserLine(state) : tone === "warn" ? "Action needed" : taskLine(task);
-  // Once the Task has ended, its last browser step joins the trail under the result line.
-  const earlier = (tone === "done" || tone === "failed" ? [...state.trail, browserLine(state)].slice(-2) : state.trail).filter((entry) => entry !== line).reverse();
+  // Its browser steps are phrased in the present tense, so a Task that has ended keeps only the result line.
+  const ended = tone === "done" || tone === "failed";
+  const earlier = (ended ? [] : state.trail).filter((entry) => entry !== line).reverse();
   const title = state.title.trim() || state.host || "Browser";
   // Once the Task has left the page to write its answer, stopping it would only lose the answer.
   const stoppable = active && state.phase !== "done";

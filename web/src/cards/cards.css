@@ -23,6 +23,8 @@
   --oc-ease: var(--ease, cubic-bezier(0.2, 0, 0, 1));
   --oc-fast: var(--fast, 140ms);
   display: grid;
+  /* The screen-reader live region is absolutely placed; without a positioned root it escapes the thread's scroller and lets the page scroll under the composer. */
+  position: relative;
   gap: 8px;
   box-sizing: border-box;
   max-width: 100%;

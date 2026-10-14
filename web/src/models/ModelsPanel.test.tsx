@@ -237,8 +237,9 @@ describe("ModelsPanel", () => {
 
     await chooseOption(user, await screen.findByLabelText("Add a fallback"), /GPT-6 Luna/);
     const chips = await screen.findByRole("group", { name: "Fallback models" });
-    expect(within(chips).getByText("openai:gpt-6-luna")).toBeInTheDocument();
-    await user.click(within(chips).getByRole("button", { name: "Remove fallback openai:gpt-6-luna" }));
+    expect(within(chips).getByText("GPT-6 Luna")).toBeInTheDocument();
+    expect(within(chips).queryByText("openai:gpt-6-luna")).toBeNull();
+    await user.click(within(chips).getByRole("button", { name: "Remove fallback GPT-6 Luna" }));
     await waitFor(() => expect(daemon.state.fallbacks).toEqual([]));
   });
 

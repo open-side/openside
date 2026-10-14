@@ -8,7 +8,7 @@ import { manageLinkState } from "../pages/manageRoutes";
 import { ErrorNote } from "../pages/blocks";
 import { Button, copyText, ICON_STROKE, QrCode, Segmented, Spinner, useToast } from "../ui";
 import { LocalOnlyNotice } from "./LocalOnlyNotice";
-import { connectionProblem, enableTransport, oneClickTransport, pairingOptions, TRANSPORT_NAMES, type ConnectionProblem, type PairingOption, type TransportId } from "./transports";
+import { connectionProblem, enableTransport, midSentence, oneClickTransport, pairingOptions, TRANSPORT_NAMES, type ConnectionProblem, type PairingOption, type TransportId } from "./transports";
 import "./remote.css";
 
 const POLL_MS = 3_000;
@@ -121,7 +121,7 @@ function Unavailable({
         <div className="pair-actions">
           <Button variant="primary" disabled={busy} onClick={() => void turnOn()}>
             {busy && <Spinner size={16} />}
-            {problem.kind === "error" ? "Try again" : `Turn on ${name}`}
+            {problem.kind === "error" ? "Try again" : `Turn on ${midSentence(name)}`}
           </Button>
         </div>
       )}
@@ -362,7 +362,7 @@ export function ConnectPhone({
       <div className="pair-secondary">
         <p className="pair-via">
           <span>
-            Through <strong>{selected.label}</strong>
+            Through <strong>{midSentence(selected.label)}</strong>
           </span>
           {options.length > 1 && (
             <Button size="compact" variant="ghost" aria-expanded={changing} onClick={() => setChanging((open) => !open)}>

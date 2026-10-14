@@ -154,4 +154,21 @@ describe("TaskUnit", () => {
     expect(screen.getByRole("region", { name: /Browser:/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop this task" })).toBeNull();
   });
+
+  it("a finished Task keeps only how it ended, with no present-tense activity", () => {
+    const { unmount } = setup(task("completed", "Signed in to mail."), state({ phase: "done", action: null }));
+    expect(screen.getByRole("button", { name: /Show the browser/ })).toHaveTextContent("Signed in to mail.");
+    expect(screen.queryByRole("list", { name: "Earlier steps" })).toBeNull();
+    expect(screen.queryByText(/Reading|Opening|Typing/)).toBeNull();
+    unmount();
+
+    const progress = [
+      { kind: "tool.started", tool_call_id: "c1", name: "web_fetch", args: {} },
+      { kind: "tool.ended", tool_call_id: "c1", name: "web_fetch", result: {}, is_error: false, status_text: "Read the forecast" },
+      { kind: "tool.started", tool_call_id: "c2", name: "web_fetch", args: {}, status_text: "Checking the radar" },
+    ];
+    setup({ ...task("cancelled"), progress }, null);
+    expect(within(screen.getByRole("list", { name: "Earlier steps" })).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Read the forecast"]);
+    expect(screen.queryByText("Checking the radar")).toBeNull();
+  });
 });

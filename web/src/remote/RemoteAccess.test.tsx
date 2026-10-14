@@ -125,11 +125,11 @@ describe("RemoteAccess", () => {
     const daemon = remoteDaemon({ status: offStatus() });
     open(daemon);
     const relay = await card("Your own relay");
-    await user.click(within(relay).getByRole("button", { name: "Turn on Your own relay" }));
+    await user.click(within(relay).getByRole("button", { name: "Turn on your own relay" }));
     expect(within(relay).getByRole("alert")).toHaveTextContent("Enter the address of your relay");
 
     await user.type(within(relay).getByLabelText("Relay address"), "https://relay.example.com");
-    await user.click(within(relay).getByRole("button", { name: "Turn on Your own relay" }));
+    await user.click(within(relay).getByRole("button", { name: "Turn on your own relay" }));
     expect(sent(daemon, "PUT", "/v1/remote/relay")).toEqual({ enabled: true, url: "https://relay.example.com", token_file: null });
   });
 
