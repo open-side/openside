@@ -3132,6 +3132,9 @@ impl Browser {
         if result["success"] != true {
             return Err(BrowserError::TabNotReady(id.to_owned()));
         }
+        // Staged files are drained below; retire_target must not also spawn a second concurrent
+        // `remove_tab`, whose unlinks would race this one and fail with NotFound.
+        state.uploads.remove(id);
         // The command reply can precede targetDestroyed by an arbitrary event backlog.
         // Retire the acknowledged target now so a following revoke cannot re-arm its session.
         retire_target(&self.inner, &mut state, id, silent);
@@ -3838,7 +3841,7 @@ async fn handle_event(inner: &Inner, event: Value) {
         }
         "Target.targetDestroyed" => {
             if let Some(id) = params["targetId"].as_str() {
-                retire_target(inner, &mut state, id, true);
+                retire_target(inner, &mut state, id, false);
             }
         }
         "Target.detachedFromTarget" => {
@@ -4242,6 +4245,70 @@ mod tests {
             .await
             .tabs
             .contains_key("owned-page"));
+        server.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closing_a_tab_with_staged_uploads_drains_them_exactly_once() {
+        for round in 0..20 {
+            let (mut browser, server, _requested) =
+                shutdown_fixture("exit 0", true, true, true).await;
+            let root = tempfile::tempdir().unwrap();
+            browser.process.profile = root.path().to_owned();
+            let mut tab = target_tab(
+                &json!({"type":"page","targetId":"owned-page","url":"https://example.com"}),
+            )
+            .unwrap();
+            tab.owner_session_id = Some("owner".into());
+            tab.opened_by = OpenedBy::Agent;
+            let staged = root.path().join("upload-staging/owned-page");
+            for copy in 0..20 {
+                std::fs::create_dir_all(staged.join(format!("copy{copy}"))).unwrap();
+                std::fs::write(staged.join(format!("copy{copy}/file")), b"x").unwrap();
+            }
+            {
+                let mut state = browser.inner.state.lock().await;
+                state.tabs.insert(tab.id.clone(), tab);
+                state
+                    .uploads
+                    .insert("owned-page".into(), root.path().to_owned());
+            }
+            // A second, detached drain would race the awaited one and fail with NotFound.
+            browser
+                .close_agent_tab("owner", "owned-page")
+                .await
+                .unwrap_or_else(|error| panic!("round {round}: {error:?}"));
+            assert!(!staged.exists(), "round {round}");
+            server.abort();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_page_initiated_close_is_a_visible_tab_closed_event() {
+        let (mut browser, server, _requested) = shutdown_fixture("exit 0", true, true, true).await;
+        let (events, mut receiver) = mpsc::unbounded_channel();
+        Arc::get_mut(&mut browser.inner).unwrap().events = events;
+        let tab =
+            target_tab(&json!({"type":"page","targetId":"popup","url":"https://example.com"}))
+                .unwrap();
+        browser
+            .inner
+            .state
+            .lock()
+            .await
+            .tabs
+            .insert(tab.id.clone(), tab);
+        handle_event(
+            &browser.inner,
+            json!({"method":"Target.targetDestroyed","params":{"targetId":"popup"}}),
+        )
+        .await;
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            BrowserEvent::TabClosed { tab, silent: false } if tab.id == "popup"
+        ));
         server.abort();
     }
 
