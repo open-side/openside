@@ -284,14 +284,21 @@ impl Browser {
                         return None;
                     }
                     Some((
+                        tab.id.clone(),
                         session.clone(),
                         force || self.inner.network.owner_restricted(principal),
                     ))
                 })
                 .collect()
         };
-        for (session, restricted) in sessions {
-            requests::arm_session(&self.inner, &session, restricted, false).await?;
+        for (tab, session, restricted) in sessions {
+            if let Err(error) =
+                requests::arm_session(&self.inner, &session, restricted, false).await
+            {
+                if !self.retire_gone_target(&tab).await {
+                    return Err(error);
+                }
+            }
         }
         requests::refresh_worker_fence(&self.inner).await?;
         Ok(())
@@ -310,14 +317,25 @@ impl Browser {
             if owner.is_some_and(|owner| owner != principal) {
                 continue;
             }
-            let same_site = matches(&tab.url)
-                || self
-                    .frames(principal, &tab.id)
-                    .await?
-                    .iter()
-                    .any(|frame| matches(&frame.url));
+            let same_site = if matches(&tab.url) {
+                true
+            } else {
+                match self.frames(principal, &tab.id).await {
+                    Ok(frames) => frames.iter().any(|frame| matches(&frame.url)),
+                    Err(error) => {
+                        if self.retire_gone_target(&tab.id).await {
+                            continue;
+                        }
+                        return Err(error);
+                    }
+                }
+            };
             if same_site {
-                self.close_agent_tab(principal, &tab.id).await?;
+                if let Err(error) = self.close_agent_tab(principal, &tab.id).await {
+                    if !self.retire_gone_target(&tab.id).await {
+                        return Err(error);
+                    }
+                }
             }
         }
         Ok(())

@@ -1457,7 +1457,17 @@ async fn connection_tools_document_grants_cover_navigation_repl_frames_and_forge
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::NO_CONTENT,
+            "revoking {}: {}",
+            row.id,
+            String::from_utf8_lossy(&body)
+        );
     }
     assert!(daemon
         .shared

@@ -2027,7 +2027,7 @@ impl Browser {
         let ready = tokio::select! {
             biased;
             () = cancellation => {
-                if self.close_agent_tab(owner, &id).await.is_err() {
+                if self.close_agent_tab_silently(owner, &id).await.is_err() {
                     // If closing was not acknowledged, retain admission until the issued load settles.
                     let _ = ready.await;
                 }
@@ -2037,7 +2037,7 @@ impl Browser {
         };
         if let Err(error) = ready {
             if !matches!(error, BrowserError::ConnectionGrantRequired { .. }) {
-                let _ = self.close_agent_tab(owner, &id).await;
+                let _ = self.close_agent_tab_silently(owner, &id).await;
             }
             return Err(error);
         }
@@ -3078,8 +3078,47 @@ impl Browser {
         }
     }
 
+    pub(super) async fn retire_gone_target(&self, id: &str) -> bool {
+        // Only a successful browser-level inventory proves a failed page command raced closure.
+        // Transport errors and still-live targets must continue to block revocation.
+        let Ok(targets) = self
+            .inner
+            .cdp
+            .call(None, "Target.getTargets", json!({}))
+            .await
+        else {
+            return false;
+        };
+        let Some(targets) = targets["targetInfos"].as_array() else {
+            return false;
+        };
+        if targets.iter().any(|target| target["targetId"] == id) {
+            return false;
+        }
+        retire_target(&self.inner, &mut *self.inner.state.lock().await, id, true);
+        true
+    }
+
     /// Close a session-owned tab, including a popup in that session's active isolated space.
     pub async fn close_agent_tab(&self, owner: &str, id: &str) -> Result<(), BrowserError> {
+        self.close_agent_tab_inner(owner, id, true).await
+    }
+
+    /// Close a tab whose terminal owner already published its final browser state.
+    pub async fn close_agent_tab_silently(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Result<(), BrowserError> {
+        self.close_agent_tab_inner(owner, id, false).await
+    }
+
+    async fn close_agent_tab_inner(
+        &self,
+        owner: &str,
+        id: &str,
+        emit_closed: bool,
+    ) -> Result<(), BrowserError> {
         let mut state = self.inner.state.lock().await;
         check_owned(&state, owner, id)?;
         let result = self
@@ -3093,6 +3132,9 @@ impl Browser {
         state.upload_closing.insert(id.to_owned());
         *state.upload_epochs.entry(id.to_owned()).or_default() += 1;
         state.uploads.remove(id);
+        // The command reply can precede targetDestroyed by an arbitrary event backlog.
+        // Retire the acknowledged target now so a following revoke cannot re-arm its session.
+        retire_target(&self.inner, &mut state, id, emit_closed);
         drop(state);
         let (root, tab) = (self.profile_path().to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || uploads::remove_tab(&root, &tab))
@@ -3664,6 +3706,46 @@ fn committed_origin(value: &str) -> Option<String> {
     matches!(url.scheme(), "http" | "https").then(|| url.origin().ascii_serialization())
 }
 
+fn retire_target(inner: &Inner, state: &mut State, id: &str, emit_closed: bool) {
+    state.closing_tabs.remove(id);
+    state.upload_closing.remove(id);
+    state.upload_epochs.remove(id);
+    if let Some(root) = state.uploads.remove(id) {
+        let tab = id.to_owned();
+        tokio::task::spawn_blocking(move || uploads::remove_tab(&root, &tab));
+    }
+    if let Some(session) = state.sessions.remove(id) {
+        inner.cdp.forget_session(&session);
+    }
+    state.references.remove(id);
+    state.frames.retain(|_, target| target != id);
+    state.pending_openers.remove(id);
+    state.tab_contexts.remove(id);
+    inner.network.request_epochs.lock().remove(id);
+    state.worker_sessions.retain(|worker, (tab, session)| {
+        if worker == id || tab == id {
+            inner.cdp.forget_session(session);
+            false
+        } else {
+            true
+        }
+    });
+    state.oopif_sessions.retain(|frame, (tab, session)| {
+        if frame == id || tab == id {
+            inner.cdp.forget_session(session);
+            false
+        } else {
+            true
+        }
+    });
+    inner.page.tab_gone(id);
+    if let Some(tab) = state.tabs.remove(id) {
+        if emit_closed {
+            let _ = inner.events.send(BrowserEvent::TabClosed { tab });
+        }
+    }
+}
+
 async fn handle_event(inner: &Inner, event: Value) {
     let params = &event["params"];
     let mut state = inner.state.lock().await;
@@ -3758,41 +3840,7 @@ async fn handle_event(inner: &Inner, event: Value) {
         }
         "Target.targetDestroyed" => {
             if let Some(id) = params["targetId"].as_str() {
-                state.closing_tabs.remove(id);
-                state.upload_closing.remove(id);
-                state.upload_epochs.remove(id);
-                if let Some(root) = state.uploads.remove(id) {
-                    let tab = id.to_owned();
-                    tokio::task::spawn_blocking(move || uploads::remove_tab(&root, &tab));
-                }
-                if let Some(session) = state.sessions.remove(id) {
-                    inner.cdp.forget_session(&session);
-                }
-                state.references.remove(id);
-                state.frames.retain(|_, target| target != id);
-                state.pending_openers.remove(id);
-                state.tab_contexts.remove(id);
-                inner.network.request_epochs.lock().remove(id);
-                state.worker_sessions.retain(|worker, (tab, session)| {
-                    if worker == id || tab == id {
-                        inner.cdp.forget_session(session);
-                        false
-                    } else {
-                        true
-                    }
-                });
-                state.oopif_sessions.retain(|frame, (tab, session)| {
-                    if frame == id || tab == id {
-                        inner.cdp.forget_session(session);
-                        false
-                    } else {
-                        true
-                    }
-                });
-                inner.page.tab_gone(id);
-                if let Some(tab) = state.tabs.remove(id) {
-                    let _ = inner.events.send(BrowserEvent::TabClosed { tab });
-                }
+                retire_target(inner, &mut state, id, true);
             }
         }
         "Target.detachedFromTarget" => {
@@ -4030,6 +4078,96 @@ mod tests {
             isolated: false,
         };
         (browser, server, receiver)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn connection_revoke_retires_acknowledged_tabs_without_destroyed_events() {
+        for emit_closed in [true, false] {
+            let (mut browser, server, _requested) =
+                shutdown_fixture("exit 0", true, true, true).await;
+            let root = tempfile::tempdir().unwrap();
+            browser.process.profile = root.path().to_owned();
+            let (events, mut receiver) = mpsc::unbounded_channel();
+            Arc::get_mut(&mut browser.inner).unwrap().events = events;
+            let mut tab = target_tab(
+                &json!({"type":"page","targetId":"owned-page","url":"https://example.com"}),
+            )
+            .unwrap();
+            tab.owner_session_id = Some("owner".into());
+            tab.opened_by = OpenedBy::Agent;
+            {
+                let mut state = browser.inner.state.lock().await;
+                state.tabs.insert(tab.id.clone(), tab);
+                state.sessions.insert("owned-page".into(), "session".into());
+                state.oopif_sessions.insert(
+                    "frame".into(),
+                    ("owned-page".into(), "frame-session".into()),
+                );
+                state.worker_sessions.insert(
+                    "worker".into(),
+                    ("owned-page".into(), "worker-session".into()),
+                );
+            }
+            assert!(!browser.retire_gone_target("owned-page").await);
+            // The fixture never sends targetDestroyed, deterministically retaining the backlog.
+            if emit_closed {
+                browser
+                    .close_agent_tab("owner", "owned-page")
+                    .await
+                    .unwrap();
+            } else {
+                browser
+                    .close_agent_tab_silently("owner", "owned-page")
+                    .await
+                    .unwrap();
+            }
+            {
+                let state = browser.inner.state.lock().await;
+                assert!(state.tabs.is_empty());
+                assert!(state.sessions.is_empty());
+                assert!(state.oopif_sessions.is_empty());
+                assert!(state.worker_sessions.is_empty());
+            }
+            browser.rearm_connection_requests(None, true).await.unwrap();
+            browser.close_connection_tabs(None, |_| true).await.unwrap();
+            assert!(browser.retire_gone_target("owned-page").await);
+            handle_event(
+                &browser.inner,
+                json!({"method":"Target.targetDestroyed","params":{"targetId":"owned-page"}}),
+            )
+            .await;
+            if emit_closed {
+                assert!(matches!(
+                    receiver.try_recv().unwrap(),
+                    BrowserEvent::TabClosed { tab } if tab.id == "owned-page"
+                ));
+            }
+            assert!(receiver.try_recv().is_err());
+            server.abort();
+        }
+        let (browser, server, _requested) = shutdown_fixture("exit 0", true, true, false).await;
+        let mut tab =
+            target_tab(&json!({"type":"page","targetId":"owned-page","url":"https://example.com"}))
+                .unwrap();
+        tab.owner_session_id = Some("owner".into());
+        tab.opened_by = OpenedBy::Agent;
+        browser
+            .inner
+            .state
+            .lock()
+            .await
+            .tabs
+            .insert(tab.id.clone(), tab);
+        assert!(browser.close_connection_tabs(None, |_| true).await.is_err());
+        assert!(browser
+            .inner
+            .state
+            .lock()
+            .await
+            .tabs
+            .contains_key("owned-page"));
+        server.abort();
     }
 
     #[cfg(unix)]
