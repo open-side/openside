@@ -37,7 +37,7 @@ function setup(handler: (call: Call) => Response | Promise<Response> | undefined
 describe("MemoryModelCard", () => {
   it("downloads on request, shows byte progress, then offers the restart that starts vector search", async () => {
     const user = userEvent.setup();
-    let polls = 0;
+    let installed = false;
     let started = false;
     const { calls, changed } = setup((call) => {
       if (call.method === "POST" && call.path === "/v1/memory/model/download") {
@@ -46,8 +46,7 @@ describe("MemoryModelCard", () => {
       }
       if (call.path === "/v1/memory/model") {
         if (!started) return json(200, status());
-        polls += 1;
-        if (polls === 1) return json(200, status({ state: "downloading", file: "model.safetensors", files_done: 0, files_total: 2, bytes_done: 5 * 1024 * 1024, bytes_total: 30 * 1024 * 1024 }));
+        if (!installed) return json(200, status({ state: "downloading", file: "model.safetensors", files_done: 0, files_total: 2, bytes_done: 5 * 1024 * 1024, bytes_total: 30 * 1024 * 1024 }));
         return json(200, status({ state: "installed", installed: true, model_id: "potion-base-8M@abc", restart_required: true }));
       }
       return undefined;
@@ -66,6 +65,8 @@ describe("MemoryModelCard", () => {
     expect(card).toHaveTextContent("5.0 MB of 30.0 MB");
     expect(card).toHaveTextContent("file 1 of 2");
 
+    // Poll frequency must not decide when the simulated transfer finishes.
+    installed = true;
     expect(await screen.findByText("Installed")).toBeInTheDocument();
     expect(card).toHaveTextContent("potion-base-8M@abc");
     expect(screen.getByRole("button", { name: "Restart daemon" })).toBeInTheDocument();
