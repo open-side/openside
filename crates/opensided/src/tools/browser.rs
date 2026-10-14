@@ -254,7 +254,7 @@ impl Controller {
                     let owner = match &event {
                         BrowserEvent::TabOpened { tab }
                         | BrowserEvent::PopupOpened { tab, .. }
-                        | BrowserEvent::TabClosed { tab } => tab
+                        | BrowserEvent::TabClosed { tab, .. } => tab
                             .owner_session_id
                             .clone()
                             .or_else(|| owners.get(&tab.id).cloned()),
@@ -273,12 +273,14 @@ impl Controller {
                     };
                     if let Some(owner) = owner {
                         let session = SessionId::new(owner);
-                        let _ = shared
-                            .emit(&session, None, crate::browser_event(event.clone()))
-                            .await;
+                        if !matches!(event, BrowserEvent::TabClosed { silent: true, .. }) {
+                            let _ = shared
+                                .emit(&session, None, crate::browser_event(event.clone()))
+                                .await;
+                        }
                         crate::browser::steer_browser_event(&shared, &session, &event).await;
                     }
-                    if let BrowserEvent::TabClosed { tab } = &event {
+                    if let BrowserEvent::TabClosed { tab, .. } = &event {
                         owners.remove(&tab.id);
                         if let Some(owner) = &tab.owner_session_id {
                             shared
@@ -450,25 +452,15 @@ impl Controller {
             self.warm_tabs.lock().remove(session);
             return;
         };
-        if self.warm_tab(&browser, session).await.is_some() {
-            if browser
+        // The close retires the tab from the ledger before it returns, so nothing can expose or
+        // persist the expired target afterwards.
+        if self.warm_tab(&browser, session).await.is_some()
+            && browser
                 .close_agent_tab_silently(session.as_str(), &tab)
                 .await
                 .is_err()
-            {
-                return;
-            }
-            // closeTarget acknowledges the command before TargetDestroyed updates the ledger.
-            // Startup must not expose or persist an expired target while that event is pending.
-            let closed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-                while browser.tabs().await.iter().any(|info| info.id == tab) {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-            })
-            .await;
-            if closed.is_err() {
-                return;
-            }
+        {
+            return;
         }
         self.warm_tabs.lock().remove(session);
         let _ = self.persist(shared).await;
@@ -949,7 +941,7 @@ impl Controller {
                     BrowserEvent::TabOpened { tab } | BrowserEvent::PopupOpened { tab, .. } => {
                         tab.owner_session_id.clone()
                     }
-                    BrowserEvent::TabClosed { tab } => {
+                    BrowserEvent::TabClosed { tab, .. } => {
                         let known = tab_owners.remove(&tab.id);
                         if let Some(owner) = &tab.owner_session_id {
                             shared
@@ -1008,9 +1000,11 @@ impl Controller {
                 };
                 if let Some(owner) = owner {
                     let session = SessionId::new(owner);
-                    let _ = shared
-                        .emit(&session, None, crate::browser_event(event.clone()))
-                        .await;
+                    if !matches!(event, BrowserEvent::TabClosed { silent: true, .. }) {
+                        let _ = shared
+                            .emit(&session, None, crate::browser_event(event.clone()))
+                            .await;
+                    }
                     crate::browser::steer_browser_event(&shared, &session, &event).await;
                 }
                 let _ = shared.registry.browser.persist(&shared).await;

@@ -19,7 +19,7 @@ pub fn browser_event(event: BrowserEvent) -> EventKind {
                 url: public_url(&tab.url),
             }
         }
-        BrowserEvent::TabClosed { tab } => EventKind::TabClosed { tab_id: tab.id },
+        BrowserEvent::TabClosed { tab, .. } => EventKind::TabClosed { tab_id: tab.id },
         BrowserEvent::DownloadStarted {
             guid,
             url,
@@ -177,7 +177,7 @@ pub(crate) fn steer_text(event: &BrowserEvent) -> Option<String> {
                 origin(&tab.url)
             )
         }
-        BrowserEvent::TabClosed { tab } => format!(
+        BrowserEvent::TabClosed { tab, .. } => format!(
             "[browser event] Tab {} was closed; its refs are gone.",
             tab.id
         ),
@@ -230,13 +230,14 @@ pub(crate) async fn steer_browser_event(
     session: &openside_proto::SessionId,
     event: &BrowserEvent,
 ) {
+    let ledger = &shared.registry.browser.task_tabs;
+    if matches!(event, BrowserEvent::TabClosed { silent: true, .. }) {
+        // The closer published the final state; only the ledger forgets the tab.
+        ledger.event_owner(session, event);
+        return;
+    }
     if let Some(text) = steer_text(event) {
-        if let Some(task) = shared
-            .registry
-            .browser
-            .task_tabs
-            .event_owner(session, event)
-        {
+        if let Some(task) = ledger.event_owner(session, event) {
             let _ = shared
                 .command(
                     session,
@@ -286,7 +287,10 @@ mod tests {
             );
         }
         assert_eq!(
-            browser_event(BrowserEvent::TabClosed { tab: tab() }),
+            browser_event(BrowserEvent::TabClosed {
+                tab: tab(),
+                silent: false
+            }),
             EventKind::TabClosed {
                 tab_id: "t1".into()
             }

@@ -159,9 +159,10 @@ impl Browser {
             });
             state.uploads.remove(&tab);
             if let Some(closed) = state.tabs.remove(&tab) {
-                let _ = inner
-                    .events
-                    .send(super::BrowserEvent::TabClosed { tab: closed });
+                let _ = inner.events.send(super::BrowserEvent::TabClosed {
+                    tab: closed,
+                    silent: false,
+                });
             }
             drop(state);
             let _ =

@@ -549,7 +549,10 @@ async fn browser_notices_steer_only_the_owning_task_and_ignore_terminal_tasks() 
             suggested_filename: "file".into(),
             tab_id: Some(tab.id.clone()),
         },
-        BrowserEvent::TabClosed { tab: tab.clone() },
+        BrowserEvent::TabClosed {
+            tab: tab.clone(),
+            silent: false,
+        },
         BrowserEvent::DownloadFinished {
             guid: "download".into(),
             status: DownloadStatus::Completed,
@@ -581,11 +584,107 @@ async fn browser_notices_steer_only_the_owning_task_and_ignore_terminal_tasks() 
     crate::tasks::report_updates(&daemon.shared, &session)
         .await
         .unwrap();
-    crate::browser::steer_browser_event(&daemon.shared, &session, &BrowserEvent::TabClosed { tab })
-        .await;
+    crate::browser::steer_browser_event(
+        &daemon.shared,
+        &session,
+        &BrowserEvent::TabClosed { tab, silent: false },
+    )
+    .await;
     assert_eq!(runtime.0.lock().controls.len(), 3);
     assert!(!daemon.shared.db.events(&session, 0).await.unwrap().iter().any(|event|
         matches!(&event.kind, EventKind::MessageQueued { text, .. } if text.starts_with("[browser event]"))));
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn silent_tab_close_runs_daemon_cleanup_without_publishing_or_steering() {
+    use openside_browser::{BrowserEvent, OpenedBy, TabInfo};
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = front_daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "silent-close", PolicyMode::Full, None).await;
+    crate::engine::prewarm_runtime(&daemon.shared, &session).await;
+    start_browser_task(&daemon, &session, "task").await;
+    let ledger = &daemon.shared.registry.browser.task_tabs;
+    let navigation = &daemon.shared.connections.navigation;
+    let connection = vec!["connection".to_string()];
+    let info = |id: &str| TabInfo {
+        id: id.into(),
+        url: "https://example.test/".into(),
+        title: String::new(),
+        opened_by: OpenedBy::Agent,
+        owner_session_id: Some(session.to_string()),
+        discarded: false,
+        unloaded: false,
+        browser_context_id: None,
+    };
+    let dialog = |id: &str| BrowserEvent::DialogOpened {
+        tab_id: id.into(),
+        kind: "alert".into(),
+        message: String::new(),
+    };
+    for id in ["quiet", "loud"] {
+        ledger.claim(&session, id, "task");
+        navigation.activate(&session, id, 1, &connection);
+    }
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    daemon.shared.registry.browser.events(
+        &daemon.shared,
+        receiver,
+        HashMap::from([
+            ("quiet".to_owned(), session.to_string()),
+            ("loud".to_owned(), session.to_string()),
+        ]),
+    );
+    sender
+        .send(BrowserEvent::TabClosed {
+            tab: info("quiet"),
+            silent: true,
+        })
+        .unwrap();
+    sender
+        .send(BrowserEvent::TabClosed {
+            tab: info("loud"),
+            silent: false,
+        })
+        .unwrap();
+    // The pump handles events in order and drops a tab's navigation grants last, so once the
+    // visible close has finished every step for both tabs has run.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while navigation.document_allowed(&session, "loud", 1, &connection) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the visible close is fully processed");
+    assert!(daemon
+        .shared
+        .db
+        .events(&session, 0)
+        .await
+        .unwrap()
+        .iter()
+        .any(|event| matches!(&event.kind, EventKind::TabClosed { tab_id } if tab_id == "loud")));
+    for id in ["quiet", "loud"] {
+        assert!(ledger.event_owner(&session, &dialog(id)).is_none(), "{id}");
+        assert!(
+            !navigation.document_allowed(&session, id, 1, &connection),
+            "{id}"
+        );
+    }
+    assert!(!daemon
+        .shared
+        .db
+        .events(&session, 0)
+        .await
+        .unwrap()
+        .iter()
+        .any(|event| matches!(&event.kind, EventKind::TabClosed { tab_id } if tab_id == "quiet")));
+    {
+        let state = runtime.0.lock();
+        assert_eq!(state.controls.len(), 1, "only the visible close steers");
+        assert!(state.sent.is_empty());
+    }
     daemon.shutdown().await;
 }
 
@@ -736,6 +835,24 @@ async fn delayed_browser_probes_cannot_overwrite_newer_or_terminal_task_state() 
                 assert!(!daemon.shared.db.events(&session, 0).await.unwrap().iter().any(|event|
                     matches!(&event.kind, EventKind::TabClosed { tab_id } if tab_id == tab)),
                     "daemon cleanup must not generate a browser close event");
+                // The silent close publishes nothing, yet the event pump still forgets the tab.
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while ledger
+                        .event_owner(
+                            &session,
+                            &openside_browser::BrowserEvent::DialogOpened {
+                                tab_id: tab.into(),
+                                kind: "alert".into(),
+                                message: String::new(),
+                            },
+                        )
+                        .is_some()
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("a silently closed tab must leave no event owner behind");
             }
         }
     }).catch_unwind().await;
@@ -1186,6 +1303,21 @@ async fn terminal_task_preserves_tab_referenced_by_pending_person_step() {
             .browser
             .task_tabs
             .holder(&session, tab)
+            .is_none());
+        // The kept tab no longer routes its dialogs, downloads and popups to the ended Task.
+        assert!(daemon
+            .shared
+            .registry
+            .browser
+            .task_tabs
+            .event_owner(
+                &session,
+                &openside_browser::BrowserEvent::DialogOpened {
+                    tab_id: tab.into(),
+                    kind: "alert".into(),
+                    message: String::new(),
+                },
+            )
             .is_none());
     })
     .catch_unwind()

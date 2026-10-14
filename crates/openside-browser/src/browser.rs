@@ -293,6 +293,9 @@ pub enum BrowserEvent {
     TabClosed {
         /// Last known provenance and ownership metadata.
         tab: TabInfo,
+        /// The closer already published the owner's final state, so consumers must clean up
+        /// their per-tab bookkeeping but publish no event and send no notice.
+        silent: bool,
     },
     /// A page created another page through `window.open` or a target-blank link.
     PopupOpened {
@@ -3095,13 +3098,13 @@ impl Browser {
         if targets.iter().any(|target| target["targetId"] == id) {
             return false;
         }
-        retire_target(&self.inner, &mut *self.inner.state.lock().await, id, true);
+        retire_target(&self.inner, &mut *self.inner.state.lock().await, id, false);
         true
     }
 
     /// Close a session-owned tab, including a popup in that session's active isolated space.
     pub async fn close_agent_tab(&self, owner: &str, id: &str) -> Result<(), BrowserError> {
-        self.close_agent_tab_inner(owner, id, true).await
+        self.close_agent_tab_inner(owner, id, false).await
     }
 
     /// Close a tab whose terminal owner already published its final browser state.
@@ -3110,14 +3113,14 @@ impl Browser {
         owner: &str,
         id: &str,
     ) -> Result<(), BrowserError> {
-        self.close_agent_tab_inner(owner, id, false).await
+        self.close_agent_tab_inner(owner, id, true).await
     }
 
     async fn close_agent_tab_inner(
         &self,
         owner: &str,
         id: &str,
-        emit_closed: bool,
+        silent: bool,
     ) -> Result<(), BrowserError> {
         let mut state = self.inner.state.lock().await;
         check_owned(&state, owner, id)?;
@@ -3129,12 +3132,9 @@ impl Browser {
         if result["success"] != true {
             return Err(BrowserError::TabNotReady(id.to_owned()));
         }
-        state.upload_closing.insert(id.to_owned());
-        *state.upload_epochs.entry(id.to_owned()).or_default() += 1;
-        state.uploads.remove(id);
         // The command reply can precede targetDestroyed by an arbitrary event backlog.
         // Retire the acknowledged target now so a following revoke cannot re-arm its session.
-        retire_target(&self.inner, &mut state, id, emit_closed);
+        retire_target(&self.inner, &mut state, id, silent);
         drop(state);
         let (root, tab) = (self.profile_path().to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || uploads::remove_tab(&root, &tab))
@@ -3706,7 +3706,7 @@ fn committed_origin(value: &str) -> Option<String> {
     matches!(url.scheme(), "http" | "https").then(|| url.origin().ascii_serialization())
 }
 
-fn retire_target(inner: &Inner, state: &mut State, id: &str, emit_closed: bool) {
+fn retire_target(inner: &Inner, state: &mut State, id: &str, silent: bool) {
     state.closing_tabs.remove(id);
     state.upload_closing.remove(id);
     state.upload_epochs.remove(id);
@@ -3740,9 +3740,7 @@ fn retire_target(inner: &Inner, state: &mut State, id: &str, emit_closed: bool) 
     });
     inner.page.tab_gone(id);
     if let Some(tab) = state.tabs.remove(id) {
-        if emit_closed {
-            let _ = inner.events.send(BrowserEvent::TabClosed { tab });
-        }
+        let _ = inner.events.send(BrowserEvent::TabClosed { tab, silent });
     }
 }
 
@@ -4044,6 +4042,12 @@ mod tests {
                     .unwrap();
             }
         });
+        let browser = connected_browser(url, child, group).await;
+        (browser, server, receiver)
+    }
+
+    #[cfg(unix)]
+    async fn connected_browser(url: String, child: tokio::process::Child, group: Pid) -> Browser {
         let (cdp, _notifications) = Cdp::connect(&url, Duration::from_secs(2)).await.unwrap();
         let (events, _receiver) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
@@ -4060,7 +4064,7 @@ mod tests {
             page: Default::default(),
             profile_writes: AtomicUsize::new(0),
         });
-        let browser = Browser {
+        Browser {
             inner,
             process: Process {
                 child: parking_lot::Mutex::new(Some(child)),
@@ -4076,14 +4080,86 @@ mod tests {
             gateway: None,
             gateway_dir: None,
             isolated: false,
-        };
-        (browser, server, receiver)
+        }
+    }
+
+    /// A browser whose per-session CDP commands all fail while `Target.getTargets` reports the
+    /// owned page as listed or gone, as when a page dies between a revoke's steps.
+    #[cfg(unix)]
+    async fn failing_session_fixture(listed: bool) -> (Browser, JoinHandle<()>) {
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = Pid::from_raw(child.id().unwrap() as i32);
+        child.wait().await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = socket.next().await {
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let reply = if request["method"] == "Target.getTargets" {
+                    json!({"id":request["id"],"result":{"targetInfos":if listed {
+                        vec![json!({"targetId":"owned-page","type":"page"})]
+                    } else {
+                        Vec::new()
+                    }}})
+                } else {
+                    json!({"id":request["id"],"error":{"code":-32000,"message":"session closed"}})
+                };
+                socket
+                    .send(Message::Text(reply.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+        });
+        let browser = connected_browser(url, child, group).await;
+        let mut tab =
+            target_tab(&json!({"type":"page","targetId":"owned-page","url":"https://example.com"}))
+                .unwrap();
+        tab.owner_session_id = Some("owner".into());
+        tab.opened_by = OpenedBy::Agent;
+        {
+            let mut state = browser.inner.state.lock().await;
+            state.tabs.insert(tab.id.clone(), tab);
+            state.sessions.insert("owned-page".into(), "session".into());
+        }
+        (browser, server)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn revoke_tolerates_failing_sessions_only_for_verified_gone_targets() {
+        for listed in [true, false] {
+            let (browser, server) = failing_session_fixture(listed).await;
+            let rearmed = browser.rearm_connection_requests(None, true).await;
+            assert_eq!(rearmed.is_ok(), !listed, "arm failure, listed={listed}");
+            server.abort();
+
+            let (browser, server) = failing_session_fixture(listed).await;
+            let closed = browser.close_connection_tabs(None, |_| false).await;
+            assert_eq!(closed.is_ok(), !listed, "frames failure, listed={listed}");
+            assert_eq!(
+                browser
+                    .inner
+                    .state
+                    .lock()
+                    .await
+                    .tabs
+                    .contains_key("owned-page"),
+                listed
+            );
+            server.abort();
+        }
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn connection_revoke_retires_acknowledged_tabs_without_destroyed_events() {
-        for emit_closed in [true, false] {
+        for silent in [false, true] {
             let (mut browser, server, _requested) =
                 shutdown_fixture("exit 0", true, true, true).await;
             let root = tempfile::tempdir().unwrap();
@@ -4111,14 +4187,14 @@ mod tests {
             }
             assert!(!browser.retire_gone_target("owned-page").await);
             // The fixture never sends targetDestroyed, deterministically retaining the backlog.
-            if emit_closed {
+            if silent {
                 browser
-                    .close_agent_tab("owner", "owned-page")
+                    .close_agent_tab_silently("owner", "owned-page")
                     .await
                     .unwrap();
             } else {
                 browser
-                    .close_agent_tab_silently("owner", "owned-page")
+                    .close_agent_tab("owner", "owned-page")
                     .await
                     .unwrap();
             }
@@ -4137,12 +4213,11 @@ mod tests {
                 json!({"method":"Target.targetDestroyed","params":{"targetId":"owned-page"}}),
             )
             .await;
-            if emit_closed {
-                assert!(matches!(
-                    receiver.try_recv().unwrap(),
-                    BrowserEvent::TabClosed { tab } if tab.id == "owned-page"
-                ));
-            }
+            assert!(matches!(
+                receiver.try_recv().unwrap(),
+                BrowserEvent::TabClosed { tab, silent: closed_silently }
+                    if tab.id == "owned-page" && closed_silently == silent
+            ));
             assert!(receiver.try_recv().is_err());
             server.abort();
         }

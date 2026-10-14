@@ -51,9 +51,11 @@ sessions. Provisional deltas remain internal and are not translated into replies
 
 Browser notices for Task-owned tabs steer that Task, never the front agent.
 Terminal Tasks receive no notices, including late download completion or close
-events. Daemon cleanup closes disposable tabs silently, without generating browser
-close events. Internal-author messages are not rendered as person bubbles, whether
-queued or already injected into a model turn.
+events: a tab a Task leaves open for a person step or card is released to the front
+agent at that moment. Daemon cleanup closes disposable tabs silently, without
+generating browser close events or notices, while the daemon still forgets the
+tab's owner and connection-grant bookkeeping. Internal-author messages are not
+rendered as person bubbles, whether queued or already injected into a model turn.
 
 After a takeover or person step resolves, the continuation starts with a fresh
 `browser_snapshot` of its tab (or `browser_repl`'s `page.snapshot()` when that is

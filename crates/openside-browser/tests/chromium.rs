@@ -151,7 +151,7 @@ async fn background_viewport_ledger_sleep_gate_warning_and_screenshot() {
         Err(BrowserError::TabNotReady(_))
     ));
     browser.close_agent_tab("owner", &tab.id).await.unwrap();
-    event(&mut events, |event| matches!(event, BrowserEvent::TabClosed { tab: closed } if closed.id == tab.id && closed.opened_by == OpenedBy::Agent && closed.owner_session_id.as_deref() == Some("owner"))).await;
+    event(&mut events, |event| matches!(event, BrowserEvent::TabClosed { tab: closed, .. } if closed.id == tab.id && closed.opened_by == OpenedBy::Agent && closed.owner_session_id.as_deref() == Some("owner"))).await;
     let profile = browser.profile_path().to_string_lossy().into_owned();
     let pid = browser.process_id();
     browser.shutdown().await.unwrap();
@@ -271,7 +271,7 @@ async fn popup_download_dialog_and_tab_closed_events() {
         .evaluate(&popup.id, "window.mockPopup.close();true")
         .await
         .unwrap();
-    event(&mut events, |event| matches!(event, BrowserEvent::TabClosed { tab } if tab.id == popup_tab.id && tab.opened_by == OpenedBy::External)).await;
+    event(&mut events, |event| matches!(event, BrowserEvent::TabClosed { tab, .. } if tab.id == popup_tab.id && tab.opened_by == OpenedBy::External)).await;
     let download = browser
         .create_agent_tab("events-owner", &server.page("download"))
         .await
@@ -326,7 +326,7 @@ async fn popup_download_dialog_and_tab_closed_events() {
         .unwrap();
     event(
         &mut events,
-        |event| matches!(event, BrowserEvent::TabClosed { tab } if tab.id == dialog.id),
+        |event| matches!(event, BrowserEvent::TabClosed { tab, .. } if tab.id == dialog.id),
     )
     .await;
     let profile = browser.profile_path().to_string_lossy().into_owned();

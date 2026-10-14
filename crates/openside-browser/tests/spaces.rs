@@ -120,7 +120,7 @@ async fn spaces_isolate_storage_and_disposal_wipes_it() {
     for id in [&alpha.id, &again.id] {
         event(
             &mut events,
-            |event| matches!(event, BrowserEvent::TabClosed { tab } if &tab.id == id),
+            |event| matches!(event, BrowserEvent::TabClosed { tab, .. } if &tab.id == id),
         )
         .await;
     }

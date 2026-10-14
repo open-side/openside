@@ -95,6 +95,13 @@ impl TabLedger {
         }
         tabs
     }
+    /// A kept tab no longer belongs to an ended Task, so its later events must reach the
+    /// front agent that now works on it instead of a Task that can no longer be notified.
+    fn forget_event_owner(&self, session: &SessionId, tab: &str) {
+        self.event_owners
+            .lock()
+            .remove(&(session.clone(), tab.to_owned()));
+    }
     pub(crate) fn event_owner(
         &self,
         session: &SessionId,
@@ -109,7 +116,7 @@ impl TabLedger {
                 owners.insert(key(&tab.id), task.clone());
                 Some(task)
             }
-            BrowserEvent::TabClosed { tab } => self.event_owners.lock().remove(&key(&tab.id)),
+            BrowserEvent::TabClosed { tab, .. } => self.event_owners.lock().remove(&key(&tab.id)),
             BrowserEvent::DialogOpened { tab_id, .. } => {
                 self.event_owners.lock().get(&key(tab_id)).cloned()
             }
@@ -236,6 +243,7 @@ pub(crate) async fn release_ended(shared: &Shared, session: &SessionId, tasks: &
                 }
                 continue;
             }
+            ledger.forget_event_owner(session, &tab);
             if let Some(state) =
                 observe(shared, &browser, session, &tab, Some(task.id.clone())).await
             {

@@ -1314,7 +1314,7 @@ async fn ownership_ledger_reports_agent_tabs_in_their_group() {
         .unwrap();
     event(
         &mut patched.events,
-        |event| matches!(event, BrowserEvent::TabClosed { tab } if tab.id == agent.id),
+        |event| matches!(event, BrowserEvent::TabClosed { tab, .. } if tab.id == agent.id),
     )
     .await;
     let closed = gateway_event(patched.gateway(), |event| event.kind == "tab.closed").await;

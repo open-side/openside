@@ -111,7 +111,7 @@ async fn agent_closes_only_its_own_tabs_and_user_tabs_are_read_only() {
     browser.close_agent_tab("owner", &own.id).await.unwrap();
     event(
         &mut events,
-        |event| matches!(event, BrowserEvent::TabClosed { tab } if tab.id == own.id),
+        |event| matches!(event, BrowserEvent::TabClosed { tab, .. } if tab.id == own.id),
     )
     .await;
     let tabs = browser.tabs().await;

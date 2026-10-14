@@ -1079,7 +1079,10 @@ async fn restored_tab_download_and_close_reach_its_owner_through_a_late_event_co
                 guid: guid.into(),
                 status: DownloadStatus::Completed,
             },
-            BrowserEvent::TabClosed { tab: closed },
+            BrowserEvent::TabClosed {
+                tab: closed,
+                silent: false,
+            },
         ] {
             sender.send(event).unwrap();
         }
