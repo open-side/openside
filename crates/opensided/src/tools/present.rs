@@ -212,7 +212,8 @@ pub(crate) fn admit(args: &Value, ctx: Option<&ToolEnv>) -> Result<PresentReques
         c.id.is_empty()
             && c.status == CardStatus::Done
             && c.interaction == CardInteraction::None
-            && c.ticket_id.is_none(),
+            && c.ticket_id.is_none()
+            && c.expires_at.is_none(),
         "card",
     )?;
     shape(
@@ -384,6 +385,9 @@ fn model_schema() -> Value {
     card["status"] = json!({"const":"done"});
     card["interaction"] = json!({"const":"none"});
     card["ticket_id"] = json!({"type":"null"});
+    if let Some(card) = card.as_object_mut() {
+        card.remove("expires_at");
+    }
     card["blocks"]["maxItems"] = json!(16);
     card["actions"]["maxItems"] = json!(8);
     defs["CardSite"]["properties"]["favicon_ref"] = json!({"type":"null"});

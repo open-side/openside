@@ -122,6 +122,17 @@ button.oc-pill:hover {
   flex: none;
   color: var(--oc-muted);
 }
+.oc-pill-expiry {
+  flex: none;
+  margin-left: auto;
+  color: var(--oc-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.oc-pill-expiry[data-urgent],
+.oc-expiry[data-urgent] {
+  color: var(--oc-warn);
+}
 /* A question still waiting for the person keeps an edge, so it reads apart from settled rows. */
 .oc-card[data-ask="pending"][data-open="false"] {
   border-color: var(--control-border);
@@ -159,6 +170,15 @@ button.oc-pill:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.oc-expiry {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 0;
+  color: var(--oc-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
 }
 .oc-close {
   display: grid;
@@ -311,6 +331,16 @@ button.oc-pill:hover {
   margin: 0;
   text-align: right;
   overflow-wrap: anywhere;
+}
+/* Asks explain in sentences: label column, left-aligned text that wraps. */
+.oc-kv[data-layout="explain"] > div {
+  display: grid;
+  grid-template-columns: minmax(84px, 30%) 1fr;
+  align-items: start;
+  gap: 12px;
+}
+.oc-kv[data-layout="explain"] dd {
+  text-align: left;
 }
 .oc-foot {
   padding-top: 12px;
@@ -640,7 +670,7 @@ button.oc-pill:hover {
 }
 .oc-control input::placeholder,
 .oc-control textarea::placeholder {
-  color: var(--faint);
+  color: var(--muted);
 }
 .oc-control input:focus-visible,
 .oc-control textarea:focus-visible {

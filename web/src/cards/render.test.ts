@@ -659,3 +659,89 @@ describe("the settled announcement", () => {
     }
   });
 });
+
+describe("the expiry countdown", () => {
+  const NOW = Date.parse("2026-11-05T10:00:00Z");
+
+  it("counts down in the header and the bubble, turns urgent in the last minute and stops once settled", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const pending = ask({ blocks: [], actions: [], expires_at: new Date(NOW + 125_000).toISOString() });
+      const { view } = mount(pending);
+      const short = q(".oc-pill-expiry")!;
+      expect(short.textContent).toBe("2:05");
+      expect(short.getAttribute("aria-hidden")).toBe("true");
+      view.open();
+      const long = q(".oc-head .oc-expiry")!;
+      expect(long.textContent).toBe("Expires in 2:05");
+      expect(long.hasAttribute("data-urgent")).toBe(false);
+      vi.advanceTimersByTime(66_000);
+      expect(q(".oc-head .oc-expiry")!.textContent).toBe("Expires in 0:59");
+      expect(q(".oc-head .oc-expiry")!.hasAttribute("data-urgent")).toBe(true);
+      view.update({ ...pending, status: "expired", expires_at: null, collapsed_summary: "Request expired" });
+      expect(q("[data-expiry]")).toBeNull();
+      vi.advanceTimersByTime(5_000);
+      expect(q("[data-expiry]")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads hours for long deadlines and is absent without one", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      mount(ask({ blocks: [], actions: [], expires_at: new Date(NOW + (2 * 3600 + 30 * 60) * 1000).toISOString() }), { defaultOpen: true });
+      expect(q(".oc-expiry")!.textContent).toBe("Expires in 2 h 30 min");
+      host.replaceChildren();
+      mount(ask({ blocks: [], actions: [] }), { defaultOpen: true });
+      expect(q(".oc-expiry")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("explanation rows", () => {
+  const about: Block = {
+    type: "kv_rows",
+    id: "about",
+    total: null,
+    rows: [
+      { label: "Tab", value: { type: "text", text: "The agent's browser tab" } },
+      { label: "What happens", value: { type: "text", text: "openside types these details into the page and stops there. Nothing is submitted." } },
+    ],
+  };
+
+  it("lay out as label and sentence in an ask, and as a ledger in a result", () => {
+    mount(ask({ blocks: [about], actions: [] }), { defaultOpen: true });
+    expect(q(".oc-kv")!.getAttribute("data-layout")).toBe("explain");
+    expect(all(".oc-kv dt").map((dt) => dt.textContent)).toEqual(["Tab", "What happens"]);
+    host.replaceChildren();
+    mount({ ...ask({ blocks: [about], actions: [] }), interaction: "none", kind: "order_summary", status: "done" });
+    expect(q(".oc-kv")!.getAttribute("data-layout")).toBe("ledger");
+  });
+
+  it("a fill-only receipt names the filled fields, shows no value and keeps the separate submit path", async () => {
+    const filled: Block = {
+      type: "kv_rows",
+      id: "filled",
+      total: null,
+      rows: [
+        { label: "Fields filled", value: { type: "text", text: "Full name, City" } },
+        { label: "Page", value: { type: "text", text: "Not submitted. It's waiting in the agent's browser tab for you to check." } },
+      ],
+    };
+    const submit: Action = { id: "ask-submit", label: "Ask the agent to submit", style: "secondary", target: { type: "follow_up", text: "Submit the form you just filled in." } };
+    const onAction = vi.fn(() => true);
+    const receipt = ask({ status: "done", collapsed_summary: "Details filled — page not submitted", blocks: [filled, { type: "notice", id: "receipt", tone: "neutral", text: "Details filled — page not submitted", placement: "inline" }], actions: [submit] });
+    mount(receipt, { defaultOpen: true, onAction });
+    q<HTMLButtonElement>("button.oc-pill")!.click();
+    expect(all("input")).toHaveLength(0);
+    expect(q(".oc-body")!.textContent).toContain("Full name, City");
+    const button = all<HTMLButtonElement>(".oc-actions .oc-btn").find((b) => b.textContent === "Ask the agent to submit")!;
+    button.click();
+    await vi.waitFor(() => expect(onAction).toHaveBeenCalledWith(submit, expect.anything(), expect.anything()));
+  });
+});

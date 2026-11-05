@@ -22,13 +22,19 @@ const PAYLOAD_KEEP: &[&[&str]] = &[
 
 // These identifiers and enum tags have passed scheduler validation. The instructions are
 // rendered only from the secret-screened payload, so repeated redaction cannot change consent.
+// The card's routine rows read the same screened payload, so its display fields (name,
+// schedule, prompt) are kept exactly as the instructions already keep them.
 pub(crate) const TICKET_KEEP: &[&[&str]] = &[
     &["instructions"],
+    &["tool", "args", "name"],
     &["tool", "args", "schedule", "type"],
+    &["tool", "args", "schedule", "expr"],
+    &["tool", "args", "schedule", "timezone"],
     &["tool", "args", "action", "type"],
     &["tool", "args", "action", "mode"],
     &["tool", "args", "action", "agent_id"],
     &["tool", "args", "action", "session_id"],
+    &["tool", "args", "action", "prompt"],
 ];
 
 pub(crate) fn is_proposal(ticket: &Ticket) -> bool {

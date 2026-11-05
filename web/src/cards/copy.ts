@@ -61,6 +61,20 @@ export function failureMessage(cause: unknown): string {
   return cause instanceof Error && cause.message ? cause.message : GENERIC_FAILURE;
 }
 
+/** "Expires in 4:05", "Expires in 2 h 30 min"; `short` drops the lead-in for the collapsed bubble. */
+export function expiresIn(ms: number, short = false): string {
+  if (ms <= 0) return short ? "0:00" : "Time is up";
+  const total = Math.ceil(ms / 1000);
+  let left: string;
+  if (total < 3600) left = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+  else {
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    left = minutes ? `${hours} h ${minutes} min` : `${hours} h`;
+  }
+  return short ? left : `Expires in ${left}`;
+}
+
 function blockText(block: Block): string[] {
   switch (block.type) {
     case "kv_rows":

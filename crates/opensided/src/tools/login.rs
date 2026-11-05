@@ -46,6 +46,8 @@ const NEXT_POLL: Duration = Duration::from_millis(300);
 /// A sign-in form that stays this long without an error message is reported as `unknown`.
 const LOGIN_SETTLE: Duration = Duration::from_secs(3);
 const MAX_OPTIONS: usize = 12;
+/// Separates the model's reason in login instructions; the card shows the reason as its own row.
+pub(crate) const WHY_REQUESTED: &str = "\nWhy this was requested: ";
 
 /// The account name a person typed on the first page of a two-step sign-in, held in memory
 /// only, so the password page's ticket can still keep the login in the vault. Keyed by session
@@ -857,7 +859,7 @@ impl RequestLogin {
                 let summary = format!("Sign in to {authority}");
                 let mut instructions = format!("Enter your sign-in details for {authority}. Values go straight into the page; saving to the vault is optional.");
                 if let Some(reason) = args.reason.filter(|reason| !reason.trim().is_empty()) {
-                    instructions.push_str("\nWhy this was requested: ");
+                    instructions.push_str(WHY_REQUESTED);
                     instructions.push_str(&reason);
                 }
                 Ok(ToolExec::Defer(Box::new(TicketRequest { hire: None, form: None, kind: TicketKind::Login,

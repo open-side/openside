@@ -9,7 +9,7 @@
 import type { Action, Block, Card, CardKind } from "../api/types";
 import { dispatchAction, fieldsOf, SaveRefused, type ActionOutcome, type CardPort, type HostActionHandler, type Transient } from "./actions";
 import { renderBlock, renderNotice, renderTotal, type BlockContext } from "./blocks";
-import { AUTHENTICATOR_SUMMARY, SECURE_NOTE, STATUS_LABEL, UNHANDLED_ACTION, failureMessage } from "./copy";
+import { AUTHENTICATOR_SUMMARY, SECURE_NOTE, STATUS_LABEL, UNHANDLED_ACTION, expiresIn, failureMessage } from "./copy";
 import { element, setPending, uid } from "./dom";
 import { FieldRegistry, renderField } from "./fields";
 import { brandMark, glyph, type GlyphName } from "./glyphs";
@@ -99,6 +99,7 @@ class CardView implements MountedCard {
   private previewAll = false;
   private disposed = false;
   private announceTimer: number | undefined;
+  private expiryTimer: number | undefined;
   private readonly shell = element("section", { class: "oc-card" });
   private readonly bubbles = element("div", { class: "oc-bubbles" });
   private readonly live = element("div", { class: "oc-sr", role: "status", "aria-live": "polite" });
@@ -207,6 +208,50 @@ class CardView implements MountedCard {
     }
 
     this.bubbles.replaceChildren(...this.card.blocks.flatMap((block) => (block.type === "notice" && block.placement === "bubble" ? [renderNotice(block)] : [])));
+    this.syncExpiry();
+  }
+
+  // ---- expiry countdown ---------------------------------------------------------------------
+
+  /** Time left on the ticket behind a pending ask; null when it has no deadline or is settled. */
+  private remaining(): number | null {
+    const at = this.pendingAsk ? this.card.expires_at : null;
+    if (!at) return null;
+    const ms = Date.parse(at) - Date.now();
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  private expiryMark(short: boolean): HTMLElement | null {
+    const ms = this.remaining();
+    if (ms === null) return null;
+    // The bubble's copy is decorative: the header line carries the readable deadline.
+    const node = short
+      ? element("span", { class: "oc-pill-expiry", "data-expiry": "short", "aria-hidden": "true" }, element("span", {}, expiresIn(ms, true)))
+      : element("p", { class: "oc-expiry", "data-expiry": "long" }, glyph("clock", 12), element("span", {}, expiresIn(ms)));
+    node.toggleAttribute("data-urgent", ms <= 60_000);
+    return node;
+  }
+
+  private readonly tickExpiry = (): void => {
+    const ms = this.remaining();
+    if (ms === null) {
+      this.syncExpiry();
+      return;
+    }
+    for (const node of this.shell.querySelectorAll<HTMLElement>("[data-expiry]")) {
+      const text = node.lastElementChild;
+      if (text) text.textContent = expiresIn(ms, node.dataset.expiry === "short");
+      node.toggleAttribute("data-urgent", ms <= 60_000);
+    }
+  };
+
+  private syncExpiry(): void {
+    const live = !this.disposed && this.remaining() !== null;
+    if (live && this.expiryTimer === undefined) this.expiryTimer = window.setInterval(this.tickExpiry, 1000);
+    else if (!live && this.expiryTimer !== undefined) {
+      window.clearInterval(this.expiryTimer);
+      this.expiryTimer = undefined;
+    }
   }
 
   /** "<helper> asked": which child agent the request came from; the label is the host's, never the card's. */
@@ -218,7 +263,8 @@ class CardView implements MountedCard {
   private pill(): HTMLElement {
     const { card } = this;
     const label = element("span", { class: "oc-pill-text" }, card.collapsed_summary);
-    const content = [this.markFor(20), ...(this.options.asker ? [this.askerLine("span")] : []), label];
+    const expiry = this.expiryMark(true);
+    const content = [this.markFor(20), ...(this.options.asker ? [this.askerLine("span")] : []), label, ...(expiry ? [expiry] : [])];
     if (card.status !== "pending" && !this.hasDetail()) return element("div", { class: "oc-pill", "data-static": "" }, ...content);
     const pill = element("button", { type: "button", class: "oc-pill", "aria-expanded": "false", "aria-controls": this.bodyId }, ...content, element("span", { class: "oc-pill-chevron", "aria-hidden": "true" }, glyph("chevron-down", 14)));
     pill.addEventListener("click", () => this.setOpen(true, "force"));
@@ -234,6 +280,8 @@ class CardView implements MountedCard {
     text.append(element("h2", { class: "oc-title", id: this.titleId }, card.title));
     if (card.subtitle) text.append(element("p", { class: "oc-subtitle" }, card.subtitle));
     if (origin) text.append(element("p", { class: "oc-origin", "data-feedback-allow": "" }, origin));
+    const expiry = this.expiryMark(false);
+    if (expiry) text.append(expiry);
     const head = element("header", { class: "oc-head" }, this.markFor(28), text);
     if (this.closable) {
       const close = element("button", { type: "button", class: "oc-close", "aria-label": "Collapse", "aria-expanded": "true", "aria-controls": this.bodyId }, glyph("chevron-down", 16));
@@ -526,6 +574,8 @@ class CardView implements MountedCard {
     this.transient.refusedKey = null;
     this.disposed = true;
     window.clearTimeout(this.announceTimer);
+    window.clearInterval(this.expiryTimer);
+    this.expiryTimer = undefined;
     this.media.dispose();
     this.element.remove();
   }

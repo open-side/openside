@@ -10,6 +10,16 @@ Cards are presentation, not permission. The canonical Rust types are exported by
 - `card.presented` contains a read-only card and its original `tool_call_id`. Its identity is `present:<tool_call_id>`; repeating the same call returns its stored `card_id` without another event or media fetch.
 - The single Rust ticket projector lives in `opensided/src/cards.rs`. Terminal asks contain no editable fields or ticket-resolution actions. Historical secure asks without a destination explain that a new secure step is required.
 
+### What a pending ask explains
+
+The projector, not each client, writes the explanation, so the web app, the extension panel and the CLI show the same words. A pending ticket card carries:
+
+- `expires_at`: the ticket deadline, for the client's countdown. It is cleared on every terminal card and is never admitted from `present`. The countdown is best-effort against the viewer's local clock: the daemon stays authoritative, and the card turns expired when the daemon expires the ticket, whatever the countdown showed.
+- An `about` `kv_rows` block: the tab the step works in (when the ticket targets one), `Agent's reason` on sign-in cards (the agent's own words, capped at 200 characters and rendered as plain text), `What happens` (the consequence of each option, for example that a fill never submits), `Next step` for sign-in, device approval and takeover, and `If you don't answer` for confirmations. Secret values never appear in it. The block is dropped from receipts.
+- For a `propose_routine` confirmation, a `routine` `kv_rows` block in place of the raw configuration: the schedule in words, the time zone (cron; UTC when unset), where it runs and the message it sends. It stays on the receipt. The actions read Create routine and Decline. The rows are read from the persisted ticket, whose display fields `routines::proposals::TICKET_KEEP` keeps verbatim because the payload already passed the secret screen. A message longer than 1,000 characters is shortened in its row, and the full instructions notice stays on the card.
+
+A fill-only form resolved with `status: filled` becomes a receipt with a `filled` block (the filled field labels, never their values; the page is not submitted) and a `follow_up` action that drafts a request to submit. That later submit is still its own Confirm.
+
 ### Person-only metadata
 
 Read scope does not grant an agent access to imported address suggestions or saved-account choices. Proto fields opt into person-only handling with `#[schemars(extend("x-person-only" = <safe replacement>))]`: arrays use `[]`, optional values use `null`. The daemon's single schema-driven outbound projection follows nested schema references, including hydrated historical cards.
@@ -19,7 +29,7 @@ Agent-client JSON responses (ticket list/get, transition responses, and event po
 
 ## Presentation admission
 
-`present` is a daemon catalog tool exposed in Full, BrowserAgent, and Ultrabrowse profiles, including the front agent's read-only tool list. Its compact model schema is derived from canonical `PresentRequest`, narrows variants and daemon-owned fields, and removes documentation annotations, response-only extensions, and unreachable definitions. The daemon still parses and validates the full canonical type. Input must use an empty id, done status, no interaction, no ticket id, and no favicon references. Only product/place lists, tables, order/payment summaries, form summaries, and connection intents are admitted. Actions may only draft a follow-up or open an HTTP(S) link.
+`present` is a daemon catalog tool exposed in Full, BrowserAgent, and Ultrabrowse profiles, including the front agent's read-only tool list. Its compact model schema is derived from canonical `PresentRequest`, narrows variants and daemon-owned fields, and removes documentation annotations, response-only extensions, and unreachable definitions. The daemon still parses and validates the full canonical type. Input must use an empty id, done status, no interaction, no ticket id, no deadline, and no favicon references. Only product/place lists, tables, order/payment summaries, form summaries, and connection intents are admitted. Actions may only draft a follow-up or open an HTTP(S) link.
 
 The daemon rejects unknown properties, forged authority, interactive/team blocks, duplicate identities, malformed typed values and table widths, excessive sizes, and secret material. Raw tool arguments are capped at 64 KiB before parsing or diagnostic recording. The diagnostic argument projection contains only an allowlisted kind and numeric counts. Secret detection uses the existing memory secret scanner and known-value redactors; errors identify a rule rather than echoing the offending value.
 
@@ -56,6 +66,10 @@ Hire and handoff cards include `openside team` navigation/action equivalents and
 Pending asks use a 48-pixel collapsed bubble. Opening it mounts the shared typed fields
 and actions; a terminal update removes editable controls and replaces the same stable
 Card. Helper-origin asks keep the helper's identity and task attribution in both states.
+A pending ask with `expires_at` shows `Expires in m:ss` (or hours and minutes) under its
+header and a short form on the collapsed bubble, ticking each second without a live region;
+the last minute uses the warning colour. Key-value rows inside an ask read as label and
+left-aligned sentence rather than the right-aligned ledger used for totals.
 Read-only results remain visible: products, places, tables and orders preview three rows,
 with Show all expanding the remaining rows. Captured totals stay pinned outside clipping.
 This is a preview expansion, not the pending-ask bubble interaction.

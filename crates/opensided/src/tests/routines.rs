@@ -2018,6 +2018,79 @@ async fn routine_proposal_keeps_validated_schema_under_short_secret_redaction() 
     daemon.shutdown().await;
 }
 
+/// The routine rows a person approves come from the persisted, redacted ticket, so they must
+/// survive the real open path (secret screen, redaction, durable append) and a restart replay.
+#[tokio::test]
+async fn routine_proposal_card_rows_survive_redaction_and_replay() {
+    fn routine_rows(ticket: &Ticket) -> Vec<(String, String)> {
+        let card = ticket
+            .card
+            .clone()
+            .unwrap_or_else(|| crate::cards::ticket(ticket));
+        card.blocks
+            .into_iter()
+            .find_map(|block| match block {
+                Block::KvRows { id, rows, .. } if id == "routine" => Some(rows),
+                _ => None,
+            })
+            .expect("routine rows")
+            .into_iter()
+            .map(|row| match row.value {
+                CardValue::Text { text } => (row.label, text),
+                other => panic!("unexpected value {other:?}"),
+            })
+            .collect()
+    }
+    let expected: Vec<(String, String)> = [
+        ("Schedule", "Weekdays at 08:00"),
+        ("Time zone", "Asia/Seoul"),
+        ("Runs in", "A new conversation each time"),
+        ("Message sent", "Summarize overnight email"),
+    ]
+    .into_iter()
+    .map(|(l, t)| (l.into(), t.into()))
+    .collect();
+    let root = tempfile::tempdir().unwrap();
+    let first = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&first, "card-replay", PolicyMode::Guard, None).await;
+    // A live secret makes every persistence step run the redactor.
+    let secret = openside_vault::Secret::new("q".into());
+    first
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(openside_vault::Redactor::new([&secret]));
+    let payload = json!({
+        "name":"Weekday digest",
+        "schedule":{"type":"cron","expr":"0 8 * * 1-5","timezone":"Asia/Seoul"},
+        "action":{"type":"new_session","prompt":"Summarize overnight email"}
+    });
+    let ticket = propose_routine(&first, &session, payload, "card-replay").await;
+    let opened = |events: Vec<Event>| {
+        events
+            .into_iter()
+            .find_map(|event| match event.kind {
+                EventKind::TicketOpened { ticket } => Some(*ticket),
+                _ => None,
+            })
+            .expect("ticket.opened")
+    };
+    let replayed = opened(first.shared.db.events(&session, 0).await.unwrap());
+    assert_eq!(routine_rows(&replayed), expected);
+    first.shutdown().await;
+    drop(first);
+    let second = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let replayed = opened(second.shared.db.events(&session, 0).await.unwrap());
+    assert_eq!(routine_rows(&replayed), expected);
+    let stored = crate::tickets::get(&second.shared, &ticket.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(routine_rows(&stored), expected);
+    second.shutdown().await;
+}
+
 #[tokio::test]
 async fn routine_proposal_revalidates_deleted_targets_at_approval() {
     let root = tempfile::tempdir().unwrap();

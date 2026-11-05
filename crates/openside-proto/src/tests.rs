@@ -1119,6 +1119,7 @@ fn cards_all_kinds_and_legacy_events_round_trip() {
             actions: vec![],
             interaction: CardInteraction::None,
             ticket_id: None,
+            expires_at: None,
             collapsed_summary: "Fixture".into(),
         };
         assert_eq!(

@@ -396,3 +396,255 @@ fn cards_catalog_schema_resolves_definitions_and_restricts_drafts() {
     input["card"]["blocks"] = json!([{"type":"list_items","id":"list","items":[{"id":"item","name":"Item","facts":[],"image":null,"image_alt":null,"price":null,"rating":null,"link":null,"quantity":null,"site":{"origin":"https://example.test","name":"Example","favicon_ref":{"type":"origin","origin":"https://example.test"}}}]}]);
     assert!(!validator.is_valid(&input));
 }
+
+fn about(card: &Card, id: &str) -> Vec<(String, String)> {
+    card.blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::KvRows {
+                id: block, rows, ..
+            } if block == id => Some(
+                rows.iter()
+                    .map(|r| match &r.value {
+                        CardValue::Text { text } => (r.label.clone(), text.clone()),
+                        other => panic!("unexpected value {other:?}"),
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn cards_pending_asks_explain_target_consequence_and_deadline() {
+    let mut login = legacy_ticket(TicketKind::Login);
+    login.login = Some(serde_json::from_value(json!({"origin":"https://example.test","site_name":"Example","icon":null,"fields":[{"id":"f0","kind":"identifier","label":"Email","masked":false,"required":true,"autocomplete":"email","placeholder":null,"suggestions":[]},{"id":"f1","kind":"password","label":"Password","masked":true,"required":true,"autocomplete":"current-password","placeholder":null,"suggestions":[]}],"alternatives":[{"id":"a0","label":"Continue with Google","kind":"provider","provider":"google"}],"submit_label":"Sign in","can_save":false,"accounts":null,"error_text":null})).unwrap());
+    login.instructions = Some(format!(
+        "Enter your sign-in details for example.test.{}The invoice is behind the sign-in",
+        crate::tools::login::WHY_REQUESTED
+    ));
+    let card = crate::cards::ticket(&login);
+    assert_eq!(card.expires_at, Some(login.expires_at));
+    let rows = about(&card, "about");
+    assert_eq!(rows[0], ("Tab".into(), "The agent's browser tab".into()));
+    assert_eq!(
+        rows[1],
+        (
+            "Agent's reason".into(),
+            "The invoice is behind the sign-in".into()
+        )
+    );
+    assert!(!card
+        .blocks
+        .iter()
+        .any(|b| matches!(b, Block::Notice { id, .. } if id == "instructions")));
+    assert!(rows.iter().any(|(label, text)| label == "Next step"
+        && text.contains("Enter your sign-in details")
+        && text.contains("another way to sign in")));
+    assert!(rows.iter().any(|(label, _)| label == "What happens"));
+    login.status = TicketStatus::Resolved;
+    login.resolution = Some(json!({"status":"submitted","next":"done"}));
+    let receipt = crate::cards::ticket(&login);
+    assert_eq!(receipt.expires_at, None);
+    assert!(about(&receipt, "about").is_empty());
+
+    let mut otp = legacy_ticket(TicketKind::SecretInput);
+    otp.otp = Some(TicketOtp {
+        channel: OtpChannel::Email,
+        can_register: false,
+    });
+    let card = crate::cards::ticket(&otp);
+    assert!(card.blocks.iter().any(|b| matches!(b, Block::Notice { id, text, .. } if id == "channel" && text == "Enter the code sent by email.")));
+    otp.instructions = Some("Enter the code the site sent you by email.".into());
+    assert!(!crate::cards::ticket(&otp)
+        .blocks
+        .iter()
+        .any(|b| matches!(b, Block::Notice { id, .. } if id == "instructions")));
+    assert!(about(&card, "about")
+        .iter()
+        .any(|(label, text)| label == "What happens" && text.contains("isn't sent to the agent")));
+
+    let mut takeover = legacy_ticket(TicketKind::Takeover);
+    let rows = about(&crate::cards::ticket(&takeover), "about");
+    assert!(rows
+        .iter()
+        .any(|(l, t)| l == "Next step" && t.contains("in the agent's tab")));
+    takeover.target = None;
+    let rows = about(&crate::cards::ticket(&takeover), "about");
+    assert!(!rows.iter().any(|(l, _)| l == "Tab"));
+    assert!(rows
+        .iter()
+        .any(|(l, t)| l == "Next step" && t.contains("on the computer")));
+
+    let mut confirm = legacy_ticket(TicketKind::Confirm);
+    confirm.deferral = TicketDeferral::Approval;
+    confirm.target = None;
+    let card = crate::cards::ticket(&confirm);
+    let rows = about(&card, "about");
+    assert!(rows
+        .iter()
+        .any(|(l, t)| l == "What happens" && t.contains("once")));
+    assert!(rows.iter().any(|(l, _)| l == "If you don't answer"));
+    let labels: Vec<_> = card.actions.iter().map(|a| a.label.as_str()).collect();
+    assert_eq!(labels, ["Approve", "Not now"]);
+
+    let mut device = legacy_ticket(TicketKind::DeviceApproval);
+    device.approval = Some(TicketApproval {
+        origin: "https://example.test".into(),
+        site_name: "Example".into(),
+        icon: None,
+        message: "Check your phone".into(),
+        number: Some("42".into()),
+    });
+    let rows = about(&crate::cards::ticket(&device), "about");
+    assert!(rows.contains(&("Number to match".into(), "42".into())));
+}
+
+#[test]
+fn cards_routine_proposal_states_schedule_zone_target_and_prompt() {
+    let mut ticket = legacy_ticket(TicketKind::Confirm);
+    ticket.target = None;
+    ticket.instructions = Some("Approve this exact routine configuration.\n{}".into());
+    ticket.tool = Some(TicketTool {
+        name: crate::routines::proposals::PROPOSE_ROUTINE.into(),
+        args: json!({"name":"Morning digest","schedule":{"type":"cron","expr":"0 8 * * 1-5","timezone":"Asia/Seoul"},"action":{"type":"new_session","prompt":"Summarize overnight email"},"enabled":true,"catch_up":false}),
+    });
+    let card = crate::cards::ticket(&ticket);
+    assert!(!card
+        .blocks
+        .iter()
+        .any(|b| matches!(b, Block::Notice { id, .. } if id == "instructions")));
+    assert_eq!(
+        about(&card, "routine"),
+        [
+            ("Schedule".to_string(), "Weekdays at 08:00".to_string()),
+            ("Time zone".into(), "Asia/Seoul".into()),
+            ("Runs in".into(), "A new conversation each time".into()),
+            ("Message sent".into(), "Summarize overnight email".into()),
+        ]
+    );
+    let labels: Vec<_> = card.actions.iter().map(|a| a.label.as_str()).collect();
+    assert_eq!(labels, ["Create routine", "Decline"]);
+    // The routine rows precede the explanation and survive into the receipt.
+    let order: Vec<_> = card
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::KvRows { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["routine", "about"]);
+    ticket.status = TicketStatus::Resolved;
+    ticket.resolution = Some(json!({"approved":false}));
+    let receipt = crate::cards::ticket(&ticket);
+    assert_eq!(about(&receipt, "routine").len(), 4);
+    assert!(about(&receipt, "about").is_empty());
+
+    for (schedule, words) in [
+        (
+            json!({"type":"cron","expr":"30 7 * * *"}),
+            "Every day at 07:30",
+        ),
+        (
+            json!({"type":"cron","expr":"5 * * * *"}),
+            "Every hour at :05",
+        ),
+        (
+            json!({"type":"cron","expr":"0 9 * * 1"}),
+            "Every Monday at 09:00",
+        ),
+        (
+            json!({"type":"cron","expr":"0 9 1 * *"}),
+            "On day 1 of every month at 09:00",
+        ),
+        (
+            json!({"type":"cron","expr":"*/15 * * * *"}),
+            "On the cron schedule */15 * * * *",
+        ),
+        (
+            json!({"type":"interval","secs":21600}),
+            "Every 6 hours, counted from when you approve",
+        ),
+    ] {
+        let mut t = legacy_ticket(TicketKind::Confirm);
+        t.tool = Some(TicketTool {
+            name: crate::routines::proposals::PROPOSE_ROUTINE.into(),
+            args: json!({"name":"R","schedule":schedule,"action":{"type":"new_session","prompt":"p"}}),
+        });
+        let rows = about(&crate::cards::ticket(&t), "routine");
+        assert_eq!(rows[0].1, words);
+        let zone = rows
+            .iter()
+            .find(|(l, _)| l == "Time zone")
+            .map(|(_, z)| z.as_str());
+        assert_eq!(zone, (!words.starts_with("Every 6")).then_some("UTC"));
+    }
+
+    // A message too long for a row is shortened there, and the full instructions stay.
+    let mut long = legacy_ticket(TicketKind::Confirm);
+    long.instructions = Some("Approve this exact routine configuration.".into());
+    long.tool = Some(TicketTool {
+        name: crate::routines::proposals::PROPOSE_ROUTINE.into(),
+        args: json!({"name":"R","schedule":{"type":"interval","secs":3600},"action":{"type":"new_session","prompt":"x".repeat(1_500)}}),
+    });
+    let card = crate::cards::ticket(&long);
+    let shown = about(&card, "routine")
+        .into_iter()
+        .find(|(l, _)| l == "Message sent")
+        .unwrap()
+        .1;
+    assert_eq!(shown.chars().count(), 1_001);
+    assert!(shown.ends_with('…'));
+    assert!(card
+        .blocks
+        .iter()
+        .any(|b| matches!(b, Block::Notice { id, .. } if id == "instructions")));
+}
+
+#[test]
+fn cards_fill_only_receipt_lists_labels_without_values_and_offers_submit_path() {
+    let mut ticket = legacy_ticket(TicketKind::Info);
+    ticket.form = Some(serde_json::from_value(json!({"origin":"https://example.test","site_name":"Example","payment":false,"submit_label":"Fill fields","fields":[
+        {"id":"name","label":"Full name","kind":"text","secret":false,"otp":false,"card":null,"required":true,"autocomplete":"name","placeholder":null,"validation":"text","max_length":80,"initial":null,"suggestions":[],"target_origin":"https://example.test"},
+        {"id":"city","label":"City","kind":"text","secret":false,"otp":false,"card":null,"required":false,"autocomplete":"address-level2","placeholder":null,"validation":"text","max_length":80,"initial":null,"suggestions":[],"target_origin":"https://example.test"}
+    ]})).unwrap());
+    let pending = crate::cards::ticket(&ticket);
+    assert!(about(&pending, "about")
+        .iter()
+        .any(|(l, t)| l == "What happens" && t.contains("Nothing is submitted")));
+    ticket.status = TicketStatus::Resolved;
+    ticket.resolution = Some(json!({"status":"filled","field_count":2,"next":"review_page"}));
+    let card = crate::cards::ticket(&ticket);
+    assert_eq!(
+        card.collapsed_summary,
+        "Details filled — page not submitted"
+    );
+    let rows = about(&card, "filled");
+    assert_eq!(rows[0], ("Fields filled".into(), "Full name, City".into()));
+    assert!(rows
+        .iter()
+        .any(|(l, t)| l == "Page" && t.starts_with("Not submitted")));
+    assert!(rows.iter().any(|(l, _)| l == "To submit"));
+    assert_eq!(card.actions.len(), 1);
+    assert!(
+        matches!(&card.actions[0].target, ActionTarget::FollowUp { text } if text == "Submit the form you just filled in.")
+    );
+    ticket.resolution = Some(json!({"status":"indeterminate"}));
+    let failed = crate::cards::ticket(&ticket);
+    assert!(about(&failed, "filled").is_empty());
+    assert!(failed.actions.is_empty());
+}
+
+#[test]
+fn cards_presentations_cannot_claim_a_deadline() {
+    let mut input = draft();
+    input["card"]["expires_at"] = json!("2030-01-01T00:00:00Z");
+    assert!(crate::tools::present::admit(&input, None)
+        .unwrap_err()
+        .0
+        .starts_with("invalid_card"));
+    let spec = crate::tools::present::Present.spec();
+    assert!(!spec.parameters_json.contains("expires_at"));
+}

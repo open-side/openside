@@ -28,6 +28,9 @@ pub struct Card {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[doc = "Daemon-issued authority reference; forbidden in model presentations."]
     pub ticket_id: Option<TicketId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[doc = "Deadline of the pending ticket behind an ask, for a countdown; absent once settled and in model presentations."]
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     #[doc = "Value-free receipt or pending summary, bounded to 240 characters."]
     pub collapsed_summary: String,
 }

@@ -918,6 +918,7 @@ mod tests {
             actions: Vec::new(),
             interaction: openside_proto::CardInteraction::Ask,
             ticket_id: Some(ticket.id.clone()),
+            expires_at: None,
             collapsed_summary: "Fill fields".into(),
         });
         assert!(serde_json::to_string(&ticket).unwrap().contains(canary));

@@ -44,7 +44,8 @@ function rating(value: { milli_value: number; milli_max: number; count?: number 
 }
 
 function kvRows(block: BlockOf<"kv_rows">, ctx: BlockContext): HTMLElement {
-  const list = element("dl", { class: "oc-kv" });
+  // An ask explains itself in sentences (what happens, the next step), not a ledger of amounts.
+  const list = element("dl", { class: "oc-kv", "data-layout": ctx.card.interaction === "ask" ? "explain" : "ledger" });
   for (const row of block.rows) list.append(element("div", {}, element("dt", {}, row.label), element("dd", {}, renderValue(row.value, ctx))));
   return list;
 }
