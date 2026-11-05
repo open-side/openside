@@ -1,6 +1,6 @@
 [package]
 name = "openside-e2e"
-description = "Cross-crate end-to-end tests for openside (daemon, CLI, Python sidecar); not published"
+description = "Cross-crate end-to-end tests for openside (daemon, CLI, Bun sidecar); not published"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -8,7 +8,7 @@ Include the affected component, the version or commit, steps to reproduce, and t
 
 ## Scope
 
-In scope: the daemon (`opensided`), the `openside` CLI, the Python sidecar (`agent/`), the web UI (`web/`), the MV3 extension (`extension/`) and the Chromium overlay and patches in `browser/`. Typical issues: policy or approval bypass, secret or vault value disclosure, sandbox escape from the shell tool, token or scope confusion in the HTTP API, pairing flaws, and cross-origin access to the daemon.
+In scope: the daemon (`opensided`), the `openside` CLI, the Bun/TypeScript sidecar (`agent/`), the web UI (`web/`), the MV3 extension (`extension/`) and the Chromium overlay and patches in `browser/`. Typical issues: policy or approval bypass, secret or vault value disclosure, sandbox escape from the shell tool, token or scope confusion in the HTTP API, pairing flaws, and cross-origin access to the daemon.
 
 Out of scope: vulnerabilities in upstream Chromium, model providers, or third-party dependencies (report those upstream), and behaviour a user explicitly allowed through policy (for example, the `full` mode).
 

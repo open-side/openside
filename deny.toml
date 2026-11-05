@@ -4,7 +4,16 @@ all-features = true
 [advisories]
 version = 2
 db-path = "target/advisory-db"
-ignore = []
+# zbus 5's helper crates are "unmaintained" notices, not vulnerabilities: zbus 6 folded
+# them in but also removed the blocking API that the Secret Service clients in
+# openside-vault (platform/secret_service.rs) and openside-import (safe_storage.rs) are
+# built on. Drop these when those clients move to zbus 6, or if a vulnerability is filed
+# against zbus 5.
+ignore = [
+  { id = "RUSTSEC-2026-0370", reason = "zvariant 5 unmaintained (merged into zbus 6); blocked on zbus 6 async migration" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 unmaintained (merged into zbus 6); blocked on zbus 6 async migration" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 unmaintained (merged into zbus 6); blocked on zbus 6 async migration" },
+]
 
 [licenses]
 version = 2
