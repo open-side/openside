@@ -4,8 +4,9 @@
 #   tools/qa/headed-ux.sh sway [patched|stock|both] [args...]
 #       Private headless sway in a rootless, network-less podman container; never touches a host desktop.
 #
-# Prerequisites: target/debug/opensided, web/dist, extension/dist, agent/.venv,
-# and for patched runs the patched build (OPENSIDE_PATCHED_BROWSER or ../openside-browser-build).
+# Prerequisites: target/debug/opensided, web/dist, extension/dist, agent/node_modules
+# (cd agent && bun install --frozen-lockfile), and for patched runs the patched build
+# (OPENSIDE_PATCHED_BROWSER or ../openside-browser-build). The image brings its own Bun and Python.
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 desktop="${1:-sway}"
@@ -14,15 +15,14 @@ shift $(( $# >= 2 ? 2 : $# ))
 case "$which" in both) browsers=(patched stock) ;; patched|stock) browsers=("$which") ;; *) echo "browser: patched|stock|both" >&2; exit 2 ;; esac
 out="${OPENSIDE_QA_OUT:-/tmp/openside-qa/uxnative}"
 mkdir -p "$out"
-python="$ROOT/agent/.venv/bin/python"
+[ -d "$ROOT/agent/node_modules" ] || { echo "run: (cd agent && bun install --frozen-lockfile)" >&2; exit 2; }
 patched="${OPENSIDE_PATCHED_BROWSER:-$ROOT/../openside-browser-build/portablelinux/build/src/out/Default/chrome}"
 
 case "$desktop" in
 sway)
-    image=localhost/openside-qa-uxnative:latest
+    # The tag names the toolchain so an image built for the old Python sidecar is never reused.
+    image=localhost/openside-qa-uxnative:bun-1.4.4
     podman image exists "$image" || podman build -t "$image" -f "$ROOT/tools/qa/headed-ux.Containerfile" "$ROOT/tools/qa"
-    # The venv links to uv's managed interpreters through a version alias; mount them all.
-    uv_python="$(dirname -- "$(dirname -- "$(dirname -- "$(realpath -- "$python")")")")"
     browser_mount=()
     if [ "$which" != stock ]; then
         browser_dir="$(dirname -- "$(realpath -- "$patched")")"
@@ -30,7 +30,7 @@ sway)
     fi
     # Rootless and --network=none: daemon and browser talk over the container's loopback only.
     exec podman run --rm --userns=keep-id --network=none --shm-size=1g \
-        -v "$ROOT:$ROOT:ro" "${browser_mount[@]}" -v "$uv_python:$uv_python:ro" -v "$out:$out" \
+        -v "$ROOT:$ROOT:ro" "${browser_mount[@]}" -v "$out:$out" \
         -e OPENSIDE_PATCHED_BROWSER="$patched" "$image" bash -c '
 set -euo pipefail
 # sway ships with file capabilities that a rootless user namespace cannot grant; a copy has none.
@@ -42,7 +42,7 @@ for _ in $(seq 50); do ls "$XDG_RUNTIME_DIR"/sway-ipc.* >/dev/null 2>&1 && break
 export WAYLAND_DISPLAY=wayland-1 SWAYSOCK="$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*)"
 status=0
 for browser in '"${browsers[*]}"'; do
-    "'"$python"'" "'"$ROOT"'/tools/qa/headed_ux.py" --no-sandbox --browser "$browser" --out "'"$out"'" '"$*"' || status=1
+    python3 "'"$ROOT"'/tools/qa/headed_ux.py" --no-sandbox --browser "$browser" --out "'"$out"'" '"$*"' || status=1
 done
 exit "$status"'
     ;;

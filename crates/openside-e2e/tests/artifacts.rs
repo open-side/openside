@@ -1,4 +1,4 @@
-//! PP-14, A-12, A-15 and B-4 against the real daemon and real Python sidecar with the
+//! PP-14, A-12, A-15 and B-4 against the real daemon and real Bun sidecar with the
 //! scripted model: an attached image reaches the model and stays in the transcript across a
 //! restart, a browser screenshot reaches the model as an image, and a malicious visual
 //! rendered through the preview route cannot reach the app's token, cookies, DOM or API.

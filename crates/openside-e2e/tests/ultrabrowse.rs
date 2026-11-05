@@ -1,4 +1,4 @@
-//! A-9 ultrabrowse acceptance: the real daemon, real Python sidecar and real Chromium browse
+//! A-9 ultrabrowse acceptance: the real daemon, real Bun sidecar and real Chromium browse
 //! three loopback pages under the `ultrabrowse` profile; the citation harness scores the
 //! answer against the pages the browser tool actually opened.
 
@@ -56,7 +56,8 @@ fn harness_report(answer: &str, visited: &Value, threshold: bool) -> (i32, Value
     let dir = tempfile::tempdir().unwrap();
     let visited_file = dir.path().join("visited.json");
     std::fs::write(&visited_file, visited.to_string()).unwrap();
-    let mut command = std::process::Command::new(repo().join("agent/.venv/bin/python"));
+    // The harness is a stdlib-only tool that runs on the system interpreter, as in CI.
+    let mut command = std::process::Command::new("python3");
     command
         .arg(repo().join("tools/citation-harness.py"))
         .args(["--answer", "-", "--visited-file"])

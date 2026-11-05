@@ -1,5 +1,5 @@
 //! Browser activity is untrusted internal data: popup, download, and closure notices queue
-//! behind the owner's running turn. Real daemon, Python sidecar, Chromium, and loopback pages.
+//! behind the owner's running turn. Real daemon, Bun sidecar, Chromium, and loopback pages.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]

@@ -147,7 +147,9 @@ flock --close /tmp/openside-heavy.lock nice -n 10 \
 
 The ignored `login_scenarios_live_model` test uses a real model authenticated by
 the local broker. Its private `[agent] command` removes `OPENSIDE_AGENT_SCRIPT`,
-reads `~/.omp/auth-broker.token` by an explicit absolute `token_file`, and refuses
+takes the broker origin from `OPENSIDE_LOGIN_LIVE_BROKER_URL` and the token file
+from `OPENSIDE_LOGIN_LIVE_BROKER_TOKEN_FILE` (both required, passed as an explicit
+absolute `token_file`), and refuses
 broker writes. The shared `live-request-count` ledger caps the entire QA run,
 including retries, at 40 model requests; do not remove it to obtain more requests.
 `live-results.json` records each attempt, the visible cards and selections, tool
@@ -165,6 +167,8 @@ recorded as deterministic-only, never as live passes.
 
 ```sh
 flock --close /tmp/openside-heavy.lock nice -n 10 \
+  env OPENSIDE_LOGIN_LIVE_BROKER_URL="<broker origin>" \
+  OPENSIDE_LOGIN_LIVE_BROKER_TOKEN_FILE="<absolute token file>" \
   cargo test -p openside-e2e -j 4 --test login_scenarios \
   login_scenarios_live_model -- --ignored --exact --nocapture --test-threads=2
 pnpm -C web build

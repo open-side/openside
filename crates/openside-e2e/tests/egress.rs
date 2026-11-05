@@ -16,8 +16,9 @@
 //!
 //! Limits: the capture sees what is sent through the namespace's network stack; it is not a
 //! proof about code paths this suite does not drive (for example live LLM provider traffic).
-//! Structural: no telemetry SDK is in the Rust or Python dependency graph. That is a blacklist
-//! of known packages, complementary to the network observation, not proof of absence.
+//! Structural: no telemetry SDK is in the Rust or sidecar (`agent/bun.lock`) dependency graph.
+//! That is a blacklist of known packages, complementary to the network observation, not proof
+//! of absence.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -141,23 +142,48 @@ peer.serve_forever()
 "#;
 
 /// Runs the sidecar's own enforcement module (the code the daemon's sidecar installs at
-/// session open with `network.allow`) against the namespace's peer.
+/// session open with `network.allow`) against the namespace's peer. `EGRESS_MODULE` is
+/// replaced with the JSON-quoted absolute path of `agent/src/providers/egress.ts`.
 const CLIENT: &str = r#"
-import json, sys
-import httpx
-from openside_agent.providers import egress
+import { EgressRefused, installEgress } from EGRESS_MODULE;
 
-peer, unlisted = sys.argv[1], sys.argv[2]
-egress.install([peer])
-result = {"reached": httpx.get("http://%s/" % peer, timeout=5).text}
-for key, url in (("unlisted", "http://%s/" % unlisted), ("redirect", "http://%s/redirect" % peer)):
-    try:
-        httpx.get(url, timeout=5, follow_redirects=True)
-        result[key] = "reached"
-    except egress.EgressRefused:
-        result[key] = "refused"
-print(json.dumps(result))
+const [peer, unlisted] = process.argv.slice(2);
+installEgress([peer]);
+// A guarded fetch may surface the refusal itself or as the cause of a fetch TypeError.
+const refused = (error: unknown): boolean => {
+	for (let cause = error; cause instanceof Error; cause = cause.cause) {
+		if (cause instanceof EgressRefused) return true;
+	}
+	return false;
+};
+const timeout = () => ({ signal: AbortSignal.timeout(5000) });
+const result: Record<string, string> = {
+	reached: await (await fetch(`http://${peer}/`, timeout())).text(),
+};
+for (const [key, url] of [["unlisted", `http://${unlisted}/`], ["redirect", `http://${peer}/redirect`]]) {
+	try {
+		await fetch(url, timeout());
+		result[key] = "reached";
+	} catch (error) {
+		if (!refused(error)) throw error;
+		result[key] = "refused";
+	}
+}
+console.log(JSON.stringify(result));
 "#;
+
+/// The Bun executable the harness configured for the sidecar (`agent.command[0]`), so the
+/// client runs on exactly the runtime the daemon's sidecar uses.
+fn harness_bun(harness: &Harness) -> PathBuf {
+    let config =
+        std::fs::read_to_string(harness.root().join("config/openside/config.toml")).unwrap();
+    let argv = config
+        .lines()
+        .find_map(|line| line.strip_prefix("command = "))
+        .expect("harness config sets agent.command");
+    let argv: Vec<String> = serde_json::from_str(argv).unwrap();
+    PathBuf::from(&argv[0])
+}
 
 fn proc_address(text: &str, v6: bool) -> Option<SocketAddr> {
     let (address, port) = text.split_once(':')?;
@@ -606,14 +632,6 @@ async fn default_install_contacts_only_loopback_and_allow_listed_peers() {
     let Some(prefix) = netns_prefix(dir.path()) else {
         return;
     };
-    let python = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent/.venv/bin/python");
-    if !python.exists() {
-        eprintln!(
-            "SKIP: the sidecar virtualenv is missing ({})",
-            python.display()
-        );
-        return;
-    }
     let browser = openside_config::discover_browser(&openside_config::Config::default()).ok();
     let mut steps = vec![
         json!({"parts":[{"type":"tool_call","name":"write","args":{"path":"notes.txt","content":"egress"},"id":"write"}]}),
@@ -675,10 +693,19 @@ async fn default_install_contacts_only_loopback_and_allow_listed_peers() {
 
     // The sidecar's enforcement against a peer that really answers: the allow-listed peer is
     // reached, an unlisted host and a redirect hop to one are refused.
-    let client_script = dir.path().join("client.py");
-    std::fs::write(&client_script, CLIENT).unwrap();
+    let client_script = dir.path().join("client.ts");
+    let egress_module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../agent/src/providers/egress.ts")
+        .canonicalize()
+        .unwrap();
+    std::fs::write(
+        &client_script,
+        CLIENT.replace("EGRESS_MODULE", &json!(egress_module).to_string()),
+    )
+    .unwrap();
     let client_err = dir.path().join("client.err");
-    let client = in_namespace(pid, &python, &client_err)
+    let client = in_namespace(pid, &harness_bun(&harness), &client_err)
+        .arg("run")
         .arg(&client_script)
         .arg(ALLOWED_PEER)
         .arg(UNLISTED_HOST)
@@ -862,25 +889,32 @@ const TELEMETRY_CRATES: &[&str] = &[
     "metrics-exporter-prometheus",
 ];
 
-const TELEMETRY_PYTHON: &[&str] = &[
-    "logfire",
-    "sentry-sdk",
-    "posthog",
-    "opentelemetry-sdk",
-    "opentelemetry-exporter-otlp",
-    "opentelemetry-exporter-otlp-proto-http",
-    "opentelemetry-exporter-otlp-proto-grpc",
-    "segment-analytics-python",
-    "analytics-python",
+/// npm telemetry senders. `@opentelemetry/api` is deliberately absent: it is the no-op API
+/// pi-ai depends on, which sends nothing without an SDK and exporter from this list.
+const TELEMETRY_NPM: &[&str] = &[
+    "@sentry/node",
+    "@sentry/bun",
+    "@sentry/core",
+    "posthog-node",
+    "posthog-js",
+    "@opentelemetry/sdk-node",
+    "@opentelemetry/sdk-trace-node",
+    "@opentelemetry/sdk-trace-base",
+    "@opentelemetry/exporter-trace-otlp-http",
+    "@opentelemetry/exporter-trace-otlp-grpc",
+    "@opentelemetry/exporter-trace-otlp-proto",
+    "@segment/analytics-node",
+    "analytics-node",
     "mixpanel",
-    "amplitude-analytics",
-    "datadog",
-    "ddtrace",
+    "@amplitude/analytics-node",
+    "dd-trace",
+    "newrelic",
+    "applicationinsights",
 ];
 
 /// G-4 / D-5: telemetry is off because no shipped component contains a telemetry sender.
 #[test]
-fn telemetry_has_no_sender_in_rust_or_python_dependencies() {
+fn telemetry_has_no_sender_in_rust_or_sidecar_dependencies() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let output = std::process::Command::new(cargo)
         .args([
@@ -914,19 +948,27 @@ fn telemetry_has_no_sender_in_rust_or_python_dependencies() {
         );
     }
 
+    // bun.lock (text format) lists each resolved package as
+    // `    "<key>": ["<name>@<version>", ...]` under `"packages"`; the first array element
+    // carries the real name even when the key is a nested `parent/child` path.
     let lock =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent/uv.lock"))
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent/bun.lock"))
             .unwrap();
     let packages: BTreeSet<&str> = lock
         .lines()
-        .filter_map(|line| line.strip_prefix("name = \""))
-        .filter_map(|rest| rest.strip_suffix('"'))
+        .skip_while(|line| line.trim() != "\"packages\": {")
+        .filter_map(|line| line.split_once("\": [\"").map(|(_, rest)| rest))
+        .filter_map(|rest| rest.split('"').next())
+        .filter_map(|spec| spec.rsplit_once('@').map(|(name, _)| name))
         .collect();
-    assert!(!packages.is_empty());
-    for name in TELEMETRY_PYTHON {
+    assert!(
+        packages.contains("@oh-my-pi/pi-agent-core"),
+        "bun.lock was not parsed"
+    );
+    for name in TELEMETRY_NPM {
         assert!(
             !packages.contains(name),
-            "telemetry package {name} is in agent/uv.lock"
+            "telemetry package {name} is in agent/bun.lock"
         );
     }
 }

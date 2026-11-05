@@ -8,11 +8,11 @@ use openside_core::RuntimeError;
 /// The only `hello.protocol` value this daemon speaks.
 pub const PROTOCOL_VERSION: u8 = 1;
 /// Lowest supported `hello.versions.openside_agent`, inclusive.
-pub const MIN_AGENT_VERSION: (u64, u64, u64) = (0, 1, 1);
+pub const MIN_AGENT_VERSION: (u64, u64, u64) = (0, 2, 0);
 /// First unsupported `hello.versions.openside_agent`; 0.x minors may break behavior.
-pub const MAX_AGENT_VERSION_EXCLUSIVE: (u64, u64, u64) = (0, 2, 0);
+pub const MAX_AGENT_VERSION_EXCLUSIVE: (u64, u64, u64) = (0, 3, 0);
 
-/// Supported package range in PEP 440 / Cargo comparator syntax, as published in
+/// Supported package range in Cargo / npm comparator syntax, as published in
 /// `docs/specs/sidecar-wire.schema.json` (`x-openside-agent-versions`).
 pub fn supported_agent_versions() -> String {
     let (a, b, c) = MIN_AGENT_VERSION;
@@ -71,29 +71,29 @@ mod tests {
 
     #[test]
     fn agent_version_range_is_half_open_and_tolerates_local_suffixes() {
-        for ok in ["0.1.1", "0.1.9", "0.1.1.dev1", "0.1.3+local"] {
+        for ok in ["0.2.0", "0.2.9", "0.2.0-dev.1", "0.2.3+local"] {
             assert!(check_agent_version(ok).is_ok(), "{ok}");
         }
         for bad in [
-            "0.0.9",
-            "0.1.0",
-            "0.1.0+local",
-            "0.1.0.dev1",
-            "0.2.0",
+            "0.1.1",
+            "0.1.9",
+            "0.1.9+local",
+            "0.1.9.dev1",
+            "0.3.0",
             "1.0.0",
             "test",
             "",
-            "0.1",
-            "0+1-0",
-            "0.1+0.0",
-            "0.1.0.5",
+            "0.2",
+            "0+2-0",
+            "0.2+0.0",
+            "0.2.0.5",
         ] {
             assert!(
                 matches!(check_agent_version(bad), Err(RuntimeError::Unavailable(_))),
                 "{bad}"
             );
         }
-        assert_eq!(supported_agent_versions(), ">=0.1.1,<0.2.0");
+        assert_eq!(supported_agent_versions(), ">=0.2.0,<0.3.0");
     }
 
     #[test]

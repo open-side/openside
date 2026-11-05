@@ -21,7 +21,7 @@ UX = module('check-browser-ux')
 
 def component_tree(tmp_path):
     for path in ['crates/opensided/src/main.rs', 'crates/openside-vault/src/lib.rs',
-                 'agent/src/agent.py', 'web/src/App.tsx', 'extension/src/panel.ts']:
+                 'agent/src/main.ts', 'web/src/App.tsx', 'extension/src/panel.ts']:
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('fixture')
@@ -36,7 +36,20 @@ def test_language_audit_reports_components_and_rejects_foreign_implementation(tm
     (root / 'crates/opensided/src/controller.ts').write_text('fixture')
     _, errors = LANGUAGES.audit(root)
     assert any('controller.ts' in error and 'violates Rust' in error for error in errors)
-    assert any('TypeScript outside web/extension' in error for error in errors)
+    assert any('controller.ts: TypeScript outside agent/web/extension' in error for error in errors)
+
+
+def test_language_audit_keeps_python_out_of_the_bun_sidecar(tmp_path):
+    root = component_tree(tmp_path)
+    installed = root / 'agent/node_modules/vendor/build.py'
+    installed.parent.mkdir(parents=True)
+    installed.write_text('fixture')
+    report, errors = LANGUAGES.audit(root)
+    assert not errors
+    assert 'agent: TypeScript=1' in report
+    (root / 'agent/src/sidecar.py').write_text('fixture')
+    errors = LANGUAGES.audit(root)[1]
+    assert any('agent/src/sidecar.py: Python violates TypeScript' in error for error in errors)
 
 
 def test_language_audit_ignores_installed_and_generated_code_but_not_nested_source(tmp_path):
@@ -133,22 +146,90 @@ def python_env(root, component, packages):
 
 def test_python_license_inventory_reads_venv_metadata_and_fails_closed(tmp_path):
     import pytest
-    python_env(tmp_path, 'agent', [('certifi', '1.0', 'License: MPL-2.0'), ('tenacity', '2.0', 'License: Apache 2.0')])
-    python_env(tmp_path, 'bench', [('pytest', '3.0', 'License-Expression: MIT')])
+    python_env(tmp_path, 'bench', [('certifi', '1.0', 'License: MPL-2.0'), ('pytest', '3.0', 'License-Expression: MIT'),
+                                   ('tenacity', '2.0', 'License: Apache 2.0')])
     records = LICENSES.python_inventory(tmp_path)
     assert [(r['component'], r['name'], r['license']) for r in records] == [
-        ('agent', 'certifi', 'MPL-2.0'), ('agent', 'tenacity', 'Apache-2.0'), ('bench', 'pytest', 'MIT')]
+        ('bench', 'certifi', 'MPL-2.0'), ('bench', 'pytest', 'MIT'), ('bench', 'tenacity', 'Apache-2.0')]
     assert records[0]['texts'] == [('LICENSE', 'certifi licence text')]
     # MPL-2.0 is accepted only for the named unmodified packages.
     other = tmp_path / 'other'
-    python_env(other, 'agent', [('fixture', '1.0', 'License: MPL-2.0')])
-    python_env(other, 'bench', [('pytest', '3.0', 'License-Expression: MIT')])
+    python_env(other, 'bench', [('fixture', '1.0', 'License: MPL-2.0')])
     with pytest.raises(ValueError, match='prohibited or unknown license MPL-2.0'):
         LICENSES.python_inventory(other)
     lock = tmp_path / 'bench/uv.lock'
     lock.write_text(lock.read_text().replace('"3.0"', '"3.1"'))
     with pytest.raises(ValueError, match='installed 3.0, locked 3.1'):
         LICENSES.python_inventory(tmp_path)
+
+
+def bun_env(root, notices=None):
+    import json
+    agent = root / 'agent'
+    agent.mkdir(parents=True, exist_ok=True)
+    # Trailing commas, as bun writes them; dev-only and nested (hoisting-conflict) entries included.
+    (agent / 'bun.lock').write_text(
+        '{\n  "lockfileVersion": 2,\n  "workspaces": {\n    "": {\n      "name": "openside-agent",\n'
+        '      "dependencies": { "@oh-my-pi/pi-natives": "1.0.0", "runtime": "1.0.0", },\n'
+        '      "devDependencies": { "devtool": "1.0.0", },\n    },\n  },\n  "packages": {\n'
+        '    "@oh-my-pi/pi-natives": ["@oh-my-pi/pi-natives@1.0.0", "", { "optionalDependencies": '
+        '{ "@oh-my-pi/pi-natives-darwin-arm64": "1.0.0" } }, "sha512-x"],\n'
+        '    "@oh-my-pi/pi-natives-darwin-arm64": ["@oh-my-pi/pi-natives-darwin-arm64@1.0.0", "", '
+        '{ "os": "darwin", "cpu": "arm64" }, "sha512-x"],\n'
+        '    "runtime": ["runtime@1.0.0", "", { "dependencies": { "shared": "2.0.0" }, '
+        '"peerDependencies": { "optional-peer": "*" } }, "sha512-x"],\n'
+        '    "shared": ["shared@1.0.0", "", {}, "sha512-x"],\n'
+        '    "runtime/shared": ["shared@2.0.0", "", {}, "sha512-x"],\n'
+        '    "devtool": ["devtool@1.0.0", "", {}, "sha512-x"],\n  },\n}\n')
+    def install(directory, name, version, license_id):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'package.json').write_text(json.dumps({'name': name, 'version': version, 'license': license_id}))
+        (directory / 'LICENSE').write_text(f'{name} licence text')
+    modules = agent / 'node_modules'
+    install(modules / '@oh-my-pi/pi-natives', '@oh-my-pi/pi-natives', '1.0.0', 'MIT')
+    install(modules / 'runtime', 'runtime', '1.0.0', 'Apache-2.0')
+    install(modules / 'runtime/node_modules/shared', 'shared', '2.0.0', 'ISC')
+    install(modules / 'devtool', 'devtool', '1.0.0', 'GPL-3.0')
+    (modules / '@oh-my-pi/pi-natives/THIRD-PARTY-NOTICES.txt').write_text(notices or (
+        '-----------------------------\nLicense: MIT License (MIT)\nUsed by:\n- brush-core 0.5.0 (https://example.test/brush)\n'
+        '-----------------------------\nLicense: Mozilla Public License 2.0 (MPL-2.0)\nUsed by:\n'
+        '- uluru 3.1.0 (https://github.com/servo/uluru)\n\nFull license text:\n- not a crate (x)\n'))
+    return modules
+
+
+def test_bun_license_inventory_covers_only_the_production_closure(tmp_path):
+    bun_env(tmp_path)
+    records = LICENSES.bun_inventory(tmp_path)
+    assert [(r['name'], r['version'], r['license']) for r in records] == [
+        ('@oh-my-pi/pi-natives', '1.0.0', 'MIT'), ('@oh-my-pi/pi-natives-darwin-arm64', '1.0.0', 'MIT'),
+        ('runtime', '1.0.0', 'Apache-2.0'), ('shared', '2.0.0', 'ISC')]
+    natives = records[0]
+    assert natives['texts'] == [('LICENSE', '@oh-my-pi/pi-natives licence text')]
+    title, text = natives['notices']
+    assert title.startswith('THIRD-PARTY-NOTICES.txt (sha256 ')
+    assert 'uluru 3.1.0 (MPL-2.0): https://crates.io/crates/uluru/3.1.0, https://github.com/servo/uluru' in text
+    assert 'not a crate' not in text
+    # The uninstalled platform build carries no host-specific text, so NOTICE matches on every host.
+    assert records[1]['texts'] == []
+
+
+def test_bun_license_inventory_fails_closed(tmp_path):
+    import pytest
+    modules = bun_env(tmp_path)
+    (modules / 'runtime/node_modules/shared/package.json').write_text('{"version": "2.0.0", "license": "SSPL-1.0"}')
+    with pytest.raises(ValueError, match='shared 2.0.0 has prohibited or unknown license SSPL-1.0'):
+        LICENSES.bun_inventory(tmp_path)
+    modules = bun_env(tmp_path / 'stale')
+    (modules / 'runtime/package.json').write_text('{"version": "0.9.0", "license": "MIT"}')
+    with pytest.raises(ValueError, match='runtime installed 0.9.0, locked 1.0.0'):
+        LICENSES.bun_inventory(tmp_path / 'stale')
+    copyleft = ('-----\nLicense: Mozilla Public License 2.0 (MPL-2.0)\nUsed by:\n- other-crate 1.0.0 (https://example.test)\n')
+    bun_env(tmp_path / 'copyleft', copyleft)
+    with pytest.raises(ValueError, match=r"MPL-2.0 is used by unreviewed crates \['other-crate'\]"):
+        LICENSES.bun_inventory(tmp_path / 'copyleft')
+    bun_env(tmp_path / 'gpl', '-----\nLicense: GNU General Public License v3.0 (GPL-3.0)\nUsed by:\n- x 1.0.0 (y)\n')
+    with pytest.raises(ValueError, match='bundled crate licence GPL-3.0 is prohibited'):
+        LICENSES.bun_inventory(tmp_path / 'gpl')
 
 
 def test_platform_compile_checker_executes_only_installed_targets():

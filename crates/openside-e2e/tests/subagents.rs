@@ -1,4 +1,4 @@
-//! Subagents with the real Python sidecar: parent-session tickets, restart recovery,
+//! Subagents with the real Bun sidecar: parent-session tickets, restart recovery,
 //! cancel/steer, per-subagent models and the SSE opt-out (ADR-020).
 
 #![cfg(unix)]

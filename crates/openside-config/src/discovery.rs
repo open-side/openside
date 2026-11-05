@@ -9,7 +9,7 @@ use crate::{env_value, Config, Paths};
 pub struct AgentCommand {
     /// Executable followed by arguments; invoke directly without shell parsing.
     pub argv: Vec<String>,
-    /// Discovered or configured Python project directory.
+    /// Discovered or configured sidecar project directory.
     pub agent_dir: Option<PathBuf>,
     /// Non-fatal setup problems for doctor to display.
     pub problems: Vec<String>,
@@ -100,13 +100,92 @@ fn executable_candidates(path: PathBuf, env: &impl Fn(&str) -> Option<OsString>)
     candidates
 }
 
-/// Resolve configured argv or a portable uv/Python module invocation.
+/// Package name in `<agent dir>/package.json` that marks a sidecar project directory.
+pub(crate) const AGENT_PACKAGE_NAME: &str = "openside-agent";
+
+/// Resolve configured argv or the default `bun run <agent dir>/src/main.ts` invocation.
 pub fn agent_command(config: &Config, _paths: &Paths) -> AgentCommand {
     agent_command_with(
         config,
         &|key| std::env::var_os(key),
         std::env::current_exe().ok().as_deref(),
     )
+}
+
+pub(crate) fn is_agent_dir(dir: &Path) -> bool {
+    std::fs::read(dir.join("package.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|package| package["name"] == AGENT_PACKAGE_NAME)
+}
+
+/// Configured (`agent.bun` / `OPENSIDE_BUN`) Bun executable, else the bare `bun` name.
+pub(crate) fn bun_program(config: &Config, env: &impl Fn(&str) -> Option<OsString>) -> PathBuf {
+    config
+        .agent
+        .bun
+        .clone()
+        .or_else(|| env_value(env, "OPENSIDE_BUN").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("bun"))
+}
+
+/// Bare names resolve through PATH; anything with a directory component is used as given.
+pub(crate) fn resolve_program(
+    program: &Path,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Option<PathBuf> {
+    if program.components().count() > 1 {
+        executable(program).then(|| program.to_path_buf())
+    } else {
+        find_on_path_with(&program.to_string_lossy(), env)
+    }
+}
+
+/// Oldest Bun the sidecar accepts; a unit test keeps it equal to `engines.bun` of
+/// `agent/package.json`.
+pub(crate) const MIN_BUN: (u64, u64, u64) = (1, 4, 4);
+/// [`MIN_BUN`] as `X.Y.Z`.
+pub(crate) const MIN_BUN_TEXT: &str = "1.4.4";
+
+pub(crate) fn parse_bun_version(text: &str) -> Option<(u64, u64, u64)> {
+    // `bun --version` prints `1.4.4`; canary builds append `-canary.N+sha`.
+    let core = text.trim().split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+/// `<bun> --version`, bounded to five seconds so a wedged executable cannot stall daemon
+/// startup or doctor; `None` when it does not answer with a version.
+pub(crate) fn bun_version(bun: &Path) -> Option<(u64, u64, u64)> {
+    use std::io::Read;
+    let mut child = std::process::Command::new(bun)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let mut stdout = String::new();
+    child.stdout.take()?.read_to_string(&mut stdout).ok()?;
+    status
+        .success()
+        .then(|| parse_bun_version(&stdout))
+        .flatten()
 }
 
 pub(crate) fn agent_command_with(
@@ -126,7 +205,7 @@ pub(crate) fn agent_command_with(
                 exe_dir.join("../../agent"),
             ]
             .into_iter()
-            .find(|dir| dir.join("pyproject.toml").is_file());
+            .find(|dir| is_agent_dir(dir));
         }
     }
     if let Some(argv) = &config.agent.command {
@@ -137,30 +216,42 @@ pub(crate) fn agent_command_with(
         };
     }
     let mut problems = Vec::new();
-    if agent_dir.is_none() {
-        problems.push("Agent project not found; set agent.dir or OPENSIDE_AGENT_DIR, or install openside_agent and set agent.command.".into());
+    let bun = bun_program(config, env);
+    match resolve_program(&bun, env) {
+        None => problems.push(format!(
+            "Bun executable {} not found; install Bun {} or newer, or set agent.bun / OPENSIDE_BUN.",
+            bun.display(),
+            MIN_BUN_TEXT
+        )),
+        Some(path) => match bun_version(&path) {
+            Some(version) if version >= MIN_BUN => {}
+            Some((major, minor, patch)) => problems.push(format!(
+                "Bun {major}.{minor}.{patch} at {} is older than the required {}; set agent.bun / OPENSIDE_BUN to a newer Bun.",
+                path.display(),
+                MIN_BUN_TEXT
+            )),
+            None => problems.push(format!(
+                "{} --version did not report a Bun version; set agent.bun / OPENSIDE_BUN to Bun {} or newer.",
+                path.display(),
+                MIN_BUN_TEXT
+            )),
+        },
     }
-    let argv = if find_on_path_with("uv", env).is_some() {
-        if let Some(dir) = &agent_dir {
-            vec![
-                "uv".into(),
-                "run".into(),
-                "--project".into(),
-                dir.to_string_lossy().into_owned(),
-                "python".into(),
-                "-m".into(),
-                "openside_agent".into(),
-            ]
-        } else {
-            problems.push("Cannot build uv project command without agent.dir; using the installed Python module candidate.".into());
-            vec!["python3".into(), "-m".into(), "openside_agent".into()]
+    // Without a project directory the entry point is relative and only works from the agent
+    // directory; the problem below tells doctor users how to fix that.
+    let main = match &agent_dir {
+        Some(dir) => dir.join("src/main.ts"),
+        None => {
+            problems.push("Agent project not found; set agent.dir or OPENSIDE_AGENT_DIR to the directory whose package.json is named openside-agent, run `bun install --frozen-lockfile --production` there (docs/INSTALL.md), or set agent.command.".into());
+            PathBuf::from("src/main.ts")
         }
-    } else {
-        problems.push("uv not found on PATH; install uv or set agent.command to a Python environment with openside_agent installed.".into());
-        vec!["python3".into(), "-m".into(), "openside_agent".into()]
     };
     AgentCommand {
-        argv,
+        argv: vec![
+            bun.to_string_lossy().into_owned(),
+            "run".into(),
+            main.to_string_lossy().into_owned(),
+        ],
         agent_dir,
         problems,
     }

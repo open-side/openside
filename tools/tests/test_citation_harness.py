@@ -1,6 +1,9 @@
-"""Tests for tools/citation-harness.py, run as a subprocess the way CI and e2e tests use it."""
+"""Tests for tools/citation-harness.py, run as a subprocess the way CI and e2e tests use it.
+
+The harness runs the sidecar's checker with Bun, so `bun` must be on PATH (or $OPENSIDE_BUN)."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,10 +22,11 @@ Lake Baikal holds about a fifth of the world's fresh surface water.
 """
 
 
-def harness(*args, stdin=None):
+def harness(*args, stdin=None, env=None):
     done = subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         input=stdin,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -71,6 +75,12 @@ class CitationHarnessTest(unittest.TestCase):
         code, _, err = harness("--answer", str(Path(self.tmp.name) / "missing.md"))
         self.assertEqual(code, 2)
         self.assertIn("cannot read input", err)
+
+    def test_missing_bun_is_exit_2(self):
+        env = {**os.environ, "OPENSIDE_BUN": str(Path(self.tmp.name) / "no-bun")}
+        code, _, err = harness("--answer", self.file("good.md", GOOD), env=env)
+        self.assertEqual(code, 2)
+        self.assertIn("cannot run the citation checker", err)
 
 
 if __name__ == "__main__":

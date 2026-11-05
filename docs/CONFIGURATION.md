@@ -81,7 +81,8 @@ Local authority means a private Unix socket, or a verified loopback launcher wit
 | 키 | 타입 | 기본값 | env | 설명 |
 |---|---|---|---|---|
 | `command` | argv | — | `OPENSIDE_AGENT_COMMAND`(JSON 문자열 배열) | 사이드카 실행 argv. 지정하면 자동 탐색을 쓰지 않는다 |
-| `dir` | path | — | `OPENSIDE_AGENT_DIR` | 사이드카 Python 프로젝트 디렉터리 |
+| `bun` | path | — | `OPENSIDE_BUN` | 사이드카를 실행할 Bun 실행 파일. 지정하지 않으면 PATH의 `bun`을 쓴다. `command`를 설정하면 쓰지 않는다 |
+| `dir` | path | — | `OPENSIDE_AGENT_DIR` | 사이드카 패키지 디렉터리. `package.json`의 이름 검사(`"name": "openside-agent"`)는 자동 탐색에만 적용되며, `dir`이나 `OPENSIDE_AGENT_DIR`로 직접 지정한 디렉터리는 이 검사 없이 그대로 쓴다 |
 | `startup_timeout_ms` | u64 | `30000` | — | 사이드카 ready 응답 대기 시간 |
 | `tool_retries` | u32 | `3` | — | 툴 거부·실패 뒤 모델 재시도 횟수(사이드카 `open.config.agent`) |
 | `compaction_max_messages` | optional u32 | unset | — | Optional legacy message-count trigger; omit to use the size budget only |
@@ -89,7 +90,7 @@ Local authority means a private Unix socket, or a verified loopback launcher wit
 | `compaction_keep_messages` | u32 | `20` | — | Normal verbatim tail; at least 2 and below optional message trigger; oversized tails keep at least 2 with complete tool pairs |
 | `profile` | string | `"full"` | — | 도구·시스템 프롬프트 프로필: `full`, `browser-agent`, `ultrabrowse`([profiles.md](specs/profiles.md)). 사이드카 `open.config.agent.profile` 로도 전달 |
 
-`command` 가 없을 때(`crates/openside-config/src/discovery.rs`): `dir` 미지정이면 실행 파일 기준 `../share/openside/agent`, `../../agent` 중 `pyproject.toml` 이 있는 곳을 쓴다. uv 가 PATH 에 있고 `dir` 이 정해지면 `uv run --project <dir> python -m openside_agent`, 아니면 `python3 -m openside_agent` 다.
+`command` 가 없을 때(`crates/openside-config/src/discovery.rs`): `dir`을 지정하지 않으면 실행 파일 위치를 기준으로 `../share/openside/agent`, `../../agent` 가운데 `"name": "openside-agent"`가 적힌 `package.json`이 있는 곳을 쓴다. 실행 argv는 `[<bun>, "run", "<dir>/src/main.ts"]`이며, `<bun>`은 `bun` 설정 키나 `OPENSIDE_BUN`, 둘 다 없으면 PATH의 `bun`이다. 사이드카에는 Bun 1.4.4 이상이 필요하다.
 
 ### `[team]`
 
@@ -133,7 +134,7 @@ front 요청은 사고(thinking) 과정을 최소화하고 `max_tokens=1024`로 
 | `omp_broker.sse` | bool | `false` | — | 스냅샷 SSE 스트림 사용 |
 | `anthropic.claude_code_version` | semver string | `2.1.280` | `OPENSIDE_CLAUDE_CODE_VERSION`(우선) | Anthropic 요청 형태에 쓰는 버전. semver 가 아니면 기본값 |
 
-선택적 브로커 후보는 omp 기본 로컬 브로커 주소와 omp 기본 토큰 파일로 유지되며, 필수가 아니다. 자격 증명 URL 및 토큰 확인은 Python broker.py 상수가 아니라 데몬이 전적으로 담당한다. 브로커 시크릿 스냅샷은 명시적 프로바이더 풀 신뢰 경계 안에서 데몬만이 가져온다.
+선택적 브로커 후보는 omp 기본 로컬 브로커 주소와 omp 기본 토큰 파일로 유지되며, 필수가 아니다. 자격 증명 URL과 토큰은 데몬만 해석하며, 사이드카에는 브로커 클라이언트가 없다. 브로커 시크릿 스냅샷은 명시적 프로바이더 풀 신뢰 경계 안에서 데몬만이 가져온다.
 
 `env` 기본 변수 이름: `anthropic` → `ANTHROPIC_API_KEY`; `openai`, `openai-chat`, `openai-responses` → `OPENAI_API_KEY`; `openrouter` → `OPENROUTER_API_KEY`; `google` → `GOOGLE_API_KEY`, `GEMINI_API_KEY`; `github-copilot` → `GITHUB_COPILOT_API_KEY`, `GITHUB_COPILOT_API_TOKEN`, `COPILOT_GITHUB_TOKEN`; 그 밖은 `<PROVIDER>_API_KEY`(대문자, `-` → `_`).
 
@@ -151,13 +152,13 @@ anthropic = ["pass", "show", "services/anthropic"]
 timeout_seconds = 10
 ```
 
-#### 계정 조회 (`openside accounts`)
+#### 계정 조회 (`openside models accounts`)
 
-`openside accounts`는 각 자격 증명 소스별 가용 상태, 마스킹된 식별용 계정 라벨, 설정된 프로바이더 모델 목록, 브로커 사용량 비율, 차단 만료 시각을 보여준다. `openside accounts --json`은 `GET /v1/accounts` (`read` 권한)와 동일한 데이터를 JSON으로 출력하며, 웹 UI의 Accounts 페이지에도 같은 정보가 표시된다.
+`openside models accounts`는 각 자격 증명 소스별 가용 상태, 마스킹된 식별용 계정 라벨, 설정된 프로바이더 모델 목록, 브로커 사용량 비율, 차단 만료 시각을 보여준다. `openside models accounts --json`은 `GET /v1/accounts` (`read` 권한)와 동일한 데이터를 JSON으로 출력하며, 웹 UI의 Accounts 페이지에도 같은 정보가 표시된다.
 
 자격 증명 값, 업스트림 계정 ID, 이메일은 절대 반환되지 않는다. 계정 진단 정보에는 브로커가 보고한 모델 목록이 제공될 경우 이를 포함한다. `openside models`와 GET `/v1/settings/models`는 설정된 모델, 소스 계정, 대화 및 도구 사용이 가능한 선별된 프로바이더 목록을 준비 상태 사유와 함께 병합하여 제공한다.
 
-계정 진단 정보는 데몬이 집계하며, 세대(generation) 무효화와 single-flight 갱신을 통해 최대 5초 동안 캐시한다. 진단 시 자격 증명 명령을 실행하지 않는다. Python `models --json` 자식 프로세스는 최대 1 MiB로 제한된 stdout으로 자격 증명이 없는 SDK 인덱스만 출력하며, 자격 증명이 포함된 설정이나 환경 변수는 일절 상속받지 않는다.
+계정 진단 정보는 데몬이 집계하며, 세대(generation) 무효화와 single-flight 갱신을 통해 최대 5초 동안 캐시한다. 진단 시 자격 증명 명령을 실행하지 않는다. 사이드카의 `models --json` 자식 프로세스는 자격 증명이 없는 모델 인덱스만 최대 1 MiB까지 stdout으로 출력하며, 자격 증명이 담긴 설정이나 환경변수는 일절 물려받지 않는다.
 
 `command` 소스는 실행 파일이 존재하는지만 확인하며, `accounts`나 `doctor` 실행 시 명령어를 실제로 실행하지 않는다. 수집에 실패하면 API는 HTTP 503 `account_sources_unavailable`을 반환한다.
 
@@ -173,7 +174,7 @@ timeout_seconds = 10
 
 #### broker wire 계약 점검
 
-`docs/specs/omp-broker-wire.schema.json`은 openside가 사용하는 스냅샷, 사용량, 범위 한정 차단 필드를 엄격히 고정한다 (출처 커밋은 `$comment`에 기록됨). 업스트림의 추가 필드는 허용된다. openside가 사용하는 필드가 삭제되거나 이름이 바뀌거나 타입이 변경되면 밀폐 테스트(hermetic test)가 실패한다. omp 업그레이드 뒤에는 선택형 점검을 실행할 수 있다. `OPENSIDE_LIVE_BROKER_URL`을 직접 지정하고 `OPENSIDE_LIVE_BROKER_TOKEN_ENV`에 기존 토큰 환경 변수의 이름을 지정한 뒤 `cd agent && uv run pytest -q -m live_broker`를 실행한다. 이 점검은 `GET /v1/snapshot`과 `GET /v1/usage`만 호출하며 변경 요청이나 프로바이더 요청은 일절 보내지 않는다. 응답 값은 출력하지 않고 마스킹된 스키마 불일치 에러만 보고한다. 기본 URL이나 토큰 파일은 자동으로 탐색하지 않는다. 또한 `live` 마커가 붙어 있어 `-m 'not live'`로 실행하면 검사 대상에서 제외된다.
+`docs/specs/omp-broker-wire.schema.json`은 openside가 쓰는 스냅샷, 사용량, 범위 한정 차단 필드를 엄격히 고정하며(출처 커밋은 `$comment`에 기록), 업스트림의 추가 필드는 허용한다. 이 스키마를 읽던 밀폐 테스트와 선택형 라이브 점검은 제거된 Python 사이드카 테스트 스위트에 속해 있었고 Bun 사이드카로는 이식하지 않았으므로, 현재 이 스키마를 읽는 자동 테스트는 없다. omp를 업그레이드한 뒤에는 필드를 스키마와 직접 대조해야 한다.
 
 ### `[browser]`
 
@@ -326,4 +327,9 @@ SMS·메일 전달 앱이 `POST /v1/otp`(`otp_ingest` 범위 토큰)로 보낸 �
 | `OPENSIDE_DOCTOR_CONFIG` | 사이드카 `doctor` | doctor 가 `credentials`, `models` JSON 을 넘길 때 쓴다 |
 | `OPENSIDE_HF_ENDPOINT` | CLI `memory model fetch` | CLI 모델 허브 엔드포인트(기본값 `https://huggingface.co`). 데몬의 요청은 로컬 권한이 필요한 명시적 엔드포인트 재정의를 사용한다. 루프백 테스트 서버를 제외하고 HTTPS여야 한다. |
 | `OPENSIDE_AGENT_SCRIPT` | 사이드카 | 테스트용 스크립트 모델 경로(`openside-e2e`) |
-| `OPENSIDE_LIVE_MODEL`, `OPENSIDE_LIVE_CREDENTIALS` | `agent/tests` | live 테스트 opt-in |
+| `BUN_INSTALL` | 사이드카 | Bun 설치 루트. 데몬이 사이드카에 그대로 전달한다 |
+| `NODE_EXTRA_CA_CERTS` | 사이드카 | 프로바이더 HTTPS용 추가 CA 인증서 파일. 그대로 전달한다 |
+| `OPENSIDE_AGENT_PRELOAD` | 사이드카(테스트 전용) | nonce가 있는 사이드카 모드에 한해, 사이드카가 egress 가드를 설치한 직후 불러오는 TS/JS 파일 경로. `openside-e2e`가 테스트 훅을 주입할 때 쓴다. 관례상 테스트 전용일 뿐 보안 경계가 아니며, 이 변수를 설정할 수 있는 주체는 `OPENSIDE_BUN`이나 `PATH`도 설정할 수 있으므로 신뢰 수준이 같다 |
+| `OPENSIDE_TEST_STDERR` | 사이드카(테스트 전용) | 디렉터리 경로. 사이드카가 표준 오류(stderr)를 그 안의 `sidecar-<pid>.stderr`에 복사한다 |
+
+## README.ko.md

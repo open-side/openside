@@ -256,9 +256,9 @@ pub(crate) enum SidecarMessage {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Versions {
-    pub python: String,
-    pub pydantic_ai: String,
-    pub pydantic_ai_harness: String,
+    pub runtime: String,
+    pub pi_agent_core: String,
+    pub pi_ai: String,
     pub openside_agent: String,
 }
 

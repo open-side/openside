@@ -583,15 +583,10 @@ async fn emailed_code_entered_through_the_cli_fills_split_boxes_and_reaches_no_s
     assert_eq!(site.codes(), [EMAIL_CODE]);
 
     let snapshot = harness.snapshot(&session);
-    let returns: Vec<_> = snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-        .filter(|part| part["part_kind"] == "tool-return" && part["tool_call_id"] == "otp-email")
-        .collect();
+    let returns = openside_e2e::tool_results(&snapshot, "otp-email");
     assert_eq!(returns.len(), 1);
-    assert_eq!(returns[0]["content"], json!({"status":"filled"}));
+    assert_eq!(returns[0]["isError"], false);
+    assert_eq!(returns[0]["details"], json!({"status":"filled"}));
     let transcript = snapshot.to_string();
     let events_text = serde_json::to_string(&all).unwrap();
     for surface in [&transcript, &events_text] {

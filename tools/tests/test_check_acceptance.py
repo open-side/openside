@@ -142,10 +142,10 @@ class DefinitionDetection(unittest.TestCase):
 
     def test_python_param_suffix_is_stripped_and_async_accepted(self):
         r = Repo(self)
-        r.write("agent/tests/test_x.py", "def test_a(x):\n    pass\n\nasync def test_b():\n    pass\n")
-        self.assertEqual(self.check(r, "agent/tests/test_x.py::test_a[True]")[0], 0)
-        self.assertEqual(self.check(r, "agent/tests/test_x.py::test_b")[0], 0)
-        code, out = self.check(r, "agent/tests/test_x.py::test_c[1]")
+        r.write("bench/tests/test_x.py", "def test_a(x):\n    pass\n\nasync def test_b():\n    pass\n")
+        self.assertEqual(self.check(r, "bench/tests/test_x.py::test_a[True]")[0], 0)
+        self.assertEqual(self.check(r, "bench/tests/test_x.py::test_b")[0], 0)
+        code, out = self.check(r, "bench/tests/test_x.py::test_c[1]")
         self.assertEqual(code, 1)
         self.assertIn("no test definition found", out)
 
@@ -302,46 +302,92 @@ class CargoMapping(unittest.TestCase):
 class JunitMapping(unittest.TestCase):
     XML = (
         '<?xml version="1.0"?><testsuites><testsuite>'
-        '<testcase classname="tests.test_runtime" name="test_auth[True]"/>'
-        '<testcase classname="tests.test_runtime" name="test_auth[False]"><failure message="x"/></testcase>'
-        '<testcase classname="tests.test_runtime" name="test_all[1]"/>'
-        '<testcase classname="tests.test_runtime" name="test_all[2]"/>'
-        '<testcase classname="tests.providers.test_sources" name="test_plain"/>'
-        '<testcase classname="tests.test_runtime" name="test_skipped"><skipped/></testcase>'
-        '<testcase classname="tests.test_runtime.TestKlass" name="test_method"/>'
+        '<testcase classname="tools.tests.test_runtime" name="test_auth[True]"/>'
+        '<testcase classname="tools.tests.test_runtime" name="test_auth[False]"><failure message="x"/></testcase>'
+        '<testcase classname="tools.tests.test_runtime" name="test_all[1]"/>'
+        '<testcase classname="tools.tests.test_runtime" name="test_all[2]"/>'
+        '<testcase classname="tools.tests.providers.test_sources" name="test_plain"/>'
+        '<testcase classname="tools.tests.test_runtime" name="test_skipped"><skipped/></testcase>'
+        '<testcase classname="tools.tests.test_runtime.TestKlass" name="test_method"/>'
         "</testsuite></testsuites>"
     )
 
     def setUp(self):
         self.r = Repo(self)
         self.r.write(
-            "agent/tests/test_runtime.py",
+            "tools/tests/test_runtime.py",
             "def test_auth(p):\n    pass\n\ndef test_all(p):\n    pass\n\ndef test_skipped():\n    pass\n\n"
             "class TestKlass:\n    def test_method(self):\n        pass\n",
         )
-        self.r.write("agent/tests/providers/test_sources.py", "def test_plain():\n    pass\n")
-        (self.r.results / "pytest.xml").write_text(self.XML)
+        self.r.write("tools/tests/providers/test_sources.py", "def test_plain():\n    pass\n")
+        (self.r.results / "tools-pytest.xml").write_text(self.XML)
 
     def verdict(self, *entries: str) -> tuple[int, str]:
         self.r.rows([row("P-1", "pass", "; ".join(entries))])
         return self.r.run(results=True)
 
     def test_exact_param_pass_and_fail(self):
-        self.assertEqual(self.verdict("agent/tests/test_runtime.py::test_auth[True]")[0], 0)
-        code, out = self.verdict("agent/tests/test_runtime.py::test_auth[False]")
+        self.assertEqual(self.verdict("tools/tests/test_runtime.py::test_auth[True]")[0], 0)
+        code, out = self.verdict("tools/tests/test_runtime.py::test_auth[False]")
         self.assertEqual(code, 1)
         self.assertIn("not passed", out)
 
     def test_unparametrised_entry_requires_every_parametrization_to_pass(self):
-        self.assertEqual(self.verdict("agent/tests/test_runtime.py::test_all")[0], 0)
-        code, out = self.verdict("agent/tests/test_runtime.py::test_auth")
+        self.assertEqual(self.verdict("tools/tests/test_runtime.py::test_all")[0], 0)
+        code, out = self.verdict("tools/tests/test_runtime.py::test_auth")
         self.assertEqual(code, 1)
         self.assertIn("not passed", out)
 
     def test_nested_package_class_and_skip(self):
-        self.assertEqual(self.verdict("agent/tests/providers/test_sources.py::test_plain")[0], 0)
-        self.assertEqual(self.verdict("agent/tests/test_runtime.py::TestKlass::test_method")[0], 0)
-        self.assertEqual(self.verdict("agent/tests/test_runtime.py::test_skipped")[0], 1)
+        self.assertEqual(self.verdict("tools/tests/providers/test_sources.py::test_plain")[0], 0)
+        self.assertEqual(self.verdict("tools/tests/test_runtime.py::TestKlass::test_method")[0], 0)
+        self.assertEqual(self.verdict("tools/tests/test_runtime.py::test_skipped")[0], 1)
+
+
+class BunJunitMapping(unittest.TestCase):
+    # Shape written by `bun test --reporter=junit` run from agent/: a file-level suite named after
+    # the file, one nested suite per describe, and testcase file paths relative to agent/.
+    XML = (
+        '<?xml version="1.0" encoding="UTF-8"?><testsuites name="bun test">'
+        '<testsuite name="tests/titles.test.ts" file="tests/titles.test.ts">'
+        '<testsuite name="titles" file="tests/titles.test.ts">'
+        '<testcase name="test_named" classname="titles" file="tests/titles.test.ts"/>'
+        '<testcase name="test_broken" classname="titles" file="tests/titles.test.ts"><failure type="AssertionError"/></testcase>'
+        '<testcase name="test_todo" classname="titles" file="tests/titles.test.ts"><skipped/></testcase>'
+        "</testsuite>"
+        '<testcase name="top level" classname="" file="tests/titles.test.ts"/>'
+        "</testsuite></testsuites>"
+    )
+
+    def setUp(self):
+        self.r = Repo(self)
+        self.r.write(
+            "agent/tests/titles.test.ts",
+            'describe("titles", () => {\n  it("test_named", () => {});\n  it("test_broken", () => {});\n'
+            '  it("test_todo", () => {});\n});\nit("top level", () => {});\n',
+        )
+        (self.r.results / "agent-bun.xml").write_text(self.XML)
+
+    def verdict(self, *entries: str) -> tuple[int, str]:
+        self.r.rows([row("A-1", "pass", "; ".join(entries))])
+        return self.r.run(results=True)
+
+    def test_bare_title_and_describe_chain_resolve(self):
+        self.assertEqual(self.verdict("agent/tests/titles.test.ts::test_named")[0], 0)
+        self.assertEqual(self.verdict("agent/tests/titles.test.ts::titles > test_named")[0], 0)
+        self.assertEqual(self.verdict("agent/tests/titles.test.ts::top level")[0], 0)
+
+    def test_failure_and_skip_are_not_pass(self):
+        for name in ("test_broken", "test_todo"):
+            code, out = self.verdict(f"agent/tests/titles.test.ts::{name}")
+            self.assertEqual(code, 1, name)
+            self.assertIn("bun JUnit reports", out)
+
+    def test_missing_case_is_reported(self):
+        self.r.write("agent/tests/other.test.ts", 'it("test_elsewhere", () => {});\n')
+        code, out = self.verdict("agent/tests/other.test.ts::test_elsewhere")
+        self.assertEqual(code, 1)
+        self.assertIn("no matching testcase in bun JUnit XML", out)
 
 
 class VitestAndScripts(unittest.TestCase):

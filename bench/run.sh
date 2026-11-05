@@ -19,9 +19,10 @@ if [[ ! -x "$OPENSIDE_BENCH_DAEMON" ]]; then
     exit 2
 fi
 
-PYTHON="${OPENSIDE_BENCH_PYTHON:-}"
-if [[ -z "$PYTHON" ]]; then
-    PYTHON=$(uv run --offline --frozen --project agent python -c 'import sys; print(sys.executable)')
+BUN="${OPENSIDE_BUN:-$(command -v bun || true)}"
+if [[ -z "$BUN" ]]; then
+    printf 'Bun is required for the sidecar: put bun on PATH or set OPENSIDE_BUN\n' >&2
+    exit 2
 fi
 exec uv run --offline --frozen --project bench python bench/runner.py \
-    --daemon "$OPENSIDE_BENCH_DAEMON" --python "$PYTHON" "$@"
+    --daemon "$OPENSIDE_BENCH_DAEMON" --bun "$BUN" "$@"

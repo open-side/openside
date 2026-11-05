@@ -205,7 +205,7 @@ async fn pwa_pairs_lists_streams_and_takes_over_through_the_encrypted_relay() {
     let executable = openside_config::discover_browser(&openside_config::Config::default())
         .expect("headless Chromium is required for relay acceptance");
     let mut harness = Harness::prepare(DAEMON, &json!({"responses":[]}))
-        .expect("scripted Python sidecar is required for relay acceptance");
+        .expect("scripted Bun sidecar is required for relay acceptance");
     harness.append_config(&format!("[ui]\ndir = {}\n", json!(dist)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let relay_origin = format!("http://{}", listener.local_addr().unwrap());

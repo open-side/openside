@@ -93,7 +93,7 @@ impl Peer {
 
     pub(crate) async fn hello(&mut self, nonce: &str) {
         self.send(json!({"v":1,"type":"hello","protocol":1,"nonce":nonce,"pid":std::process::id(),
-            "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.1"}})).await;
+            "versions":{"runtime":"test","pi_agent_core":"test","pi_ai":"test","openside_agent":"0.2.0"}})).await;
     }
 
     pub(crate) async fn ready(&mut self) {
@@ -175,23 +175,23 @@ async fn hello_open_and_ready_preserve_the_authoritative_fields() {
 #[tokio::test]
 async fn nonce_hello_protocol_and_agent_version_mismatch_are_unavailable() {
     for (nonce, protocol, agent) in [
-        ("wrong-nonce", 1, "0.1.1"),
-        (NONCE, 2, "0.1.1"),
-        (NONCE, 1, "0.2.0"),
-        (NONCE, 1, "0.0.9"),
-        (NONCE, 1, "0.1.0"),
+        ("wrong-nonce", 1, "0.2.0"),
+        (NONCE, 2, "0.2.0"),
+        (NONCE, 1, "0.3.0"),
+        (NONCE, 1, "0.1.1"),
+        (NONCE, 1, "0.1.9"),
         (NONCE, 1, "test"),
     ] {
         let (host, peer) = UnixStream::pair().unwrap();
         let mut peer = Peer::new(peer);
         peer.send(json!({"v":1,"type":"hello","protocol":protocol,"nonce":nonce,"pid":1,
-            "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":agent}})).await;
+            "versions":{"runtime":"test","pi_agent_core":"test","pi_ai":"test","openside_agent":agent}})).await;
         let result = Connection::open(host, NONCE, spec(), Arc::new(Echo)).await;
         let Err(RuntimeError::Unavailable(message)) = result else {
             panic!("{nonce} {protocol} {agent} must be refused");
         };
-        if agent != "0.1.1" {
-            assert!(message.contains(">=0.1.1,<0.2.0"), "{message}");
+        if agent != "0.2.0" {
+            assert!(message.contains(">=0.2.0,<0.3.0"), "{message}");
         }
     }
 }
@@ -689,7 +689,7 @@ async fn event_flood_stalls_the_sidecar_instead_of_growing_the_queue() {
             format!(
                 "{}\n",
                 json!({"v":1,"type":"hello","protocol":1,"nonce":NONCE,"pid":1,
-                "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.1"}})
+                "versions":{"runtime":"test","pi_agent_core":"test","pi_ai":"test","openside_agent":"0.2.0"}})
             )
             .as_bytes(),
         )
@@ -807,7 +807,7 @@ async fn shutdown_does_not_deadlock_behind_a_blocked_tool_result_write() {
     let (read, mut write) = tokio::io::split(peer);
     let mut read = BufReader::new(read);
     let hello = json!({"v":1,"type":"hello","protocol":1,"nonce":NONCE,"pid":1,
-        "versions":{"python":"test","pydantic_ai":"test","pydantic_ai_harness":"test","openside_agent":"0.1.1"}});
+        "versions":{"runtime":"test","pi_agent_core":"test","pi_ai":"test","openside_agent":"0.2.0"}});
     write
         .write_all(format!("{hello}\n").as_bytes())
         .await

@@ -148,11 +148,30 @@ impl Drop for Server {
 
 fn prepare(server: &Server, broker: bool) -> Option<(Harness, tempfile::TempDir)> {
     let environment = tempfile::tempdir().unwrap();
+    // Only the disposable fixture redirects provider traffic; production code still
+    // refuses credentials to any origin other than its configured provider client. The
+    // sidecar imports this file through OPENSIDE_AGENT_PRELOAD, which the daemon passes
+    // through to its child; the script model is dropped so the real provider path runs.
+    let preload = environment.path().join("sidecar-preload.ts");
+    let models = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../agent/src/providers/models.ts")
+        .canonicalize()
+        .unwrap();
+    std::fs::write(
+        &preload,
+        format!(
+            "import {{ setProviderBaseUrlForTests }} from {models};\ndelete process.env.OPENSIDE_AGENT_SCRIPT;\nsetProviderBaseUrlForTests(\"anthropic\", {endpoint});\n",
+            models = json!(models),
+            endpoint = json!(server.url),
+        ),
+    )
+    .unwrap();
     let daemon = environment.path().join("daemon-wrapper");
     std::fs::write(
         &daemon,
         format!(
-            "#!/bin/sh\nexport TEST_API_KEY='{ENV_KEY}'\nexec '{}' \"$@\"\n",
+            "#!/bin/sh\nexport TEST_API_KEY='{ENV_KEY}'\nexport OPENSIDE_AGENT_PRELOAD='{}'\nexec '{}' \"$@\"\n",
+            preload.display(),
             env!("CARGO_BIN_EXE_e2e-opensided")
         ),
     )
@@ -171,23 +190,6 @@ fn prepare(server: &Server, broker: bool) -> Option<(Harness, tempfile::TempDir)
     if broker {
         h.append_config(&format!("\n[credentials.omp_broker]\nurl = {:?}\ntoken_file = {:?}\nsnapshot_ttl_seconds = 0\ntimeout_seconds = 2\n", server.url, h.root().join("source.token").to_string_lossy()));
     }
-    let hooks = h.root().join("python-hooks/sitecustomize.py");
-    let existing = std::fs::read_to_string(&hooks).unwrap();
-    // Only the disposable fixture redirects provider traffic; production code still
-    // refuses credentials to any origin other than its configured provider client.
-    let injection = format!(
-        r#"
-os.environ.pop('OPENSIDE_AGENT_SCRIPT', None)
-from openside_agent.providers import request_auth
-endpoint = {endpoint:?}
-original = request_auth.AsyncAnthropic
-def fake_client(**kwargs):
-    return original(base_url=endpoint, **kwargs)
-request_auth.AsyncAnthropic = fake_client
-"#,
-        endpoint = server.url
-    );
-    std::fs::write(hooks, existing + &injection).unwrap();
     Some((h, environment))
 }
 
@@ -277,12 +279,12 @@ async fn audit(h: &mut Harness, id: &str, observed: &[Value]) {
         audit_bytes(&serde_json::to_vec(&response.body).unwrap());
     }
     for args in [
-        vec!["accounts"],
-        vec!["accounts", "--json"],
+        vec!["models", "accounts"],
+        vec!["models", "accounts", "--json"],
         vec!["doctor", "--json"],
     ] {
         let output = h.cli(env!("CARGO_BIN_EXE_e2e-openside"), &args, None).await;
-        if args[0] == "accounts" {
+        if args[0] == "models" {
             assert!(output.status.success());
         }
         audit_bytes(&output.stdout);
@@ -534,13 +536,9 @@ async fn command_source_runs_without_broker_and_never_persists_credentials() {
         text.replace("anthropic = [\"env\"]", "anthropic = [\"command\"]"),
     )
     .unwrap();
-    let python = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../agent/.venv/bin/python")
-        .canonicalize()
-        .unwrap();
-    let command = h.root().join("credential-command.py");
-    std::fs::write(&command, format!("print({ENV_KEY:?})\n")).unwrap();
-    let argv = json!([python, command]);
+    let command = h.root().join("credential-command.sh");
+    std::fs::write(&command, format!("printf '%s\\n' '{ENV_KEY}'\n")).unwrap();
+    let argv = json!(["/bin/sh", command]);
     h.append_config(&format!("\n[credentials.command]\nanthropic = {argv}\n"));
     h.launch().await;
     let id = h

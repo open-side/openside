@@ -28,7 +28,7 @@ async fn task_spills_reads_range_and_chief_receives_only_report() {
             {"parts":[{"type":"text","text":"Verified the requested range."}]}
         ]}
     });
-    let mut harness = Harness::prepare(BIN, &script).expect("uv sync --project agent is required");
+    let mut harness = Harness::prepare(BIN, &script).expect("bun install --cwd agent is required");
     let config = harness.root().join("config/openside/config.toml");
     let original = std::fs::read_to_string(&config).unwrap();
     std::fs::write(config, original.replace("orchestration = \"single\"\n", "")).unwrap();

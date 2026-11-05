@@ -1,4 +1,4 @@
-//! Front/Task acceptance against the real daemon, Python sidecar and headless Chromium.
+//! Front/Task acceptance against the real daemon, Bun sidecar and headless Chromium.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -41,7 +41,7 @@ fn blocked(call: &str, marker: &str) -> Value {
     )
 }
 async fn harness(script: &Value, browser: bool) -> Harness {
-    let harness = Harness::prepare(BIN, script).expect("uv sync --project agent is required");
+    let harness = Harness::prepare(BIN, script).expect("bun install --cwd agent is required");
     let config = harness.root().join("config/openside/config.toml");
     let original = std::fs::read_to_string(&config).unwrap();
     // Omitting orchestration exercises the production default, including the session-model fallback.
@@ -271,7 +271,7 @@ async fn configured_fast_front_starts_tasks_on_reasoning_model() {
     for fast in [Some("openai:gpt-6-luna"), None] {
         let script = json!({"responses":[start("role-task", "reason about this"), send("Started"), send("{{user_text}}")],
             "subagents":{"role-task":[text("Reasoned")]}});
-        let mut harness = Harness::prepare(BIN, &script).expect("scripted Python environment");
+        let mut harness = Harness::prepare(BIN, &script).expect("scripted Bun sidecar environment");
         let config = harness.root().join("config/openside/config.toml");
         let original = std::fs::read_to_string(&config).unwrap();
         let mut configured = original.replace("orchestration = \"single\"\n", "");
@@ -308,7 +308,7 @@ async fn chief_selects_an_available_connected_task_model() {
         tool("create_task", json!({"goal":"quick lookup","model":selected}), "selected-task"),
         send("Task admitted"), send("{{user_text}}")
     ], "subagents":{"selected-task":[text("Selected model completed the work")]}});
-    let mut harness = Harness::prepare(BIN, &script).expect("scripted Python environment");
+    let mut harness = Harness::prepare(BIN, &script).expect("scripted Bun sidecar environment");
     let config = harness.root().join("config/openside/config.toml");
     let original = std::fs::read_to_string(&config).unwrap();
     std::fs::write(config, original.replace("orchestration = \"single\"\n", "")).unwrap();
@@ -1181,19 +1181,24 @@ async fn waiting_task_keeps_its_repl_claimed_prewarm_tab_across_restart_and_stal
             .unwrap()["task"],
         first
     );
-    // The sidecar checkpoint must also preserve the deferred child before simulating a crash.
+    // The sidecar checkpoint must also preserve the deferred child and the front's turn on the
+    // waiting report (script cursor 3) before simulating a crash; otherwise the restarted front
+    // replays "Needs your answer" instead of starting the competitor.
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !harness.snapshot(&id)["subagents"]
-        .as_array()
-        .is_some_and(|children| {
+    loop {
+        let snapshot = harness.snapshot(&id);
+        let waiting = snapshot["subagents"].as_array().is_some_and(|children| {
             children
                 .iter()
                 .any(|task| task["id"] == first && task["status"] == "waiting_human")
-        })
-    {
+        });
+        if waiting && snapshot["script_cursor"] == 3 {
+            break;
+        }
         assert!(
             Instant::now() < deadline,
-            "waiting Task was not checkpointed"
+            "waiting Task and the front's report turn were not checkpointed: {}",
+            snapshot["script_cursor"]
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

@@ -1,11 +1,11 @@
-//! Hermetic real-process acceptance harness for the Python sidecar.
+//! Hermetic real-process acceptance harness for the Bun sidecar.
 //!
 //! Each daemon and CLI receives private HOME/XDG directories and an empty
 //! environment except PATH and explicit test settings. The private `bin/`
 //! directory leads PATH so tests can shadow host tools (a fake `tailscale`)
 //! instead of depending on what the runner happens to have installed.
-//! Scripted FunctionModel responses require no credentials. Missing repository
-//! Python environments skip with a diagnostic; an installed but broken sidecar
+//! Scripted model responses (`OPENSIDE_AGENT_SCRIPT`) require no credentials. Missing Bun or
+//! sidecar dependencies skip with a diagnostic; an installed but broken sidecar
 //! fails normally.
 //! Cleanup tracks descendants across separate daemon, sidecar and browser process
 //! groups, reaps them, and checks that no owned child remains. On Linux the test process is
@@ -46,7 +46,7 @@ pub struct Response {
     pub body: Value,
 }
 
-/// Private daemon, durable storage and scripted real Python runtime.
+/// Private daemon, durable storage and scripted real sidecar runtime.
 pub struct Harness {
     /// Private Unix HTTP endpoint.
     pub socket: PathBuf,
@@ -74,14 +74,19 @@ fn lock(owned: &Mutex<Owned>) -> MutexGuard<'_, Owned> {
 }
 
 impl Harness {
-    /// Prepare isolated configuration, or explain why the Python environment is missing.
+    /// Prepare isolated configuration, or explain why the Bun sidecar cannot start. A missing or
+    /// too old sidecar skips locally but fails the final gate and CI, where a skip is no pass.
     pub fn prepare(daemon_bin: &str, script: &Value) -> Option<Self> {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let python = repo.join("agent/.venv/bin/python");
-        if !python.is_file() {
-            eprintln!("SKIP: real sidecar Python is missing; run uv sync --project agent");
-            return None;
-        }
+        let agent = repo.join("agent");
+        let bun = match sidecar_bun(&agent) {
+            Ok(bun) => bun,
+            Err(reason) if strict_prerequisites() => panic!("sidecar prerequisites: {reason}"),
+            Err(reason) => {
+                eprintln!("SKIP: {reason}");
+                return None;
+            }
+        };
         #[cfg(target_os = "linux")]
         nix::sys::prctl::set_child_subreaper(true)
             .unwrap_or_else(|e| panic!("child subreaper: {e}"));
@@ -96,7 +101,6 @@ impl Harness {
             "tmp",
             "workspace",
             "stderr",
-            "python-hooks",
             "bin",
         ] {
             std::fs::create_dir_all(directory.path().join(name))
@@ -110,7 +114,7 @@ impl Harness {
         .unwrap_or_else(|e| panic!("runtime permissions: {e}"));
         let socket = directory.path().join("run/opensided.sock");
         let data_dir = directory.path().join("data");
-        let argv = serde_json::json!([python, "-m", "openside_agent"]);
+        let argv = serde_json::json!([bun, "run", agent.join("src/main.ts")]);
         // Scripts drive the session agent directly; front-agent tests opt in with
         // `orchestration = "front"`.
         let config = format!(
@@ -118,11 +122,6 @@ impl Harness {
         );
         std::fs::write(directory.path().join("config/openside/config.toml"), config)
             .unwrap_or_else(|e| panic!("test config: {e}"));
-        // Python startup instrumentation captures raw stderr without changing the
-        // configured `python -m openside_agent` entrypoint or the RPC transport.
-        std::fs::write(directory.path().join("python-hooks/sitecustomize.py"),
-            "import os\nfrom pathlib import Path\nif os.environ.get('OPENSIDE_SIDECAR_NONCE'):\n    root = Path(os.environ['OPENSIDE_TEST_STDERR'])\n    fd = os.open(root / f'sidecar-{os.getpid()}.stderr', os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)\n    os.dup2(fd, 2)\n    os.close(fd)\n")
-            .unwrap_or_else(|e| panic!("stderr capture: {e}"));
         let client = reqwest::Client::builder()
             .unix_socket(socket.clone())
             .build()
@@ -142,7 +141,7 @@ impl Harness {
         Some(harness)
     }
 
-    /// Prepare and start a credential-free real Python sidecar daemon.
+    /// Prepare and start a credential-free real sidecar daemon.
     pub async fn start(daemon_bin: &str, script: &Value) -> Option<Self> {
         let mut harness = Self::prepare(daemon_bin, script)?;
         harness.launch().await;
@@ -215,7 +214,6 @@ impl Harness {
             .env("TMPDIR", self.root().join("tmp"))
             .env("OPENSIDE_AGENT_SCRIPT", self.root().join("script.json"))
             .env("OPENSIDE_TEST_STDERR", self.root().join("stderr"))
-            .env("PYTHONPATH", self.root().join("python-hooks"))
             .kill_on_drop(true);
         // The private bin directory first: a fixture executable there (e.g. a fake
         // `tailscale`) decides what the daemon can find, not the runner's host.
@@ -426,7 +424,7 @@ impl Harness {
     }
 
     /// Execute the real CLI without `--socket`, with extra environment such as
-    /// `OPENSIDE_REMOTE`: how a remote computer reaches this daemon through a saved profile.
+    /// `OPENSIDE_HOST`: how a remote computer reaches this daemon through a saved host.
     pub async fn cli_remote(&self, binary: &str, args: &[&str], env: &[(&str, &str)]) -> Output {
         let child = self
             .command(binary)
@@ -607,7 +605,7 @@ impl Harness {
         Response { status, body }
     }
 
-    /// Read a committed Python state snapshot, including conversation and script cursor.
+    /// Read a committed sidecar state snapshot, including conversation and script cursor.
     pub fn snapshot(&self, session: &str) -> Value {
         let store = openside_sessions::Store::open(self.data_dir.join("events.db"))
             .unwrap_or_else(|e| panic!("snapshot store: {e}"));
@@ -615,8 +613,18 @@ impl Harness {
             .agent_state(&SessionId::new(session))
             .unwrap_or_else(|e| panic!("snapshot read: {e}"))
             .unwrap_or_else(|| panic!("missing committed snapshot"));
-        assert_eq!(state.format, "openside-agent-state/1");
-        serde_json::from_str(&state.data).unwrap_or_else(|e| panic!("Python snapshot JSON: {e}"))
+        assert_eq!(state.format, "openside-agent-state/2");
+        serde_json::from_str(&state.data).unwrap_or_else(|e| panic!("sidecar snapshot JSON: {e}"))
+    }
+
+    /// Tool results committed for `call`, as pi-agent-core `toolResult` messages of the
+    /// `openside-agent-state/2` snapshot. `details` carries the daemon's `for_model` value (a
+    /// denial carries its reason); `isError` marks a model retry or a denial.
+    pub fn tool_results(&self, session: &str, call: &str) -> Vec<Value> {
+        tool_results(&self.snapshot(session), call)
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     fn sidecar_pids(&self) -> Vec<i32> {
@@ -634,7 +642,7 @@ impl Harness {
             .collect()
     }
 
-    /// PID of the only currently live scripted Python process in this harness.
+    /// PID of the only currently live scripted sidecar process in this harness.
     pub fn sidecar_pid(&mut self) -> i32 {
         self.track_descendants();
         let live: Vec<_> = self
@@ -796,6 +804,97 @@ impl Drop for Harness {
         }
         #[cfg(target_os = "linux")]
         reap_orphans(&self.owned);
+    }
+}
+
+/// The conversation of an `openside-agent-state/2` snapshot: pi-agent-core messages.
+pub fn snapshot_messages(snapshot: &Value) -> &[Value] {
+    snapshot["messages"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_else(|| panic!("snapshot without messages: {snapshot}"))
+}
+
+/// `toolResult` messages for `call`; see [`Harness::tool_results`].
+pub fn tool_results<'a>(snapshot: &'a Value, call: &str) -> Vec<&'a Value> {
+    snapshot_messages(snapshot)
+        .iter()
+        .filter(|message| message["role"] == "toolResult" && message["toolCallId"] == call)
+        .collect()
+}
+
+/// The text of a pi-agent-core message: a plain string content, or its joined text blocks.
+pub fn message_text(message: &Value) -> String {
+    match &message["content"] {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect(),
+        _ => String::new(),
+    }
+}
+
+/// `OPENSIDE_GATE_FINAL=1` or `CI=true`: missing prerequisites are failures, not skips.
+fn strict_prerequisites() -> bool {
+    std::env::var_os("OPENSIDE_GATE_FINAL").is_some_and(|value| value == "1")
+        || std::env::var_os("CI").is_some_and(|value| value == "true")
+}
+
+/// The Bun that runs the sidecar, checked against `engines.bun` of `agent/package.json`.
+///
+/// `OPENSIDE_BUN`, else the binary behind `bun` on the runner's PATH. A version-manager shim
+/// (mise, asdf) cannot run in the daemon's hermetic environment, so it is asked for the real
+/// executable here, with the runner's environment, from the agent project directory.
+fn sidecar_bun(agent: &Path) -> Result<PathBuf, String> {
+    if !agent.join("node_modules").is_dir() {
+        return Err("sidecar dependencies are missing; run bun install --cwd agent".into());
+    }
+    let bun = match std::env::var_os("OPENSIDE_BUN") {
+        Some(bun) => PathBuf::from(bun),
+        None => std::process::Command::new("bun")
+            .args(["-e", "process.stdout.write(process.execPath)"])
+            .current_dir(agent)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(PathBuf::from)
+            .ok_or("bun is missing; set OPENSIDE_BUN or put bun on PATH")?,
+    };
+    if !bun.is_file() {
+        return Err(format!("bun {} does not exist", bun.display()));
+    }
+    let version = std::process::Command::new(&bun)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|text| text.trim().to_owned())
+        .ok_or_else(|| format!("{} --version failed", bun.display()))?;
+    let manifest: Value = std::fs::read_to_string(agent.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .ok_or("agent/package.json is unreadable")?;
+    let minimum = manifest["engines"]["bun"]
+        .as_str()
+        .and_then(|range| range.strip_prefix(">="))
+        .ok_or("agent/package.json has no `engines.bun` of the form >=X.Y.Z")?;
+    let parse = |text: &str| -> Option<(u64, u64, u64)> {
+        let mut parts = text.split(['.', '-', '+']).map(str::parse::<u64>);
+        Some((
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+        ))
+    };
+    match (parse(&version), parse(minimum)) {
+        (Some(found), Some(wanted)) if found >= wanted => Ok(bun),
+        _ => Err(format!(
+            "{} is bun {version}; the sidecar needs >={minimum} (set OPENSIDE_BUN)",
+            bun.display()
+        )),
     }
 }
 

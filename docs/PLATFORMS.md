@@ -3,7 +3,7 @@
 | 플랫폼 | 상태 | 근거 |
 |---|---|---|
 | Linux | 지원한다. 개발과 테스트 모두 Linux 환경에서 진행했고, CI는 Linux에서 `tools/gate.sh`를 실행한다 | 헤드리스 브라우저 컨트롤러 테스트는 디스플레이 종속성이 없음을 보이려고 일부러 잘못된 디스플레이 엔드포인트를 지정한 채 Wayland와 X11 세션 환경 모두에서 통과했다(특정 윈도우 매니저 호환성 인증은 아님). B-5 포커스 테스트는 실제 Wayland 컴포지터 세션에서 통과했다 |
-| macOS | macOS 26.7.1 환경에서 네이티브 x86_64 빌드/링크, 핵심 데몬/CLI, 스크립트 기반 Python sidecar, 직접 CDP 브라우저 열기/스냅샷/스크린샷, 실제 Keychain 볼트 스모크 테스트를 검증했다. 이는 모든 기능이나 전체 테스트 스위트의 통과를 뜻하지 않는다. Apple Silicon 네이티브 실행, 패치된 AgentGateway, launchd 연동은 아직 검증되지 않았다 | 구체적인 실패 내역과 복구 현황은 아래 네이티브 검증 섹션을 참고한다 |
+| macOS | macOS 26.7.1 환경에서 네이티브 x86_64 빌드/링크, 핵심 데몬/CLI, 스크립트 기반 사이드카(검증 당시에는 Python 사이드카였으며, Bun 사이드카는 아직 macOS에서 검증하지 않음), 직접 CDP 브라우저 열기/스냅샷/스크린샷, 실제 Keychain 볼트 스모크 테스트를 검증했다. 이는 모든 기능이나 전체 테스트 스위트의 통과를 뜻하지 않는다. Apple Silicon 네이티브 실행, 패치된 AgentGateway, launchd 연동은 아직 검증되지 않았다 | 구체적인 실패 내역과 복구 현황은 아래 네이티브 검증 섹션을 참고한다 |
 | Windows | Windows 런타임은 지원하지 않는다. VS2022 및 stable 1.99.0 MSVC 기반 네이티브 Windows 11 build 26100.1742 환경에서 작업공간 전체 타깃 빌드와 링크를 완료했다. 초기 전체 Rust 테스트에서는 475개 통과, 40개 실패를 기록했으나, Unix/Linux 전용 픽스처 스코프를 명확히 분리하고 이식성을 수정한 뒤 이전에 실패했던 9개 타깃을 집중 검사하여 모두 통과했다 | 미지원 데몬 및 상태 경로는 패닉 없이 문서화된 Unix 트랜스포트 오류를 반환한다. 컴파일 성공이나 인메모리 API 테스트 통과를 정상 작동하는 Windows 데몬으로 소개하지 않는다 |
 
 설치는 [INSTALL.md](INSTALL.md), 경로 규칙은 [CONFIGURATION.md](CONFIGURATION.md#파일-위치와-경로) 를 본다.
@@ -28,7 +28,7 @@
 | `openside-config/src/paths.rs` | runtime 대체 경로 `openside-<uid>`(`nix::unistd::getuid`) | 임시 디렉터리`/openside` |
 | `openside-config/src/discovery.rs` | 실행 비트 검사(`cfg(unix)`), Windows `PATHEXT` 후보(`cfg(windows)`), macOS·Windows 브라우저 위치 | Windows 는 실행 비트 없이 파일 존재만 본다 |
 | `openside-config/src/doctor.rs` | 디렉터리 소유자 uid·0700 검사, `sandbox.bwrap`·`remote.*` 점검 | 읽기 전용 여부만 검사. `sandbox.bwrap`·`remote.*` 대신 `daemon.transport` 를 `fail`("daemon transport is unsupported on this OS")로 보고한다 |
-| `openside-e2e/src/lib.rs` | 크레이트 전체 `#![cfg(unix)]`, `nix` 의존성은 `cfg(unix)`로 조건화. `set_child_subreaper`는 `cfg(target_os = "linux")`, `agent/.venv/bin/python` 경로 사용 | Unix 밖에서는 빈 크레이트로 컴파일된다. 크레이트 타깃이 컴파일된다고 해서 Windows에서 E2E 테스트를 실행할 수 있는 것은 아니다. macOS 에서는 subreaper 없이 실행 |
+| `openside-e2e/src/lib.rs` | 크레이트 전체 `#![cfg(unix)]`, `nix` 의존성은 `cfg(unix)`로 조건화. `set_child_subreaper`는 `cfg(target_os = "linux")`, `bun`(PATH 또는 `OPENSIDE_BUN`) 및 `agent/node_modules` 필요 | Unix 밖에서는 빈 크레이트로 컴파일된다. 크레이트 타깃이 컴파일된다고 해서 Windows에서 E2E 테스트를 실행할 수 있는 것은 아니다. macOS 에서는 subreaper 없이 실행 |
 | `openside-import/src/db.rs`, `db_windows.rs`, `crypto.rs`, `safe_storage.rs`, `chromium_passwords.rs`, `store.rs` | 프로필 탐색에는 Linux/macOS/Windows의 네이티브 경로를 사용한다. SQLite 스냅샷은 온라인 백업이나 검증된 콜드 메인 파일 복사를 거친다. Windows에서는 소스 핸들과 리파스 포인트(reparse-point) 상위 경로를 검증하고 소유자 전용 DACL 스크래치 파일을 생성한다. 자세한 내용은 아래 스냅샷 경계 절을 참고한다. | 이 지원은 Windows 소스 리더만을 활성화하며, 미지원 상태인 Windows 데몬·브라우저 실행이나 대상 프로필 잠금까지 지원하는 것은 아니다. Chromium의 App-Bound 암호화는 여전히 지원하지 않으며, 브라우저 잠금이나 OS 자격 증명 보호 체계를 우회하지 않는다. |
 | `extension/`(MV3), `openside-config/src/doctor.rs`(native messaging 점검) | sidePanel·tabGroups·omnibox 를 지원하는 순정 Chromium 126 이상. OS 별 NativeMessagingHosts 경로: Linux 는 XDG 사용자·시스템 디렉터리, macOS 는 `~/Library/Application Support` 와 시스템 디렉터리, Windows 는 레지스트리 키(문서에만 적고 조회하지 않음) | 확장 프로그램 빌드는 플랫폼 독립적임. Linux 헤드리스 E2E 및 공식 CfT 환경의 네이티브 Mac MV3 확장 프로그램 클릭/위임 픽스처 1건 통과. 실제 macOS 데스크톱 확장 프로그램 및 네이티브 메시징 연동은 미검증 상태이며, Windows 브라우저 런타임 역시 검증되지 않음. Windows 에서 doctor 는 레지스트리 키 위치만 안내한다 |
 
@@ -86,7 +86,7 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-clang \
 - `XDG_RUNTIME_DIR` 이 보통 없다. 데몬과 CLI 모두 runtime 경로를 임시 디렉터리`/openside-<uid>` 로 잡고(`Loaded::socket_path`, 데몬과 CLI 가 공유) `daemon.socket` 이 있으면 그 값을 쓰므로 기본값으로 서로 연결된다. `--socket` 은 필요 없다. macOS 에서 확인했다(`/var/folders/.../T/openside-501/opensided.sock` 바인드·연결 성공).
 - `dirs` crate 는 macOS 에서 state·runtime 디렉터리를 주지 않으므로 state 는 data 디렉터리를 쓴다.
 - 브라우저는 PATH 다음에 `/Applications/Chromium.app/Contents/MacOS/Chromium`, `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` 을 찾는다.
-- macOS Unix 소켓의 `sun_path` 길이는 104바이트로 Linux의 108바이트보다 짧다. 데몬은 구동 전 소켓 주소를 검증하며, 경로가 초과되면 공개 엔드포인트를 임의로 변경하지 않고 더 짧은 `--socket`, `OPENSIDE_SOCKET` 또는 `daemon.socket` 경로를 요청하는 메시지를 반환한다. sidecar 런타임의 상위 디렉터리 경로가 너무 깊어 유효한 Unix 소켓을 생성할 수 없을 때는 해당 sidecar의 소켓만 무작위 이름의 0700 비공개 `/tmp` 디렉터리에 배치하고, 0600 소켓 권한과 nonce 인증은 유지한다. Python 프로세스 픽스처 역시 짧은 임시 소켓 디렉터리를 사용한다.
+- macOS Unix 소켓의 `sun_path` 길이는 104바이트로 Linux의 108바이트보다 짧다. 데몬은 구동 전 소켓 주소를 검증하며, 경로가 초과되면 공개 엔드포인트를 임의로 변경하지 않고 더 짧은 `--socket`, `OPENSIDE_SOCKET` 또는 `daemon.socket` 경로를 요청하는 메시지를 반환한다. sidecar 런타임의 상위 디렉터리 경로가 너무 깊어 유효한 Unix 소켓을 생성할 수 없을 때는 해당 sidecar의 소켓만 무작위 이름의 0700 비공개 `/tmp` 디렉터리에 배치하고, 0600 소켓 권한과 nonce 인증은 유지한다. 사이드카 테스트 픽스처 역시 짧은 임시 소켓 디렉터리를 사용한다.
 - Linux와 macOS에서 호스트 파일 디스크립터 검사를 지원한다. macOS에서는 `fstatfs` 파일시스템 이름을 기준으로 판별하며, APFS/HFS+, NFS/SMB 및 일반 디스크 포맷을 포함한 정규 스토리지 파일시스템은 허용하고 devfs나 프로세스/커널 가상 파일시스템은 거부한다. 확인되지 않은 macOS 파일시스템 유형과 미지원 Unix 플랫폼은 fail-closed 원칙에 따라 거부한다. 이 검사가 보호 대상 자격 증명 경로, 디스크립터 동일성, 심볼릭 링크 추적 금지(no-follow) 검사를 완화하지는 않는다.
 - 관리 대상 브라우저 프로필은 정규화된 물리 경로로 기록한다. 구동 시 소유권 검사에서 신뢰하도록 설정된 상위 데이터 디렉터리를 정규화하므로 `/var` 및 `/private/var` 별칭으로 인해 관리 대상 프로필을 비관리 프로필로 오판하지 않는다. 신뢰 루트 외부의 프로필은 계속 거부하며, 신뢰 루트를 벗어나는 최종 프로필 심볼릭 링크 역시 허용하지 않는다. 심볼릭 링크 추적 금지(no-follow) 업로드 레이스 픽스처는 플랫폼 네이티브 정규 작업공간 루트를 사용한다.
 - Unix 환경의 데몬 구동 시, 기존 소프트 제한이 더 낮은 경우에만 `RLIMIT_NOFILE` 소프트 제한을 `min(hard, 8192)`로 상향한다. 하드 제한과 이미 더 높게 설정된 소프트 제한은 변경하지 않는다. 단기 실행 런타임에서 `scheduler→host→Shared→scheduler` 순환 참조와 SQLite 디스크립터가 유지되지 않도록, 종료 및 드롭(drop) 시점에 루틴 스케줄러 슬롯을 정리한다. 수명 주기 회귀 검증에서는 프로세스 전역 런타임 1회 초기화 이후 디스크립터 개수를 비교한다.
@@ -95,6 +95,8 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-clang \
 - 서비스 예시(launchd)는 [INSTALL.md](INSTALL.md#launchd-macos-unverified) 를 본다.
 
 ## macOS 네이티브 검증 (2026-10-13)
+
+아래 기록은 2026-10에 이전 Python 사이드카로 측정한 결과이며, 사이드카 관련 수치는 Bun 사이드카의 동작을 나타내지 않는다.
 
 - 네이티브 환경: macOS 26.7.1 build 25G241 x86_64, stable Rust 1.99.0, 전체 Xcode 대신 CLT 사용, uv 0.13.0/Python 3.13.16, 공식 Node 22.23.3/Corepack 0.36/pnpm 9.15.9, 공식 Chrome for Testing 155.0.8059.39. 고정된 cryptography 50.0.2 버전은 Intel macOS용 휠이 제공되지 않아 의존성을 낮추지 않고 공식 OpenSSL 3.5.9 소스와 `OPENSSL_DIR`/`OPENSSL_STATIC`을 지정하여 직접 빌드했다. 빌드는 공유 폴더가 아닌 게스트 로컬 소스/타깃 디렉터리에서만 수행한다. 복구 검증은 CPU Tctl 발열 제어를 위한 일시 정지와 호스트 고부하 잠금 하에 `cargo -j 2` 및 `--test-threads=1` 설정으로 실행한다.
 - 초기 커밋 트리 기준 전체 macOS 검증 결과: `cargo build --workspace --all-targets --locked -j 4` 빌드를 통과했다. `cargo test --workspace --locked -j 2 --no-fail-fast -- --test-threads=1 --show-output` 실행 시 129개 단위/통합/문서 타깃에서 966개 통과, 137개 실패, 10개 무시를 기록했고 27개 타깃에서 실패가 발생했다. 명목상 통과로 집계된 6개 항목은 사전 요구사항 미충족에 따른 조기 반환 스킵이므로 실제 실행 검증으로 간주하지 않는다. `pytest -m 'not live'`로 실행한 Python 비라이브 테스트는 224개 통과, 1개 실패, 2개 제외(deselected)를 기록했으며 실패 원인은 Unix 소켓 픽스처의 경로 길이 초과였다. 초기 웹(53개 파일/332개 테스트)과 확장 프로그램(11개 파일/45개 테스트)은 고정 설치(frozen install) 및 프로덕션 빌드 조건에서 모두 통과했다. 이 수치는 초기 커밋 상태의 결과이며 복구 후 소스 코드의 결과가 아니다.
@@ -106,6 +108,19 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-clang \
 - 게스트 Python 가상환경(venv)과 일관된 오버레이를 구성한 뒤, 2회차 전체 작업공간 실행 대신 `openside-e2e` 크레이트만 단독 재실행했다. 63개 바이너리/문서 타깃에서 76개 통과, 42개 실패, 14개 무시, 20개 실패 타깃을 기록했으며 Python 사전 요구사항 누락 마커는 0건이었다. 통과된 76건 중 2건은 사전 요구사항 조기 반환 스킵(패치된 네이티브 임포트 1건, Linux bwrap 스코프 픽스처 1건)이므로 76건 전체가 실제 동작 검증을 거친 것은 아니다. 해당 bwrap 픽스처는 실제 Linux 커널 사용자 네임스페이스에 의존하므로 정직하게 `cfg(target_os = "linux")`로 한정했다. 상세 결과는 별도 보고서에 기록한다. Chromium 프로세스 크래시가 다수의 정리(cleanup) 실패 원인을 설명하지만, 계정·채널·인증·작업·mock 관련 실패가 Chromium 크래시 때문에 발생했는지는 입증되지 않았으며 전체 통과를 의미하지 않는다.
 - 게스트 `opensided` 및 `openside` CLI 실제 스크립트 스모크 테스트에서 15개 명령이 모두 exit 0으로 완료되었다. `sandbox_unavailable` 경고가 표시되어도 CLI 스트리밍과 대기가 중단되지 않았으며, `OPENSIDE_AGENT_SCRIPT`로 미리 지정한 모의 모델 응답 픽스처가 실제 데몬과 CLI 간에 엔드투엔드로 정상 전달되어 `session.settled` 및 `idle` 상태에 도달함을 확인했다. 네이티브 Keychain 연동(`init`/`add`/`items`/`lock`/`unlock`/`status`/`remove`)이 정상 작동하여 래핑 항목 생성과 `vault format 2`를 확인했고, 정리 후 자체 래핑 계정이 삭제됨(`security 44`)을 확인했다. 브라우저가 루프백 페이지를 정상적으로 열었고, 스냅샷에 실제 헤딩이 포함되었으며, PNG 파일 생성 후 close까지 성공적으로 완료되었다. 스크립트 실행이 끝난 뒤 출력된 1440x900 PNG 파일을 육안으로 확인했다. 이 검증은 동일 SSH 로그인 세션 내 잠금 해제와 상속된 환경 변수, 실제 게스트 `HOME` 구성을 바탕으로 이루어졌으며, 문서에 비밀번호나 키 데이터를 기록하지 않는다. 이 결과가 네이티브 Chromium의 정상 종료 크래시 해결이나 Mac 패치 `AgentGateway`/ARM/`launchd` 검증을 뜻하지는 않는다.
 - 미검증 영역: Apple Silicon 네이티브 실행, macOS 환경의 패치된 AgentGateway(현재 Linux 전용 구현), launchd 서비스 등록 및 구동, macOS 실환경 데스크톱 확장 프로그램/네이티브 메시징 동작. 기본 브라우저의 루프백 감지 실패는 기본 데몬/브라우저/Keychain 스모크 테스트와 별개로 기록하며, 패치된 브라우저 감지 인증을 통과한 것으로 서술하지 않는다.
+
+## 사이드카 네이티브 애드온
+
+Bun 사이드카는 시작할 때 `@oh-my-pi/pi-natives` 네이티브 애드온을 로드한다. `agent/bun.lock`에는 OS·CPU별 선택적 플랫폼 패키지가 하나씩 등록되어 있으며, `bun install`은 현재 머신에 맞는 패키지만 내려받는다. 해당 패키지가 없으면 사이드카가 시작되지 않는다(doctor `agent.dependencies`가 `fail`).
+
+| 플랫폼 | 패키지 | 상태 |
+|---|---|---|
+| linux x64 | `@oh-my-pi/pi-natives-linux-x64` | 검증(개발 환경) |
+| linux arm64 | `@oh-my-pi/pi-natives-linux-arm64` | 패키지 있음, 실행 미검증 |
+| darwin x64 | `@oh-my-pi/pi-natives-darwin-x64` | 패키지 있음, 실행 미검증 |
+| darwin arm64 | `@oh-my-pi/pi-natives-darwin-arm64` | 패키지 있음, 실행 미검증 |
+| win32 x64 | `@oh-my-pi/pi-natives-win32-x64` | 패키지 있음, 사이드카 트랜스포트가 Unix 전용이라 실행 불가 |
+| win32 arm64 | `@oh-my-pi/pi-natives-win32-arm64` | 패키지 있음, 사이드카 트랜스포트가 Unix 전용이라 실행 불가 |
 
 ## Windows
 
@@ -166,15 +181,15 @@ wine 11.17 가상 환경(임시 prefix)에서 Windows 런타임을 시험했다.
 Windows의 경우 필요한 작업 항목은 다음과 같다.
 - 현재 사용자 SID 대상 DACL을 적용한 네임드 파이프 데몬 트랜스포트 구현(4~6인일).
 - CLI 네임드 파이프 엔드포인트 구현(1~2인일).
-- 기존 128비트 임의값(nonce) `Hello`를 사용한 `127.0.0.1:0` 사이드카 트랜스포트 구현 및 Python `asyncio.open_connection` 연동(2~3인일).
+- 기존 128비트 임의값(nonce) `Hello`를 유지하고 Bun `node:net`으로 연결하는 `127.0.0.1:0` 사이드카 트랜스포트 구현(2~3인일).
 - 사이드카, Chromium, 계정 탐색, 키체인 명령 제어를 위한 Job Objects(`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) 기반 프로세스 감독(5~8인일).
 - 정책 경로 정규화(2인일).
 - `bash` 도구 차단 유지(XS).
-- 사이드카 실행 기본값을 `python` 및 `py -3`로 설정(0.5인일).
+- 사이드카 기본 실행 명령을 `bun.exe run <agent dir>\src\main.ts`로 설정(0.5인일).
 - 작업 스케줄러(Task Scheduler) 기반 `openside service` 구현(1인일).
 - OS 환경을 인식하는 doctor 진단(트랜스포트 점검 항목은 이미 완료).
 - 테스트 픽스처 수정 및 `windows-latest` CI 잡 구성(3~4인일).
-데몬, CLI, 사이드카 구현에 총 4~5인주가 필요하며, 파일 도구(`CreateFileW(FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS)` 기반 핸들 탐색 구현, 완료 전까지 읽기·쓰기·수정 차단 유지)에 1~1.5인주가 추가된다. 브라우저 프로필 임포트(DPAPI/AES-GCM) 및 Seatbelt/AppContainer 샌드박스는 최소 지원 범위에서 제외한다. 추가 발견 사항으로, Windows에서는 `dirs::data_dir`이 Roaming 프로필 경로를 가리키므로 SQLite 이벤트 로그, vault, 메모리 모델 파일이 로밍 프로필에 저장된다(Local 경로로 변경 필요). 또한 Windows 환경에는 통상 `python3` 명령어가 없다.
+데몬, CLI, 사이드카 구현에 총 4~5인주가 필요하며, 파일 도구(`CreateFileW(FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS)` 기반 핸들 탐색 구현, 완료 전까지 읽기·쓰기·수정 차단 유지)에 1~1.5인주가 추가된다. 브라우저 프로필 임포트(DPAPI/AES-GCM) 및 Seatbelt/AppContainer 샌드박스는 최소 지원 범위에서 제외한다. 추가 발견 사항으로, Windows에서는 `dirs::data_dir`이 Roaming 프로필 경로를 가리키므로 SQLite 이벤트 로그, vault, 메모리 모델 파일이 로밍 프로필에 저장된다(Local 경로로 변경 필요). `@oh-my-pi/pi-natives-win32-x64`와 `-win32-arm64` 패키지는 존재하지만, Windows에서 사이드카를 실행해 보지는 않았다.
 
 ## 브라우저 임포트 SQLite 스냅샷
 

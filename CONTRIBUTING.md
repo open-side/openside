@@ -4,10 +4,10 @@ openside is pre-alpha; expect large changes. Open an issue before starting on an
 
 ## Setup
 
-You need the tools from the [README](README.md#build-and-run): Rust stable, a C compiler, uv, Node.js 22+ with pnpm 9, and a Chromium-based browser (browser tests print a skip reason without one). The full gate also needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) on `PATH` or in `CARGO_DENY`.
+You need the tools from the [README](README.md#build-and-run): Rust stable, a C compiler, Bun 1.4.4+, Node.js 22+ with pnpm 9, and a Chromium-based browser (browser tests print a skip reason without one). The benchmark suite and the Python tools under `tools/` also need [uv](https://docs.astral.sh/uv/). The full gate also needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) on `PATH` or in `CARGO_DENY`.
 
 ```bash
-uv sync --project agent
+(cd agent && bun install --frozen-lockfile)
 uv sync --frozen --project bench
 pnpm -C web install && pnpm -C extension install
 ```
@@ -20,7 +20,7 @@ Run the whole gate before sending a change; there is no hosted CI, so this is th
 tools/gate.sh
 ```
 
-It covers Rust fmt/clippy/tests, the sidecar (ruff, pyright, pytest), web and extension lint/typecheck/test/build, licence and `NOTICE` checks, the portability check, generated-docs drift, and the acceptance map in `docs/specs/acceptance.csv`. `OPENSIDE_GATE_JOBS` sets cargo parallelism (default 12).
+It covers Rust fmt/clippy/tests, the sidecar (biome, tsc, bun test), web and extension lint/typecheck/test/build, licence and `NOTICE` checks, the portability check, generated-docs drift, and the acceptance map in `docs/specs/acceptance.csv`. `OPENSIDE_GATE_JOBS` sets cargo parallelism (default 12).
 
 Faster loops while working:
 
@@ -29,7 +29,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -j 2 -- -D warnings
 cargo check --workspace --tests -j 2
 cargo test -p <crate>
-cd agent && uv run pytest -m "not live"
+cd agent && bun test && bun x tsc --noEmit -p . && bun x biome check .
 pnpm -C web test
 ```
 

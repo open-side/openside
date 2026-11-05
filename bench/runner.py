@@ -114,7 +114,7 @@ class Descendants:
 
 
 @contextmanager
-def daemon_process(binary: Path, browser: Path, python: Path, live_model: str | None, origin: str):
+def daemon_process(binary: Path, browser: Path, bun: Path, live_model: str | None, origin: str):
     if os.name != "posix":
         raise RuntimeError("The real daemon benchmark currently requires Unix sockets (Linux/macOS)")
     with tempfile.TemporaryDirectory(prefix="openside-bench-") as temporary:
@@ -127,7 +127,7 @@ def daemon_process(binary: Path, browser: Path, python: Path, live_model: str | 
         profile = "ultrabrowse" if live_model else "full"
         model = live_model or "script"
         config = (
-            "[agent]\ncommand = " + json.dumps([str(python), "-m", "openside_agent"])
+            "[agent]\ncommand = " + json.dumps([str(bun), "run", str(REPO / "agent/src/main.ts")])
             + ('\norchestration = "single"\n' if not live_model else "\n")
             + f"\nprofile = {json.dumps(profile)}\n"
             + "[models]\ndefault = " + json.dumps(model)
@@ -271,7 +271,7 @@ def metrics(events: list[dict], state, task_id: str, resolved: int, live: bool) 
     }
 
 
-def run_suite(binary: Path, browser: Path, python: Path, output: Path, live_model: str | None = None) -> dict:
+def run_suite(binary: Path, browser: Path, bun: Path, output: Path, live_model: str | None = None) -> dict:
     if live_model and ":" not in live_model:
         raise ValueError("OPENSIDE_LIVE_MODEL must be a provider-qualified selector")
     if output.exists() and any(output.iterdir()):
@@ -282,7 +282,7 @@ def run_suite(binary: Path, browser: Path, python: Path, output: Path, live_mode
     selection = {"provider": provider, "modelId": model_id, "thinkingLevel": "high" if live else "off", "fastMode": False}
     results = []
     suite_start = time.monotonic()
-    with fixture_server() as (origin, state), daemon_process(binary, browser, python, live_model, origin) as (root, client, script, descendants):
+    with fixture_server() as (origin, state), daemon_process(binary, browser, bun, live_model, origin) as (root, client, script, descendants):
         for task in TASKS:
             write_json(script, task.script(origin))
             session = request(client, "POST", "/v1/sessions", {
@@ -377,12 +377,13 @@ def summarize(results: list[dict], selection: dict, total_duration: float) -> di
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--daemon", type=Path, required=True)
-    parser.add_argument("--python", type=Path, required=True)
+    parser.add_argument("--bun", type=Path, required=True, help="Bun executable that runs the sidecar (agent/src/main.ts)")
     parser.add_argument("--output", type=Path, default=REPO / "bench/results" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ"))
     arguments = parser.parse_args()
     try:
-        # Resolving a virtualenv interpreter symlink selects the base Python without its packages.
-        summary = run_suite(arguments.daemon.resolve(), discover_browser(), arguments.python.absolute(), arguments.output.resolve(), os.environ.get("OPENSIDE_LIVE_MODEL"))
+        if not (REPO / "agent/node_modules").is_dir():
+            raise ValueError("Sidecar dependencies are missing; run: (cd agent && bun install --frozen-lockfile)")
+        summary = run_suite(arguments.daemon.resolve(), discover_browser(), arguments.bun.absolute(), arguments.output.resolve(), os.environ.get("OPENSIDE_LIVE_MODEL"))
     except (ValueError, RuntimeError, OSError, httpx.HTTPError) as error:
         print(f"openside-bench: {error}", file=sys.stderr)
         return 2

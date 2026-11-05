@@ -20,12 +20,8 @@ const RUNTIME_NAMES: &[&str] = &[
     "XDG_DATA_DIRS",
     "APPDATA",
     "LOCALAPPDATA",
-    "PYTHONPATH",
-    "PYTHONHOME",
-    "VIRTUAL_ENV",
-    "UV_CACHE_DIR",
-    "UV_PYTHON",
-    "UV_PYTHON_INSTALL_DIR",
+    "BUN_INSTALL",
+    "NODE_EXTRA_CA_CERTS",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
@@ -36,6 +32,7 @@ const RUNTIME_NAMES: &[&str] = &[
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "OPENSIDE_AGENT_SCRIPT",
+    "OPENSIDE_AGENT_PRELOAD",
     "OPENSIDE_CLAUDE_CODE_VERSION",
     "OPENSIDE_TEST_STDERR",
 ];
@@ -95,7 +92,7 @@ fn runtime_environment_with(
 ) -> Vec<(String, String)> {
     let mut excluded = HashSet::new();
     credential_names(credentials, &mut excluded);
-    RUNTIME_NAMES
+    let mut values: Vec<(String, String)> = RUNTIME_NAMES
         .iter()
         .filter(|name| !excluded.contains(**name))
         .filter_map(|name| {
@@ -103,7 +100,12 @@ fn runtime_environment_with(
                 .and_then(|value| value.into_string().ok())
                 .map(|value| ((*name).into(), value))
         })
-        .collect()
+        .collect();
+    // Bun otherwise writes its transpiler cache into the inherited XDG cache root, and
+    // openside keeps no XDG cache directory (docs/specs/data-layout.md). Startup cost of
+    // running without it was not measurable for the sidecar.
+    values.push(("BUN_RUNTIME_TRANSPILER_CACHE_PATH".into(), "0".into()));
+    values
 }
 
 #[cfg(test)]
@@ -133,5 +135,8 @@ mod tests {
         assert!(values
             .iter()
             .all(|(name, _)| !matches!(name.as_str(), "HTTP_PROXY" | "HTTPS_PROXY" | "ALL_PROXY")));
+        assert!(values
+            .iter()
+            .any(|(name, value)| name == "BUN_RUNTIME_TRANSPILER_CACHE_PATH" && value == "0"));
     }
 }

@@ -61,7 +61,7 @@ pub struct Config {
     pub vault: VaultConfig,
     /// Human-step ticket lifetimes; every TTL is at least one second.
     pub tickets: TicketsConfig,
-    /// Python sidecar launch settings.
+    /// Bun/TypeScript sidecar launch settings.
     pub agent: AgentConfig,
     /// Durable teammate scheduling; separate from ephemeral Task concurrency.
     pub team: TeamConfig,
@@ -411,8 +411,11 @@ impl fmt::Debug for VaultConfig {
 pub struct AgentConfig {
     /// Explicit executable and arguments (`OPENSIDE_AGENT_COMMAND`, JSON array).
     pub command: Option<Vec<String>>,
-    /// Python project directory (`OPENSIDE_AGENT_DIR`).
+    /// Sidecar project directory (`OPENSIDE_AGENT_DIR`), used as given; only the automatic
+    /// search requires a `package.json` named `openside-agent`.
     pub dir: Option<PathBuf>,
+    /// Bun executable for the default launch; `bun` on PATH when unset (`OPENSIDE_BUN`).
+    pub bun: Option<PathBuf>,
     /// Deadline for receiving the sidecar ready response, in milliseconds.
     pub startup_timeout_ms: u64,
     /// Model retries after a denied or failed tool call before the run fails.
@@ -456,6 +459,7 @@ impl Default for AgentConfig {
         Self {
             command: None,
             dir: None,
+            bun: None,
             startup_timeout_ms: 30_000,
             tool_retries: 3,
             compaction_max_messages: None,
@@ -652,6 +656,7 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
             &[
                 "command",
                 "dir",
+                "bun",
                 "startup_timeout_ms",
                 "tool_retries",
                 "compaction_max_messages",
@@ -771,6 +776,7 @@ fn load_with(
         ("OPENSIDE_DATA_DIR", &mut config.daemon.data_dir),
         ("OPENSIDE_SOCKET", &mut config.daemon.socket),
         ("OPENSIDE_AGENT_DIR", &mut config.agent.dir),
+        ("OPENSIDE_BUN", &mut config.agent.bun),
         ("OPENSIDE_VAULT_PATH", &mut config.vault.path),
         ("OPENSIDE_UI_DIR", &mut config.ui.dir),
     ] {
@@ -898,6 +904,7 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
         ("daemon.socket", &config.daemon.socket),
         ("vault.path", &config.vault.path),
         ("agent.dir", &config.agent.dir),
+        ("agent.bun", &config.agent.bun),
         ("browser.executable", &config.browser.executable),
         ("browser.bundle_dir", &config.browser.bundle_dir),
         ("sandbox.bwrap", &config.sandbox.bwrap),

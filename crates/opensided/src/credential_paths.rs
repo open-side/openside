@@ -427,8 +427,9 @@ fn file_identity(stat: &rustix::fs::Stat) -> (u64, u64) {
 fn file_identity(stat: &rustix::fs::Stat) -> (u64, u64) {
     (stat.st_dev as u64, stat.st_ino as u64)
 }
-// Match Python Path.home()/expanduser(), including an unset or empty HOME; otherwise
-// the source could read a default credential that the daemon forgot to protect.
+// Empty HOME means `/` and unset HOME means the passwd entry, the widest reading a
+// credential source may use; otherwise a source could read a default credential that the
+// daemon forgot to protect.
 #[cfg(unix)]
 fn source_home(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
     match env("HOME") {
@@ -538,7 +539,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn home_environment_matches_the_python_source_paths() {
+    fn source_home_treats_an_empty_home_as_root_and_uses_a_set_home_as_is() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(
             source_home(|_| Some(std::ffi::OsString::new())),

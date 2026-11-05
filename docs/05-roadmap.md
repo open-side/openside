@@ -20,7 +20,7 @@
 - ✅ 저장소·검증: `tools/gate.sh`에서 fmt, clippy, test, cargo-deny, 에이전트 검사 및 잔여 검증 통과. 2026-10-14 오너 결정으로 호스티드 CI를 걷어냈으며, 로컬에서 `tools/gate.sh`를 직접 돌리는 것을 표준 검증 기준으로 삼는다. ✅ 라이선스 고지(ADR-009, 워크스페이스 `MIT OR Apache-2.0`, NOTICE). ✅ 데이터 디렉터리 및 설정 스키마(`openside-config`: XDG 경로, `config.toml`, 환경변수 재정의). ✅ `openside doctor [--json]`(설정, 브라우저, 샌드박스, Vault, 자격 증명 소스 진단).
 - ✅ `openside-policy`(D-2), ✅ `openside-core` 타입·trait(사이드카 계약으로 재작성).
 - ✅ 스파이크: omp 시절 S-1~S-6, 사이드카 전환 S-8/S-9/S-14/S-15/S-16(`docs/spikes/`). 결과는 ADR 로 기록(docs/06).
-- ✅ 수용 AC 목록(`docs/specs/acceptance.csv`), ✅ 테스트 harness(`crates/openside-e2e`: 실제 Python 사이드카 + 스크립트 모델).
+- ✅ 수용 AC 목록(`docs/specs/acceptance.csv`), ✅ 테스트 harness(`crates/openside-e2e`: 실제 Bun 사이드카 + 스크립트 모델).
 - 종료 조건: ✅ 로컬 게이트 통과(호스팅 CI 실행은 PP-1 외부 의존성 차단 상태), ✅ 모든 스파이크 "가능 / 불가능 + 대안" 결론 도출 완료, ✅ 외부 아웃바운드 네트워크 허용 목록 테스트 통과(PP-25, `crates/openside-e2e/tests/egress.rs`, `[network].allow` 및 설정된 프로바이더·서비스 대상 격리 강제).
 
 ### M1 — 코어 루프 (XL)
@@ -82,7 +82,7 @@
 
 ### M8 — 작업 모델과 브라우저 경험 확장 (L)
 - 프론트 에이전트와 Task 분리(A-16), 단일 작업 공간 및 Task별 탭 소유권(B-12), 브라우저 상태와 카드 UI(B-13), 브라우저 드라이버 고도화(B-15), 지연 시간 단축(B-16).
-- 공통 글래스 시각 체계(F-6).
+- 공통 플랫 시각 체계(F-6).
 - 이미 구현된 항목: 스냅샷 뷰포트 범위(B-14), 로그인 폼 도구(C-9, 채널 링크 검증 제외), 격리 브라우저 공간(B-11, 단 기준 ③ 은 검토에서 발견된 결함 세 가지를 고치기 전까지 통과로 보지 않는다).
 - `browser_repl` 내 페이지 JavaScript 허용(ADR-022; B-2 ③, B-15 ⑦) 및 Vault·로그인 명세 내 redaction/노출 관련 문구 반영
 - PWA 네이티브 사용성 개선(F-7), 원격 전송 방식 지원(F-8), 외부 에이전트 CLI/MCP 위임 및 직접 제어(E-6), 원격 CLI/MCP 접속(E-7)

@@ -1,4 +1,4 @@
-//! Credential-free real CLI round trips through the Python sidecar daemon.
+//! Credential-free real CLI round trips through the Bun sidecar daemon.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]

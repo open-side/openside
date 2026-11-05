@@ -7,7 +7,7 @@ openside 는 한 사용자의 로컬 데몬이다. 아래 표는 막는 위협�
 1. 모델 출력: 신뢰하지 않는다. 모든 툴 호출은 데몬의 하네스 훅(`host.rs`)을 거친다.
 2. 웹 페이지 내용: 신뢰하지 않는다. 프롬프트 인젝션이 들어 있다고 가정한다.
 3. 클라이언트: 토큰 스코프만큼만 믿는다. Unix 소켓 호출자는 같은 사용자로 본다.
-4. Python 사이드카: 툴은 데몬의 Host 훅을 거쳐서만 실행하고, 비밀은 받지 않는다. 다만 사이드카 프로세스 자체는 샌드박스에서 돌지 않는 한 신뢰하는 코드다. 외부 전송 검사는 그 프로세스 안에서 도는 장치이고 커널 수준 격리가 아니다.
+4. Bun 사이드카: 툴은 데몬의 Host 훅을 거쳐서만 실행하고, 비밀은 받지 않는다. 다만 사이드카 프로세스 자체는 샌드박스에서 돌지 않는 한 신뢰하는 코드다. 외부 전송 검사는 그 프로세스 안에서 도는 장치이고 커널 수준 격리가 아니다. `OPENSIDE_AGENT_PRELOAD`는 관례상 테스트에만 쓰는 훅일 뿐 보안 경계가 아니며, 사이드카 환경변수를 설정할 수 있는 주체는 이미 `OPENSIDE_BUN`이나 `PATH`도 지정할 수 있으므로 프리로드 파일은 Bun 실행 파일 자체와 신뢰 수준이 같다.
 
 ## 위협과 대응
 
@@ -36,7 +36,7 @@ openside 는 한 사용자의 로컬 데몬이다. 아래 표는 막는 위협�
 
 독립적으로 설치된 CLI와 MCP는 페어링 QR 코드나 링크에 고정(pinning)된 데몬 공개키와 Noise 프로토콜 종단간 암호화(E2EE)로 릴레이 연결을 보호한다. 반면 릴레이가 제공하는 PWA는 릴레이 운영자가 서빙하는 HTML과 JS 코드를 신뢰해야 한다. 따라서 자체 호스팅 릴레이를 운영하거나, 릴레이를 거치지 않고 데몬 또는 Tailscale 오리진에 직접 연결하여 PWA를 불러오는 구성을 권장한다.
 
-사람의 판단과 승인 권한은 프롬프트 지침이 아니라 데몬이 직접 강제하는 규칙이다. 기기와 토큰의 역할(`kind`)은 코드를 교환할 때가 아니라 운영자가 오퍼나 토큰을 발급할 때 결정된다. 데몬 호스트에서 일반 `openside pair`를 실행하면 `person_device` 오퍼가 생성되고(웹 UI 선택지 'Pair a phone/browser'), `openside pair --agent`를 실행하면 `agent_client` 오퍼가 생성된다(웹 UI 선택지 'Connect an agent / CLI'). `openside token create`는 기본적으로 `agent_client` 토큰을 발급하며, 로컬 소켓 전용인 `openside token create --person`을 실행하면 확장 프로그램·웹·모바일 기기용 `person_device` 토큰을 명시적으로 발급한다. `openside connect`는 오퍼에 지정된 역할을 그대로 물려받을 뿐 변경할 수 없으므로, `person_device` 오퍼를 교환하면 그대로 `person_device`가 된다. 로컬 Unix 소켓 자체는 식별자가 `local`이며 `agent_client`로 분류된다. `person_device` 토큰을 에이전트에 넘기면 사람의 승인 권한까지 부여되므로 에이전트에는 절대 `person_device` 토큰을 주어서는 안 된다. 로컬 소켓에 접근할 수 있는 동일 UID 프로세스는 의도적으로 `person_device` 토큰을 발급할 수 있으므로, 이 구분은 OS 샌드박스 경계가 아니라 신뢰받는 운영자의 제어 수단이다.
+사람의 판단과 승인 권한은 프롬프트 지침이 아니라 데몬이 직접 강제하는 규칙이다. 기기와 토큰의 역할(`kind`)은 코드를 교환할 때가 아니라 운영자가 오퍼나 토큰을 발급할 때 결정된다. 데몬 호스트에서 일반 `openside pair`를 실행하면 `person_device` 오퍼가 생성되고(웹 UI 선택지 'Pair a phone/browser'), `openside pair --agent`를 실행하면 `agent_client` 오퍼가 생성된다(웹 UI 선택지 'Connect an agent / CLI'). `openside token create`는 기본적으로 `agent_client` 토큰을 발급하며, 로컬 소켓 전용인 `openside token create --person`을 실행하면 확장 프로그램·웹·모바일 기기용 `person_device` 토큰을 명시적으로 발급한다. `openside login`은 오퍼에 지정된 역할을 그대로 물려받을 뿐 변경할 수 없으므로, `person_device` 오퍼를 교환하면 그대로 `person_device`가 된다. 로컬 Unix 소켓 자체는 식별자가 `local`이며 `agent_client`로 분류된다. `person_device` 토큰을 에이전트에 넘기면 사람의 승인 권한까지 부여되므로 에이전트에는 절대 `person_device` 토큰을 주어서는 안 된다. 로컬 소켓에 접근할 수 있는 동일 UID 프로세스는 의도적으로 `person_device` 토큰을 발급할 수 있으므로, 이 구분은 OS 샌드박스 경계가 아니라 신뢰받는 운영자의 제어 수단이다.
 
 사람의 판단이나 승인이 필요한 작업은 기존 스코프에 더해 반드시 `person_device` 역할이 있어야만 수행할 수 있다. 여기에는 확인(confirm) 티켓 승인(`true` 또는 `"approve"`), 모든 선택지(`choice`) 티켓 응답, `secret_input`의 `{totp}` 영구 등록, `login`의 `save: true` 저장이 포함된다. `agent_client`나 로컬 소켓(`local`)이 이러한 작업을 시도하면 해당 티켓을 직접 생성하거나 세션을 구동한 주체가 아니더라도 `403 person_approval_required` 오류로 거부된다. 거부된 티켓은 승인 대기(pending) 상태를 그대로 유지하며 페이지 조작이나 Vault 등록·저장도 일절 실행되지 않는다. 반면 확인 티켓 거절(`false` 또는 `"reject"`)과 거절·취소 엔드포인트 호출은 필요한 스코프만 있으면 에이전트에서도 허용된다.
 

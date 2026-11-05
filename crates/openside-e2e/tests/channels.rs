@@ -1,4 +1,4 @@
-//! Chat-channel round trips against the real daemon and the scripted Python sidecar.
+//! Chat-channel round trips against the real daemon and the scripted Bun sidecar.
 //!
 //! The bot talks to the daemon only through a recording proxy, so every scenario also
 //! proves (G-5) that adapters use nothing but public `/v1/*` routes.

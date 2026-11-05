@@ -106,56 +106,95 @@ impl Run {
             &json!({"responses":responses}),
         )?;
         if let Some(count) = live_count {
-            let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-            let wrapper = harness.root().join("live-agent.py");
+            let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .canonicalize()
+                .unwrap();
+            let preload = harness.root().join("live-agent-preload.ts");
             std::fs::write(
-                &wrapper,
+                &preload,
                 format!(
-                    r#"# Opt-in live QA blocks report-driven broker mutations, but the daemon may
-# refresh an expired token while acquiring a credential snapshot.
-import fcntl, runpy
-from pathlib import Path
-from openside_agent.providers import AuthUnavailable
-from openside_agent.providers.credential_rpc import DaemonCredentialRpc
-credential_report = DaemonCredentialRpc.report
-async def read_only_report(self, lease, outcome, request_id, **kwargs):
-    if outcome.kind in ('auth', 'rate_limit', 'quota', 'policy'):
-        raise AuthUnavailable('live', ['Live login QA forbids report-driven broker mutation']) from None
-    return await credential_report(self, lease, outcome, request_id, **kwargs)
-DaemonCredentialRpc.report = read_only_report
-original = DaemonCredentialRpc.acquire
-async def limited(self, provider, model, request_id, attempt, subagent):
-    with Path({count:?}).open('a+') as ledger:
-        fcntl.flock(ledger, fcntl.LOCK_EX)
-        ledger.seek(0)
-        used = len(ledger.readlines())
-        if used >= 40:
-            raise RuntimeError('Live login QA model request budget exhausted')
-        ledger.write(str(used + 1) + '\n')
-        ledger.flush()
-    return await original(self, provider, model, request_id, attempt, subagent)
-DaemonCredentialRpc.acquire = limited
-runpy.run_module('openside_agent', run_name='__main__')
+                    r#"// Opt-in live QA blocks report-driven broker mutations, but the daemon may
+// refresh an expired token while acquiring a credential snapshot.
+import {{ appendFileSync, closeSync, mkdirSync, openSync }} from "node:fs";
+import {{ wrapCredentialRpcForTests }} from {credential_rpc};
+import {{ AuthUnavailable }} from {errors};
+
+const ledger = {ledger};
+const slots = `${{ledger}}.slots`;
+mkdirSync(slots, {{ recursive: true }});
+// Every sidecar process of every scenario shares one 40-request budget, without a lock:
+// exclusive creation (O_EXCL) of a numbered slot file admits each slot exactly once even
+// when processes race. The ledger line (one small O_APPEND write, which lands whole) is
+// what the test counts afterwards.
+function admit(): void {{
+	for (let slot = 1; slot <= 40; slot++) {{
+		try {{
+			closeSync(openSync(`${{slots}}/${{slot}}`, "wx"));
+		}} catch (error) {{
+			if ((error as {{ code?: string }}).code === "EEXIST") continue;
+			throw error;
+		}}
+		appendFileSync(ledger, `${{slot}}\n`);
+		return;
+	}}
+	throw new Error("Live login QA model request budget exhausted");
+}}
+
+wrapCredentialRpcForTests(rpc => ({{
+	acquire(...args: Parameters<typeof rpc.acquire>) {{
+		admit();
+		return rpc.acquire(...args);
+	}},
+	report(...args: Parameters<typeof rpc.report>) {{
+		if (["auth", "rate_limit", "quota", "policy"].includes(args[1].kind)) {{
+			return Promise.reject(
+				new AuthUnavailable("live", ["Live login QA forbids report-driven broker mutation"]),
+			);
+		}}
+		return rpc.report(...args);
+	}},
+}}));
 "#,
-                    count = count.to_string_lossy(),
+                    credential_rpc = json!(repo.join("agent/src/providers/credential-rpc.ts")),
+                    errors = json!(repo.join("agent/src/providers/errors.ts")),
+                    ledger = json!(count),
                 ),
             )
             .unwrap();
-            let command = json!([
-                "env",
-                "-u",
-                "OPENSIDE_AGENT_SCRIPT",
-                repo.join("agent/.venv/bin/python"),
-                wrapper
-            ]);
-            let token = std::path::Path::new(&std::env::var("HOME").unwrap())
-                .join(".omp/auth-broker.token");
+            // Keep the harness's own `bun run <agent>/src/main.ts` argv; only the environment
+            // around it changes.
+            let harness_config =
+                std::fs::read_to_string(harness.root().join("config/openside/config.toml"))
+                    .unwrap();
+            let sidecar: Vec<String> = serde_json::from_str(
+                harness_config
+                    .lines()
+                    .find_map(|line| line.strip_prefix("command = "))
+                    .expect("harness config sets agent.command"),
+            )
+            .unwrap();
+            let mut command = vec![
+                "env".to_string(),
+                "-u".into(),
+                "OPENSIDE_AGENT_SCRIPT".into(),
+                format!("OPENSIDE_AGENT_PRELOAD={}", preload.display()),
+            ];
+            command.extend(sidecar);
+            let command = json!(command);
+            // The live broker is the operator's own; its location never lives in the repo.
+            let broker_url = std::env::var("OPENSIDE_LOGIN_LIVE_BROKER_URL")
+                .expect("OPENSIDE_LOGIN_LIVE_BROKER_URL names the live broker origin");
+            let token = std::path::PathBuf::from(
+                std::env::var_os("OPENSIDE_LOGIN_LIVE_BROKER_TOKEN_FILE")
+                    .expect("OPENSIDE_LOGIN_LIVE_BROKER_TOKEN_FILE names the broker token file"),
+            );
             assert!(token.is_file(), "broker token file is unavailable");
             let model = std::env::var("OPENSIDE_LOGIN_LIVE_MODEL")
                 .unwrap_or_else(|_| "anthropic:claude-haiku-5-5".into());
             std::fs::write(
                 harness.root().join("config/openside/config.toml"),
-                format!("[agent]\ncommand = {command}\norchestration = \"single\"\n[models]\ndefault = {}\n[policy]\nmode = \"full\"\n[credentials.omp_broker]\nurl = \"http://127.0.0.1:8765\"\ntoken_file = {}\n", json!(model), json!(token)),
+                format!("[agent]\ncommand = {command}\norchestration = \"single\"\n[models]\ndefault = {}\n[policy]\nmode = \"full\"\n[credentials.omp_broker]\nurl = {}\ntoken_file = {}\n", json!(model), json!(broker_url), json!(token)),
             )
             .unwrap();
         }

@@ -6,7 +6,7 @@
 
 - `opensided`: Rust 데몬. 세션·정책·볼트·브라우저·티켓을 소유하고 모든 도구를 실행한다.
 - `openside`: 비대화형 CLI 클라이언트(`crates/openside-cli`).
-- `agent/`: Python Pydantic AI 사이드카(`openside_agent`). 데몬이 세션마다 띄운다.
+- `agent/`: omp `@oh-my-pi/pi-agent-core`/`@oh-my-pi/pi-ai` 기반의 Bun/TypeScript 사이드카(패키지 `openside-agent`). 데몬이 세션마다 하나씩 띄운다.
 
 ## 1. 필수 도구
 
@@ -18,17 +18,33 @@
 rustup show            # 저장소 루트에서 실행해 툴체인 확인
 ```
 
-### uv 와 Python 사이드카
+### Bun 과 사이드카
 
-[uv](https://docs.astral.sh/uv/) 를 설치한 뒤 저장소 루트에서 사이드카 의존성을 설치한다. `agent/.python-version` 이 `3.13`, `agent/pyproject.toml` 이 `requires-python = ">=3.13"` 이므로 필요하면 uv 가 Python 3.13 을 받아 `agent/.venv` 를 만든다.
+[Bun](https://bun.sh) 1.4.4 이상(`agent/package.json`의 `engines.bun`)을 설치한 뒤, 저장소 루트에서 사이드카 의존성을 설치한다. `agent/bun.lock`이 `@oh-my-pi/*` 패키지를 18.16.0으로 고정하며, 설치할 때 현재 플랫폼용 네이티브 애드온인 `@oh-my-pi/pi-natives-<os>-<arch>`(linux-x64 기준 약 245 MB)도 함께 받는다.
 
 ```bash
-uv sync --project agent
+cd agent && bun install --frozen-lockfile
 ```
 
-uv 가 PATH 에 있으면 데몬은 사이드카를 `uv run --project <agent.dir> python -m openside_agent` 로 띄운다. uv 가 없으면 `python3 -m openside_agent` 로 대체하므로, 그 Python 환경에 `openside_agent` 가 설치돼 있어야 한다(`crates/openside-config/src/discovery.rs` `agent_command_with`).
+데몬은 사이드카를 `bun run <agent.dir>/src/main.ts`로 띄운다. 설정 `agent.bun`이나 환경변수 `OPENSIDE_BUN`으로 실행 파일 경로를 지정하지 않으면 PATH의 `bun`을 쓴다(`crates/openside-config/src/discovery.rs`).
 
-`agent.dir` 을 지정하지 않으면 실행 파일 위치 기준으로 `../share/openside/agent`, `../../agent` 순서로 `pyproject.toml` 이 있는 디렉터리를 찾는다. 저장소에서 빌드한 `target/<profile>/opensided` 는 두 번째 후보로 저장소의 `agent/` 를 찾는다. 바이너리를 다른 곳으로 옮기면 `agent.dir`(또는 `OPENSIDE_AGENT_DIR`) 이나 `agent.command` 를 설정한다.
+`agent.dir`을 지정하지 않으면 실행 파일 위치를 기준으로 `../share/openside/agent`, `../../agent` 순서로 `package.json`에 `"name": "openside-agent"`가 들어 있는 디렉터리를 찾는다. 저장소에서 빌드한 바이너리(`target/<profile>/opensided`)는 두 번째 후보로 저장소의 `agent/`를 찾는다. 바이너리를 다른 곳으로 옮기면 `agent.dir`(또는 `OPENSIDE_AGENT_DIR`)이나 `agent.command`를 설정한다.
+
+### 릴리스 배치
+
+릴리스는 사이드카를 컴파일된 단일 바이너리로 배포하지 않는다. pi-agent-core를 불러올 때 pi-natives 네이티브 애드온을 로드하는데, `bun build --compile`은 `.node` 애드온을 바이너리에 내장할 수 없기 때문이다. 따라서 릴리스에는 소스 코드와 프로덕션 `node_modules`를 함께 담으며, 대상 머신에는 Bun 1.4.4 이상이 필요하다.
+
+```
+share/openside/
+  agent/
+    package.json
+    bun.lock
+    src/
+    node_modules/                  # bun install --frozen-lockfile --production
+  docs/specs/sidecar-wire.schema.json
+```
+
+`share/openside/agent` 안에서 `bun install --frozen-lockfile --production`을 실행해 `node_modules`를 만든다. `agent/src/protocol/validate.ts`가 `../../../docs/specs/sidecar-wire.schema.json` 경로에서 와이어 스키마를 불러오므로, 스키마 파일은 `agent/` 옆인 `share/openside/docs/specs/`에 두어야 한다. 설치 용량은 약 300 MB 늘어나며, 그중 대부분은 pi-natives 애드온(약 245 MB)이다.
 
 ### 바이너리 빌드
 
@@ -68,7 +84,7 @@ UI의 Models & accounts에서 설정하거나 동등한 CLI 명령을 사용한�
 
 - `env`: API 키 환경변수. 기본 이름은 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`(`openai`, `openai-chat`, `openai-responses`), `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`/`GEMINI_API_KEY`, `GITHUB_COPILOT_API_KEY`/`GITHUB_COPILOT_API_TOKEN`/`COPILOT_GITHUB_TOKEN`. 표에 없는 공급자는 `<PROVIDER>_API_KEY`(대문자, `-`→`_`). 데몬 프로세스 환경에 있어야 한다.
 - `command`: `credentials.command.<provider>` 에 셸 없이 실행할 argv 를 둔다. stdout 이 키이며 기본 타임아웃은 10초다.
-- `claude-code`/`codex-cli`: 기존 읽기 전용 기본 로그인을 사용하거나 `openside accounts add <source> --label <label>`로 격리된 계정을 만든다. 화면에 안내되는 외부 명령을 실행하며 openside 자체는 별도의 OAuth 로그인 흐름을 두지 않는다.
+- `claude-code`/`codex-cli`: 기존 읽기 전용 기본 로그인을 사용하거나 `openside models accounts add <source> --label <label>`로 격리된 계정을 만든다. 화면에 안내되는 외부 명령을 실행하며 openside 자체는 별도의 OAuth 로그인 흐름을 두지 않는다.
 - `vault`: 숨겨진 표준 입력을 통해 라벨이 지정된 API 키 계정을 등록한다(`openside key set <provider> --label <label>`). `builtin`은 데몬이 확인할 수 있는 프로바이더 환경변수 인증을 명시적으로 사용하며, 사이드카가 홈 디렉터리나 자격 증명 환경변수를 직접 검사하도록 허용하지는 않는다.
 - `omp-broker`(선택): oh-my-pi auth broker 를 쓰는 사용자용이다. 토큰이 없으면 오류 없이 비활성화되므로 broker 가 없는 머신에서는 아무 설정도 필요 없다. `OPENSIDE_BROKER_URL`, `OPENSIDE_BROKER_TOKEN` 또는 `credentials.omp_broker.url`, `credentials.omp_broker.token_file` 로 지정한다.
 
@@ -96,7 +112,7 @@ target/release/openside doctor --json     # 기계용 JSON
 target/release/openside doctor --config ./config.toml
 ```
 
-doctor 는 데몬 없이 동작하며 디렉터리를 만들거나 자격 증명 값을 출력하지 않는다. 점검 항목: `config`, `paths.data|state|runtime`, `vault`(passphrase 명령은 실행하지 않음), `executable.python3`, `executable.uv`, `agent.discovery.*`, `agent.sidecar`/`agent.packages`(사이드카 `doctor --json` 을 60초 제한으로 실행), 공급자별 자격 증명, `models`, `browser`, `sandbox.bwrap`, `network.allow`. `fail` 항목이 하나라도 있으면 종료 코드가 1 이다.
+doctor는 데몬 없이 동작하며 디렉터리를 만들거나 자격 증명 값을 출력하지 않는다. 점검 항목: `config`, `paths.data|state|runtime`, `vault`(passphrase 명령은 실행하지 않음), `executable.bun`(`agent.bun`/`OPENSIDE_BUN` 또는 PATH에서 `bun`을 찾고 `bun --version`이 1.4.4 이상인지 확인하며, `agent.command`가 설정되어 있으면 건너뜀), `agent.discovery.*`, `agent.dependencies`(`node_modules/@oh-my-pi/pi-agent-core`와 현재 플랫폼의 `@oh-my-pi/pi-natives-<os>-<arch>`가 있는지 확인하며, 없으면 에이전트 디렉터리에서 `bun install --frozen-lockfile --production`을 실행), `agent.sidecar`/`agent.packages`(사이드카 `doctor --json`을 60초 제한으로 실행해 Bun과 패키지 버전을 보고), 프로바이더별 자격 증명, `models`, `browser`, `sandbox.bwrap`, `network.allow`. `fail` 항목이 하나라도 있으면 종료 코드는 1이다.
 
 ## 6. 실행
 
@@ -143,16 +159,14 @@ openside session resume <id>                   # 해결 후 이어서 보기
 Description=openside daemon
 
 [Service]
+Type=simple
 ExecStart=%h/.local/bin/opensided
-# Only signal the daemon; it decides whether Chromium survives (pending
-# browser tickets) or closes it itself. The default control-group mode would
-# kill Chromium and break ticket resumption across restarts.
+# The daemon decides whether Chromium outlives it (pending browser tickets).
 KillMode=process
 Restart=on-failure
-# User units get a minimal PATH; uv and the browser must be findable.
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-# Optional: model and credentials from a private env file (mode 0600).
-# EnvironmentFile=%h/.config/openside/env
+RestartSec=2
+# User units get a minimal PATH; the sidecar needs bun (~/.bun/bin or ~/.local/bin).
+Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
@@ -165,7 +179,7 @@ systemctl --user enable --now openside
 journalctl --user -u openside -f
 ```
 
-바이너리를 `~/.local/bin` 에 두면 사이드카 자동 탐색 후보는 `~/.local/share/openside/agent` 다. 저장소 checkout 을 그대로 쓰려면 설정에 `agent.dir` 을 저장소의 `agent` 디렉터리 절대 경로로 둔다. systemd user manager 는 `XDG_RUNTIME_DIR` 을 설정하므로 CLI 기본 소켓 경로와 일치한다. 이 유닛은 2026-10-12 qemu/KVM 가상머신(Arch Linux 클라우드 이미지)에서 실기 검증을 마쳤다. `sudo reboot` 및 sysrq 하드 리셋 후에도 linger(`loginctl enable-linger`) 설정 덕분에 systemd 사용자 관리자가 `openside.service`를 정상 기동했고, 중단되었던 세션은 `idle` 상태로 복구되어 새 메시지를 처리했다. 이 유닛은 `Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin`(미설정 시 systemd 사용자 관리자 환경에서 `uv`를 찾지 못함)과 `KillMode=process` 설정이 필요하며, `openside service install` 명령이 두 항목을 모두 자동 등록한다. 가상머신 환경은 Arch Linux로만 시험했으며, 다른 리눅스 배포판이나 데스크톱 세션에서는 별도로 확인하지 않았다 [INFERENCE: 동일하게 정상 동작할 것으로 예상됨].
+바이너리를 `~/.local/bin` 에 두면 사이드카 자동 탐색 후보는 `~/.local/share/openside/agent` 다. 저장소 checkout 을 그대로 쓰려면 설정에 `agent.dir` 을 저장소의 `agent` 디렉터리 절대 경로로 둔다. systemd user manager 는 `XDG_RUNTIME_DIR` 을 설정하므로 CLI 기본 소켓 경로와 일치한다. 이 유닛은 2026-10-12 qemu/KVM 가상머신(Arch Linux 클라우드 이미지)에서 실기 검증을 마쳤다. `sudo reboot` 및 sysrq 하드 리셋 후에도 linger(`loginctl enable-linger`) 설정 덕분에 systemd 사용자 관리자가 `openside.service`를 정상 기동했고, 중단되었던 세션은 `idle` 상태로 복구되어 새 메시지를 처리했다. 유닛에는 `Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin`(없으면 systemd 사용자 관리자가 `bun`을 찾지 못함)과 `KillMode=process`가 필요하며, `openside service install`이 두 설정을 모두 기록한다. 가상머신 환경은 Arch Linux로만 시험했으며, 다른 리눅스 배포판이나 데스크톱 세션에서는 별도로 확인하지 않았다 [INFERENCE: 동일하게 정상 동작할 것으로 예상됨]. 위 가상머신 검증은 2026-10-12에 이전 Python 사이드카로 수행한 것이며, systemd 아래에서 Bun 사이드카는 다시 검증하지 않았다(`unverified`).
 
 ### launchd (macOS, `unverified`)
 
@@ -192,7 +206,7 @@ journalctl --user -u openside -f
 	<!-- Stop only the daemon; it decides whether Chromium outlives it (pending browser tickets). -->
 	<key>AbandonProcessGroup</key>
 	<true/>
-	<!-- Agents get a minimal PATH; the sidecar needs uv (Homebrew or ~/.local/bin installs). -->
+	<!-- Agents get a minimal PATH; the sidecar needs bun from Homebrew or /usr/local/bin. -->
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
@@ -221,12 +235,11 @@ Windows 에서는 `openside service` 가 systemd unit 대신 미지원 오류(`d
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-cd agent && uv run ruff check && uv run ruff format --check && uv run pyright && uv run pytest -m "not live"
+cd agent && bun install --frozen-lockfile && bun x biome check . && bun x tsc --noEmit -p . && bun test
 ```
 
 - 브라우저 테스트는 브라우저를 찾지 못하면 `skip` 을 출력하고 건너뛴다.
-- `openside-e2e` 는 `agent/.venv/bin/python` 이 없으면 건너뛰므로 `uv sync --project agent` 를 먼저 실행한다.
-- live 테스트(`@pytest.mark.live`)는 `OPENSIDE_LIVE_MODEL` 이 없으면 건너뛴다.
+- `openside-e2e`는 `bun`(PATH 또는 `OPENSIDE_BUN`)이나 `agent/node_modules`가 없으면 건너뛰므로, 먼저 `agent/`에서 `bun install --frozen-lockfile`을 실행한다.
 - `tools/gate.sh`는 전체 게이트 검사를 한 번에 실행한다. 위에 적힌 명령 외에 웹 및 확장 프로그램 검사, 언어 검사, 라이선스 및 `NOTICE` 확인, 브라우저 UX 근거 점검, 이식성 검사를 함께 진행한다. 실행하려면 PATH 환경 변수에 `cargo-deny`가 있거나 `CARGO_DENY` 환경 변수를 지정해야 한다. 자세한 내용은 `docs/specs/quality-operations.md`를 참고한다.
 - `tools/e2e-scenarios.sh`는 `docs/specs/e2e-scenarios.md`에 정의된 엔드투엔드 시나리오 스위트(실제 데몬, 스크립트 기반 모델, 로컬 테스트 사이트)를 실행하고 PASS/FAIL 표를 출력한다.
 - `bench/run.sh`는 로컬 벤치마크 스위트를 명령 하나로 재현한다(`bench/README.md` 참고).

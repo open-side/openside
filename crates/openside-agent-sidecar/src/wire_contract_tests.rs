@@ -1,7 +1,7 @@
 //! OP-2 contract: every message shape this crate puts on (or accepts from) the wire validates
-//! against docs/specs/sidecar-wire.schema.json, which the Python sidecar generates from its own
-//! models. A Rust-only or Python-only change to a message shape fails here or in
-//! agent/tests/test_wire_schema.py.
+//! against docs/specs/sidecar-wire.schema.json, the hand-maintained canonical schema. The Bun
+//! sidecar validates inbound lines against the same file and agent/tests/wire-schema.test.ts
+//! checks its outbound shapes, so a one-sided change to a message shape fails on one side.
 
 use std::collections::BTreeSet;
 
@@ -274,10 +274,10 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
             nonce: "0123456789abcdef".into(),
             pid: 42,
             versions: Versions {
-                python: "3.13".into(),
-                pydantic_ai: "1.0".into(),
-                pydantic_ai_harness: "0.1".into(),
-                openside_agent: "0.1.1".into(),
+                runtime: "bun 1.4.4".into(),
+                pi_agent_core: "18.16.0".into(),
+                pi_ai: "18.16.0".into(),
+                openside_agent: "0.2.0".into(),
             },
         },
         SidecarMessage::Ready {
@@ -309,7 +309,7 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
         },
         SidecarMessage::StateSnapshot {
             state: State {
-                format: "openside-agent-state/1".into(),
+                format: "openside-agent-state/2".into(),
                 data: "opaque".into(),
             },
         },
@@ -503,7 +503,7 @@ fn schema_rejects_shapes_outside_the_contract() {
         json!({"v": 2, "type": "settled"}),
         json!({"type": "settled"}),
         json!({"v": 1, "type": "hello", "protocol": 2, "nonce": "n", "pid": 1,
-            "versions": {"python": "", "pydantic_ai": "", "pydantic_ai_harness": "", "openside_agent": ""}}),
+            "versions": {"runtime": "", "pi_agent_core": "", "pi_ai": "", "openside_agent": ""}}),
         json!({"v": 1, "type": "ready", "tools": [], "pending_deferred": [], "startup_ms": 1, "extra": 1}),
         json!({"v": 1, "type": "unknown"}),
     ] {

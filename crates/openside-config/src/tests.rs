@@ -38,13 +38,46 @@ fn write(path: &Path, contents: &str) {
 }
 
 fn binary(path: &Path) {
-    write(path, "fake executable");
+    write_executable(path, "fake executable");
+}
+
+/// Writes an executable file without this process ever holding a write fd to it. Such an fd
+/// is inherited by children that parallel tests fork until they exec, and exec'ing the file
+/// meanwhile fails with ETXTBSY; `cp` holds the only write fd, in its own process.
+pub(crate) fn write_executable(path: &Path, contents: &str) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let source = path.with_extension("source");
+        write(&source, contents);
+        let status = std::process::Command::new("cp")
+            .arg(&source)
+            .arg(path)
+            .status()
+            .unwrap_or_else(|err| panic!("cp: {err}"));
+        assert!(status.success(), "cp {}: {status}", path.display());
+        std::fs::remove_file(&source).unwrap_or_else(|err| panic!("remove: {err}"));
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
             .unwrap_or_else(|err| panic!("permissions: {err}"));
     }
+    #[cfg(not(unix))]
+    write(path, contents);
+}
+
+#[test]
+fn min_bun_matches_the_sidecar_engines_bun() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../agent/package.json"))
+            .unwrap_or_else(|err| panic!("agent/package.json: {err}"));
+    let (major, minor, patch) = crate::discovery::MIN_BUN;
+    assert_eq!(
+        crate::discovery::MIN_BUN_TEXT,
+        format!("{major}.{minor}.{patch}")
+    );
+    assert_eq!(
+        manifest["engines"]["bun"],
+        format!(">={}", crate::discovery::MIN_BUN_TEXT)
+    );
 }
 
 #[test]
@@ -61,8 +94,9 @@ listen = "127.0.0.1:1"
 path = "file-vault"
 passphrase_cmd = ["unlock-fixture", "--no-shell"]
 [agent]
-command = ["file-python"]
+command = ["file-bun"]
 dir = "file-agent"
+bun = "file-bun-executable"
 startup_timeout_ms = 123
 [models]
 default = "file-selection"
@@ -81,9 +115,10 @@ mode = "read-only"
         ("OPENSIDE_LISTEN", OsStr::new("127.0.0.1:2")),
         (
             "OPENSIDE_AGENT_COMMAND",
-            OsStr::new(r#"["env-python","-m","openside_agent"]"#),
+            OsStr::new(r#"["env-bun","run","env-agent/src/main.ts"]"#),
         ),
         ("OPENSIDE_AGENT_DIR", OsStr::new("env-agent")),
+        ("OPENSIDE_BUN", OsStr::new("env-bun-executable")),
         ("OPENSIDE_MODEL", OsStr::new("env-selection")),
         ("OPENSIDE_BROWSER", OsStr::new("env-browser")),
         ("OPENSIDE_VAULT_PATH", OsStr::new("env-vault")),
@@ -104,12 +139,16 @@ mode = "read-only"
     assert_eq!(
         parsed.config.agent.command,
         Some(vec![
-            "env-python".into(),
-            "-m".into(),
-            "openside_agent".into()
+            "env-bun".into(),
+            "run".into(),
+            "env-agent/src/main.ts".into()
         ])
     );
     assert_eq!(parsed.config.agent.dir, Some(PathBuf::from("env-agent")));
+    assert_eq!(
+        parsed.config.agent.bun,
+        Some(PathBuf::from("env-bun-executable"))
+    );
     assert_eq!(parsed.config.agent.startup_timeout_ms, 123);
     assert_eq!(
         parsed.config.models.default.as_deref(),
@@ -354,6 +393,7 @@ fn example_and_schema_cover_every_known_key() {
         "passphrase_cmd",
         "command",
         "dir",
+        "bun",
         "startup_timeout_ms",
         "default",
         "fallback",
@@ -468,16 +508,27 @@ fn path_discovery_rejects_non_executable_files_and_directories() {
     assert_eq!(find_on_path_with("directory", &env), None);
 }
 
+fn agent_package(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap_or_else(|err| panic!("mkdir: {err}"));
+    write(
+        &dir.join("package.json"),
+        r#"{"name":"openside-agent","version":"0.2.0"}"#,
+    );
+}
+
+/// Executable that answers `--version` like Bun; a shell script, hence unix-only tests.
+#[cfg(unix)]
+fn fake_bun(path: &Path, version: &str) {
+    write_executable(path, &format!("#!/bin/sh\necho {version}\n"));
+}
+
+#[cfg(unix)]
 #[test]
-fn agent_command_explicit_wins_and_uv_fallback_uses_fake_path() {
+fn agent_command_explicit_wins_and_default_runs_bun_on_main_ts() {
     let (root, loaded) = fixture();
     let mut config = loaded.config;
     let dir = root.path().join("agent");
-    std::fs::create_dir(&dir).unwrap_or_else(|err| panic!("mkdir: {err}"));
-    write(
-        &dir.join("pyproject.toml"),
-        "[project]\nname = 'fake-agent'",
-    );
+    agent_package(&dir);
     config.agent.dir = Some(dir.clone());
     config.agent.command = Some(vec!["explicit-command".into(), "argument".into()]);
     let env = env_lookup(&[("PATH", root.path().as_os_str())]);
@@ -486,27 +537,73 @@ fn agent_command_explicit_wins_and_uv_fallback_uses_fake_path() {
         ["explicit-command", "argument"]
     );
     config.agent.command = None;
-    let without_uv = agent_command_with(&config, &env, None);
-    assert_eq!(without_uv.argv, ["python3", "-m", "openside_agent"]);
-    assert!(without_uv
+    let main = dir.join("src/main.ts").to_string_lossy().into_owned();
+    let without_bun = agent_command_with(&config, &env, None);
+    assert_eq!(
+        without_bun.argv,
+        ["bun".to_string(), "run".into(), main.clone()]
+    );
+    assert!(without_bun
         .problems
         .iter()
-        .any(|problem| problem.contains("uv not found")));
-    binary(&root.path().join("uv"));
-    let with_uv = agent_command_with(&config, &env, None);
-    assert_eq!(
-        with_uv.argv,
-        vec![
-            "uv".into(),
-            "run".into(),
-            "--project".into(),
-            dir.to_string_lossy().into_owned(),
-            "python".into(),
-            "-m".into(),
-            "openside_agent".into()
-        ]
+        .any(|problem| problem.contains("Bun executable bun not found")));
+    fake_bun(&root.path().join("bun"), "1.4.2");
+    let too_old = agent_command_with(&config, &env, None);
+    assert_eq!(too_old.argv[0], "bun");
+    assert!(
+        too_old
+            .problems
+            .iter()
+            .any(|problem| problem.contains("Bun 1.4.2")
+                && problem.contains("older than the required 1.4.4")),
+        "{:?}; direct exec: {:?}",
+        too_old.problems,
+        std::process::Command::new(root.path().join("bun"))
+            .arg("--version")
+            .output()
+            .map(|output| output.status)
     );
-    assert!(with_uv.problems.is_empty());
+    fake_bun(&root.path().join("bun"), "1.4.4");
+    let with_bun = agent_command_with(&config, &env, None);
+    assert_eq!(with_bun.argv, ["bun".to_string(), "run".into(), main]);
+    assert!(with_bun.problems.is_empty(), "{:?}", with_bun.problems);
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_bun_config_wins_over_openside_bun_env_over_path() {
+    let (root, loaded) = fixture();
+    let mut config = loaded.config;
+    let dir = root.path().join("agent");
+    agent_package(&dir);
+    config.agent.dir = Some(dir.clone());
+    let (configured, environment) = (
+        root.path().join("configured-bun"),
+        root.path().join("env-bun"),
+    );
+    fake_bun(&configured, "1.5.0");
+    fake_bun(&environment, "1.4.5-canary.3+abc");
+    let env = env_lookup(&[
+        ("PATH", root.path().join("empty").as_os_str()),
+        ("OPENSIDE_BUN", environment.as_os_str()),
+    ]);
+    let from_env = agent_command_with(&config, &env, None);
+    assert_eq!(from_env.argv[0], environment.to_string_lossy());
+    assert!(from_env.problems.is_empty());
+    config.agent.bun = Some(configured.clone());
+    let from_config = agent_command_with(&config, &env, None);
+    assert_eq!(from_config.argv[0], configured.to_string_lossy());
+    assert!(from_config.problems.is_empty());
+    config.agent.bun = Some(root.path().join("missing-bun"));
+    assert!(agent_command_with(&config, &env, None)
+        .problems
+        .iter()
+        .any(|problem| problem.contains("missing-bun not found")));
+    // load() maps OPENSIDE_BUN onto agent.bun, so file values lose to the environment.
+    write(&loaded.paths.config_file, "[agent]\nbun = 'file-bun'\n");
+    let parsed = load_with(Some(&loaded.paths.config_file), loaded.paths.clone(), &env)
+        .unwrap_or_else(|err| panic!("load: {err}"));
+    assert_eq!(parsed.config.agent.bun, Some(environment));
 }
 
 #[test]
@@ -518,11 +615,7 @@ fn agent_directory_search_prefers_env_then_installed_then_cargo_layout() {
     let cargo_agent = root.path().join("agent");
     let installed_agent = root.path().join("target/share/openside/agent");
     for dir in [&cargo_agent, &installed_agent] {
-        std::fs::create_dir_all(dir).unwrap_or_else(|err| panic!("mkdir: {err}"));
-        write(
-            &dir.join("pyproject.toml"),
-            "[project]\nname = 'fake-agent'",
-        );
+        agent_package(dir);
     }
     let env = env_lookup(&[("PATH", root.path().as_os_str())]);
     let selected = agent_command_with(&loaded.config, &env, Some(&exe));
@@ -530,8 +623,11 @@ fn agent_directory_search_prefers_env_then_installed_then_cargo_layout() {
         selected.agent_dir,
         Some(root.path().join("target/debug/../share/openside/agent"))
     );
-    std::fs::remove_file(installed_agent.join("pyproject.toml"))
-        .unwrap_or_else(|err| panic!("remove fixture: {err}"));
+    // A package.json with another name is not the sidecar project.
+    write(
+        &installed_agent.join("package.json"),
+        r#"{"name":"some-other-package"}"#,
+    );
     assert_eq!(
         agent_command_with(&loaded.config, &env, Some(&exe)).agent_dir,
         Some(root.path().join("target/debug/../../agent"))

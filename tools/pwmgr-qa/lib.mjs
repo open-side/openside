@@ -57,9 +57,11 @@ export class Daemon {
     }
     Bun.spawnSync(["chmod", "700", join(this.root, "run")]);
     writeFileSync(join(this.root, "script.json"), JSON.stringify({ responses: [{ parts: [{ type: "text", text: "ok" }] }] }));
-    const python = join(this.repo, "agent/.venv/bin/python");
+    if (!existsSync(join(this.repo, "agent/node_modules"))) throw new Error("run: (cd agent && bun install --frozen-lockfile)");
+    // This harness already runs under Bun, so the sidecar uses the same binary unless overridden.
+    const bun = process.env.OPENSIDE_BUN || process.execPath;
     const config = [
-      `[agent]\ncommand = ${JSON.stringify([python, "-m", "openside_agent"])}`,
+      `[agent]\ncommand = ${JSON.stringify([bun, "run", join(this.repo, "agent/src/main.ts")])}`,
       `[models]\ndefault = "script"`,
       `[policy]\nmode = "full"`,
       `[browser]\nexecutable = ${JSON.stringify(this.executable)}\nextensions = ${JSON.stringify(this.extensions)}\ngateway = "auto"`,

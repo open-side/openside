@@ -413,15 +413,10 @@ async fn hs1_vault_login_secret_ticket_survives_daemon_restart_without_canary_le
     .await
     .expect("fixture did not complete verification");
     let snapshot = harness.snapshot(&session);
-    let returns: Vec<_> = snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-        .filter(|part| part["part_kind"] == "tool-return" && part["tool_call_id"] == "hs1-code")
-        .collect();
+    let returns = openside_e2e::tool_results(&snapshot, "hs1-code");
     assert_eq!(returns.len(), 1);
-    assert_eq!(returns[0]["content"]["status"], "filled");
+    assert_eq!(returns[0]["isError"], false);
+    assert_eq!(returns[0]["details"]["status"], "filled");
     assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
     assert!(!snapshot.to_string().contains(PASSWORD) && !snapshot.to_string().contains(OTP));
     let store = openside_sessions::Store::open(harness.data_dir.join("events.db")).unwrap();
@@ -574,16 +569,16 @@ async fn sensitive_payment_ask_expires_and_denies_original_call_without_clicking
     );
     let snapshot = harness.snapshot(&session);
     assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
-    let denied = snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-        .find(|part| part["tool_call_id"] == "payment-click" && part["part_kind"] == "tool-return")
-        .expect("expired approval must deliver denial for original tool call");
+    let results = openside_e2e::tool_results(&snapshot, "payment-click");
     assert_eq!(
-        denied["outcome"], "denied",
-        "expired approval must use Pydantic AI denial semantics"
+        results.len(),
+        1,
+        "expired approval must deliver denial for original tool call"
+    );
+    let denied = results[0];
+    assert_eq!(
+        denied["isError"], true,
+        "expired approval is a denial: {denied}"
     );
     let explanation = denied["content"].to_string().to_lowercase();
     assert!(

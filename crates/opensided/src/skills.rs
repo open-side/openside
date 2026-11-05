@@ -326,7 +326,7 @@ fn one_line(text: &str, max_chars: usize) -> String {
     }
 }
 
-/// Marker lines the sidecar uses to find mentionable names (`agent/src/openside_agent/skills.py`).
+/// Marker lines the sidecar uses to find mentionable names (`agent/src/features/skills.ts`).
 pub(crate) const INDEX_OPEN: &str = "<available_skills>";
 pub(crate) const INDEX_CLOSE: &str = "</available_skills>";
 

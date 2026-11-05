@@ -111,7 +111,7 @@ async fn every_created_data_config_runtime_and_cache_path_is_documented() {
     let done = json!({"parts":[{"type":"text","text":"audit completed"}]});
     let mut script = json!({"responses":[first, done]});
     let Some(mut h) = Harness::prepare(env!("CARGO_BIN_EXE_e2e-opensided"), &script) else {
-        eprintln!("SKIP storage sidecar audit: run uv sync --project agent and rerun.");
+        eprintln!("SKIP storage sidecar audit: run bun install --cwd agent and rerun.");
         server.abort();
         return;
     };

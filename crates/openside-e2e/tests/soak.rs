@@ -81,7 +81,7 @@ async fn soak() {
     let done = json!({"parts":[{"type":"text","text":"soak completed"}]});
     let script = json!({"responses":[open, done, open, done]});
     let mut h = Harness::prepare(env!("CARGO_BIN_EXE_e2e-opensided"), &script)
-        .expect("soak requires uv sync --project agent");
+        .expect("soak requires bun install --cwd agent");
     h.append_config(&format!("[browser]\nexecutable = {}\n", json!(executable)));
     h.launch().await;
     let started = Instant::now();

@@ -15,9 +15,9 @@
          │ 0700 dir / 0600 unix socket + nonce   │
          │ JSONL v1, reverse RPC tool_call       │
 ┌────────▼─────────────────────────┐   ┌─────────▼──────────────────────┐
-│ Python sidecar (세션당 1 프로세스) │   │ Chromium (데몬 소유 격리 프로필) │
-│ openside_agent: Pydantic AI 런타임│   │ Stage A: 발견된 Chromium/Chrome │
-│ + 선택한 pydantic-ai-harness 기능  │   │ Stage C: 패치 Chromium(browser/)│
+│ Bun sidecar (세션당 1 프로세스)  │   │ Chromium (데몬 소유 격리 프로필) │
+│ openside-agent: omp pi-agent-core│   │ Stage A: 발견된 Chromium/Chrome │
+│ + capability (툴 노출 없음)      │   │ Stage C: 패치 Chromium(browser/)│
 │ 툴 = 데몬 툴 프록시(자체 툴 없음)  │   └────────────────────────────────┘
 └────────┬─────────────────────────┘
          │ daemon-owned source pools; fresh private credential leases per request
@@ -42,20 +42,22 @@
 | `openside-vault` | 암호화 시크릿 저장, origin 검증, redaction, 감사 로그, 플랫폼 잠금 trait | C-1~C-6 |
 | `openside-browser` | CDP 컨트롤러: 임시/격리 프로필, background 탭, 탭 장부, a11y 스냅샷, `act`/`insert_text`/`navigate`, detached 실행·재연결·탭 입양 | B-2~B-7 |
 | `openside-sched` | 루틴 스케줄러: cron(POSIX 요일, IANA 시간대)·간격 스케줄, `routines.db`(루틴·실행 기록), 겹침 건너뛰기, 대상 세션 삭제 시 pause, 지금 실행, 재시작 복구(`missed`), 반복 요청 초안 제안. 데몬 부수효과는 `RoutineHost` trait 뒤에 둔다. 명세는 `docs/specs/routines.md` | A-10 |
-| `openside-e2e` | 실제 프로세스 E2E: 실제 Python 사이드카 + 스크립트 모델(`OPENSIDE_AGENT_SCRIPT`)로 SIGKILL·재시작·사람 단계·정책 시나리오 | 품질 |
+| `openside-e2e` | 실제 프로세스 E2E: 실제 Bun 사이드카 + 스크립트 모델(`OPENSIDE_AGENT_SCRIPT`)로 SIGKILL·재시작·사람 단계·정책 시나리오 | 품질 |
 
 `crates/openside-agent-omp` 와 fake omp 바이너리는 삭제됐다(ADR-002).
 
-### Python 사이드카 (`agent/`, uv 프로젝트, 패키지 `openside_agent`)
+### Bun/TypeScript 사이드카 (`agent/`, 패키지 `openside-agent`)
 | 모듈 | 책임 |
 | --- | --- |
-| `__main__.py` | 진입점: 사이드카 모드, `doctor --json` |
-| `protocol.py` | v1 메시지 타입, 4 MiB JSONL, 손상 입력 복구, `openside-agent-state/1` |
-| `runtime/` | 세션 런타임: 런, steer 버퍼(S-8), 보류/재개, `stale_ticket`, abort, 상태 스냅샷(`state.py`) |
-| `tools/` | 데몬 `ToolSpec` 을 `Tool.from_schema` 프록시로 노출, outcome → `ApprovalRequired`/`CallDeferred`/`ModelRetry` 매핑 |
-| `capabilities.py` | 채택한 harness 기능(`SummarizingCompaction`, `PromptInjectionDefender`, `RepairToolArguments`, `WarnOnCacheBusts`, `SpendLimits(expose_tools=False)`) |
-| `providers/` | 자격증명 소스(`sources.py`), broker 클라이언트(`broker.py`), 계정 선택·핀(`selector.py`, `pins.py`), 모델 조립(`models.py`), Anthropic 셰이핑(`anthropic.py`), `build_model`·`doctor_report` |
-| `scripted.py` | 테스트용 스크립트 모델(프로토콜 §9) |
+| `src/main.ts` | 진입점: 사이드카 모드, `doctor --json`, `accounts --json`, `models --json`, stderr 복제(tee) 및 테스트 프리로드 |
+| `src/protocol/` | v1 메시지 타입, 수신 줄 스키마 검증, 버전 정보, `openside-agent-state/2` |
+| `src/transport/` | Unix 소켓 위 4 MiB JSONL, nonce `hello`, reverse RPC 상관관계 매칭 |
+| `src/runtime/` | pi-agent-core 루프를 감싼 세션 런타임: 런, steer 버퍼(S-8), 보류/재개, `stale_ticket`, abort, 상태 스냅샷(`state.ts`), 압축(compaction), 서브에이전트, 팀 |
+| `src/runtime/tools.ts` | 각 데몬 `ToolSpec`을 `AgentTool` 프록시로 노출하고 outcome을 결과·보류·재시도로 매핑 |
+| `src/capabilities/` | 툴을 노출하지 않는 capability: 시크릿 마스킹(redaction), 시스템 리마인더, 프롬프트 인젝션 방어, 캐시 무효화 경고 |
+| `src/providers/` | 모델 조립(`models.ts`), 자격 증명 리스 및 시도 루프(`credential-rpc.ts`, `stream.ts`, `request-auth.ts`), 결과 분류(`outcomes.ts`), egress 가드(`egress.ts`), Anthropic 셰이핑(`anthropic.ts`), 모델 카탈로그 및 진단(`catalog.ts`, `doctor.ts`, `accounts.ts`) |
+| `src/features/` | 순수 기능 모듈: 스킬, 인용, 리서치 모드, 프롬프트 에포크(epoch), 메모리, 브라우징 정책 |
+| `src/scripted.ts` | 테스트용 스크립트 모델(프로토콜 §9) |
 
 ### 계획(아직 없음)
 `openside-memory`(A-11), `openside-channels`(A-13), `openside-push`(F-2), MCP 서버(E-2), `openside-bench`(E-5). 비 Rust: `web/`(PWA), `extension/`(MV3). `browser/` 에는 Stage C 패치 Chromium 오버레이·빌드 스크립트가 있다.
@@ -105,7 +107,7 @@ CEF 기반 자체 셸은 채택하지 않는다: 확장 생태계(비밀번호 �
 - 관측 순서: url/title → a11y snapshot → extract → screenshot(시각 증명만).
 
 ## 7. 보안 모델
-- 신뢰 경계: ① 모델 출력(비신뢰) ② 웹 페이지 내용(비신뢰, 프롬프트 인젝션 가능) ③ 클라이언트 토큰(스코프) ④ 로컬 사용자 ⑤ Python 사이드카(툴 실행권 없음, 비밀 수신 없음).
+- 신뢰 경계: ① 모델 출력(비신뢰) ② 웹 페이지 내용(비신뢰, 프롬프트 인젝션 가능) ③ 클라이언트 토큰(스코프) ④ 로컬 사용자 ⑤ Bun 사이드카(툴 실행권 없음, 비밀 수신 없음).
 - 툴은 데몬만 실행한다. 사이드카는 `open.tools` 로 받은 프록시만 노출하고, 노출 목록이 데몬 목록과 다르면 세션을 거부한다(툴 게이트, ADR-015).
 - Vault 입력값과 `secret_input`은 Rust 프로세스 메모리에서만 다루며, CDP 입력 직후 0으로 덮어써 완전히 파기(zeroize)한다. 사이드카나 이벤트 로그로 전달하지 않고 도구 결과에서도 마스킹하지만, 에이전트가 실행한 페이지 스크립트는 페이지 데이터를 직접 읽을 수 있다(ADR-022).
 - 데몬이 모델 자격 증명 소스, 명시적 프로바이더 풀, 갱신, 계정 사용량 및 차단 상태를 관리한다. 사이드카는 외부 요청을 시도할 때마다 유효한 비공개 접근 리스만 받는다. 관리 대상 API 키와 OAuth 상태는 Vault에 암호화하여 정식 보관하며 기본 사용자 CLI 홈은 읽기 전용 상태를 유지한다. 소스가 없거나 모두 소진되면 목록에 없는 소스로 다운그레이드하지 않고 fail-closed 처리한다.

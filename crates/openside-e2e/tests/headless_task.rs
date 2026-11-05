@@ -1,6 +1,6 @@
 //! PP-3: on a server without a display, a task that uses the browser runs to completion. The
 //! real daemon starts with a cleared environment (no `DISPLAY`/`WAYLAND_DISPLAY`), the real
-//! Python sidecar runs the scripted model, and the model drives real headless Chromium on a
+//! Bun sidecar runs the scripted model, and the model drives real headless Chromium on a
 //! loopback page through `browser_repl` before answering.
 
 #![cfg(target_os = "linux")]

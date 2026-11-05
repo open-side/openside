@@ -1,5 +1,5 @@
 //! A-4 / PP-10: queue steering, editing, deleting, promoting and reordering against the real
-//! Python sidecar, and a seeded random operation sequence (with a daemon crash) that must
+//! Bun sidecar, and a seeded random operation sequence (with a daemon crash) that must
 //! deliver every message exactly once or drop it exactly once.
 
 #![cfg(unix)]
@@ -73,28 +73,25 @@ fn seq_of(events: &[Event], predicate: impl Fn(&EventKind) -> bool) -> u64 {
         .seq
 }
 
-/// Texts of the snapshot's conversation as `(kind, part_kind, text)` triples, per message.
+/// The snapshot's conversation as `(kind, text)` pairs grouped by model turn: each request
+/// (the tool results and user prompts the model received together) and each response.
+/// Kinds: `tool-return`, `user-prompt`, `text`.
 fn conversation(snapshot: &Value) -> Vec<Vec<(String, String)>> {
-    snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|message| {
-            message["parts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|part| {
-                    let kind = part["part_kind"].as_str().unwrap().to_owned();
-                    let content = match &part["content"] {
-                        Value::String(text) => text.clone(),
-                        other => other.to_string(),
-                    };
-                    (kind, content)
-                })
-                .collect()
-        })
-        .collect()
+    let mut turns: Vec<Vec<(String, String)>> = Vec::new();
+    let mut last_was_response = None;
+    for message in openside_e2e::snapshot_messages(snapshot) {
+        let (response, kind, text) = match message["role"].as_str() {
+            Some("assistant") => (true, "text", openside_e2e::message_text(message)),
+            Some("toolResult") => (false, "tool-return", message["details"].to_string()),
+            _ => (false, "user-prompt", openside_e2e::message_text(message)),
+        };
+        if last_was_response != Some(response) {
+            turns.push(Vec::new());
+        }
+        last_was_response = Some(response);
+        turns.last_mut().unwrap().push((kind.to_owned(), text));
+    }
+    turns
 }
 
 /// A-4: a steer message reaches the model at the next model-request boundary of the run that
@@ -488,13 +485,11 @@ async fn fuzz(seed: u64) {
     );
 
     // The model saw each delivered message at most once, including recovery notices.
-    let prompts: Vec<String> = harness.snapshot(&id)["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().unwrap().clone())
-        .filter(|part| part["part_kind"] == "user-prompt")
-        .map(|part| part["content"].to_string())
+    let prompts: Vec<String> = conversation(&harness.snapshot(&id))
+        .into_iter()
+        .flatten()
+        .filter(|(kind, _)| kind == "user-prompt")
+        .map(|(_, text)| text)
         .collect();
     let distinct: BTreeSet<_> = prompts.iter().collect();
     assert_eq!(

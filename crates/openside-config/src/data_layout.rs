@@ -131,7 +131,7 @@ impl StorageRoot {
             Self::Config => ("config_dir", "`config.toml` and `.config.toml.<nonce>.tmp`", "Configuration and atomic replacement; OPENSIDE_CONFIG can relocate the file"),
             Self::State => ("state_dir", "`cli/**`", "CLI resume cursors; the daemon itself writes no state files"),
             Self::Runtime => ("runtime_dir", "`opensided.sock`, `sidecar-*/**`, `incognito-browsers/**`, `browser/**`", "Private daemon/sidecar/gateway sockets and disposable incognito profiles; explicit socket overrides may relocate the socket"),
-            Self::Cache => ("cache", "none outside `browser-profile/**`", "No openside XDG cache directory; Chromium's disk cache stays in `browser-profile/cache` (`--disk-cache-dir`) and its crash database in `browser-profile/Crash Reports` (`--breakpad-dump-location`). The managed browser keeps the user's XDG directories so native-messaging hosts work, so its NSS store (`pki/nssdb`, shared with the user's other NSS apps), GSettings runtime (`dconf`) and GPU/font library caches are the user's own"),
+            Self::Cache => ("cache", "none outside `browser-profile/**`", "No openside XDG cache directory; Chromium's disk cache stays in `browser-profile/cache` (`--disk-cache-dir`) and its crash database in `browser-profile/Crash Reports` (`--breakpad-dump-location`). Sidecar children run with Bun's transpiler cache off (`BUN_RUNTIME_TRANSPILER_CACHE_PATH=0`), so Bun writes no `bun/` cache. The managed browser keeps the user's XDG directories so native-messaging hosts work, so its NSS store (`pki/nssdb`, shared with the user's other NSS apps), GSettings runtime (`dconf`) and GPU/font library caches are the user's own"),
         }
     }
 }

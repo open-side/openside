@@ -27,8 +27,9 @@ info_ttl_secs = 86400
 takeover_ttl_secs = 1800
 
 [agent]
-# command = ["python3", "-m", "openside_agent"] # OPENSIDE_AGENT_COMMAND (JSON)
-# dir = "./agent"                              # OPENSIDE_AGENT_DIR
+# command = ["bun", "run", "./agent/src/main.ts"] # OPENSIDE_AGENT_COMMAND (JSON)
+# dir = "./agent"                                 # OPENSIDE_AGENT_DIR; package.json named openside-agent
+# bun = "bun"                                     # OPENSIDE_BUN; Bun >= 1.4.4 for the default launch
 startup_timeout_ms = 30000
 tool_retries = 3                  # model retries after a denied/failed tool call
 # compaction_max_messages = 100   # optional legacy message-count trigger

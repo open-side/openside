@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 use crate::discovery::{
-    agent_command_with, discover_browser_with, executable, find_on_path_with,
-    platform_browser_locations,
+    agent_command_with, bun_program, bun_version, discover_browser_with, executable,
+    find_on_path_with, platform_browser_locations, resolve_program, MIN_BUN, MIN_BUN_TEXT,
 };
 use crate::{parse_config, validate, Loaded, StoredVault, VaultBackend, VaultResolveError};
 
@@ -202,24 +202,21 @@ async fn run_with(
         check_directory(&mut report, id, path, private);
     }
     vault_check(&mut report, loaded, opts.vault);
-    for (name, required) in [("python3", true), ("uv", false)] {
-        match find_on_path_with(name, env) {
-            Some(path) => report.add(format!("executable.{name}"), Status::Ok, format!("{} found at {}", name, path.display()), None),
-            None => report.add(format!("executable.{name}"), Status::Warn,
-                if required { "python3 not found on PATH; an explicit agent.command may supply Python" } else { "uv not found on PATH; automatic launch falls back to python3" },
-                Some(if required { "Install Python or configure agent.command with your Python environment." } else { "Install uv for reproducible sidecar dependencies, or configure agent.command." }.into())),
+    let agent = agent_command_with(&loaded.config, env, current_exe);
+    // An explicit agent.command owns its runtime; Bun and node_modules only matter for the
+    // default `bun run <dir>/src/main.ts` launch.
+    if loaded.config.agent.command.is_none() {
+        bun_check(&mut report, &bun_program(&loaded.config, env), env);
+        if let Some(dir) = &agent.agent_dir {
+            dependency_check(&mut report, dir);
         }
     }
-    let agent = agent_command_with(&loaded.config, env, current_exe);
     for (index, problem) in agent.problems.iter().enumerate() {
         report.add(
             format!("agent.discovery.{index}"),
             Status::Warn,
             problem,
-            Some(
-                "Set agent.dir and install its dependencies with uv sync, or set agent.command."
-                    .into(),
-            ),
+            Some(INSTALL_NEXT_STEP.into()),
         );
     }
     probe_sidecar(&mut report, loaded, &agent.argv).await;
@@ -475,9 +472,123 @@ fn check_directory(report: &mut DoctorReport, id: &str, path: &Path, private: bo
     );
 }
 
+const INSTALL_NEXT_STEP: &str = "Set agent.dir (or OPENSIDE_AGENT_DIR) and run `bun install --frozen-lockfile --production` in it (docs/INSTALL.md), or set agent.command.";
+
+fn bun_check(report: &mut DoctorReport, bun: &Path, env: &impl Fn(&str) -> Option<OsString>) {
+    let next = || {
+        Some(format!(
+            "Install Bun {} or newer, or point agent.bun / OPENSIDE_BUN at it.",
+            MIN_BUN_TEXT
+        ))
+    };
+    let Some(path) = resolve_program(bun, env) else {
+        report.add(
+            "executable.bun",
+            Status::Warn,
+            format!("Bun executable {} not found", bun.display()),
+            next(),
+        );
+        return;
+    };
+    match bun_version(&path) {
+        Some(version) if version >= MIN_BUN => report.add(
+            "executable.bun",
+            Status::Ok,
+            format!(
+                "bun {}.{}.{} found at {}",
+                version.0,
+                version.1,
+                version.2,
+                path.display()
+            ),
+            None,
+        ),
+        Some(version) => report.add(
+            "executable.bun",
+            Status::Fail,
+            format!(
+                "bun {}.{}.{} at {} is older than the required {}",
+                version.0,
+                version.1,
+                version.2,
+                path.display(),
+                MIN_BUN_TEXT
+            ),
+            next(),
+        ),
+        None => report.add(
+            "executable.bun",
+            Status::Fail,
+            format!("{} --version did not report a Bun version", path.display()),
+            next(),
+        ),
+    }
+}
+
+/// npm platform suffix of the `@oh-my-pi/pi-natives-*` optional dependency for this host.
+fn natives_platform() -> Option<&'static str> {
+    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "linux-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("macos", "x86_64") => "darwin-x64",
+        ("macos", "aarch64") => "darwin-arm64",
+        ("windows", "x86_64") => "win32-x64",
+        ("windows", "aarch64") => "win32-arm64",
+        _ => return None,
+    })
+}
+
+fn dependency_check(report: &mut DoctorReport, dir: &Path) {
+    let scope = dir.join("node_modules/@oh-my-pi");
+    let mut missing = Vec::new();
+    if !scope.join("pi-agent-core/package.json").is_file() {
+        missing.push("@oh-my-pi/pi-agent-core".to_string());
+    }
+    match natives_platform() {
+        Some(platform) if scope.join(format!("pi-natives-{platform}")).is_dir() => {}
+        Some(platform) => missing.push(format!("@oh-my-pi/pi-natives-{platform}")),
+        None => {
+            report.add(
+                "agent.dependencies",
+                Status::Fail,
+                format!(
+                    "No pi-natives build exists for {}-{}",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ),
+                Some(
+                    "Run openside on Linux, macOS or Windows (x64 or arm64), or set agent.command."
+                        .into(),
+                ),
+            );
+            return;
+        }
+    }
+    if missing.is_empty() {
+        report.add(
+            "agent.dependencies",
+            Status::Ok,
+            format!("Sidecar dependencies are installed in {}", dir.display()),
+            None,
+        );
+    } else {
+        report.add(
+            "agent.dependencies",
+            Status::Fail,
+            format!(
+                "Sidecar dependencies missing in {}: {}",
+                dir.display(),
+                missing.join(", ")
+            ),
+            Some(INSTALL_NEXT_STEP.into()),
+        );
+    }
+}
+
+/// Output of `bun run src/main.ts doctor --json` (agent/src/main.ts `doctor()`).
 #[derive(Deserialize)]
 struct SidecarDoctor {
-    python: String,
+    runtime: String,
     packages: BTreeMap<String, String>,
     credentials: Vec<CredentialAvailability>,
     models: ModelAvailability,
@@ -501,7 +612,7 @@ struct ModelAvailability {
 
 async fn probe_sidecar(report: &mut DoctorReport, loaded: &Loaded, argv: &[String]) {
     let next = || {
-        Some("Install sidecar dependencies with uv sync and check agent.command / agent.dir; then run doctor again.".into())
+        Some("Install sidecar dependencies with `bun install --frozen-lockfile --production` and check agent.command / agent.dir / agent.bun (docs/INSTALL.md); then run doctor again.".into())
     };
     let Some(program) = argv.first().filter(|program| !program.is_empty()) else {
         report.add(
@@ -569,7 +680,7 @@ async fn probe_sidecar(report: &mut DoctorReport, loaded: &Loaded, argv: &[Strin
     report.add(
         "agent.sidecar",
         Status::Ok,
-        format!("Sidecar doctor is available (Python {})", sidecar.python),
+        format!("Sidecar doctor is available ({})", sidecar.runtime),
         None,
     );
     if sidecar.packages.is_empty() {
@@ -627,9 +738,7 @@ mod tests {
 
     fn script(root: &Path, name: &str, contents: &str) -> PathBuf {
         let path = root.join(name);
-        std::fs::write(&path, contents).unwrap_or_else(|err| panic!("script: {err}"));
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-            .unwrap_or_else(|err| panic!("permissions: {err}"));
+        crate::tests::write_executable(&path, contents);
         path
     }
 
@@ -651,7 +760,7 @@ mod tests {
             r#"#!/bin/sh
 [ "$1" = doctor ] && [ "$2" = --json ] || exit 2
 case "$OPENSIDE_DOCTOR_CONFIG" in *'"credentials":{}'*'"models":'* ) ;; *) exit 3 ;; esac
-printf '%s\n' '{"python":"test-python","packages":{"pydantic-ai":"test-version"},"credentials":[{"provider":"test-provider","source":"env","available":false,"reason":"not set","next_step":"configure source"}],"models":{"default":null,"fallback":[],"providers_ok":false}}'
+printf '%s\n' '{"runtime":"bun test-version","packages":{"@oh-my-pi/pi-agent-core":"test-version","openside-agent":"test-version"},"credentials":[{"provider":"test-provider","source":"env","available":false,"reason":"not set","next_step":"configure source"}],"models":{"default":null,"fallback":[],"providers_ok":false}}'
 "#,
         );
         loaded.config.agent.command = Some(vec![fake.to_string_lossy().into_owned()]);

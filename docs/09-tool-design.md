@@ -1,13 +1,13 @@
-# 09. 툴 설계: Rust 데몬이 실행하는 툴과 Pydantic AI 사이드카 프록시
+# 09. 툴 설계: Rust 데몬이 실행하는 툴과 사이드카 프록시
 
-작성: 2026-10-11, 구현 반영. 근거 코드: `crates/opensided/src/tools/{human,files,shell,browser,vault,login}.rs`, `crates/opensided/src/{host,tickets}.rs`, `crates/openside-policy/src/lib.rs`, `agent/src/openside_agent/tools/__init__.py`. 프로토콜은 `docs/specs/sidecar-protocol.md`, 사람 단계(티켓)는 `docs/specs/human-step.md`, 하네스 결정은 `docs/08`.
+작성: 2026-10-11, 구현 반영. 근거 코드: `crates/opensided/src/tools/{human,files,shell,browser,vault,login}.rs`, `crates/opensided/src/{host,tickets}.rs`, `crates/openside-policy/src/lib.rs`, `agent/src/runtime/{tools,deferred}.ts`. 프로토콜은 `docs/specs/sidecar-protocol.md`, 사람 단계(티켓)는 `docs/specs/human-step.md`, 하네스 결정은 `docs/08`.
 표기: 검증 = 코드·테스트로 확인, `unverified` = 확인하지 못함.
 
 ## 1. 구조
-- **툴은 데몬만 실행하고 노출 게이트로 고정한다**(ADR-017). 사이드카의 Pydantic AI `Tool` 은 데몬으로 가는 얇은 프록시다. 입력 JSON Schema 의 원본은 데몬 툴의 `schemars` 출력(`ToolSpec.parameters`)이며, 사이드카는 `Tool.from_schema` 로 그대로 등록하고 Python 쪽 검증은 하지 않는다. 인자 검증은 데몬이 한다(`deny_unknown_fields`, 위반 시 `Arguments do not match the tool schema`).
-- `ToolSpec = {name, description, parameters, approval: read|write|exec|sensitive, deferrable}`. 사이드카가 보는 툴은 `open.tools` 로 받은 명세뿐이다. 사이드카 자체의 파일·셸·브라우저 툴은 없고, harness capability 도 툴을 노출하는 것은 연결하지 않았다(`docs/08` §E). 사이드카는 모델 요청 직전에 선언된 함수 툴 이름이 기대 집합과 다르면 `ToolGateError`, 데몬은 `ready.tools` 가 `open.tools` 와 다르면 세션 시작을 거부한다(`tool_gate`).
-- 시크릿(Vault 값, `secret_input` 값), 정책 판정, 감사, redaction 은 Python 프로세스를 지나지 않는다. 사이드카가 받는 것은 redaction 이 끝난 `for_model` 뿐이다.
-- 호출 결과(`tool_result.outcome`)는 사이드카에서 이렇게 바뀐다: `done` → 툴 반환값, `deferred/approval` → `ApprovalRequired(metadata={ticket_id})`, `deferred/external` → `CallDeferred(metadata={ticket_id})`, `denied`/`error` → `ModelRetry`(이유+대안 문장, 기본 3회). 재개는 같은 `tool_call_id` 로 `DeferredToolResults`(`docs/specs/sidecar-protocol.md` §6~7).
+- **툴은 데몬만 실행하고 노출 게이트로 고정한다**(ADR-017). 각 사이드카 툴은 데몬으로 연결되는 얇은 pi-agent-core `AgentTool` 프록시다(`agent/src/runtime/tools.ts`). 입력 JSON Schema의 원본은 데몬 툴의 `schemars` 출력(`ToolSpec.parameters`)이며, 사이드카는 이를 바꾸지 않고 그대로 전달할 뿐 자체 검증은 하지 않는다. 인자 검증은 데몬이 수행한다(`deny_unknown_fields`, 위반 시 `Arguments do not match the tool schema`).
+- `ToolSpec = {name, description, parameters, approval: read|write|exec|sensitive, deferrable}`. 사이드카가 보는 툴은 `open.tools` 로 받은 명세뿐이다. 사이드카 자체의 파일·셸·브라우저 툴은 없고, 사이드카 capability도 툴을 노출하지 않는다(ADR-017). 사이드카는 매 모델 요청 직전에 선언된 함수 툴 이름이 기대 집합과 다르면 `ToolGateError`를 일으키고, 데몬은 `ready.tools`가 `open.tools`와 다르면 세션 시작을 거부한다(`tool_gate`).
+- 시크릿(Vault 값, `secret_input` 값), 정책 판정, 감사, redaction 은 사이드카 프로세스를 지나지 않는다. 사이드카가 받는 것은 redaction 이 끝난 `for_model` 뿐이다.
+- 사이드카는 각 호출 결과(`tool_result.outcome`)를 다음과 같이 매핑한다: `done` → 툴 결과 반환, `deferred/approval` 및 `deferred/external` → 호출을 `ticket_id`와 함께 기록하고 플레이스홀더 결과를 넣은 뒤 다음 모델 요청 직전에 런을 멈춤, `denied`/`error` → 모델이 재시도(기본 3회)할 수 있도록 사유와 대안 문장을 담은 오류 툴 결과(`isError`) 반환. 재개 시에는 동일한 `tool_call_id`의 플레이스홀더를 해결 결과로 교체하고 런을 이어 간다(`docs/specs/sidecar-protocol.md` §6–7).
 
 ## 2. 호출 파이프라인 (`host.rs`)
 1. 툴 이름 조회: 모르는 툴 → `denied` `Unknown tool`. 이 세션에서 노출되지 않은 툴(모드·조건, §4) → `denied` `Tool is not exposed in this session`.
@@ -60,7 +60,7 @@ tier 는 `ToolSpec.approval`, 정책 capability 는 `actions()` 가 만드는 `A
 - `browser_tabs` 항목의 `group` 은 패치 브라우저 gateway 가 알려주는 탭 그룹 제목이다(B-7 ④). 에이전트가 만든 탭은 MCP·CLI 의 `POST /v1/sessions/{id}/repl` 로 연 탭을 포함해 모두 `"Agent Tabs"` 그룹에 들어간다. 스톡 Chromium 은 CDP 로 탭 그룹을 볼 수 없으므로 `group` 이 `null` 이고, 세션별 소유권 장부가 그룹 역할을 한다.
 - 브라우저가 강제 종료되면(PP-23 ②) 데몬은 다음 브라우저 호출이나 2초 주기 점검에서 같은 관리 프로필로 Chromium 을 다시 띄운다. 죽은 탭의 소유 세션에는 `tab.closed` 이벤트와, 실행 중이면 steer 알림이 간다. 그 탭 ID 를 쓰는 호출(`browser_repl` 포함)은 한 번 `browser_restarted: …` 로 거부되고, 그 뒤로는 일반 소유권 거부가 된다. 다시 띄운 브라우저가 30초 안에 또 죽으면 1초부터 두 배씩, 최대 30초까지 기다렸다가 다시 띄우며, 그동안의 호출은 `browser_restarting: …` 으로 거부된다.
 - incognito 세션(B-10)은 공유 프로필 대신 세션 전용 Chromium 을 쓴다. 프로필은 `<runtime_dir>/incognito-browsers/<session>/profile`(0700)이고 장부는 저장하지 않는다. 세션 삭제, 데몬 종료, 크래시 뒤 다음 데몬 시작 때 프로세스를 끝내고 디렉터리를 지운다. 시작 시 정리는 incognito 루트 바로 아래의 실제 디렉터리만 다루고, `endpoint.json` 이 그 디렉터리의 `profile` 을 가리킬 때만 브라우저를 끈다. 심볼릭 링크는 따라가지 않고 링크만 지운다. `vault_*` 호출과 `secret_input` 사람 단계는 정책 판정 전에 `denied` reason `vault_incognito` 로 거부된다. 팝업·다운로드·탭 닫힘은 공유 브라우저와 같이 steer 알림으로 전달되고, device approval 사람 단계는 incognito 탭에도 걸린다. incognito 브라우저가 죽으면 탭은 `tab.closed`·`browser_restarted` 로 알리고, 다음 호출은 빈 새 프로필로 시작한다.
-- 격리 브라우저 공간(`browser_space: "isolated"`)은 세션 생성 시점에만 지정할 수 있으며(API, CLI `--browser-space isolated`, MCP `session_create`, 웹 새 대화의 "Isolated browser" 토글), 생성 후에는 변경할 수 없다. 기본값은 로그인 정보가 유지되는 공유 프로필(`"shared"`)이다. 세션의 에이전트 탭은 동일한 공유 관리형 Chromium 안에서 세션 전용 CDP 브라우저 컨텍스트(`Target.createBrowserContext`)로 열린다. 쿠키, localStorage, 캐시는 공유 프로필 및 다른 모든 격리 세션과 완전히 분리되며 메모리에만 유지된다. 해당 탭에서 열린 팝업도 같은 격리 공간에 남는다. 정책, 승인, 탭 소유권, Vault(`vault_*`, `secret_input`), OTP, 로그인 도구, takeover, preview, screencast 는 공유 탭과 똑같이 동작한다. 탭 장부 항목인 `TabInfo.browser_context_id` 에 컨텍스트 ID 를 기록하며, 공유 프로필 탭은 null 이다. 이 공간에서 탐색한 페이지는 메모리에 색인되지 않는다. 공간은 세션의 첫 브라우저 호출 때 생성되고, 세션을 보관(archive)하거나 삭제하면 탭을 닫고 데이터를 지우면서 함께 정리된다. 보관 해제 후 세션을 다시 사용하면 비어 있는 새 공간이 할당된다.
+- 격리 브라우저 공간(`browser_space: "isolated"`)은 세션 생성 시점에만 지정할 수 있으며(API, CLI `--profile isolated`, MCP `session_create`, 웹 새 대화의 "Isolated browser" 토글), 생성 후에는 변경할 수 없다. 기본값은 로그인 정보가 유지되는 공유 프로필(`"shared"`)이다. 세션의 에이전트 탭은 동일한 공유 관리형 Chromium 안에서 세션 전용 CDP 브라우저 컨텍스트(`Target.createBrowserContext`)로 열린다. 쿠키, localStorage, 캐시는 공유 프로필 및 다른 모든 격리 세션과 완전히 분리되며 메모리에만 유지된다. 해당 탭에서 열린 팝업도 같은 격리 공간에 남는다. 정책, 승인, 탭 소유권, Vault(`vault_*`, `secret_input`), OTP, 로그인 도구, takeover, preview, screencast 는 공유 탭과 똑같이 동작한다. 탭 장부 항목인 `TabInfo.browser_context_id` 에 컨텍스트 ID 를 기록하며, 공유 프로필 탭은 null 이다. 이 공간에서 탐색한 페이지는 메모리에 색인되지 않는다. 공간은 세션의 첫 브라우저 호출 때 생성되고, 세션을 보관(archive)하거나 삭제하면 탭을 닫고 데이터를 지우면서 함께 정리된다. 보관 해제 후 세션을 다시 사용하면 비어 있는 새 공간이 할당된다.
 - 브라우저 상태 파일에 컨텍스트 ID 를 보존한다. 데몬이 재시작되더라도 Chromium 이 살아 있으면(예: 데몬 비정상 종료) 탭을 다시 회수하기 전에 공간을 먼저 재연결하고, 확인되지 않은 나머지 컨텍스트는 모두 정리한다. 반면 Chromium 자체가 종료되면(프로세스 강제 종료, 충돌, 정상 데몬 종료) 쿠키와 로그인 정보를 포함한 격리 공간 전체가 사라진다. 실행 중이던 세션에는 steer 알림이 전달되며, 다음 브라우저 호출은 한 번 `browser_space_reset: …` 로 거부된 뒤 비어 있는 새 공간에서 재개된다. incognito 와 isolated 를 함께 요청하면 400 `invalid_browser_space` 로 거부된다.
 - 격리 공간의 쿠키, 사이트 스토리지, 캐시는 메모리에만 남지만, 다운로드 파일은 공용 프로필 폴더 대신 각 공간의 전용 디렉터리인 `<profile>/space-downloads/<context>` (권한 0700)에 저장한다. 이 파일은 공간을 정리할 때 함께 지우며, 실행 중인 공간과 연결되지 않은 잔여 디렉터리는 다음 정리 작업 때 삭제한다. 세션이 아카이브된 동안에는 도구와 REPL 을 비롯한 격리 세션의 모든 브라우저 호출을 `session_archived: …` 로 거부하고, 아카이브를 해제하기 전까지 공간을 다시 생성하지 않는다. 한 번이라도 전용 공간을 할당받은 세션의 탭은 공용 프로필에 절대 열리지 않으므로, 공간이 닫히거나 유실되면 진행 중이던 Vault 로그인 탭 생성을 포함한 모든 탭 생성을 `browser_space_closed: …` 로 거부한다. 공간 내부의 탭은 오프너가 없더라도 모두 해당 세션의 소유다. 공간 정리는 아카이브나 삭제 응답 시점에 완료를 보장하는 대신 백그라운드에서 최종 처리를 보장한다. 즉, 정리에 실패하거나 도중에 중단되더라도 컨텍스트를 잊지 않고 대기 상태로 유지하며, 그동안 탭 요청은 거부하고 2초 주기 폴링으로 재시도한다. 데몬이 먼저 종료되면 다음 데몬 시작 시 남은 정리를 마저 진행하고, 남은 컨텍스트 정리에 실패해도 같은 방식으로 재시도한다. 세션과 컨텍스트의 소유 관계를 기록하는 상태 파일은 로컬 파일(0600)로 신뢰할 수 있으며, 이 파일을 읽지 못하면 상태를 복원하지 않고 세션을 빈 새 공간에서 새로 시작한다.
 - incognito 를 격리 공간 기반으로 재구성하지 않고 독립 기능으로 유지한다. incognito 는 임시 프로필을 쓰는 별도 Chromium 프로세스를 보장하므로 확장 프로그램, 네이티브 메시징 호스트, 비정상 종료 격리 영역을 공유 브라우저와 공유하지 않으며 Vault 와 preview 도 차단한다. 반면 격리 공간은 프로세스를 공유하면서 Vault, OTP, preview 를 의도적으로 허용한다. 두 기능은 흔적을 남기지 않는 용도와 로그인 상태를 분리하는 용도로 목적이 다르므로 둘 다 유지한다.
@@ -116,17 +116,16 @@ tier 는 `ToolSpec.approval`, 정책 capability 는 `actions()` 가 만드는 `A
 - **bwrap 이 있을 때**(`sandbox.bwrap` 설정 또는 PATH 의 `bwrap`): `bwrap --die-with-parent --new-session --unshare-all --clearenv`, 존재하는 `/usr /bin /sbin /lib /lib64 /etc` 는 읽기 전용 bind, `/proc`·`/dev`·`/tmp`(tmpfs), 세션 workspace 만 읽기/쓰기 bind. `--unshare-all` 이므로 네트워크도 격리된다. `[network] allow` 는 정보용이며 격리를 풀지 않는다(`--share-net` 으로 바꾸지 않음). 샌드박스 bash 는 workspace 가 설정돼 있어야 한다. 래퍼가 샌드박스 설정 직후 준비 마커를 출력하고, 마커가 없거나 bwrap 이 기동에 실패하면 `denied` — `Bubblewrap execution failed; unsandboxed fallback is forbidden`(hint `openside doctor`). 샌드박스 없이 다시 실행하지 않는다.
 - **bwrap 이 없을 때**: `sandbox.required = false`(기본)면 `bash` 는 노출되지만 정책 전용 격리로 돈다. 세션을 열 때 stderr 와 `runtime.error{code:"sandbox_unavailable"}`(비치명) 로 `Bubblewrap is unavailable; shell tools use policy-only isolation. Install bubblewrap or set sandbox.required=true.` 를 알린다. `sandbox.required = true` 면 bwrap 이 없을 때 `bash` 를 **숨긴다**(`open.tools` 에서 빠짐).
 
-## 8. Pydantic AI 개념과 openside 의 대응
-| Pydantic AI 개념 | openside 에서의 형태 | 상태 |
+## 8. pi-agent-core 개념과 openside에서의 형태
+| pi-agent-core 개념 | openside에서의 형태 | 상태 |
 | --- | --- | --- |
-| Function tools + 스키마 | 데몬 `schemars` 스키마를 `Tool.from_schema` 로 등록 | 구현 |
-| `ModelRetry` | `denied`/`error` outcome 의 이유·대안 문장 | 구현 |
-| Deferred tools(`CallDeferred`, `ApprovalRequired`, `DeferredToolResults`) | 티켓. 같은 call id 로 재개 | 구현 (live: `ask_user` 왕복) |
-| `HandleDeferredToolCalls` | 쓰지 않음. 정책 Allow/Ask 는 데몬 파이프라인(§2)이, TOTP 는 `vault_otp` 가 직접 처리 | 해당 없음 |
-| Toolsets / `prepare_tools` | 데몬이 모드·조건(§3~4)으로 노출 목록을 정해 `open.tools` 로 전달 | 구현 |
-| `ToolReturn`(모델용/앱용) | `for_model` / `for_app` | 구현 (§5) |
-| AskUser | 데몬 `ask_user` 툴(`info` 티켓). harness `AskUser` 는 쓰지 않음 | 구현 |
-| Guardrails, Warn on cache busts | `PromptInjectionDefender`, `WarnOnCacheBusts` 연결(`docs/08` §E) | 구현 |
+| `AgentTool` + JSON Schema | 데몬 `schemars` 스키마를 툴의 `parameters`로 그대로 전달 | 구현 |
+| 오류 툴 결과(`isError`) | `denied`/`error` outcome의 사유와 대안 문장 | 구현 |
+| 보류(pi-agent-core에는 없음) | 티켓. 플레이스홀더 결과를 넣고 멈춘 뒤, 같은 call id로 재개(`agent/src/runtime/deferred.ts`) | 구현 |
+| 컨텍스트 `tools` | 데몬이 모드·조건(§3~4)으로 노출 목록을 정해 `open.tools` 로 전달 | 구현 |
+| `AgentToolResult` (`content`/`details`) | `for_model` | 구현 (§5) |
+| AskUser | 데몬 `ask_user` 툴(`info` 티켓). 런타임 쪽 질문 툴은 없음 | 구현 |
+| capability | `agent/src/capabilities/{injection,cache-busts}.ts` (ADR-017) | 구현 |
 | Durable execution | 데몬 이벤트 소싱 + `state_snapshot`(런 종료 지점) | 구현 |
 | Workspaces / Bubblewrap | 데몬 `bash` 가 직접 bwrap 실행(§7) | 구현 |
 | Tool Search, Code Mode | — | 미구현 |

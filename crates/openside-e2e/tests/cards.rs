@@ -1,4 +1,4 @@
-//! Cards must cross the real sidecar/daemon boundary so Python cannot bypass admission.
+//! Cards must cross the real sidecar/daemon boundary so the sidecar cannot bypass admission.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -28,6 +28,24 @@ fn present_draft() -> Value {
 
 fn present_call(id: &str, args: Value) -> Value {
     json!({"parts": [{"type": "tool_call", "name": "present", "id": id, "args": args}]})
+}
+
+/// The single model retry the sidecar committed for a rejected `present` call, as its text.
+/// A retry carries no `details`; a deferred denial would carry its reason there instead.
+fn card_retry(snapshot: &Value, call: &str) -> String {
+    let results = openside_e2e::tool_results(snapshot, call);
+    assert_eq!(results.len(), 1, "{call}: {snapshot}");
+    let result = results[0];
+    assert_eq!(result["toolName"], "present", "{result}");
+    assert_eq!(result["isError"], true, "{call} was not rejected: {result}");
+    assert_eq!(
+        result["details"],
+        Value::Null,
+        "{call} is not a model retry: {result}"
+    );
+    let text = openside_e2e::message_text(result);
+    assert!(!text.is_empty(), "{result}");
+    text
 }
 
 #[tokio::test]
@@ -119,30 +137,19 @@ async fn cards_present_scripted_roundtrip() {
         .collect();
     assert_eq!(finals, [final_text]);
     let snapshot = harness.snapshot(id);
-    let parts: Vec<_> = snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().unwrap())
-        .collect();
     for rejected in ["malformed-draft", "privileged-draft"] {
-        let retries: Vec<_> = parts
-            .iter()
-            .filter(|part| part["part_kind"] == "retry-prompt" && part["tool_call_id"] == rejected)
-            .collect();
-        assert_eq!(retries.len(), 1, "{snapshot}");
-        assert_eq!(retries[0]["tool_name"], "present");
-        assert!(!retries[0]["content"].as_str().unwrap().is_empty());
-        assert!(!parts
-            .iter()
-            .any(|part| part["part_kind"] == "tool-return" && part["tool_call_id"] == rejected));
+        card_retry(&snapshot, rejected);
     }
-    let returned: Vec<_> = parts
+    let returned: Vec<_> = openside_e2e::snapshot_messages(&snapshot)
         .iter()
-        .filter(|part| part["part_kind"] == "tool-return" && part["tool_name"] == "present")
+        .filter(|message| {
+            message["role"] == "toolResult"
+                && message["toolName"] == "present"
+                && message["isError"] == false
+        })
         .collect();
     assert_eq!(returned.len(), 1);
-    assert_eq!(returned[0]["content"], result);
+    assert_eq!(returned[0]["details"], result);
     assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
     assert_eq!(snapshot["script_cursor"], 5);
     harness.kill().await;
@@ -240,7 +247,7 @@ async fn prepared(script: &Value) -> Harness {
         dist.join("index.html").is_file(),
         "build the web bundle before Cards acceptance"
     );
-    let mut harness = Harness::prepare(DAEMON, script).expect("scripted Python environment");
+    let mut harness = Harness::prepare(DAEMON, script).expect("scripted Bun sidecar environment");
     harness.append_config(&format!("[ui]\ndir = {}\n", json!(dist)));
     harness.launch().await;
     harness
@@ -478,14 +485,17 @@ async fn cards_present_rejects_authority_html_blocks_and_remote_image_paths() {
     assert_eq!(ui.eval("performance.getEntriesByType('resource').some(r => r.name.includes('fixture.invalid'))").await, false);
     let snapshot = harness.snapshot(&session);
     for call in ["authority", "html", "remote"] {
+        let text = card_retry(&snapshot, call);
         assert!(
-            snapshot["messages"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .flat_map(|m| m["parts"].as_array().unwrap())
-                .any(|p| p["part_kind"] == "retry-prompt" && p["tool_call_id"] == call),
-            "{snapshot}"
+            [
+                "invalid_card:",
+                "card_media_denied:",
+                "card_secret_detected:",
+                "card_too_large:"
+            ]
+            .iter()
+            .any(|code| text.starts_with(code)),
+            "{call} was not rejected by card validation: {text}"
         );
     }
     ui.close().await;
@@ -713,7 +723,7 @@ async fn cards_embedded_payment_fill_only_then_separately_bound_decline_and_appr
             .as_f64()
             .unwrap()
             .round(),
-            48.0
+            44.0
         );
         ui.eval(&format!("{card}.querySelector('.oc-pill').click(); true"))
             .await;

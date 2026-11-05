@@ -1,11 +1,11 @@
-//! Real Python sidecar scenarios: events, tools, deferred calls and crash recovery.
+//! Real Bun sidecar scenarios: events, tools, deferred calls and crash recovery.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
 
-use openside_e2e::{Harness, SseReader};
+use openside_e2e::{tool_results, Harness, SseReader};
 use openside_proto::{Event, EventKind, MessageOutcome, TicketKind};
 use serde_json::{json, Value};
 
@@ -69,14 +69,14 @@ async fn ticket(stream: &mut SseReader) -> openside_proto::Ticket {
 
 #[tokio::test]
 async fn basic_scripted_text_reaches_assistant_final_and_settles() {
-    let Some(mut harness) = harness(json!({"responses":[text("hello from Python")]})).await else {
+    let Some(mut harness) = harness(json!({"responses":[text("hello from Bun")]})).await else {
         return;
     };
     let id = create(&harness, "guard").await;
     let mut stream = harness.events(&id, 0).await;
     submit(&harness, &id, "basic", "now").await;
     let events = stream.settled().await;
-    assert_final(&events, "hello from Python");
+    assert_final(&events, "hello from Bun");
     assert!(events.iter().any(
         |event| matches!(&event.kind, EventKind::AssistantDelta { text } if !text.is_empty())
     ));
@@ -152,19 +152,14 @@ async fn ask_user_ticket_resolved_by_cli_resumes_same_tool_call() {
     assert!(resumed.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &ticket.id && resolution["answer"] == "blue")));
     let snapshot = harness.snapshot(&id);
     assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
-    let returns: Vec<_> = snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-        .filter(|part| part["part_kind"] == "tool-return" && part["tool_call_id"] == "ask-call")
-        .collect();
+    let returns = tool_results(&snapshot, "ask-call");
+    assert!(returns.iter().all(|result| result["isError"] == false));
     assert_eq!(
         returns.len(),
         1,
         "deferred tool must resume exactly once with original ID"
     );
-    assert_eq!(returns[0]["content"]["answer"], "blue");
+    assert_eq!(returns[0]["details"]["answer"], "blue");
     assert_eq!(
         harness
             .request(
@@ -219,16 +214,15 @@ async fn read_only_gate_hides_mutations_and_unknown_write_retries_without_touchi
     assert_final(&events, "write unavailable");
     assert_eq!(std::fs::read_to_string(file).unwrap(), "original");
     let snapshot = harness.snapshot(&id);
-    let retry = snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-        .find(|part| part["part_kind"] == "retry-prompt" && part["tool_call_id"] == "hidden-write")
-        .expect("unknown-tool ModelRetry recorded in conversation");
+    let retry = tool_results(&snapshot, "hidden-write")
+        .into_iter()
+        .find(|result| result["isError"] == true)
+        .expect("unknown-tool retry recorded in conversation");
     let explanation = retry["content"].to_string().to_lowercase();
     assert!(
-        explanation.contains("unknown tool") || explanation.contains("not available"),
+        explanation.contains("unknown tool")
+            || explanation.contains("not available")
+            || explanation.contains("not found"),
         "not an unknown-tool rejection: {retry}"
     );
     harness.kill().await;

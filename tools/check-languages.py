@@ -11,14 +11,17 @@ LANGUAGES = {
     ".php":"PHP", ".lua":"Lua", ".zig":"Zig", ".dart":"Dart", ".scala":"Scala", ".sh":"Shell",
 }
 # This is JS evaluated inside the Rust-owned QuickJS sandbox, not a controller.
-EMBEDDED = {"crates/openside-repl/src/prelude.js":"sandboxed browser-repl guest API"}
+EMBEDDED = {
+    "crates/openside-repl/src/prelude.js": "sandboxed browser-repl guest API",
+    "crates/openside-repl/src/context.js": "sandboxed browser-repl context globals",
+}
 UI_JS_ASSETS = {"web/eslint.config.js", "extension/eslint.config.js", "web/public/sw.js", "web/public/theme-boot.js"}
 
 
 def audit(root: Path) -> tuple[list[str], list[str]]:
     report, errors = [], []
     components = [(path, "Rust") for path in sorted((root / "crates").iterdir()) if path.is_dir()]
-    components += [(root / "agent", "Python"), (root / "web", "TypeScript"), (root / "extension", "TypeScript")]
+    components += [(root / "agent", "TypeScript"), (root / "web", "TypeScript"), (root / "extension", "TypeScript")]
     for component, expected in components:
         counts: dict[str, int] = {}
         for path in component.rglob("*"):
@@ -40,15 +43,15 @@ def audit(root: Path) -> tuple[list[str], list[str]]:
         report.append(f"{component.relative_to(root)}: " + ", ".join(f"{name}={count}" for name, count in sorted(counts.items())))
         if not counts.get(expected):
             errors.append(f"{component.relative_to(root)}: no {expected} implementation")
-    # TypeScript is exclusive to the two UI components, even in future top-level code.
+    # TypeScript is exclusive to the Bun sidecar and the two UI components, even in future top-level code.
     for path in root.rglob("*"):
         if path.suffix not in {".ts", ".tsx"} or not path.is_file():
             continue
         relative = path.relative_to(root)
         if any(part in {"node_modules", ".venv", "target", "dist", ".git"} for part in relative.parts):
             continue
-        if relative.parts[0] not in {"web", "extension"}:
-            errors.append(f"{relative}: TypeScript outside web/extension")
+        if relative.parts[0] not in {"agent", "web", "extension"}:
+            errors.append(f"{relative}: TypeScript outside agent/web/extension")
     return report, errors
 
 

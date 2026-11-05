@@ -13,7 +13,7 @@ async fn controlled_restart_preserves_pid_and_launcher_secret_but_changes_boot_i
         &json!({"responses":[]}),
     )
     .await
-    .expect("scripted Python runtime is required");
+    .expect("scripted Bun sidecar is required");
     let pid = harness.daemon_pid();
     let before = harness.request("GET", "/v1/daemon", None).await.body;
     let local = harness

@@ -13,6 +13,13 @@ rm -rf "$DIR"
 mkdir -p "$DIR"
 : >"$DIR/scripts.txt"
 
+# The e2e harness runs the sidecar in a hermetic environment where a version-manager shim
+# (mise, asdf) fails, so hand it the real Bun binary the shim resolves to here.
+if [ -z "${OPENSIDE_BUN:-}" ] && command -v bun >/dev/null; then
+  OPENSIDE_BUN=$(cd agent && bun -e 'process.stdout.write(process.execPath)') || OPENSIDE_BUN=""
+fi
+[ -n "${OPENSIDE_BUN:-}" ] && export OPENSIDE_BUN
+
 FAILED=0
 step() {
   local name=$1 rc
@@ -42,8 +49,9 @@ browser_ux_checks() {
       --daemon-bin "$ROOT/target/debug/e2e-opensided" --junitxml "$DIR/headed-pytest.xml"
 }
 agent_checks() {
-  (cd agent && uv run ruff check && uv run ruff format --check && uv run pyright \
-    && uv run pytest -m 'not live' --junitxml="$DIR/pytest.xml")
+  local bun=${OPENSIDE_BUN:-bun}
+  (cd agent && "$bun" install --frozen-lockfile && "$bun" x biome check . && "$bun" x tsc --noEmit -p . \
+    && "$bun" test --reporter=junit --reporter-outfile="$DIR/agent-bun.xml")
 }
 
 has_script() { (cd "$1" && node -e 'process.exit(require("./package.json").scripts?.[process.argv[1]] ? 0 : 1)' "$2"); }
@@ -93,19 +101,21 @@ acceptance_scripts() {
 
 step "cargo fmt" cargo fmt --check
 step "cargo clippy" cargo_clippy
-# Browser e2e tests in `cargo test` serve web/dist and load the built extension, so build them first.
+# Browser e2e tests in `cargo test` serve web/dist and load the built extension, so build them first;
+# the sidecar e2e tests need the agent's dependencies.
 js_checks web
 js_checks extension
+step "agent install" bash -c 'cd agent && "${OPENSIDE_BUN:-bun}" install --frozen-lockfile'
 step "cargo test" cargo_test
 step "responsive first browser action" responsive_checks
 step "mobile encrypted relay journey twice" mobile_remote_checks
-step "agent (ruff, pyright, pytest)" agent_checks
+step "agent (biome, tsc, bun test)" agent_checks
 step "portability" tools/check-portability.sh
 step "tools tests" uv run --no-project --with pytest pytest -q tools/tests --junitxml="$DIR/tools-pytest.xml"
 step "bench dependencies" uv sync --frozen --project bench
 step "bench tests" uv run --offline --frozen --project bench pytest bench/tests -m 'not live' --junitxml="$DIR/bench-pytest.xml"
 step "component languages" tools/check-languages.py
-step "Rust/npm/Python licenses and NOTICE" tools/check-licenses.py
+step "Rust/npm/Bun/Python licenses and NOTICE" tools/check-licenses.py
 step "browser UX evidence" browser_ux_checks
 step "installed platform targets" tools/check-platforms.py
 step "openapi breaking changes" tools/openapi-diff.py

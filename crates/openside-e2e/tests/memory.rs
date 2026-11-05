@@ -1,4 +1,4 @@
-//! Real Python sidecar: a fact written with `memory_write` in one session is recalled by
+//! Real Bun sidecar: a fact written with `memory_write` in one session is recalled by
 //! `memory_search` in a later session after a daemon restart; a secret write is refused.
 
 #![cfg(unix)]

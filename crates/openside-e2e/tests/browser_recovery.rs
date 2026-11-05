@@ -1,7 +1,7 @@
 //! PP-23 ②: Chromium is force-killed in the middle of a session; the real daemon relaunches
 //! it on its own, reconciles the tab ledger (`tab.closed` for the tabs that died), the agent's
 //! call naming a dead tab fails with `browser_restarted`, and its next browser call works.
-//! Real daemon, real Python sidecar with the scripted model, real Chromium, loopback pages.
+//! Real daemon, real Bun sidecar with the scripted model, real Chromium, loopback pages.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]

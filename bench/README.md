@@ -1,6 +1,6 @@
 # Local browser task benchmark
 
-Run a deterministic suite through the **real opensided daemon, Python sidecar,
+Run a deterministic suite through the **real opensided daemon, Bun/TypeScript sidecar,
 and Chromium**. There are five loopback-only tasks: form fill, three-page
 navigation, table extraction, fake login with an automatically resolved 2FA
 information ticket, and a file download. The grader checks fixture state and
@@ -16,19 +16,20 @@ they do not claim scores on the corresponding public datasets.
 
 ## Install once
 
-Requirements: a Rust toolchain compatible with this repository, `uv`, Python
-3.13 or later, and a Chromium-compatible browser. Linux and macOS are supported
+Requirements: a Rust toolchain compatible with this repository, Bun 1.4.4 or
+later (the sidecar runtime), `uv` with Python 3.13 or later (the benchmark
+harness), and a Chromium-compatible browser. Linux and macOS are supported
 by this harness's Unix-socket transport. Browser discovery checks
 `OPENSIDE_PATCHED_BROWSER` (explicit opt-in), then `OPENSIDE_BROWSER`, then
 Chromium/Chrome on PATH, and the standard Chrome application location on macOS.
 Only disposable browser profiles are used.
 
-Dependency installation may contact crates.io and PyPI. Do this before an
-offline benchmark run, from the repository root:
+Dependency installation may contact crates.io, the npm registry and PyPI. Do
+this before an offline benchmark run, from the repository root:
 
 ```sh
 cargo fetch --locked
-uv sync --frozen --project agent
+(cd agent && bun install --frozen-lockfile)
 uv sync --frozen --project bench
 ```
 
@@ -44,8 +45,8 @@ bench/run.sh
 ```
 
 The command builds `opensided` with `cargo build --offline --locked -j
-${CARGO_BUILD_JOBS:-4} -p opensided --bin opensided`, discovers the sidecar
-interpreter with `uv`, starts a temporary daemon and fixture server, runs all
+${CARGO_BUILD_JOBS:-4} -p opensided --bin opensided`, runs the sidecar as
+`bun run agent/src/main.ts`, starts a temporary daemon and fixture server, runs all
 five tasks, validates every
 result with JSON Schema, prints the summary, and stops its daemon, sidecars,
 browser descendants, and fixture server. No model credentials are read in the
@@ -73,9 +74,8 @@ OPENSIDE_BENCH_DAEMON=/path/to/opensided bench/run.sh
 ```
 
 `OPENSIDE_BENCH_DAEMON` skips only the build and must identify a real daemon
-binary. `OPENSIDE_BENCH_PYTHON` may select an already installed sidecar
-interpreter. Otherwise `uv run --offline --frozen --project agent` discovers it;
-no interpreter or environment path is hardcoded. `CARGO_TARGET_DIR` is respected.
+binary. `OPENSIDE_BUN` may select the Bun executable that runs the sidecar;
+otherwise `bun` on PATH is used. `CARGO_TARGET_DIR` is respected.
 The selected output directory must be new or empty, so measurements from a
 previous run cannot be overwritten accidentally. The default is a fresh
 `bench/results/<UTC timestamp>/` directory.
@@ -108,7 +108,7 @@ All openside-specific measurements are under the single `openside` extension:
 - `steps`: number of actual daemon `tool.started` events, including the fake
   2FA ticket request. A REPL tool call can contain several browser actions.
 - `tokens.input/output`: sums of actual daemon `usage` events. Scripted counts
-  come from Pydantic AI FunctionModel's deterministic usage estimates, **not**
+  come from the scripted sidecar model's deterministic usage estimates, **not**
   paid/provider tokenizer counts; the `source` field makes that distinction.
 - `browserBytes`: response-body bytes served by the loopback fixture for this
   task, including downloads; not browser RSS, HTTP header bytes, CDP bytes, or
@@ -142,7 +142,7 @@ installed but failing browser/daemon/sidecar fails the test.
 OPENSIDE_LIVE_MODEL='<provider>:<model-from-your-configuration>' bench/run.sh
 ```
 
-This opt-in replaces the scripted FunctionModel with the requested real model
+This opt-in replaces the scripted model with the requested real model
 and may contact **that provider**. It still uses only local mock web tasks and
 private HOME/XDG/browser directories. Only the standard provider API-key
 environment variables are forwarded; broker, keyring, user CLI authentication,

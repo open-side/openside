@@ -276,7 +276,9 @@ class Run:
         dist = ROOT / "web/dist"
         if not self.args.prewarm_only and not (dist / "index.html").is_file():
             raise SystemExit("build web/dist first (pnpm -C web build)")
-        python = ROOT / "agent/.venv/bin/python"
+        bun = os.environ.get("OPENSIDE_BUN") or shutil.which("bun")
+        if bun is None or not (ROOT / "agent/node_modules").is_dir():
+            raise SystemExit("needs bun on PATH and agent/node_modules (cd agent && bun install --frozen-lockfile)")
         browser = self.executable
         if self.args.no_sandbox:
             # The managed browser needs the same container-only sandbox exception as the visible fixture.
@@ -285,7 +287,7 @@ class Run:
             browser.write_text(f"#!/bin/sh\nexec {shlex.quote(str(self.executable))} --no-sandbox \"$@\"\n")
             browser.chmod(0o700)
         (r / "config/openside/config.toml").write_text(
-            f"[agent]\ncommand = {json.dumps([str(python), '-m', 'openside_agent'])}\n"
+            f"[agent]\ncommand = {json.dumps([bun, 'run', str(ROOT / 'agent/src/main.ts')])}\n"
             '[models]\ndefault = "script"\n[policy]\nmode = "full"\n'
             f"[ui]\ndir = {json.dumps(str(dist))}\n"
             f"[browser]\nexecutable = {json.dumps(str(browser))}\n"

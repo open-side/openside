@@ -145,14 +145,31 @@ def python_defines_test(src: str, name: str) -> bool:
 
 
 _TS_CALL = re.compile(r"""\b(it|test|describe)(?:\.only)?\s*\(\s*(['"`])((?:\\.|(?!\2).)*)\2""", re.DOTALL)
+_TS_EACH = re.compile(r"""\b(it|test|describe)(?:\.only)?\.each\s*\(""")
+_TS_EACH_TITLE = re.compile(r"""\)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1""", re.DOTALL)
+# Template substitutions and bun/jest `.each` printf placeholders render per parametrization.
+_TS_PARAM = re.compile(r"\$\{[^}]*\}|%[psdifjo#]")
+
+
+def _ts_title_matches(title: str, leaf: str) -> bool:
+    first = _TS_PARAM.search(title)
+    if first is None:
+        return title == leaf
+    pattern = "".join(".+?" if _TS_PARAM.fullmatch(part) else re.escape(part) for part in re.split(f"({_TS_PARAM.pattern})", title))
+    # Like a pytest id without brackets, the bare title before the parameters names every parametrization.
+    return re.fullmatch(pattern, leaf, re.DOTALL) is not None or leaf == title[: first.start()].rstrip(" [(")
 
 
 def ts_defines_test(src: str, name: str) -> bool:
     tests, suites = set(), set()
     for m in _TS_CALL.finditer(src):
         (suites if m.group(1) == "describe" else tests).add(m.group(3))
+    for m in _TS_EACH.finditer(src):
+        title = _TS_EACH_TITLE.search(src, m.end())
+        if title:
+            (suites if m.group(1) == "describe" else tests).add(title.group(2))
     *parents, leaf = name.split(" > ")
-    return leaf in tests and all(p in suites for p in parents)
+    return any(_ts_title_matches(t, leaf) for t in tests) and all(p in suites for p in parents)
 
 
 # --------------------------------------------------------------------------------------------
@@ -195,20 +212,38 @@ def _name_matches(result_name: str, wanted: str) -> bool:
     return result_name == wanted or result_name.endswith("::" + wanted)
 
 
+def _bun_cases(node: ET.Element, suites: tuple[str, ...] = ()):
+    """Yield (testcase, describe chain); bun nests one <testsuite> per file and one per describe."""
+    for child in node:
+        if child.tag == "testcase":
+            yield child, suites
+        elif child.tag == "testsuite":
+            # The file-level suite is named after its file and is not a describe block.
+            inner = suites if child.get("name") == child.get("file") else (*suites, child.get("name", ""))
+            yield from _bun_cases(child, inner)
+
+
 def parse_junit(text: str, root: Path, prefixes: tuple[str, ...] = ("agent/", "")) -> dict[tuple[str, str], bool]:
     """(repo-relative file, test name) -> passed. A repeated key is passed only if every case passed."""
     out: dict[tuple[str, str], bool] = {}
     tree = ET.fromstring(text)
-    for case in tree.iter("testcase"):
-        classname, name = case.get("classname", ""), case.get("name", "")
+    for case, suites in _bun_cases(tree):
+        ok = not any(case.find(t) is not None for t in ("failure", "error", "skipped"))
+        file, name = case.get("file", ""), case.get("name", "")
+        if file.endswith(TS_SUFFIXES):
+            # bun test records the file relative to the directory it ran in (agent/).
+            path = next((p + file for p in prefixes if (root / (p + file)).is_file()), prefixes[0] + file)
+            key = (path, " > ".join([*suites, name]))
+            out[key] = out.get(key, True) and ok
+            continue
+        classname = case.get("classname", "")
         parts = classname.split(".") if classname else []
         rust_path = "/".join(parts) + ".rs"
         if parts and parts[0] == "crates" and (root / rust_path).is_file():
-            ok = not any(case.find(t) is not None for t in ("failure", "error", "skipped"))
             out[(rust_path, name)] = out.get((rust_path, name), True) and ok
             continue
-        # pytest classnames are relative to the project it ran in: agent/ and bench/ run from
-        # their own directory, tools/ from the repo root.
+        # pytest classnames are relative to the project it ran in: bench/ runs from its own
+        # directory, tools/ from the repo root.
         path, rest = prefixes[0] + "/".join(parts) + ".py", []
         found = False
         for prefix in prefixes:
@@ -220,7 +255,6 @@ def parse_junit(text: str, root: Path, prefixes: tuple[str, ...] = ("agent/", ""
             if found:
                 break
         full = "::".join([*rest, name])
-        ok = not any(case.find(t) is not None for t in ("failure", "error", "skipped"))
         out[(path, full)] = out.get((path, full), True) and ok
     return out
 
@@ -268,7 +302,8 @@ class Evidence:
                 elif p.suffix in (".log", ".txt"):
                     self.cargo.extend(parse_cargo_log(p.read_text(errors="replace")))
                 elif p.suffix == ".xml":
-                    # bench/ is a separate uv project whose pytest classnames start at bench/.
+                    # bench/ is a separate uv project whose pytest classnames start at bench/;
+                    # bun test (agent-bun.xml) records files relative to agent/.
                     prefixes = ("bench/",) if p.name.startswith("bench") else ("agent/", "")
                     for key, ok in parse_junit(p.read_text(errors="replace"), self.root, prefixes).items():
                         self.junit[key] = self.junit.get(key, True) and ok
@@ -291,6 +326,8 @@ class Evidence:
             return self._check_rust(path, name)
         if path.endswith(".py"):
             return self._check_python(path, name)
+        if path.startswith("agent/"):
+            return self._check_bun(path, name)
         return self._check_vitest(path, name)
 
     def _check_rust(self, path: str, name: str) -> tuple[str, str]:
@@ -331,6 +368,23 @@ class Evidence:
         if not hits:
             return "missing", "no matching testcase in JUnit XML"
         return ("pass", "") if all(hits) else ("fail", "JUnit reports failure/error/skip")
+
+    def _check_bun(self, path: str, name: str) -> tuple[str, str]:
+        # An id may name the bare it() title or the full "describe > it" chain. A bare id of a
+        # parametrized test (`x[${p}]`, `.each(...)("x %p")`) needs every rendered case to pass.
+        def matches(rendered: str) -> bool:
+            if rendered == name or rendered.endswith(" > " + name):
+                return True
+            leaf = rendered.rsplit(" > ", 1)[-1]
+            wanted = name.rsplit(" > ", 1)[-1]
+            if " > " in name and rendered[: -len(leaf)] != name[: -len(wanted)]:
+                return False
+            return leaf.startswith((wanted + "[", wanted + " "))
+
+        hits = [ok for (p, n), ok in self.junit.items() if p == path and matches(n)]
+        if not hits:
+            return "missing", "no matching testcase in bun JUnit XML"
+        return ("pass", "") if all(hits) else ("fail", "bun JUnit reports failure/error/skip")
 
     def _check_vitest(self, path: str, name: str) -> tuple[str, str]:
         hits = []

@@ -1,6 +1,6 @@
 # 스킬 (Skills) — 재사용 지침 관리와 멘션
 
-상태: **구현됨**. 관련: A-6. 코드: `crates/openside-skills`(형식·저장소·설치기), `crates/opensided/src/skills.rs`(API·`skill` 도구·프롬프트 목록), `crates/openside-proto/src/skills.rs`(API 타입), `crates/openside-config/src/skills.rs`(`[skills]`), `crates/openside-cli/src/skills.rs`(`openside skills`), `agent/src/openside_agent/skills.py`(`/이름` 멘션 로딩).
+상태: **구현됨**. 관련: A-6. 코드: `crates/openside-skills`(형식·저장소·설치기), `crates/opensided/src/skills.rs`(API·`skill` 도구·프롬프트 목록), `crates/openside-proto/src/skills.rs`(API 타입), `crates/openside-config/src/skills.rs`(`[skills]`), `crates/openside-cli/src/skills.rs`(`openside skills`), `agent/src/features/skills.ts`(`/이름` 멘션 로딩).
 
 웹 UI 의 입력창 `/` 칩과 설정 화면은 이 문서의 API 를 쓰는 별도 작업이다. 여기서는 그 화면이 쓰는 데이터 API 와, 멘션한 스킬을 모델이 받기까지의 경로를 다룬다.
 
@@ -62,7 +62,7 @@ license: MIT
 - 멘션은 단어 경계에서만 인식한다. `/usr/bin`, `/이름/하위`, `/이름.md`, 대문자 이름은 멘션이 아니다. 메시지마다 최대 5개, 중복은 한 번만.
 - 데몬이 거절하면(이미 끈 스킬 등) 조용히 건너뛰고 메시지는 그대로 모델에 간다.
 - 입력창의 `/` 칩은 `GET /v1/skills?q=…&enabled=true` 로 후보를 받는다.
-- pydantic-ai-harness 의 `skills` 기능은 쓰지 않는다. 그 기능은 사이드카가 파일 시스템을 직접 읽는데, 도구는 데몬이 소유한다는 원칙(`docs/08` §E)과 맞지 않기 때문이다. 대신 목록 + 불러오기 도구라는 비슷한 구조를 데몬이 소유하는 형태로 구현했다.
+- 사이드카 런타임에는 파일시스템을 직접 읽는 내장 스킬 기능이 없다. 그런 기능은 도구를 데몬이 소유한다는 원칙(`docs/08` §E)에 어긋나기 때문이다. 대신 목록과 불러오기 도구를 결합한 비슷한 구조를 데몬이 직접 소유하는 형태로 구현했다.
 
 ## 5. CLI
 ```
@@ -70,11 +70,12 @@ openside skills list [QUERY] [--session ID]
 openside skills show NAME [--session ID]
 openside skills new NAME --description TEXT [--body TEXT]
 openside skills enable|disable|rm NAME
-openside skills install AGENT [--to-dir PATH] [--force]
+openside skills install [AGENT] [--to-dir PATH] [--force]
 openside skills import SOURCE [--from AGENT | --from-dir PATH] [--allow-scripts] [--force]
 ```
 - `list`·`show`·`new`·`enable`·`disable`·`rm` 은 데몬 API 를 쓴다(`--json` 지원).
-- `install` 은 데몬 없이 실행한다. openside 의 브라우저 스킬(`openside-browser`)을 다른 에이전트의 스킬 디렉터리에 설치해, 그 에이전트가 브라우저 작업을 `openside` 에 맡기게 한다(AC ③). 스킬 안에는 언제 작업을 위임하고(`openside run --wait "goal"`, MCP `agent_run`: 여러 단계 작업, 로그인, 판단이 필요할 때), 언제 직접 제어할지(`openside repl` 에 heredoc 스크립트 전달, `openside browser <verb>`: 정해진 순서의 작업, 가공되지 않은 페이지 데이터 수집, 빠른 확인)를 짧은 예시와 함께 안내한다. 사용자에게 티켓이 전달되는 방식과 페어링된 원격 데몬을 위한 `--remote NAME` 도 함께 설명한다. 같은 이름이 이미 있으면 `--force` 가 있어야 바꾼다. 스테이징 디렉터리에 쓴 뒤 rename 하므로 중간에 멈춰도 반쪽짜리가 남지 않는다.
+- `install` 은 데몬 없이 실행한다. openside 의 브라우저 스킬(`openside-browser`)을 다른 에이전트의 스킬 디렉터리에 설치해, 그 에이전트가 브라우저 작업을 `openside` 에 맡기게 한다(AC ③). 스킬 안에는 언제 작업을 위임하고(`openside exec "prompt"`, MCP `exec`: 여러 단계 작업, 로그인, 판단이 필요할 때), 언제 직접 제어할지(`openside repl` 에 heredoc 스크립트 전달, `openside browser <verb>`: 정해진 순서의 작업, 가공되지 않은 페이지 데이터 수집, 빠른 확인)를 짧은 예시와 함께 안내한다. 사용자에게 티켓이 전달되는 방식과 페어링된 원격 데몬을 위한 `--host NAME` 도 함께 설명한다. 같은 이름이 이미 있으면 `--force` 가 있어야 바꾼다. 스테이징 디렉터리에 쓴 뒤 rename 하므로 중간에 멈춰도 반쪽짜리가 남지 않는다.
+- `AGENT` 는 생략할 수 있으며, 주지 않으면 `install` 은 내장 에이전트와 `[skills.agents]` 에 등록된 에이전트 가운데 이 기기에 홈 디렉터리가 있는 모든 에이전트에 스킬을 설치하지만, `--to-dir` 는 `AGENT` 와 함께 써야 한다.
 - 에이전트의 스킬 디렉터리는 `--to-dir` → `[skills.agents]` 설정 → `OPENSIDE_SKILLS_<AGENT>_DIR` → 에이전트 관례 순으로 정한다. 관례를 내장한 에이전트는 `claude`(`$CLAUDE_CONFIG_DIR/skills`, 없으면 `$HOME/.claude/skills`), `codex`(`$CODEX_HOME/skills`, 없으면 `$HOME/.codex/skills`), `omp`(`$OMP_CODING_AGENT_DIR/skills`, 다음 `$PI_CODING_AGENT_DIR/skills`, 없으면 `$HOME` 아래 omp 의 설정 디렉터리 `agent/skills`)다. 그 밖의 에이전트는 설정이나 환경변수로 알려 줘야 하고, 모르면 어느 키를 쓰면 되는지 오류로 알려 준다.
 - `import` 는 반대 방향이다. `--from`/`--from-dir` 와 함께 쓰는 `SOURCE` 는 스킬 이름이어야 하고(`../`·경로 구분자는 거절), 이름 대신 경로를 쓰려면 두 옵션 없이 디렉터리 경로를 준다. 스킬 디렉터리(또는 `--from`/`--from-dir` 아래의 이름)를 openside 라이브러리로 복사한다. 이 경로가 실행 파일을 들여올 수 있는 유일한 길이라서 `--allow-scripts` 가 없으면 실행 권한이 있는 파일이 하나라도 있는 스킬은 거절한다.
 - `install`·`import` 는 `skills.dir`(없으면 `<data_dir>/skills`)을 설정에서 읽는다. 데몬을 `--data-dir` 로 따로 띄웠다면 CLI 와 경로가 달라지므로 `skills.dir` 을 직접 지정한다.
@@ -89,7 +90,7 @@ openside skills import SOURCE [--from AGENT | --from-dir PATH] [--allow-scripts]
 - 형식·퍼징: `crates/openside-skills/tests/frontmatter.rs`(임의 바이트·구조화된 쓰레기 입력, 왕복, 한도).
 - 저장소: `crates/openside-skills/tests/store.rs`.
 - API·도구·프롬프트: `crates/opensided/src/tests/skills.rs`.
-- 멘션: `agent/tests/test_skills.py`(가짜 데몬), `crates/openside-e2e/tests/skills.rs`(실제 사이드카와 CLI).
+- 멘션: `agent/tests/skills.test.ts`(가짜 데몬), `crates/openside-e2e/tests/skills.rs`(실제 사이드카와 CLI).
 - CLI: `crates/openside-cli/src/tests/skills.rs`.
 
 **웹 UI 설치.** 웹 첫 실행 안내는 `POST /v1/external-agents/{id}/browser-skill`(`admin` 스코프)을 호출해 번들로 제공되는 `openside-browser` 스킬을 설치한다. 이때 설치되는 내용과 대상 디렉터리는 `openside skills install`과 완전히 동일하며, 클라이언트 요청으로 임의의 디렉터리를 지정할 수는 없다. 자세한 내용은 `docs/specs/onboarding.md`를 참고한다.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Rust/npm/Python dependency licenses and deterministically generate NOTICE."""
+"""Check Rust/npm/Bun/Python dependency licenses and deterministically generate NOTICE."""
 from __future__ import annotations
 
 import argparse
@@ -19,14 +19,24 @@ NPM_ALLOW = {
     "0BSD", "Unlicense", "CC0-1.0", "BlueOak-1.0.0", "Python-2.0", "CC-BY-4.0",
 }
 PYTHON_ALLOW = NPM_ALLOW | {"PSF-2.0", "CNRI-Python"}
-# MPL-2.0 is file-level copyleft; these are used unmodified (certifi at runtime, hypothesis in tests only).
-PYTHON_MPL = {"certifi", "hypothesis"}
+# MPL-2.0 is file-level copyleft; certifi is used unmodified at runtime.
+PYTHON_MPL = {"certifi"}
 # Pre-PEP 639 free-text `License:` values, mapped after reading the licence text each package ships.
 PYTHON_LICENSE_TEXT = {"Apache 2.0": "Apache-2.0", "Apache License, Version 2.0": "Apache-2.0", "MIT License": "MIT", "MIT license": "MIT"}
 # Metadata says only "BSD"; the clause count comes from the shipped licence text.
-PYTHON_REVIEWED = {"nodeenv": "BSD-3-Clause", "pyasn1-modules": "BSD-2-Clause"}
-# Locked behind platform markers (win32, emscripten), so a Linux sync never installs them; licence from PyPI metadata.
-PYTHON_OTHER_PLATFORM = {"colorama": "BSD-3-Clause", "httpx2-jsfetch": "BSD-3-Clause"}
+PYTHON_REVIEWED: dict[str, str] = {}
+# Locked behind platform markers (win32), so a Linux sync never installs them; licence from PyPI metadata.
+PYTHON_OTHER_PLATFORM = {"colorama": "BSD-3-Clause"}
+# Per-platform builds of pi-natives: only the host's one is installed, so their licence is reviewed here
+# (npm registry metadata, identical to the installed variant) and NOTICE stays the same on every host.
+BUN_PLATFORM_PACKAGES = {
+    f"@oh-my-pi/pi-natives-{target}": "MIT"
+    for target in ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-arm64", "win32-x64")
+}
+# The pi_natives addon statically links Rust crates listed in its THIRD-PARTY-NOTICES.txt. Beyond the
+# permissive set, it carries two file-level weak-copyleft crates, used unmodified with source published.
+PI_NATIVES_ALLOW = NPM_ALLOW | {"BSL-1.0", "Unicode-3.0", "Zlib", "WTFPL"}
+PI_NATIVES_WEAK_COPYLEFT = {"CDDL-1.0": {"inferno"}, "MPL-2.0": {"uluru"}}
 # These upstream packages keep required notices in source headers, not root license files.
 RUST_EMBEDDED_NOTICES = {"jpeg-encoder": "src/fdct.rs"}
 
@@ -168,7 +178,7 @@ def python_license(name: str, metadata: str) -> str:
 
 def python_inventory(root: Path) -> list[dict]:
     inventory = []
-    for component in ("agent", "bench"):
+    for component in ("bench",):
         lock = tomllib.loads((root / component / "uv.lock").read_text())
         installed: dict[str, Path] = {}
         for dist in sorted((root / component / ".venv").glob("lib/python*/site-packages/*.dist-info")):
@@ -204,6 +214,97 @@ def python_inventory(root: Path) -> list[dict]:
     return sorted(inventory, key=lambda item: (item["component"], item["name"]))
 
 
+def bun_lock(root: Path) -> dict:
+    # bun.lock is JSON with trailing commas.
+    text = (root / "agent/bun.lock").read_text()
+    return json.loads(re.sub(r",(\s*[}\]])", r"\1", text))
+
+
+def pi_natives_notices(directory: Path) -> tuple[str, str]:
+    """Check the crate licences compiled into the pi_natives addon; return a NOTICE (title, text)."""
+    path = directory / "THIRD-PARTY-NOTICES.txt"
+    if not path.is_file():
+        raise ValueError("@oh-my-pi/pi-natives: THIRD-PARTY-NOTICES.txt is missing")
+    text = path.read_text(errors="replace")
+    weak = []
+    for block in re.split(r"^-{20,}$", text, flags=re.M):
+        header = re.search(r"^License: .*\(([^()]+)\)\s*$", block, re.M)
+        if header is None:
+            continue
+        spdx = header.group(1).strip().replace(" ", "-")
+        if spdx in PI_NATIVES_WEAK_COPYLEFT:
+            used = re.findall(r"^- (\S+) (\S+) \((\S+)\)", block.split("Full license text:", 1)[0], re.M)
+            unreviewed = sorted({crate for crate, _, _ in used} - PI_NATIVES_WEAK_COPYLEFT[spdx])
+            if not used or unreviewed:
+                raise ValueError(f"@oh-my-pi/pi-natives: {spdx} is used by unreviewed crates {unreviewed}")
+            weak += [f"{crate} {version} ({spdx}): https://crates.io/crates/{crate}/{version}, {url}" for crate, version, url in used]
+        elif not allowed_expression(spdx, PI_NATIVES_ALLOW):
+            raise ValueError(f"@oh-my-pi/pi-natives: bundled crate licence {spdx} is prohibited or unknown")
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    # The 700 KB file ships next to the addon in the installed agent/node_modules, so it is referenced, not copied.
+    return f"{path.name} (sha256 {digest})", (
+        "Licences of the Rust crates, C libraries, data and fonts compiled into the pi_natives addon ship with it at "
+        f"node_modules/@oh-my-pi/pi-natives/{path.name} inside the agent directory (share/openside/agent in a release). "
+        "These crates are used unmodified under file-level weak copyleft; their source is available at:\n" + "\n".join(sorted(weak))
+    )
+
+
+def bun_inventory(root: Path) -> list[dict]:
+    """Production closure of agent/bun.lock: what `bun install --production` ships with the sidecar."""
+    lock = bun_lock(root)
+    packages = lock["packages"]
+    workspace = lock["workspaces"][""]
+    modules = root / "agent/node_modules"
+    # (ancestor keys, dependency name, required); optional peers absent from the lock are not installed.
+    pending = [((), name, True) for kind in ("dependencies", "optionalDependencies") for name in workspace.get(kind, {})]
+    directories: dict[str, Path] = {}
+    inventory = []
+    while pending:
+        chain, name, required = pending.pop()
+        # bun.lock keys a hoisting conflict as "<parent key>/<name>", installed in the parent's
+        # node_modules; the nearest such entry wins, like node_modules resolution.
+        key, directory = name, modules / name
+        for scope in reversed(chain):
+            if f"{scope}/{name}" in packages:
+                key, directory = f"{scope}/{name}", directories[scope] / "node_modules" / name
+                break
+        if key not in packages:
+            if not required:
+                continue
+            raise ValueError(f"agent: {name} is not in bun.lock; run bun install")
+        if key in directories:
+            continue
+        directories[key] = directory
+        entry = packages[key]
+        version = entry[0].rsplit("@", 1)[1]
+        meta = entry[2] if len(entry) > 2 and isinstance(entry[2], dict) else {}
+        for kind in ("dependencies", "optionalDependencies", "peerDependencies"):
+            pending.extend(((*chain, key), dependency, kind != "peerDependencies") for dependency in meta.get(kind, {}))
+        manifest = directory / "package.json"
+        record = {"component": "agent", "name": name, "version": version, "texts": [], "notices": None}
+        if name in BUN_PLATFORM_PACKAGES:
+            record["license"] = BUN_PLATFORM_PACKAGES[name]
+            if manifest.is_file() and json.loads(manifest.read_text()).get("license") != record["license"]:
+                raise ValueError(f"agent: {name} licence differs from the reviewed {record['license']}")
+        elif not manifest.is_file():
+            raise ValueError(f"agent: {name} {version} is locked but not installed; run bun install --frozen-lockfile in agent/")
+        else:
+            data = json.loads(manifest.read_text())
+            if data.get("version") != version:
+                raise ValueError(f"agent: {name} installed {data.get('version')}, locked {version}; run bun install --frozen-lockfile in agent/")
+            license_value = data.get("license")
+            record["license"] = license_value.get("type", "") if isinstance(license_value, dict) else str(license_value or "")
+            record["texts"] = license_files(directory)
+            if name == "@oh-my-pi/pi-natives":
+                record["notices"] = pi_natives_notices(directory)
+        if not allowed_expression(record["license"], NPM_ALLOW):
+            raise ValueError(f"agent: {name} {version} has prohibited or unknown license {record['license']}")
+        inventory.append(record)
+    if not inventory:
+        raise ValueError("agent: empty production dependency closure in bun.lock")
+    return sorted(inventory, key=lambda item: item["name"])
+
+
 def vendored_inventory(root: Path) -> list[tuple[str, str, str, str]]:
     entries = []
     for what, source, license_id, text in VENDORED:
@@ -218,9 +319,9 @@ def notice(root: Path) -> str:
     metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=root, text=True))
     rust = sorted((p for p in metadata["packages"] if p["source"] is not None), key=lambda p: (p["name"], p["version"]))
     chunks = ["openside third-party notices", "Generated by tools/check-licenses.py --write; do not edit.",
-              "Rust inventory covers Cargo.lock across platforms; npm inventory covers installed web/extension dependencies, including development tools; Python inventory covers agent/ and bench/ uv.lock, including development tools.",
+              "Rust inventory covers Cargo.lock across platforms; npm inventory covers installed web/extension dependencies, including development tools; Bun inventory covers the production dependency closure of agent/bun.lock (what the sidecar ships; devDependencies excluded); Python inventory covers bench/ uv.lock, including development tools.",
               "Browser Chromium overlay notices are maintained separately in browser/NOTICE.md.",
-              "License expressions retain upstream choices; r-efi is used under MIT, not LGPL. option-ext, certifi and hypothesis retain MPL-2.0 file-level obligations; they are used unmodified and their source is available from crates.io and PyPI."]
+              "License expressions retain upstream choices; r-efi is used under MIT, not LGPL. option-ext and certifi retain MPL-2.0 file-level obligations; they are used unmodified and their source is available from crates.io and PyPI. The pi_natives addon's weak-copyleft crates are listed under its Bun entry."]
     for package in rust:
         chunks.append(f"\nRust: {package['name']} {package['version']}\nLicense: {package['license'] or 'SEE LICENSE FILE'}")
         files = rust_license_files(package)
@@ -228,6 +329,13 @@ def notice(root: Path) -> str:
     for package in npm_inventory(root):
         chunks.append(f"\nnpm ({package['component']}): {package['name']} {', '.join(package['versions'])}\nLicense: {package['license']}")
         chunks.extend(f"--- {name} ---\n{text}" for name, text in package["texts"])
+    for package in bun_inventory(root):
+        chunks.append(f"\nBun ({package['component']}): {package['name']} {package['version']}\nLicense: {package['license']}")
+        if package["name"] in BUN_PLATFORM_PACKAGES:
+            chunks.append("Per-platform build of @oh-my-pi/pi-natives; only the host's build is installed, under the same licence and notices.")
+        chunks.extend(f"--- {name} ---\n{text}" for name, text in package["texts"])
+        if package["notices"]:
+            chunks.append("--- {} ---\n{}".format(*package["notices"]))
     for package in python_inventory(root):
         chunks.append(f"\nPython ({package['component']}): {package['name']} {package['version']}\nLicense: {package['license']}")
         if not package["installed"]:
@@ -263,7 +371,7 @@ def main() -> int:
             print("NOTICE is stale: run tools/check-licenses.py --write", file=sys.stderr)
             return 1
         else:
-            print("Rust/npm/Python licenses and NOTICE: pass")
+            print("Rust/npm/Bun/Python licenses and NOTICE: pass")
         return 0
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"license check failed: {error}", file=sys.stderr)

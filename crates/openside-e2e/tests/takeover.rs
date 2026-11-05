@@ -1,4 +1,4 @@
-//! HS-4 and HS-6 end to end: real daemon, real Python sidecar on a scripted model, real
+//! HS-4 and HS-6 end to end: real daemon, real Bun sidecar on a scripted model, real
 //! Chromium and loopback fixture pages. Each test proves that the SAME deferred
 //! `request_human_step` call receives its result and the run continues to settle.
 
@@ -160,15 +160,13 @@ async fn resumed(stream: &mut SseReader, ticket: &Ticket) -> Vec<Event> {
         }
     }
 }
-/// The tool-return Pydantic AI recorded for `call` in the committed conversation.
+
+/// The successful tool result committed for `call`.
 fn tool_return(harness: &Harness, session: &str, call: &str) -> Value {
-    harness.snapshot(session)["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-        .find(|part| part["tool_call_id"] == call && part["part_kind"] == "tool-return")
-        .cloned()
+    harness
+        .tool_results(session, call)
+        .into_iter()
+        .find(|result| result["isError"] == false)
         .unwrap_or_else(|| panic!("no tool-return for {call}"))
 }
 
@@ -329,7 +327,7 @@ async fn hs6_takeover_stream_drives_tab_while_agent_is_locked_out_and_same_call_
     assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "continued after takeover")));
     // The SAME call got the post-takeover page, and the agent wrote to the tab again.
     let result = tool_return(&harness, &session, "captcha");
-    let content = result["content"].to_string();
+    let content = result["details"].to_string();
     assert!(content.contains("Clicked by human"), "{result}");
     assert!(content.contains("page_changed"), "{result}");
     let snapshot = ended_ok(&events, "after-snapshot").to_string();
@@ -383,7 +381,7 @@ async fn hs4_device_approval_condition_resumes_same_call_without_a_human() {
     assert!(events.iter().any(|event| matches!(&event.kind, EventKind::TicketResolved { ticket_id, resolution, .. } if ticket_id == &ticket.id && resolution["status"] == "done")));
     assert!(events.iter().any(|event| matches!(&event.kind, EventKind::AssistantFinal { text, .. } if text == "approved without me")));
     let result = tool_return(&harness, &session, "device");
-    assert!(result["content"].to_string().contains("done"), "{result}");
+    assert!(result["details"].to_string().contains("done"), "{result}");
     let state = harness
         .request("GET", &format!("/v1/tickets/{}", ticket.id), None)
         .await;
