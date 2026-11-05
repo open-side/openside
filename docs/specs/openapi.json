@@ -3593,6 +3593,17 @@
             "$ref": "#/components/schemas/BrowserSpace",
             "description": "Browse in the shared managed profile (default) or an isolated space; immutable\nafterwards. Incognito sessions already have their own browser and refuse `isolated`."
           },
+          "effort": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ThinkingEffort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Thinking effort, immutable afterwards; omission keeps the model's default."
+          },
           "incognito": {
             "description": "Create a private session; immutable afterwards. Browsing history is not indexed.",
             "type": "boolean"
@@ -3614,6 +3625,28 @@
               "string",
               "null"
             ]
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agent profile, immutable afterwards; omission means the daemon-wide profile."
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionSpeed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Service speed, immutable afterwards; omission means `default`."
           },
           "title": {
             "description": "Conversation title, or a daemon-generated title when omitted.",
@@ -4861,6 +4894,17 @@
                 "$ref": "#/components/schemas/BrowserSpace",
                 "description": "Browser space; historical events are shared."
               },
+              "effort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ThinkingEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Thinking effort; historical events keep the model's default."
+              },
               "incognito": {
                 "description": "Private session; historical events are not private.",
                 "type": "boolean"
@@ -4877,6 +4921,28 @@
               "model": {
                 "description": "Provider-qualified model.",
                 "type": "string"
+              },
+              "profile": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionProfile"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Agent profile; historical events use the daemon-wide profile."
+              },
+              "speed": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionSpeed"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Service speed; historical events use the default tier."
               },
               "title": {
                 "description": "Initial conversation title.",
@@ -6307,6 +6373,17 @@
                 "$ref": "#/components/schemas/BrowserSpace",
                 "description": "Browser space; historical events are shared."
               },
+              "effort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ThinkingEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Thinking effort; historical events keep the model's default."
+              },
               "incognito": {
                 "description": "Private session; historical events are not private.",
                 "type": "boolean"
@@ -6323,6 +6400,28 @@
               "model": {
                 "description": "Provider-qualified model.",
                 "type": "string"
+              },
+              "profile": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionProfile"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Agent profile; historical events use the daemon-wide profile."
+              },
+              "speed": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionSpeed"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Service speed; historical events use the default tier."
               },
               "title": {
                 "description": "Initial conversation title.",
@@ -9858,7 +9957,7 @@
       },
       "ModelProvider": {
         "additionalProperties": false,
-        "description": "Chat/tool-capable candidates for one Pydantic AI provider namespace.",
+        "description": "Chat/tool-capable candidates for one SDK provider namespace.",
         "properties": {
           "models": {
             "description": "Configured, curated and account-reported candidates, deduplicated by id.",
@@ -11559,11 +11658,15 @@
             "description": "Approved `confirm` ticket from an earlier `deferred` response; the identical `code` and\n`tab_id` are rerun from the start under that approval."
           },
           "code": {
-            "description": "JavaScript using `page`, `expect`, and `console`; top-level `await` is allowed and the\nlast expression statement is the return value. Each request gets a fresh context.",
+            "description": "JavaScript using `page`, `expect`, and `console`; top-level `await` is allowed and the\nlast expression statement is the return value. Each request gets a fresh context unless\n`persistent` is set.",
             "type": "string"
           },
+          "persistent": {
+            "description": "Run in the session's persistent REPL context (`openside repl`): `page` starts unset,\n`openTab(url)` and `getTabs()` manage the tabs attached to the context, top-level\nbindings and attached tabs carry over to later persistent calls of the same session\nuntil the context has been idle for 10 minutes, and each call may run for 120 seconds.",
+            "type": "boolean"
+          },
           "tab_id": {
-            "description": "Agent tab to drive; optional when the session owns exactly one tab or none (a blank\ntab is opened).",
+            "description": "Agent tab to drive; optional when the session owns exactly one tab or none (a blank\ntab is opened). With `persistent`, this owned tab is attached to the context and becomes\n`page` for this call; without it the call keeps the context's current `page`, if any.",
             "type": [
               "string",
               "null"
@@ -12257,6 +12360,17 @@
             "default": "shared",
             "description": "Browser space fixed at creation; historical sessions are shared."
           },
+          "effort": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ThinkingEffort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Thinking effort fixed at creation; absent keeps the model's default."
+          },
           "id": {
             "$ref": "#/components/schemas/SessionId",
             "description": "Stable session identifier."
@@ -12285,12 +12399,34 @@
             "description": "Listed before unpinned sessions.",
             "type": "boolean"
           },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agent profile fixed at creation; absent means the daemon-wide profile."
+          },
           "queue": {
             "description": "Steering first, then follow-up messages.",
             "items": {
               "$ref": "#/components/schemas/Message"
             },
             "type": "array"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionSpeed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Service speed fixed at creation; absent means `default`."
           },
           "status": {
             "$ref": "#/components/schemas/SessionStatus",
@@ -12380,6 +12516,36 @@
         ],
         "title": "SessionList",
         "type": "object"
+      },
+      "SessionProfile": {
+        "description": "Per-session tool and system-prompt profile, fixed at creation; omission means `default`.",
+        "oneOf": [
+          {
+            "const": "default",
+            "description": "The daemon-wide `[agent] profile`.",
+            "type": "string"
+          },
+          {
+            "const": "ultrabrowse",
+            "description": "Research mode (`docs/specs/ultrabrowse.md`), whatever the daemon-wide profile is.",
+            "type": "string"
+          }
+        ]
+      },
+      "SessionSpeed": {
+        "description": "Per-session model service speed, fixed at creation; omission means `default`.",
+        "oneOf": [
+          {
+            "const": "default",
+            "description": "The provider's standard service tier.",
+            "type": "string"
+          },
+          {
+            "const": "fast",
+            "description": "The provider's priority tier where available; the standard tier elsewhere.",
+            "type": "string"
+          }
+        ]
       },
       "SessionStatus": {
         "description": "Durable session lifecycle.",
@@ -13871,6 +14037,46 @@
           {
             "const": "retire",
             "description": "Typed Retire presentation variant; source authorization remains unchanged.",
+            "type": "string"
+          }
+        ]
+      },
+      "ThinkingEffort": {
+        "description": "Per-session thinking effort, fixed at creation; omission keeps the model's default.",
+        "oneOf": [
+          {
+            "const": "off",
+            "description": "No extended reasoning.",
+            "type": "string"
+          },
+          {
+            "const": "minimal",
+            "description": "Least reasoning the model supports.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "Low reasoning effort.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "Medium reasoning effort.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "High reasoning effort.",
+            "type": "string"
+          },
+          {
+            "const": "xhigh",
+            "description": "Extra-high reasoning effort.",
+            "type": "string"
+          },
+          {
+            "const": "max",
+            "description": "Highest reasoning effort the model supports.",
             "type": "string"
           }
         ]
@@ -20252,7 +20458,7 @@
         "x-required-capability": "read"
       },
       "post": {
-        "description": "Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space).",
+        "description": "Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). Paired devices get 403 local_socket_required for a mode looser than the daemon default or any workspace; agent_client devices also get it for speed \"fast\", effort \"xhigh\"/\"max\" or profile \"ultrabrowse\".",
         "requestBody": {
           "content": {
             "application/json": {

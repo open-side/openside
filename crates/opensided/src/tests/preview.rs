@@ -699,10 +699,23 @@ async fn preview_drops_a_stalled_reader_with_a_bounded_write_deadline() {
             .await,
     );
     let token = token(&f, CapabilityScope::Browse).await;
+    // Linux autotunes an unlocked send buffer up to tcp_wmem's max (4 MiB by default), which
+    // absorbs a 25 s stall of preview frames, so the write deadline never fires. Accepted
+    // sockets inherit the listener's locked SO_SNDBUF, so the stall reaches the writer
+    // regardless of host TCP tuning or frame size.
+    let listener = tokio::net::TcpSocket::new_v4().unwrap();
+    listener.set_send_buffer_size(4096).unwrap();
+    listener.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = listener.listen(16).unwrap();
+    let stalled_tcp = listener.local_addr().unwrap();
+    let router = api::router(f.daemon.shared.clone(), false);
+    let stalled_api = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
     let socket = tokio::net::TcpSocket::new_v4().unwrap();
     socket.set_recv_buffer_size(4096).unwrap();
-    let mut stream = socket.connect(f.tcp.parse().unwrap()).await.unwrap();
-    stream.write_all(format!("GET /v1/sessions/{}/browser/preview HTTP/1.1\r\nHost: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer {token}\r\n\r\n",f.session,f.tcp).as_bytes()).await.unwrap();
+    let mut stream = socket.connect(stalled_tcp).await.unwrap();
+    stream.write_all(format!("GET /v1/sessions/{}/browser/preview HTTP/1.1\r\nHost: {stalled_tcp}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer {token}\r\n\r\n",f.session).as_bytes()).await.unwrap();
     let mut headers = Vec::new();
     while !headers.ends_with(b"\r\n\r\n") {
         headers.push(stream.read_u8().await.unwrap());
@@ -721,6 +734,7 @@ async fn preview_drops_a_stalled_reader_with_a_bounded_write_deadline() {
     })
     .await
     .expect("stalled preview was not disconnected");
+    stalled_api.abort();
     let mut fresh = connect(&f, &f.session, &token).await.unwrap();
     frame(&mut fresh).await;
     fresh.close(None).await.unwrap();

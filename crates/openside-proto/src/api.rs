@@ -89,6 +89,71 @@ impl BrowserSpace {
     }
 }
 
+/// Per-session thinking effort, fixed at creation; omission keeps the model's default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingEffort {
+    /// No extended reasoning.
+    Off,
+    /// Least reasoning the model supports.
+    Minimal,
+    /// Low reasoning effort.
+    Low,
+    /// Medium reasoning effort.
+    Medium,
+    /// High reasoning effort.
+    High,
+    /// Extra-high reasoning effort.
+    Xhigh,
+    /// Highest reasoning effort the model supports.
+    Max,
+}
+
+impl ThinkingEffort {
+    /// Wire name (`open.config.agent.effort`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
+/// Per-session model service speed, fixed at creation; omission means `default`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSpeed {
+    /// The provider's standard service tier.
+    Default,
+    /// The provider's priority tier where available; the standard tier elsewhere.
+    Fast,
+}
+
+impl SessionSpeed {
+    /// Wire name (`open.config.agent.speed`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Fast => "fast",
+        }
+    }
+}
+
+/// Per-session tool and system-prompt profile, fixed at creation; omission means `default`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionProfile {
+    /// The daemon-wide `[agent] profile`.
+    Default,
+    /// Research mode (`docs/specs/ultrabrowse.md`), whatever the daemon-wide profile is.
+    Ultrabrowse,
+}
+
 /// Minimal daemon settings, with no credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Settings {
@@ -168,6 +233,15 @@ pub struct Session {
     /// Browser space fixed at creation; historical sessions are shared.
     #[serde(default)]
     pub browser_space: BrowserSpace,
+    /// Thinking effort fixed at creation; absent keeps the model's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ThinkingEffort>,
+    /// Service speed fixed at creation; absent means `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<SessionSpeed>,
+    /// Agent profile fixed at creation; absent means the daemon-wide profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<SessionProfile>,
 }
 
 /// Health response without environment or credential details.
@@ -201,6 +275,15 @@ pub struct CreateSessionRequest {
     /// afterwards. Incognito sessions already have their own browser and refuse `isolated`.
     #[serde(default, skip_serializing_if = "BrowserSpace::is_shared")]
     pub browser_space: BrowserSpace,
+    /// Thinking effort, immutable afterwards; omission keeps the model's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ThinkingEffort>,
+    /// Service speed, immutable afterwards; omission means `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<SessionSpeed>,
+    /// Agent profile, immutable afterwards; omission means the daemon-wide profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<SessionProfile>,
 }
 
 /// Session listing response.

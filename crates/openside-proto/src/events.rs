@@ -330,6 +330,15 @@ pub enum EventKind {
         /// Browser space; historical events are shared.
         #[serde(default, skip_serializing_if = "BrowserSpace::is_shared")]
         browser_space: BrowserSpace,
+        /// Thinking effort; historical events keep the model's default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<crate::ThinkingEffort>,
+        /// Service speed; historical events use the default tier.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        speed: Option<crate::SessionSpeed>,
+        /// Agent profile; historical events use the daemon-wide profile.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<crate::SessionProfile>,
     },
     /// Runtime has no active turn.
     #[serde(rename = "session.settled")]

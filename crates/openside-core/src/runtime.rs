@@ -1,4 +1,4 @@
-//! Runtime-independent boundary for the Python sidecar and daemon-owned tools.
+//! Runtime-independent boundary for the Bun sidecar and daemon-owned tools.
 //!
 //! The daemon owns message queues and executes tools. A session opens only after the
 //! runtime reports ready; its exposed tools must match the supplied specifications.

@@ -21,7 +21,7 @@ pub struct ModelCatalog {
     pub truncated: bool,
 }
 
-/// Chat/tool-capable candidates for one Pydantic AI provider namespace.
+/// Chat/tool-capable candidates for one SDK provider namespace.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ModelProvider {

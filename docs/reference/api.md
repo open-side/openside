@@ -1356,7 +1356,7 @@ Required capability: `read`
 
 Required capability: `steer`
 
-Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space).
+Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). Paired devices get 403 local_socket_required for a mode looser than the daemon default or any workspace; agent_client devices also get it for speed "fast", effort "xhigh"/"max" or profile "ultrabrowse".
 
 Request body (required): `application/json` [CreateSessionRequest](#createsessionrequest)
 
@@ -3583,9 +3583,12 @@ Session creation request.
 |---|---|---|---|
 | `agent_id` | string \| null | no | Existing active agent for a new non-home thread; cannot rebind an existing session. Default: `null`. |
 | `browser_space` | [BrowserSpace](#browserspace) | no | Browse in the shared managed profile (default) or an isolated space; immutable afterwards. Incognito sessions already have their own browser and refuse `isolated`. |
+| `effort` | [ThinkingEffort](#thinkingeffort) \| null | no | Thinking effort, immutable afterwards; omission keeps the model's default. |
 | `incognito` | boolean | no | Create a private session; immutable afterwards. Browsing history is not indexed. |
 | `mode` | [PolicyMode](#policymode) \| null | no | Permission override, or settings default when omitted. |
 | `model` | string \| null | no | Model override, or settings default when omitted. |
+| `profile` | [SessionProfile](#sessionprofile) \| null | no | Agent profile, immutable afterwards; omission means the daemon-wide profile. |
+| `speed` | [SessionSpeed](#sessionspeed) \| null | no | Service speed, immutable afterwards; omission means `default`. |
 | `title` | string \| null | no | Conversation title, or a daemon-generated title when omitted. |
 | `workspace` | string \| null | no | Absolute workspace path, canonicalized by the daemon before session creation. |
 
@@ -3809,7 +3812,7 @@ Variants:
 - `kind=tab.closed`: Browser tab closed. Fields: `tab_id`: string.
 - `kind=tab.asleep`: Browser tab discarded or unloaded. Fields: `tab_id`: string.
 - `kind=session.driver_recorded`: An agent-client identity drove the session and cannot approve its later confirmations. Fields: `device_id`: string.
-- `kind=session.created`: First event in a session log. Fields: `agent_id`: string \| null (optional), `browser_space`: [BrowserSpace](#browserspace) (optional), `incognito`: boolean (optional), `mode`: [PolicyMode](#policymode) (optional), `model`: string, `title`: string, `workspace`: string \| null (optional).
+- `kind=session.created`: First event in a session log. Fields: `agent_id`: string \| null (optional), `browser_space`: [BrowserSpace](#browserspace) (optional), `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `incognito`: boolean (optional), `mode`: [PolicyMode](#policymode) (optional), `model`: string, `profile`: [SessionProfile](#sessionprofile) \| null (optional), `speed`: [SessionSpeed](#sessionspeed) \| null (optional), `title`: string, `workspace`: string \| null (optional).
 - `kind=session.settled`: Runtime has no active turn.
 - `kind=session.stopped`: User explicitly stopped the session; pending messages are retained.
 - `kind=session.deleted`: Session removed by an administrator; the log remains as a tombstone and nothing can be appended after it.
@@ -3863,7 +3866,7 @@ Public event payloads with stable `kind` identifiers, dotted except for `usage`.
 - `kind=tab.closed`: Browser tab closed. Fields: `tab_id`: string.
 - `kind=tab.asleep`: Browser tab discarded or unloaded. Fields: `tab_id`: string.
 - `kind=session.driver_recorded`: An agent-client identity drove the session and cannot approve its later confirmations. Fields: `device_id`: string.
-- `kind=session.created`: First event in a session log. Fields: `agent_id`: string \| null (optional), `browser_space`: [BrowserSpace](#browserspace) (optional), `incognito`: boolean (optional), `mode`: [PolicyMode](#policymode) (optional), `model`: string, `title`: string, `workspace`: string \| null (optional).
+- `kind=session.created`: First event in a session log. Fields: `agent_id`: string \| null (optional), `browser_space`: [BrowserSpace](#browserspace) (optional), `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `incognito`: boolean (optional), `mode`: [PolicyMode](#policymode) (optional), `model`: string, `profile`: [SessionProfile](#sessionprofile) \| null (optional), `speed`: [SessionSpeed](#sessionspeed) \| null (optional), `title`: string, `workspace`: string \| null (optional).
 - `kind=session.settled`: Runtime has no active turn.
 - `kind=session.stopped`: User explicitly stopped the session; pending messages are retained.
 - `kind=session.deleted`: Session removed by an administrator; the log remains as a tombstone and nothing can be appended after it.
@@ -4855,7 +4858,7 @@ Unknown fields are rejected.
 
 ### ModelProvider
 
-Chat/tool-capable candidates for one Pydantic AI provider namespace.
+Chat/tool-capable candidates for one SDK provider namespace.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -5496,8 +5499,9 @@ Run one Playwright-syntax snippet in a session-owned agent tab (`browser_repl`).
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `approval_ticket` | [TicketId](#ticketid) \| null | no | Approved `confirm` ticket from an earlier `deferred` response; the identical `code` and `tab_id` are rerun from the start under that approval. |
-| `code` | string | yes | JavaScript using `page`, `expect`, and `console`; top-level `await` is allowed and the last expression statement is the return value. Each request gets a fresh context. |
-| `tab_id` | string \| null | no | Agent tab to drive; optional when the session owns exactly one tab or none (a blank tab is opened). |
+| `code` | string | yes | JavaScript using `page`, `expect`, and `console`; top-level `await` is allowed and the last expression statement is the return value. Each request gets a fresh context unless `persistent` is set. |
+| `persistent` | boolean | no | Run in the session's persistent REPL context (`openside repl`): `page` starts unset, `openTab(url)` and `getTabs()` manage the tabs attached to the context, top-level bindings and attached tabs carry over to later persistent calls of the same session until the context has been idle for 10 minutes, and each call may run for 120 seconds. |
+| `tab_id` | string \| null | no | Agent tab to drive; optional when the session owns exactly one tab or none (a blank tab is opened). With `persistent`, this owned tab is attached to the context and becomes `page` for this call; without it the call keeps the context's current `page`, if any. |
 
 Unknown fields are rejected.
 
@@ -5715,13 +5719,16 @@ Session metadata and pending queue, in delivery order.
 | `agent_id` | string \| null | no | Immutable owner tag; null keeps earlier conversations separate from agent homes. Default: `null`. |
 | `archived` | boolean | no | Hidden from the default session list. Default: `false`. |
 | `browser_space` | [BrowserSpace](#browserspace) | no | Browser space fixed at creation; historical sessions are shared. Default: `"shared"`. |
+| `effort` | [ThinkingEffort](#thinkingeffort) \| null | no | Thinking effort fixed at creation; absent keeps the model's default. |
 | `id` | [SessionId](#sessionid) | yes | Stable session identifier. |
 | `incognito` | boolean | no | Private session fixed at creation: its browsing is never written to memory. Default: `false`. |
 | `last_seq` | integer (uint64) | yes | Latest durable sequence, or zero before creation. |
 | `mode` | [PolicyMode](#policymode) | yes | Permission ceiling selected when the session was created. |
 | `model` | string | yes | Provider-qualified model selected when the session was created, not its effective current model. |
 | `pinned` | boolean | no | Listed before unpinned sessions. Default: `false`. |
+| `profile` | [SessionProfile](#sessionprofile) \| null | no | Agent profile fixed at creation; absent means the daemon-wide profile. |
 | `queue` | [Message](#message)[] | yes | Steering first, then follow-up messages. |
+| `speed` | [SessionSpeed](#sessionspeed) \| null | no | Service speed fixed at creation; absent means `default`. |
 | `status` | [SessionStatus](#sessionstatus) | yes | Rebuilt from turn and session events. |
 | `title` | string | yes | User-visible conversation title. |
 | `workspace` | string \| null | no | Canonical absolute workspace path used as the Guard root and file-tool cwd. |
@@ -5753,6 +5760,24 @@ Session listing response.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `sessions` | [Session](#session)[] | yes | Sessions sorted by identifier for stable results. |
+
+### SessionProfile
+
+Per-session tool and system-prompt profile, fixed at creation; omission means `default`.
+
+| Value | Description |
+|---|---|
+| `"default"` | The daemon-wide `[agent] profile`. |
+| `"ultrabrowse"` | Research mode (`docs/specs/ultrabrowse.md`), whatever the daemon-wide profile is. |
+
+### SessionSpeed
+
+Per-session model service speed, fixed at creation; omission means `default`.
+
+| Value | Description |
+|---|---|
+| `"default"` | The provider's standard service tier. |
+| `"fast"` | The provider's priority tier where available; the standard tier elsewhere. |
 
 ### SessionStatus
 
@@ -6228,6 +6253,20 @@ Canonical TeamCardCommand wire contract; presentation never grants authority.
 |---|---|
 | `"undo_hire"` | Typed UndoHire presentation variant; source authorization remains unchanged. |
 | `"retire"` | Typed Retire presentation variant; source authorization remains unchanged. |
+
+### ThinkingEffort
+
+Per-session thinking effort, fixed at creation; omission keeps the model's default.
+
+| Value | Description |
+|---|---|
+| `"off"` | No extended reasoning. |
+| `"minimal"` | Least reasoning the model supports. |
+| `"low"` | Low reasoning effort. |
+| `"medium"` | Medium reasoning effort. |
+| `"high"` | High reasoning effort. |
+| `"xhigh"` | Extra-high reasoning effort. |
+| `"max"` | Highest reasoning effort the model supports. |
 
 ### Ticket
 

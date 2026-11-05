@@ -139,6 +139,9 @@ impl Store {
                 workspace,
                 incognito,
                 browser_space: BrowserSpace::Shared,
+                effort: None,
+                speed: None,
+                profile: None,
             },
         )
     }

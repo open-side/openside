@@ -1157,9 +1157,18 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
         .db
         .store(move |s| Ok(s.agent_state(&stored_id)?))
         .await?;
-    let mut system_prompt_parts =
-        crate::profiles::system_prompt_parts(shared, state.workspace.as_deref(), agent.as_ref())
-            .await;
+    // The retired Python sidecar's snapshot format; the current sidecar cannot restore it.
+    let legacy_snapshot = resume_state
+        .as_ref()
+        .is_some_and(|state| state.format == "openside-agent-state/1");
+    let profile = host.env.profile;
+    let mut system_prompt_parts = crate::profiles::system_prompt_parts(
+        shared,
+        profile,
+        state.workspace.as_deref(),
+        agent.as_ref(),
+    )
+    .await;
     if agent
         .as_ref()
         .is_some_and(|agent| agent.kind == openside_proto::AgentKind::Chief)
@@ -1174,6 +1183,13 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
     }
     let mut agent_json = agent_options(&shared.config.loaded.config);
     agent_json["title_needed"] = serde_json::json!(!state.title_locked && !state.title_proposed);
+    agent_json["profile"] = serde_json::json!(profile.as_str());
+    if let Some(effort) = state.effort {
+        agent_json["effort"] = serde_json::json!(effort.as_str());
+    }
+    if let Some(speed) = state.speed {
+        agent_json["speed"] = serde_json::json!(speed.as_str());
+    }
     if !state.incognito {
         let memory_session = id.as_str().to_owned();
         let memory_owner = state.agent_id.clone();
@@ -1288,6 +1304,36 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
         live.session = Some(session);
         return Ok(());
     }
+    // A sidecar that started from a legacy snapshot holds none of the session's deferred calls,
+    // so its tickets can never be delivered: resolving one would only return `stale_ticket`.
+    // A pending one expires so it neither holds the queue nor waits for a person; an answered
+    // one counts as handled so `Action::Resume` does not deliver it. API-call tickets belong to
+    // their caller, child tickets to `subagents::reconcile`.
+    if legacy_snapshot {
+        let held: HashSet<&str> = pending
+            .iter()
+            .map(|call| call.tool_call_id.as_str())
+            .collect();
+        let _gate = shared.ticket_gate.lock().await;
+        let state = shared.db.state(id).await?;
+        for ticket in state.tickets.values().filter(|ticket| {
+            ticket.origin.subagent_id.is_none()
+                && !ticket
+                    .tool_call_id
+                    .starts_with(crate::tools::API_CALL_PREFIX)
+                && !held.contains(ticket.tool_call_id.as_str())
+        }) {
+            if ticket.status == TicketStatus::Pending {
+                crate::diag!(
+                    "opensided: ticket {} expired: the legacy snapshot does not hold call {}",
+                    ticket.id,
+                    ticket.tool_call_id
+                );
+                crate::tickets::close_unanswered(shared, ticket, None).await?;
+            }
+            live.resolutions.insert(ticket.id.clone());
+        }
+    }
     let state = shared.db.state(id).await?;
     let mut deliver = Vec::new();
     let mut cancelled = HashSet::new();
@@ -1343,13 +1389,22 @@ async fn child_ended(shared: &Shared, id: &SessionId, ticket: &Ticket) -> Result
 /// A pending ticket holds every queue lane, except one opened by a background Task: the
 /// front agent keeps talking while that Task waits for its person.
 async fn holds_queue(shared: &Shared, id: &SessionId, state: &SessionState) -> Result<bool> {
+    Ok(!front_pending(shared, id, state).await?.is_empty())
+}
+
+/// Pending tickets that wait on the front run rather than on a background Task.
+async fn front_pending(
+    shared: &Shared,
+    id: &SessionId,
+    state: &SessionState,
+) -> Result<HashSet<TicketId>> {
     let pending: Vec<_> = state
         .tickets
         .values()
         .filter(|t| t.status == TicketStatus::Pending)
         .collect();
     if pending.is_empty() {
-        return Ok(false);
+        return Ok(HashSet::new());
     }
     let tasks: HashSet<String> = crate::subagents::list(shared, id)
         .await?
@@ -1357,13 +1412,17 @@ async fn holds_queue(shared: &Shared, id: &SessionId, state: &SessionState) -> R
         .filter(|child| child.background)
         .map(|child| child.id)
         .collect();
-    Ok(pending.iter().any(|ticket| {
-        ticket
-            .origin
-            .subagent_id
-            .as_ref()
-            .map_or(true, |child| !tasks.contains(child))
-    }))
+    Ok(pending
+        .into_iter()
+        .filter(|ticket| {
+            ticket
+                .origin
+                .subagent_id
+                .as_ref()
+                .map_or(true, |child| !tasks.contains(child))
+        })
+        .map(|ticket| ticket.id.clone())
+        .collect())
 }
 
 async fn dispatch(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()> {
@@ -1524,6 +1583,7 @@ async fn recover_owed(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
     }
     if owed == Owed::Interruption {
         complete_inflight(shared, id, MessageOutcome::Failed, "interrupted").await?;
+        settle_unanswerable_deferred(shared, id, "interrupted").await?;
         crate::subagents::interrupt_running(shared, id).await?;
         crate::tasks::report_updates(shared, id).await?;
     }
@@ -1568,6 +1628,7 @@ async fn interrupted(shared: &Shared, id: &SessionId, live: &mut Live) -> Result
     live.running = false;
     live.resolutions.clear();
     complete_inflight(shared, id, MessageOutcome::Failed, "interrupted").await?;
+    settle_unanswerable_deferred(shared, id, "interrupted").await?;
     crate::subagents::interrupt_running(shared, id).await?;
     crate::tasks::report_updates(shared, id).await?;
     shared
@@ -1605,6 +1666,12 @@ async fn fail(shared: &Shared, id: &SessionId, live: &mut Live, error: RuntimeEr
         },
     )
     .await?;
+    // An auth failure stops the session, so no answer can wake a paused run any more.
+    if auth {
+        settle_deferred(shared, id, MessageOutcome::Failed, "auth_unavailable").await?;
+    } else {
+        settle_unanswerable_deferred(shared, id, "interrupted").await?;
+    }
     shared
         .emit(
             id,
@@ -1638,6 +1705,99 @@ async fn fail(shared: &Shared, id: &SessionId, live: &mut Live, error: RuntimeEr
     Ok(())
 }
 
+/// After the runtime died, settle each deferred message unless a person can still wake its run.
+/// Answering a pending ticket resumes the paused run from the last snapshot in a new process,
+/// so a message keeps waiting while a ticket its run opened is pending (as across a restart).
+/// Without one nothing would ever close it: an answer already handed to the dead process is
+/// lost with it, and a resolution whose delivery failed is only redelivered by the next daemon
+/// start, whose result can no longer reopen a settled message.
+///
+/// Tickets carry no message id, so ownership comes from the log: a ticket belongs to every
+/// message whose run was going when it opened (injected, or resumed by closing one of its own
+/// tickets, and not yet deferred or finished). A message parked earlier does not pick up the
+/// tickets of a later run, so one pending ticket cannot keep an unrelated deferral open.
+async fn settle_unanswerable_deferred(shared: &Shared, id: &SessionId, reason: &str) -> Result<()> {
+    let state = shared.db.state(id).await?;
+    if !state
+        .completions
+        .values()
+        .any(|outcome| *outcome == MessageOutcome::Deferred)
+    {
+        return Ok(());
+    }
+    let waking = front_pending(shared, id, &state).await?;
+    let mut running: HashSet<MessageId> = HashSet::new();
+    let mut owned: HashMap<MessageId, HashSet<TicketId>> = HashMap::new();
+    for event in shared.db.events(id, 0).await? {
+        match event.kind {
+            EventKind::MessageInjected { message_id } => {
+                running.insert(message_id);
+            }
+            EventKind::MessageCompleted {
+                message_id,
+                outcome: MessageOutcome::Deferred,
+                ..
+            } => {
+                running.remove(&message_id);
+            }
+            EventKind::MessageCompleted { message_id, .. }
+            | EventKind::MessageDropped { message_id, .. } => {
+                running.remove(&message_id);
+                owned.remove(&message_id);
+            }
+            EventKind::TicketOpened { ticket } => {
+                for mid in &running {
+                    owned
+                        .entry(mid.clone())
+                        .or_default()
+                        .insert(ticket.id.clone());
+                }
+            }
+            EventKind::TicketResolved { ticket_id, .. }
+            | EventKind::TicketRejected { ticket_id, .. }
+            | EventKind::TicketExpired { ticket_id, .. } => {
+                // Closing a ticket hands its answer to the paused run, which resumes.
+                for (mid, tickets) in &owned {
+                    if tickets.contains(&ticket_id) {
+                        running.insert(mid.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for (mid, _) in state.completions.iter().filter(|(mid, done)| {
+        **done == MessageOutcome::Deferred
+            && !owned
+                .get(*mid)
+                .is_some_and(|tickets| tickets.iter().any(|ticket| waking.contains(ticket)))
+    }) {
+        close_message(shared, id, mid, MessageOutcome::Failed, reason).await?;
+    }
+    Ok(())
+}
+
+async fn close_message(
+    shared: &Shared,
+    id: &SessionId,
+    mid: &MessageId,
+    outcome: MessageOutcome,
+    reason: &str,
+) -> Result<()> {
+    shared
+        .emit(
+            id,
+            Some(mid.as_str().into()),
+            EventKind::MessageCompleted {
+                message_id: mid.clone(),
+                outcome,
+                reason: Some(reason.into()),
+            },
+        )
+        .await?;
+    Ok(())
+}
+
 /// Settle messages whose run paused on a ticket (`deferred`) and will never resume.
 async fn settle_deferred(
     shared: &Shared,
@@ -1651,17 +1811,7 @@ async fn settle_deferred(
         .iter()
         .filter(|(_, done)| **done == MessageOutcome::Deferred)
     {
-        shared
-            .emit(
-                id,
-                Some(mid.as_str().into()),
-                EventKind::MessageCompleted {
-                    message_id: mid.clone(),
-                    outcome,
-                    reason: Some(reason.into()),
-                },
-            )
-            .await?;
+        close_message(shared, id, mid, outcome, reason).await?;
     }
     Ok(())
 }

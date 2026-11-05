@@ -146,6 +146,9 @@ async fn favicon_origin_route_refuses_incognito_and_isolated_partitions_even_wit
                         workspace: None,
                         incognito,
                         browser_space,
+                        effort: None,
+                        speed: None,
+                        profile: None,
                     },
                 )?;
                 Ok(())

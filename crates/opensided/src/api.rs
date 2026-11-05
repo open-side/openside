@@ -209,6 +209,22 @@ impl Caller {
             && (workspace.is_some()
                 || mode.is_some_and(|mode| rank(mode) > rank(shared.policy.default_mode())))
     }
+
+    /// An agent-client token cannot pick the expensive tiers for a session it creates: a
+    /// leaked or automated token would otherwise spend the owner's quota at priority rates.
+    /// Person devices and the local socket choose them freely.
+    pub(crate) fn raises_cost(&self, request: &CreateSessionRequest) -> bool {
+        self.0.is_some()
+            && self.1 == DeviceKind::AgentClient
+            && (request.speed == Some(openside_proto::SessionSpeed::Fast)
+                || matches!(
+                    request.effort,
+                    Some(
+                        openside_proto::ThinkingEffort::Xhigh | openside_proto::ThinkingEffort::Max
+                    )
+                )
+                || request.profile == Some(openside_proto::SessionProfile::Ultrabrowse))
+    }
 }
 
 pub(crate) fn router(shared: Shared, unix: bool) -> Router {
@@ -903,7 +919,8 @@ async fn create(
     if agent.is_some() && (request.incognito || request.browser_space != BrowserSpace::Shared) {
         return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_browser_space"));
     }
-    if caller.widens(&s, request.mode, request.workspace.as_deref()) {
+    if caller.widens(&s, request.mode, request.workspace.as_deref()) || caller.raises_cost(&request)
+    {
         return Err(HttpError(StatusCode::FORBIDDEN, "local_socket_required"));
     }
     let id = SessionId::new(random_id());
@@ -963,6 +980,9 @@ async fn create(
                     workspace,
                     incognito,
                     browser_space,
+                    effort: request.effort,
+                    speed: request.speed,
+                    profile: request.profile,
                 },
             )?)
         })

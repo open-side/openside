@@ -448,6 +448,9 @@ pub(crate) async fn ensure_home(s: &Shared, agent: &Agent) -> Result<()> {
                     workspace: None,
                     incognito: false,
                     browser_space: BrowserSpace::Shared,
+                    effort: None,
+                    speed: None,
+                    profile: None,
                     agent_id: Some(agent.id),
                 },
             )?))

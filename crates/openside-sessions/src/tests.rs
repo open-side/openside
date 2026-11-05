@@ -1201,6 +1201,34 @@ fn historical_session_creation_defaults_mode_and_workspace() {
     assert_eq!(session.mode, PolicyMode::Guard);
     assert_eq!(session.workspace, None);
     assert_eq!(session.agent_id, None);
+    // Logs written before per-session effort and speed keep the model's defaults.
+    let state = store.session(&sid()).unwrap();
+    assert_eq!((state.effort, state.speed), (None, None));
+    let encoded = serde_json::to_value(&session).unwrap();
+    assert!(encoded.get("effort").is_none() && encoded.get("speed").is_none());
+}
+
+#[test]
+fn session_effort_and_speed_survive_replay() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.db");
+    drop(Store::open(&path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events(session_id,seq,ts,payload) VALUES(?1,1,?2,?3)",
+            params![
+                sid().as_str(),
+                Utc::now().to_rfc3339(),
+                r#"{"kind":"session.created","title":"Task","model":"model","effort":"max","speed":"fast"}"#
+            ],
+        )
+        .unwrap();
+    drop(connection);
+    let store = Store::open(&path).unwrap();
+    let state = store.session(&sid()).unwrap();
+    assert_eq!(state.effort, Some(openside_proto::ThinkingEffort::Max));
+    assert_eq!(state.speed, Some(openside_proto::SessionSpeed::Fast));
 }
 
 #[test]

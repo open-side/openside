@@ -3,7 +3,7 @@
 작성: 2026-10-12. 근거: docs/01 A-1·A-2·A-9, docs/02 OP-3. 구현: `crates/opensided/src/profiles.rs`, 설정 `crates/openside-config/src/profile.rs`.
 
 ## 1. 프로필
-설정 `[agent] profile`(기본 `"full"`)이 데몬이 사이드카에 넘기는 `open.tools` 와 `open.system_prompt_parts` 를 정한다. 값은 `open.config.agent.profile` 로도 전달된다. 세션별로 바꾸는 API 는 없다(데몬 전체 설정).
+설정 `[agent] profile`(기본 `"full"`)이 데몬이 사이드카에 넘기는 `open.tools` 와 `open.system_prompt_parts` 를 정한다. 값은 `open.config.agent.profile` 로도 전달된다. 세션을 만들 때 `POST /v1/sessions` 의 `profile` 필드(`default` 또는 `ultrabrowse`)로 세션별 프로필을 고를 수 있으며, 만든 뒤에는 바꿀 수 없다. `ultrabrowse` 를 지정하면 데몬 전체 설정과 관계없이 그 세션에만 `ultrabrowse` 프로필을 적용하고, `default` 를 지정하거나 필드를 생략하면 데몬의 `[agent] profile` 을 따른다. 같은 데몬의 다른 세션에는 영향을 주지 않는다. `open.config.agent.profile` 에는 그 세션이 실제로 쓰는 프로필이 들어간다. `full` 과 `browser-agent` 는 데몬 전체 설정으로만 지정할 수 있다.
 
 | 프로필 | 도구 | 시스템 프롬프트 |
 | --- | --- | --- |

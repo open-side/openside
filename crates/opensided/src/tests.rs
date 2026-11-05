@@ -63,6 +63,7 @@ mod remote_transport;
 mod repl;
 mod resource_limits;
 mod routines;
+mod session_effort;
 mod session_help;
 mod skills;
 mod subagents;
@@ -299,6 +300,18 @@ async fn opened(
     id: &str,
     deadline: chrono::DateTime<Utc>,
 ) -> Ticket {
+    opened_by(daemon, session, kind, id, deadline, None).await
+}
+
+/// [`opened`] for a ticket that `subagent` asked for.
+async fn opened_by(
+    daemon: &Daemon,
+    session: &SessionId,
+    kind: TicketKind,
+    id: &str,
+    deadline: chrono::DateTime<Utc>,
+    subagent: Option<&str>,
+) -> Ticket {
     let ticket = Ticket {
         hire: None,
         id: TicketId::new(id),
@@ -310,7 +323,7 @@ async fn opened(
         instructions: None,
         options: Vec::new(),
         origin: TicketOrigin {
-            subagent_id: None,
+            subagent_id: subagent.map(str::to_owned),
             device_id: None,
             driver_ids: Vec::new(),
         },
@@ -943,6 +956,91 @@ async fn restart_keeps_pending_tickets_and_resolution_resumes_once_hs1() {
         StatusCode::CONFLICT
     );
     assert_eq!(second_runtime.0.lock().resolved.len(), 1);
+    second.shutdown().await;
+}
+
+#[tokio::test]
+async fn legacy_snapshot_expires_pending_tickets_and_does_not_deliver_answered_ones() {
+    let root = tempfile::tempdir().unwrap();
+    let first = daemon(root.path(), &TestRuntime::default()).await;
+    let session = create_session(&first, "session", PolicyMode::Guard, None).await;
+    for id in ["answered", "orphan"] {
+        opened(
+            &first,
+            &session,
+            TicketKind::Info,
+            id,
+            Utc::now() + chrono::Duration::hours(1),
+        )
+        .await;
+    }
+    // Answered before the restart and never delivered, so startup resumes the session.
+    first
+        .shared
+        .emit(
+            &session,
+            None,
+            EventKind::TicketResolved {
+                card: None,
+                ticket_id: TicketId::new("answered"),
+                resolution: json!({"answer": "ready"}),
+            },
+        )
+        .await
+        .unwrap();
+    let stored = session.clone();
+    first
+        .shared
+        .db
+        .store(move |store| {
+            Ok(store.put_agent_state(
+                &stored,
+                &AgentState {
+                    format: "openside-agent-state/1".into(),
+                    data: "python history".into(),
+                },
+            )?)
+        })
+        .await
+        .unwrap();
+    first.shutdown().await;
+    drop(first);
+    // The sidecar cannot restore that snapshot: `ready.pending_deferred` is empty.
+    let runtime = TestRuntime::default();
+    let second = daemon(root.path(), &runtime).await;
+    wait_event(&second, &session, |kind| {
+        matches!(kind, EventKind::TicketExpired { ticket_id, .. } if ticket_id.as_str() == "orphan")
+    })
+    .await;
+    {
+        let state = runtime.0.lock();
+        assert_eq!(state.opened.len(), 1);
+        assert_eq!(state.opened[0].session, session);
+    }
+    let state = second.shared.db.state(&session).await.unwrap();
+    assert_eq!(
+        state.tickets[&TicketId::new("orphan")].status,
+        TicketStatus::Expired
+    );
+    assert_eq!(
+        state.tickets[&TicketId::new("answered")].status,
+        TicketStatus::Resolved
+    );
+    assert_ne!(state.session().status, SessionStatus::WaitingHuman);
+    let errors: Vec<_> = second
+        .shared
+        .db
+        .events(&session, 0)
+        .await
+        .unwrap()
+        .into_iter()
+        // Hosts without bubblewrap report sandbox_unavailable on every runtime start.
+        .filter(|event| {
+            matches!(&event.kind, EventKind::RuntimeError { code, .. } if code != "sandbox_unavailable")
+        })
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(runtime.0.lock().resolved.is_empty());
     second.shutdown().await;
 }
 

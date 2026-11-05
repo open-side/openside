@@ -1,4 +1,4 @@
-//! Durable local openside API daemon with a supervised Python agent sidecar.
+//! Durable local openside API daemon with a supervised Bun agent sidecar.
 //!
 //! [`openside_proto::ROUTES`] defines the complete HTTP surface: sessions, durable
 //! message queues, SSE events, capability devices and human-step tickets. Unix

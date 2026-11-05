@@ -62,6 +62,12 @@ pub struct SessionState {
     pub incognito: bool,
     /// Fixed by `session.created`; isolated sessions browse in their own browser context.
     pub browser_space: BrowserSpace,
+    /// Fixed by `session.created`; `None` keeps the model's default reasoning effort.
+    pub effort: Option<openside_proto::ThinkingEffort>,
+    /// Fixed by `session.created`; `None` is the default service tier.
+    pub speed: Option<openside_proto::SessionSpeed>,
+    /// Fixed by `session.created`; `None` uses the daemon-wide `[agent] profile`.
+    pub profile: Option<openside_proto::SessionProfile>,
     /// Original text of the first queued message, used for list search.
     pub first_message: Option<String>,
     /// Bounded latest message preview, rebuilt during replay instead of rescanning each list.
@@ -123,6 +129,9 @@ impl SessionState {
             archived: self.archived,
             incognito: self.incognito,
             browser_space: self.browser_space,
+            effort: self.effort,
+            speed: self.speed,
+            profile: self.profile,
         }
     }
 
@@ -135,6 +144,9 @@ impl SessionState {
             workspace,
             incognito,
             browser_space,
+            effort,
+            speed,
+            profile,
         } = &event.kind
         else {
             return Err(Error::InvalidEvent(
@@ -170,6 +182,9 @@ impl SessionState {
             archived: false,
             incognito: *incognito,
             browser_space: *browser_space,
+            effort: *effort,
+            speed: *speed,
+            profile: *profile,
             first_message: None,
             last_message_preview: String::new(),
             attachments: BTreeMap::new(),

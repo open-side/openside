@@ -589,11 +589,31 @@ async fn deferred_heartbeat(
     router: &axum::Router,
     runtime: &TestRuntime,
 ) -> (SessionId, String, Value) {
+    deferred_heartbeat_on(daemon, router, runtime, None).await
+}
+
+/// [`deferred_heartbeat`] whose run opens `ticket` before it pauses.
+async fn deferred_heartbeat_on(
+    daemon: &Daemon,
+    router: &axum::Router,
+    runtime: &TestRuntime,
+    ticket: Option<&str>,
+) -> (SessionId, String, Value) {
     let session = create_session(daemon, "target", PolicyMode::Guard, None).await;
     let id = heartbeat_to(router, &session).await;
     let first = run_now(router, &id).await;
     assert_eq!(first["status"], "started");
     until(|| runtime.0.lock().sent.len() == 1).await;
+    if let Some(ticket) = ticket {
+        opened(
+            daemon,
+            &session,
+            TicketKind::Confirm,
+            ticket,
+            Utc::now() + chrono::Duration::hours(1),
+        )
+        .await;
+    }
     runtime.emit(
         &session,
         RuntimeEvent::MessageResult {
@@ -708,6 +728,311 @@ async fn a_deferred_run_that_nothing_can_wake_is_failed_by_the_restart_not_left_
     );
     assert_eq!(run_status(&router, &id).await, ["started", "failed"]);
     reopened.shutdown().await;
+}
+
+/// Waits until the settlement that follows the `runtime_unavailable` error is logged.
+async fn settled_after_runtime_failure(daemon: &Daemon, session: &SessionId) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let events = daemon.shared.db.events(session, 0).await.unwrap();
+            let failure = events.iter().position(|event| {
+                matches!(&event.kind, EventKind::RuntimeError { code, .. } if code == "runtime_unavailable")
+            });
+            if failure.is_some_and(|start| {
+                events[start..]
+                    .iter()
+                    .any(|event| matches!(event.kind, EventKind::SessionSettled {}))
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("settlement after the runtime failure");
+}
+
+#[tokio::test]
+async fn a_runtime_failure_settles_a_deferred_run_nothing_can_wake_before_the_session_settles() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon_with_model(root.path(), &runtime).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let (session, id, first) = deferred_heartbeat(&daemon, &router, &runtime).await;
+    let message = first["message_id"].as_str().unwrap().to_owned();
+    runtime.emit(
+        &session,
+        RuntimeEvent::Error {
+            error: RuntimeError::Unavailable("sidecar crashed".into()),
+        },
+    );
+    // Read the log only once the settlement after the error is logged.
+    settled_after_runtime_failure(&daemon, &session).await;
+    let events = daemon.shared.db.events(&session, 0).await.unwrap();
+    let failed = events
+        .iter()
+        .position(|event| {
+            matches!(&event.kind, EventKind::MessageCompleted { message_id, outcome: openside_proto::MessageOutcome::Failed, reason }
+                if message_id.as_str() == message && reason.as_deref() == Some("interrupted"))
+        })
+        .unwrap_or_else(|| {
+            let kinds: Vec<_> = events.iter().map(|event| &event.kind).collect();
+            panic!("the deferred message is not closed as failed: {kinds:?}")
+        });
+    let settled = events
+        .iter()
+        .rposition(|event| matches!(event.kind, EventKind::SessionSettled {}))
+        .unwrap();
+    let deferred_settled = events
+        .iter()
+        .position(|event| matches!(event.kind, EventKind::SessionSettled {}))
+        .unwrap();
+    assert!(
+        deferred_settled < failed && failed < settled,
+        "closed by the failure, before its settlement"
+    );
+    assert_eq!(run_now(&router, &id).await["status"], "started");
+    assert_eq!(run_status(&router, &id).await, ["started", "failed"]);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_runtime_failure_leaves_a_deferred_run_waiting_while_a_ticket_can_still_wake_it() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon_with_model(root.path(), &runtime).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let (session, id, _) =
+        deferred_heartbeat_on(&daemon, &router, &runtime, Some("still-open")).await;
+    runtime.emit(
+        &session,
+        RuntimeEvent::Error {
+            error: RuntimeError::Unavailable("sidecar crashed".into()),
+        },
+    );
+    settled_after_runtime_failure(&daemon, &session).await;
+    let events = daemon.shared.db.events(&session, 0).await.unwrap();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.kind,
+            EventKind::MessageCompleted {
+                outcome: openside_proto::MessageOutcome::Failed
+                    | openside_proto::MessageOutcome::Completed
+                    | openside_proto::MessageOutcome::Aborted,
+                ..
+            }
+        )),
+        "answering the open ticket resumes the run from its snapshot, so it stays deferred"
+    );
+    assert_eq!(run_now(&router, &id).await["status"], "skipped_overlap");
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_pending_ticket_of_a_later_run_does_not_keep_an_earlier_deferral_open() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon_with_model(root.path(), &runtime).await;
+    let router = api::router(daemon.shared.clone(), true);
+    // The first run paused without a ticket a person could still answer.
+    let (session, _, first) = deferred_heartbeat(&daemon, &router, &runtime).await;
+    let earlier = first["message_id"].as_str().unwrap().to_owned();
+
+    // A later message runs and pauses on a ticket that is still open.
+    let (status, _) = send(
+        &router,
+        "POST",
+        &format!("/v1/sessions/{}/messages", session.as_str()),
+        json!({"message_id":"later","text":"next","mode":"queue"}),
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    until(|| runtime.0.lock().sent.len() == 2).await;
+    opened(
+        &daemon,
+        &session,
+        TicketKind::Confirm,
+        "later-step",
+        Utc::now() + chrono::Duration::hours(1),
+    )
+    .await;
+    runtime.emit(
+        &session,
+        RuntimeEvent::MessageResult {
+            id: MessageId::new("later"),
+            outcome: RunOutcome::Deferred,
+            reason: None,
+        },
+    );
+    runtime.emit(&session, RuntimeEvent::Settled);
+    wait_event(&daemon, &session, |e| {
+        matches!(e, EventKind::MessageCompleted { message_id, outcome: openside_proto::MessageOutcome::Deferred, .. } if message_id.as_str() == "later")
+    })
+    .await;
+
+    runtime.emit(
+        &session,
+        RuntimeEvent::Error {
+            error: RuntimeError::Unavailable("sidecar crashed".into()),
+        },
+    );
+    settled_after_runtime_failure(&daemon, &session).await;
+    let closed: Vec<(String, openside_proto::MessageOutcome)> = daemon
+        .shared
+        .db
+        .events(&session, 0)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::MessageCompleted {
+                message_id,
+                outcome,
+                ..
+            } if outcome != openside_proto::MessageOutcome::Deferred => {
+                Some((message_id.as_str().to_owned(), outcome))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        closed,
+        [(earlier, openside_proto::MessageOutcome::Failed)],
+        "only the later run can still be woken by its open ticket"
+    );
+    daemon.shutdown().await;
+}
+
+/// A background Task's ticket wakes only that Task: the sidecar hands its answer to the child
+/// (`agent/src/runtime/session.ts` `resolve` → `subs.resumeIfReady(child)`), and a front run
+/// never waits on a Task (`createTask` returns at once; only `delegate` children defer it).
+#[tokio::test]
+async fn a_background_task_ticket_does_not_keep_the_front_deferral_open_and_is_still_answerable() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon_with_model(root.path(), &runtime).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let session = create_session(&daemon, "target", PolicyMode::Guard, None).await;
+    let id = heartbeat_to(&router, &session).await;
+    let first = run_now(&router, &id).await;
+    let message = first["message_id"].as_str().unwrap().to_owned();
+    until(|| runtime.0.lock().sent.len() == 1).await;
+    // The front run starts a background Task, which asks a person while the run is going.
+    daemon
+        .shared
+        .emit(
+            &session,
+            None,
+            EventKind::SubagentStarted {
+                subagent_id: "task".into(),
+                parent_tool_call_id: "start".into(),
+                task: "check the dashboard".into(),
+                model: "test/model".into(),
+                tools: Vec::new(),
+                background: true,
+            },
+        )
+        .await
+        .unwrap();
+    let ticket = opened_by(
+        &daemon,
+        &session,
+        TicketKind::Confirm,
+        "task-step",
+        Utc::now() + chrono::Duration::hours(1),
+        Some("task"),
+    )
+    .await;
+    // A waiting Task is not interrupted by the failure (only running children are), so its
+    // ticket stays pending.
+    daemon
+        .shared
+        .emit(
+            &session,
+            None,
+            EventKind::SubagentLifecycle {
+                subagent_id: "task".into(),
+                status: "waiting_human".into(),
+            },
+        )
+        .await
+        .unwrap();
+    runtime.emit(
+        &session,
+        RuntimeEvent::MessageResult {
+            id: MessageId::new(&message),
+            outcome: RunOutcome::Deferred,
+            reason: None,
+        },
+    );
+    runtime.emit(&session, RuntimeEvent::Settled);
+    wait_event(&daemon, &session, |e| {
+        matches!(
+            e,
+            EventKind::MessageCompleted {
+                outcome: openside_proto::MessageOutcome::Deferred,
+                ..
+            }
+        )
+    })
+    .await;
+
+    runtime.emit(
+        &session,
+        RuntimeEvent::Error {
+            error: RuntimeError::Unavailable("sidecar crashed".into()),
+        },
+    );
+    settled_after_runtime_failure(&daemon, &session).await;
+    let outcome = |daemon: &Daemon| {
+        let session = session.clone();
+        let message = MessageId::new(&message);
+        let shared = daemon.shared.clone();
+        async move {
+            shared
+                .db
+                .state(&session)
+                .await
+                .unwrap()
+                .completions
+                .get(&message)
+                .copied()
+        }
+    };
+    assert_eq!(
+        outcome(&daemon).await,
+        Some(openside_proto::MessageOutcome::Failed),
+        "the Task's ticket cannot resume the front run"
+    );
+
+    // The Task's ticket is still answered and handed to a new process restored from the
+    // snapshot, which still holds the Task's deferred call; the front message stays closed.
+    runtime.0.lock().ready_deferred.push(DeferredCall {
+        tool_call_id: ticket.tool_call_id.clone(),
+        ticket: ticket.id.clone(),
+        kind: DeferKind::External,
+    });
+    let response = person_resolve(&daemon, &ticket.id, json!(true)).await;
+    let status = response.status();
+    assert!(
+        status.is_success(),
+        "{status}: {}",
+        json_body(response).await
+    );
+    until(|| {
+        runtime
+            .0
+            .lock()
+            .resolved
+            .iter()
+            .any(|(resolved, _, _)| resolved == &ticket.id)
+    })
+    .await;
+    assert_eq!(
+        outcome(&daemon).await,
+        Some(openside_proto::MessageOutcome::Failed)
+    );
+    daemon.shutdown().await;
 }
 
 #[tokio::test]

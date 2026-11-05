@@ -413,6 +413,9 @@ async fn queued_authority_and_agent_tags_survive_content_redaction() {
                 workspace: None,
                 incognito: false,
                 browser_space: BrowserSpace::Shared,
+                effort: None,
+                speed: None,
+                profile: None,
             },
         )
         .await

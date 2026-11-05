@@ -19,6 +19,7 @@
 - 라우트별 스코프 표는 `openside_proto::ROUTES` 하나뿐이다. OpenAPI 의 `x-capability` 도 여기서 생성한다.
 - 발급: `openside token create --scope browse [--scope ...] [--name NAME]`. 출력은 `device_id<TAB>token` 한 줄이다. 토큰은 다시 볼 수 없다.
 - loopback TCP 연결에서는 디바이스 토큰에 `steer` 권한이 있더라도 데몬의 현재 기본 모드보다 완화된 `mode`(`read-only` < `guard` < `full`)로 세션을 생성(`POST /v1/sessions`)할 수 없으며, `workspace`를 임의로 지정하는 것도 불가능하다. 페어링된 기기가 임의로 `full` 모드를 선택해 승인 절차를 우회하거나 샌드박스 루트 경로를 넓히는 일을 막기 위한 조치이며, 이를 시도하면 데몬이 403 `local_socket_required`를 반환한다. 로컬 Unix 소켓을 통한 요청은 이 제한을 받지 않으며, 원격 기기라도 기본 모드나 더 엄격한 모드는 그대로 선택할 수 있다.
+- `agent_client` 디바이스 토큰(사람이 아닌 자동화 에이전트 클라이언트)은 `steer` 권한이 있더라도 `speed: "fast"`, `xhigh`·`max` 단계의 `effort`, `profile: "ultrabrowse"` 같은 고비용 등급으로 세션을 생성(`POST /v1/sessions`)할 수 없다. 자동화 에이전트나 유출된 토큰이 우선 처리·고추론 요율로 소유자의 모델 할당량을 소진하지 못하도록, 이를 요청하면 403 `local_socket_required`를 반환한다. 사용자 기기(`person_device`)와 로컬 Unix 소켓은 해당 등급을 자유롭게 선택할 수 있으며, 에이전트 클라이언트도 기본 속도와 `off`부터 `high`까지의 `effort`는 그대로 지정할 수 있다.
 - `PUT /v1/policy`는 이제 Unix 소켓 외에도 로컬 출처의 person/admin 토큰과 로컬 비밀값을 갖춘 검증된 루프백 런처의 요청을 허용한다. 원격 person 토큰, 에이전트 토큰, 읽기 토큰은 정책을 완화할 수 없으며, 요청 시 `local_access_required`(권한 범위 부족 시 `forbidden`) 오류로 거절된다. 세션 및 루틴 모드 완화와 워크스페이스 확장은 기존의 소켓 전용 규칙을 유지한다. `POST /v1/policy/validate`는 저장 없이 변경 사항을 검사하고 잘못된 목록 항목을 식별한다. `GET/PUT /v1/policy/network`는 아웃바운드 허용 목록을 읽고 쓰며, 변경 사항은 재시작 후 반영된다. 네트워크 설정 변경에는 로컬 권한이 필요하다.
 - 발급(`POST /v1/devices/pair`)은 Unix 소켓으로만 된다. TCP 로 호출하면 `admin` 토큰이어도 403 `local_socket_required` 다. 유출된 토큰으로 새 토큰을 만들지 못하게 하는 규칙이다.
 - `browse` 는 라우트 단위 스코프이고 세션 단위로 가두지 않는다. 토큰 소지자는 세션 id 를 알면 어느 세션의 REPL 이든 호출할 수 있다.
@@ -91,9 +92,9 @@ origin 목록과 `browse` 규칙은 도구 호출 앞단(`host.rs`)뿐 아니라
 - 번들 Chromium 은 백그라운드 통신을 끄는 플래그로 띄운다. 업데이트, 네트워크 시간, AI 모드 자격 확인, 검색엔진 preconnect 를 끈다. 끌 스위치가 없는 GCM checkin 은 끄는 것이 아니라 로컬 포트 `127.0.0.1:9` 로 돌린다. 컴포넌트 업데이트 주소 역시 `127.0.0.1:9` 로 돌린다. `--disable-component-update` 는 정기 확인만 막고 on-demand 요청(최신 Chromium 이 시작할 때 `update.googleapis.com` 에 기기 내 AI 모델 매니페스트를 요구하는 동작)은 막지 못하지만, 업데이트 주소가 일반 HTTP 라 Chromium 이 요청 자체를 보내지 않고 버린다. 그 포트에서 듣는 로컬 서비스가 있으면 GCM 요청이 그쪽에 닿는다.
 - 검증:
   - `crates/openside-e2e/tests/egress.rs`: 데몬, 사이드카, Chromium 을 모든 경로가 loopback 으로 돌아오는 전용 네트워크 네임스페이스에서 실행한다. loopback 패킷 캡처로 세션·루틴·메모리를 거치는 동안 나간 모든 목적지가 `Egress` 를 통과하는지 확인한다. 캡처 자체는 장수 TCP, 즉시 실패하는 TCP, 단발 UDP, DNS 대조군으로 검증한다. 네임스페이스 안의 허용 목록 상대에 실제로 닿는지, 목록 밖 호스트와 리다이렉트 홉이 연결 전에 거부되는지, 브라우저와 REPL 작업이 성공했는지도 단언한다.
-  - 사이드카 강제는 `agent/tests/providers/test_egress.py`, 채널은 `openside-channels` 의 `http.rs` 단위 테스트, 모델 다운로드는 `openside-cli` 의 `model_fetch` 테스트가 확인한다.
+  - 사이드카 강제는 `agent/tests/providers/egress.test.ts`, 채널은 `openside-channels` 의 `http.rs` 단위 테스트, 모델 다운로드는 `openside-cli` 의 `model_fetch` 테스트가 확인한다.
   - 이 테스트가 실제로 구동하는 경로만 본다. LLM 제공자와 주고받는 실제 트래픽은 대상이 아니다.
 
 ## 6. 텔레메트리
 
-기본값도 설정도 없고 보내는 코드도 두지 않는다. 테스트가 확인하는 것은 두 가지다. 하나는 Rust 의존성 그래프와 `agent/uv.lock` 에 알려진 텔레메트리 SDK(sentry, OTLP exporter, posthog, logfire 등)가 없다는 것이다. 이름 목록(블랙리스트) 검사라서, 목록에 없는 패키지가 들어오는 것은 이 검사로 못 잡는다. 다른 하나는 위 네트워크 관찰에서 허용되지 않은 목적지로 나간 패킷이 없다는 것이다. `logfire-api`, `opentelemetry-api` 는 전송 기능이 없는 API 패키지다.
+기본값도 설정도 없고 보내는 코드도 두지 않는다. 테스트가 확인하는 것은 두 가지다. 하나는 Rust 의존성 그래프와 `agent/bun.lock` 에 알려진 텔레메트리 SDK(sentry, OTLP exporter, posthog, logfire 등)가 없다는 것이다. 이름 목록(블랙리스트) 검사라서, 목록에 없는 패키지가 들어오는 것은 이 검사로 못 잡는다. 다른 하나는 위 네트워크 관찰에서 허용되지 않은 목적지로 나간 패킷이 없다는 것이다. `logfire-api`, `opentelemetry-api` 는 전송 기능이 없는 API 패키지다.

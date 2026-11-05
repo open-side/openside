@@ -472,6 +472,8 @@ impl Host {
             subagent: call.subagent.clone(),
             cancellation: cancellation.clone(),
             browser_probe: browser_probe.clone(),
+            profile: self.env.profile,
+            repl_context: self.env.repl_context,
         };
         let tracker = crate::artifacts::Tracker::before(&env, &call.name).await;
         let used_tab = args

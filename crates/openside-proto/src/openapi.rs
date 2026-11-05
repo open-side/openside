@@ -2117,7 +2117,7 @@ pub fn openapi() -> Value {
                 "schema": {"type": "boolean", "default": false}}));
         }
         if route.path == "/v1/sessions" && route.method == HttpMethod::Post {
-            operation["description"] = json!("Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space).");
+            operation["description"] = json!("Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). Paired devices get 403 local_socket_required for a mode looser than the daemon default or any workspace; agent_client devices also get it for speed \"fast\", effort \"xhigh\"/\"max\" or profile \"ultrabrowse\".");
         }
         if route.path == "/v1/agents/{id}" && route.method == HttpMethod::Patch {
             operation["description"] = json!("Edit the profile for the next turn. Omitted nullable overrides are unchanged; explicit null inherits defaults. Permission widening and skills/model/account-pool/channel changes additionally require Admin and a person device (local socket exempt). Immutable identity and home fields cannot be patched.");

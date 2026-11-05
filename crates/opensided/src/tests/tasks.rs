@@ -648,10 +648,18 @@ async fn silent_tab_close_runs_daemon_cleanup_without_publishing_or_steering() {
             silent: false,
         })
         .unwrap();
-    // The pump handles events in order and drops a tab's navigation grants last, so once the
-    // visible close has finished every step for both tabs has run.
+    // The pump handles events in order and the visible close's steer is its last observable
+    // step (navigation grants drop before the event is emitted), so once that steer lands every
+    // step for both tabs, including any wrongful steer for the silent close, has run.
+    let loud_steer = |control: &openside_core::SubagentControl| matches!(control, openside_core::SubagentControl::Steer { text } if text.contains("Tab loud "));
     tokio::time::timeout(Duration::from_secs(10), async {
-        while navigation.document_allowed(&session, "loud", 1, &connection) {
+        while !runtime
+            .0
+            .lock()
+            .controls
+            .iter()
+            .any(|(_, control)| loud_steer(control))
+        {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
@@ -683,6 +691,10 @@ async fn silent_tab_close_runs_daemon_cleanup_without_publishing_or_steering() {
     {
         let state = runtime.0.lock();
         assert_eq!(state.controls.len(), 1, "only the visible close steers");
+        assert!(state
+            .controls
+            .iter()
+            .all(|(task, control)| task == "task" && loud_steer(control)));
         assert!(state.sent.is_empty());
     }
     daemon.shutdown().await;

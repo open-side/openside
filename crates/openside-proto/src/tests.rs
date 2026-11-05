@@ -281,6 +281,9 @@ fn every_event_kind_round_trips() {
             workspace: None,
             incognito: false,
             browser_space: BrowserSpace::Isolated,
+            effort: Some(ThinkingEffort::Xhigh),
+            speed: Some(SessionSpeed::Fast),
+            profile: Some(SessionProfile::Ultrabrowse),
         },
         EventKind::SessionSettled {},
         EventKind::SessionStopped {},
@@ -607,6 +610,9 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             workspace: Some("/tmp/workspace".into()),
             incognito: mode == PolicyMode::Full,
             browser_space: space,
+            effort: None,
+            speed: None,
+            profile: Some(SessionProfile::Ultrabrowse),
         };
         assert_eq!(
             serde_json::from_value::<CreateSessionRequest>(serde_json::to_value(&request).unwrap())
@@ -621,6 +627,9 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             workspace: Some("/tmp/workspace".into()),
             incognito: mode == PolicyMode::Full,
             browser_space: space,
+            effort: Some(ThinkingEffort::High),
+            speed: Some(SessionSpeed::Default),
+            profile: Some(SessionProfile::Default),
         };
         assert_eq!(
             serde_json::from_value::<EventKind>(serde_json::to_value(&event).unwrap()).unwrap(),
@@ -641,6 +650,9 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             archived: false,
             incognito: mode == PolicyMode::Full,
             browser_space: space,
+            effort: Some(ThinkingEffort::Off),
+            speed: Some(SessionSpeed::Fast),
+            profile: Some(SessionProfile::Ultrabrowse),
         };
         assert_eq!(
             serde_json::from_value::<Session>(serde_json::to_value(&session).unwrap()).unwrap(),
@@ -660,6 +672,9 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             workspace: None,
             incognito: false,
             browser_space: BrowserSpace::Shared,
+            effort: None,
+            speed: None,
+            profile: None,
         }
     );
     assert_eq!(
@@ -680,6 +695,84 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
         ("CapabilityScope", "human_step"),
     ] {
         assert!(schema_variants(&schemas()[name]).contains(&json!(wire)));
+    }
+}
+
+#[test]
+fn session_effort_and_speed_round_trip_and_reject_unknown_values() {
+    let efforts = [
+        (ThinkingEffort::Off, "off"),
+        (ThinkingEffort::Minimal, "minimal"),
+        (ThinkingEffort::Low, "low"),
+        (ThinkingEffort::Medium, "medium"),
+        (ThinkingEffort::High, "high"),
+        (ThinkingEffort::Xhigh, "xhigh"),
+        (ThinkingEffort::Max, "max"),
+    ];
+    for (effort, wire) in efforts {
+        assert_eq!(serde_json::to_value(effort).unwrap(), wire);
+        assert_eq!(effort.as_str(), wire);
+        assert!(schema_variants(&schemas()["ThinkingEffort"]).contains(&json!(wire)));
+    }
+    for (speed, wire) in [
+        (SessionSpeed::Default, "default"),
+        (SessionSpeed::Fast, "fast"),
+    ] {
+        assert_eq!(serde_json::to_value(speed).unwrap(), wire);
+        assert_eq!(speed.as_str(), wire);
+    }
+    let request: CreateSessionRequest =
+        serde_json::from_value(json!({"effort": "max", "speed": "fast"})).unwrap();
+    assert_eq!(request.effort, Some(ThinkingEffort::Max));
+    assert_eq!(request.speed, Some(SessionSpeed::Fast));
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        json!({"title": null, "model": null, "mode": null, "workspace": null, "agent_id": null,
+            "effort": "max", "speed": "fast"})
+    );
+    let default: CreateSessionRequest = serde_json::from_value(json!({})).unwrap();
+    let encoded = serde_json::to_value(&default).unwrap();
+    assert!(encoded.get("effort").is_none() && encoded.get("speed").is_none());
+    // `ultrabrowse` is a profile, not an effort; unknown values stay errors.
+    for body in [
+        json!({"effort": "ultrabrowse"}),
+        json!({"effort": "turbo"}),
+        json!({"speed": "slow"}),
+        json!({"thinking": "high"}),
+    ] {
+        assert!(serde_json::from_value::<CreateSessionRequest>(body).is_err());
+    }
+}
+
+#[test]
+fn session_profile_round_trips_and_rejects_unknown_values() {
+    for (profile, wire) in [
+        (SessionProfile::Default, "default"),
+        (SessionProfile::Ultrabrowse, "ultrabrowse"),
+    ] {
+        assert_eq!(serde_json::to_value(profile).unwrap(), wire);
+        assert!(schema_variants(&schemas()["SessionProfile"]).contains(&json!(wire)));
+        let request: CreateSessionRequest =
+            serde_json::from_value(json!({"profile": wire, "effort": "max"})).unwrap();
+        assert_eq!(request.profile, Some(profile));
+        assert_eq!(
+            serde_json::from_value::<CreateSessionRequest>(serde_json::to_value(&request).unwrap())
+                .unwrap(),
+            request
+        );
+    }
+    let default: CreateSessionRequest = serde_json::from_value(json!({})).unwrap();
+    assert!(serde_json::to_value(&default)
+        .unwrap()
+        .get("profile")
+        .is_none());
+    // Daemon-wide names that are not per-session choices stay errors.
+    for body in [
+        json!({"profile": "full"}),
+        json!({"profile": "browser-agent"}),
+        json!({"profile": "research"}),
+    ] {
+        assert!(serde_json::from_value::<CreateSessionRequest>(body).is_err());
     }
 }
 
