@@ -1,7 +1,7 @@
 diff --git a/chrome/browser/openside/agent_gateway.cc b/chrome/browser/openside/agent_gateway.cc
 --- a/chrome/browser/openside/agent_gateway.cc
 +++ b/chrome/browser/openside/agent_gateway.cc
-@@ -624,7 +624,7 @@
+@@ -668,7 +668,7 @@
      tab_groups::TabGroupId id = strip->AddToNewGroup({index});
      strip->ChangeTabGroupVisuals(
          id, tab_groups::TabGroupVisualData(kAgentTabsTitle,
@@ -9,7 +9,7 @@ diff --git a/chrome/browser/openside/agent_gateway.cc b/chrome/browser/openside/
 +                                           tab_groups::TabGroupColorId::kGrey));
    }
  
-   // Every agent page is emulated at 1440x900, DSF 1, wherever it lives: in
+   // tab_groups::TabGroupSyncService::Observer:
 diff --git a/chrome/browser/ui/color/chrome_color_mixer.cc b/chrome/browser/ui/color/chrome_color_mixer.cc
 --- a/chrome/browser/ui/color/chrome_color_mixer.cc
 +++ b/chrome/browser/ui/color/chrome_color_mixer.cc

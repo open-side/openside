@@ -1272,6 +1272,8 @@ async fn ownership_ledger_reports_agent_tabs_in_their_group() {
     let opened = gateway_event(patched.gateway(), |event| event.kind == "tab.opened").await;
     assert_eq!(opened.session_id.as_deref(), Some("ledger-session"));
     assert_eq!(opened.payload["tab"]["cdp_target_id"], agent.id.as_str());
+    // The group join precedes the announcement, so the event already names the group.
+    assert_eq!(opened.payload["tab"]["group_title"], "Agent Tabs");
 
     let ledger = patched.gateway().tabs().await.unwrap();
     assert!(ledger.through_event_seq >= opened.seq);

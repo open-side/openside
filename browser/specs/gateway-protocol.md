@@ -161,6 +161,7 @@ PNG는 base64 변환 전 최대 8388608바이트다. 응답 전체는 프레임 
 - native grant UI가 없다. `focus.request`는 항상 `{allowed:false, reason:"no_user_grant", owner:"user"}`다.
 - agent 탭의 활성화 시도(`Target.activateTarget`, `window.focus()`)를 막으면 `focus.decided`를 `request_id:null`로 보낸다.
 - `TabRecord`에 `group_title`(탭 그룹 제목 또는 `null`)을 더 넣는다.
+- 패치 빌드에서 agent 탭의 `tab.opened`와 `tab.updated`는 탭이 "Agent Tabs" 탭 그룹에 들어간 뒤에야 보낸다. 프로필의 저장된 탭 그룹 동기화 서비스가 시작 시점에 상태를 맞추면서 그룹 탭의 페이지를 이동시켜 agent의 첫 탐색을 끊을 수 있으므로, 이 서비스가 로드를 마칠 때까지 기다렸다가 그룹에 넣는다. 최대 5초까지 기다린 뒤에는 그대로 그룹에 넣으며, 시크릿 프로필(격리 공간)이나 해당 서비스가 없는 프로필은 바로 넣는다. `tab.opened`를 보내기 전에도 `tabs.list`에는 `group_title`이 `null`인 상태로 실리고, 그 전에 닫힌 탭은 `tab.closed`를 보내지 않는다.
 - `message_redacted`·`suggested_filename_redacted`는 bool `true`다. 메시지와 파일명은 보내지 않는다.
 - `tab.closed`의 `reason`은 `browser_shutdown` 또는 `external`뿐이다. 닫은 주체는 구분하지 않는다.
 - `beforeunload`(앱 모달) 다이얼로그와 차단된 팝업은 보고하지 않는다.

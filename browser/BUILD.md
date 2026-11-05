@@ -58,6 +58,8 @@ git clone --branch 155.0.8059.39-1 --recurse-submodules \
 
 `shared.sh`의 `setup_toolchain` 은 시스템 `gperf` 와 `/usr/bin/esbuild` 를 전제해 이 머신에서 실패한다. Main 은 다음으로 대체했다. gperf 는 Chromium CIPD `infra/3pp/tools/gperf/linux-amd64` `version:3@3.2` 를 `third_party/gperf/cipd` 에 풀었다. esbuild 는 GitHub `evanw/esbuild` `v0.28.2` 를 로컬에서 빌드해 devtools 기대 경로 `third_party/esbuild/esbuild` 에 두었다.
 
+`fetch_sources`는 `gclient`를 실행하지 않아 `CIPD` 의존성을 받지 않으므로, 이전에는 gperf도 수동으로 풀어야 했다. 그 때문에 새로 `fetch`해 `build/` 트리가 지워진 뒤에는 `toolchain` 단계가 로그의 sysroot 다운로드 줄 직후 `test -x third_party/gperf/cipd/bin/gperf`에서 오류 메시지 없이 `exit 1`로 멈췄다. 이제는 바이너리가 없을 때 `br0.sh`의 `stage_toolchain`이 `https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/gperf/linux-amd64/+/version:3@3.2`에서 직접 zip을 받아 풀고, 그래도 파일이 없으면 누락된 경로를 출력한다.
+
 `shellcheck` 는 이 머신에 없어 두 스크립트에 실행하지 않았다.
 
 네트워크·다운로드 manifest·캐시 압축 해제·디스크·user bus·툴체인·개발 헤더·GN 인자·컴파일 오류는 각각 실제 로그를 보고 분리한다. 인증 파일이나 사용자 브라우저 프로필을 읽어 해결하지 않는다.

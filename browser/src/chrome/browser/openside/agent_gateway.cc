@@ -149,6 +149,9 @@ constexpr base::TimeDelta kCaptureTimeout = base::Seconds(8);
 // A renderer whose main thread is busy answers no protocol command.
 constexpr base::TimeDelta kEmulationAckTimeout = base::Seconds(3);
 constexpr base::TimeDelta kBoundsSettleDelay = base::Milliseconds(500);
+// A saved-tab-group store that fails to load never initializes its service;
+// past this wait an agent tab joins its group anyway, so it is still reported.
+constexpr base::TimeDelta kTabGroupSyncWait = base::Seconds(5);
 
 const char* OwnerName(TabOwner owner) {
   switch (owner) {
@@ -522,13 +525,19 @@ class GatewayTab : public content::WebContentsObserver,
       FinishAnnounce(/*join_group=*/true);
       return;
     }
-    // An initialized service calls OnInitialized from inside AddObserver.
+    // Armed first: an initialized service calls OnInitialized from inside
+    // AddObserver, which disarms it.
     tab_group_sync_ = sync;
+    tab_group_sync_wait_.Start(FROM_HERE, kTabGroupSyncWait, this,
+                               &GatewayTab::OnTabGroupSyncWaitExpired);
     sync->AddObserver(this);
   }
 
   // tab.opened goes out after the join so its record carries the group title.
   void FinishAnnounce(bool join_group) {
+    if (announced_) {
+      return;
+    }
     if (join_group) {
       JoinAgentTabsGroup();
     }
@@ -664,12 +673,31 @@ class GatewayTab : public content::WebContentsObserver,
 
   // tab_groups::TabGroupSyncService::Observer:
   void OnInitialized() override {
-    if (!tab_group_sync_) {
+    if (!tab_group_sync_ || pending_join_factory_.HasWeakPtrs()) {
       return;
     }
+    tab_group_sync_wait_.Stop();
+    // The service notifies from inside its observer loop, which on desktop
+    // disallows reentrancy; joining here would add the group locally and make
+    // the service iterate its observers again. The coordinator's reconcile,
+    // the first observer, has already run by the time the posted task does.
+    // Observation stays on until then so a teardown in between still reaches
+    // OnWillBeDestroyed, which cancels the join.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&GatewayTab::FinishSyncedAnnounce,
+                                  pending_join_factory_.GetWeakPtr()));
+  }
+
+  void FinishSyncedAnnounce() {
     StopObservingTabGroupSync();
     // Ownership may have left the agent while the service loaded.
     FinishAnnounce(/*join_group=*/IsAgentTab(web_contents()));
+  }
+
+  void OnTabGroupSyncWaitExpired() {
+    LOG(WARNING) << "openside: saved tab groups did not initialize; joining "
+                    "the Agent Tabs group without waiting";
+    FinishSyncedAnnounce();
   }
 
   // Only reached at profile teardown; joining then would feed a group into a
@@ -682,7 +710,10 @@ class GatewayTab : public content::WebContentsObserver,
     FinishAnnounce(/*join_group=*/false);
   }
 
+  // Also cancels a posted join, so nothing joins after observation ends.
   void StopObservingTabGroupSync() {
+    tab_group_sync_wait_.Stop();
+    pending_join_factory_.InvalidateWeakPtrs();
     if (tab_group_sync_) {
       std::exchange(tab_group_sync_, nullptr)->RemoveObserver(this);
     }
@@ -893,6 +924,7 @@ class GatewayTab : public content::WebContentsObserver,
   bool announced_ = false;
   // Set while the announcement waits for saved-tab-group sync to initialize.
   raw_ptr<tab_groups::TabGroupSyncService> tab_group_sync_ = nullptr;
+  base::OneShotTimer tab_group_sync_wait_;
   uint64_t primary_generation_ = 0;
   base::ScopedClosureRunner keep_rendering_;
   uint64_t next_dialog_ = 1;
@@ -906,6 +938,8 @@ class GatewayTab : public content::WebContentsObserver,
   std::unique_ptr<ViewportEmulation> emulation_;
   std::vector<base::OnceCallback<void(bool)>> capture_waiters_;
   std::vector<base::CallbackListSubscription> tab_subscriptions_;
+  // Only the deferred group join; invalidated when sync observation ends.
+  base::WeakPtrFactory<GatewayTab> pending_join_factory_{this};
   base::WeakPtrFactory<GatewayTab> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
