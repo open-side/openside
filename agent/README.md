@@ -94,6 +94,20 @@ owns the version override (`OPENSIDE_CLAUDE_CODE_VERSION` or
 `credentials.anthropic.claude_code_version`). Every model request goes through the egress
 guard in `src/providers/egress.ts`: only loopback, the called provider's origin and
 `network.allow` entries are reachable, and each redirect hop is checked before it connects.
+Every resolved address is checked too: a name reached only through a wildcard entry must
+resolve to a public address, while an exact entry (or admitted endpoint) may resolve to an
+internal one only for the scheme and port it names, so `https://lan.example` never vouches
+for `http://lan.example`.
+
+Google Cloud Code accounts (`google-gemini-cli`, `google-antigravity`) need their project
+on every request. The daemon sends it as the lease's private `auth.request_metadata.project_id`
+(1–256 chars of `[A-Za-z0-9._:-]`); the sidecar hands pi-ai the structured key
+`{"token":"<placeholder>","projectId":"…"}` so the request body carries the project, and the
+lease bearer replaces the placeholder per request. A Cloud Code lease without a project is
+reported and refused with `AuthUnavailable` before any request is sent. The project is
+cleared with the token when the attempt ends. Antigravity requests use pi-ai's pinned client
+version (`PI_AI_ANTIGRAVITY_VERSION` is defaulted unless the environment sets it) so pi-ai
+never fetches its version manifest from a non-provider origin.
 
 Consumed JSONL line buffers are zeroed (`src/transport/jsonl.ts`), and a lease token's only
 sidecar reference is dropped when its attempt ends (`src/providers/secret.ts`).

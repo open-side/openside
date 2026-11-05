@@ -152,7 +152,15 @@ export type CredentialErrorCode =
 	| "provider_unavailable"
 	| "invalid_credential_request";
 
-export type AccountSource = "omp-broker" | "vault" | "env" | "command" | "claude-code" | "codex-cli" | "builtin";
+export type AccountSource =
+	| "omp-broker"
+	| "vault"
+	| "env"
+	| "command"
+	| "claude-code"
+	| "codex-cli"
+	| "builtin"
+	| "plugin";
 
 export interface ModelAccountRef {
 	source: AccountSource;
@@ -168,6 +176,34 @@ export interface CredentialAuth {
 	value: string;
 	upstream_account_id?: string;
 	expires_at_ms?: number;
+	/** Private endpoint replacing the provider default for this lease (a plugin relay); max 512 chars. */
+	base_url?: string | null;
+	/** Private non-credential `x-` headers for that endpoint; max 8 entries. */
+	headers?: Record<string, string> | null;
+	/** The relay's refusal mapping, applied before generic status classification. */
+	error_rules?: CredentialErrorRules | null;
+	/** Private request context (a Cloud Code project); `project_id` 1..256 chars of `[A-Za-z0-9._:-]`. */
+	request_metadata?: CredentialRequestMetadata | null;
+}
+
+export type CredentialRuleOutcome = "unsupported_client" | "sign_in" | "capacity" | "rate_limit";
+
+export interface CredentialErrorRule {
+	status: number;
+	hint?: string | null;
+	body_contains?: string | null;
+	outcome: CredentialRuleOutcome;
+	message?: string | null;
+}
+
+export interface CredentialErrorRules {
+	hint_header?: string | null;
+	/** At most 16; the first match wins. */
+	rules: CredentialErrorRule[];
+}
+
+export interface CredentialRequestMetadata {
+	project_id?: string;
 }
 
 export interface CredentialRequest extends Envelope {

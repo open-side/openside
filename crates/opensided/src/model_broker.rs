@@ -311,6 +311,10 @@ impl Broker {
                         .as_f64()
                         .filter(|v| v.is_finite() && *v >= 0.0)
                         .map(|v| v.min(u64::MAX as f64) as u64),
+                    base_url: None,
+                    headers: None,
+                    error_rules: None,
+                    request_metadata: None,
                 },
             });
         }

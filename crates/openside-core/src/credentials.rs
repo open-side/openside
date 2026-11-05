@@ -59,6 +59,21 @@ pub struct CredentialAuth {
     pub upstream_account_id: Option<String>,
     /// Access-token expiry in Unix milliseconds, absent for static API keys.
     pub expires_at_ms: Option<u64>,
+    /// Private endpoint for this account's requests (a plugin relay), replacing the provider
+    /// default; absent for first-party accounts. Never public account metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Private non-credential request headers the account's endpoint expects (a relay's
+    /// per-session label); names are lower-case `x-` headers, never authentication headers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// How the account's relay signals refusals that need a typed outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_rules: Option<CredentialErrorRules>,
+    /// Private per-account request context a provider transport needs (a Cloud Code project);
+    /// never public account metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_metadata: Option<CredentialRequestMetadata>,
 }
 
 impl std::fmt::Debug for CredentialAuth {
@@ -74,6 +89,73 @@ impl Drop for CredentialAuth {
     fn drop(&mut self) {
         self.value.zeroize();
         self.upstream_account_id.zeroize();
+    }
+}
+
+/// A relay's refusal mapping, carried with its lease because only the daemon reads manifests.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialErrorRules {
+    /// Response header holding the relay's refusal hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint_header: Option<String>,
+    /// First match wins.
+    pub rules: Vec<CredentialErrorRule>,
+}
+
+/// One refusal rule: `status` plus the hint or message matcher (either; none = status only).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialErrorRule {
+    /// HTTP status.
+    pub status: u16,
+    /// Case-insensitive hint header value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// Case-insensitive substring of the error message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_contains: Option<String>,
+    /// Typed outcome.
+    pub outcome: CredentialRuleOutcome,
+    /// Person-facing replacement for the status-only error text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Typed relay refusal.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialRuleOutcome {
+    /// The relay refuses this client; no retry on the same account.
+    UnsupportedClient,
+    /// An account behind the relay must sign in again.
+    SignIn,
+    /// No free relay capacity now.
+    Capacity,
+    /// The caller is rate-limited.
+    RateLimit,
+}
+
+/// Bounded private request context leased with an OAuth account; `project_id` is 1..=256
+/// chars of `[A-Za-z0-9._:-]` (the sidecar rejects anything else). Zeroized on drop.
+#[derive(Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialRequestMetadata {
+    /// Google Cloud Code project the account's requests are billed to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+}
+
+impl std::fmt::Debug for CredentialRequestMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialRequestMetadata")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for CredentialRequestMetadata {
+    fn drop(&mut self) {
+        self.project_id.zeroize();
     }
 }
 
@@ -290,11 +372,18 @@ mod tests {
                 value: "private-access-canary-1742".into(),
                 upstream_account_id: Some("private-upstream-identity-841".into()),
                 expires_at_ms: Some(1),
+                base_url: None,
+                headers: None,
+                error_rules: None,
+                request_metadata: Some(CredentialRequestMetadata {
+                    project_id: Some("private-project-canary-593".into()),
+                }),
             },
         };
         let text = format!("{snapshot:?}");
         assert!(!text.contains("private-access-canary-1742"));
         assert!(!text.contains("private-upstream-identity-841"));
+        assert!(!text.contains("private-project-canary-593"));
         assert!(text.contains("[REDACTED]"));
     }
 

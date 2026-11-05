@@ -30,7 +30,7 @@ A read-scoped paired phone cannot inspect key metadata or alter managed credenti
 
 `SubscriptionAccount` contains `{source,provider,account_id,label,managed,installed,logged_in,enabled,available,reason,login_command,created_at,reserve_percent}`. Source is `claude-code` or `codex-cli`. Admin-only login_command contains the account-specific environment/home setting and `claude auth login` or `codex login`, never a token. The GUI creates the account, copies that command for the person to run, then polls its status; it does not open or implement its own OAuth flow.
 
-`ProviderPool` is `{provider,accounts:ModelAccountRef[]}`. It is person-built and ordered; an empty provider pool disables routing. Adding a key or CLI account does not silently add it to an explicit pool. Existing SDK namespaces remain distinct: in particular `openai` and `openai-codex` are not automatically interchangeable, and pool members must support the selected model/provider.
+`ProviderPool` is `{provider,accounts:ModelAccountRef[]}`. It is person-built and ordered; an empty provider pool disables routing. Adding a key or CLI account does not silently add it to an explicit pool. Existing SDK namespaces remain distinct: in particular `openai` and `openai-codex` are not automatically interchangeable, and pool members must support the selected model/provider. A member its source no longer reports (for example an `omp-broker` credential id the broker re-created under a new id) is never replaced automatically; when every member of a pool is unreported, each catalog model of that provider reads `Pool accounts <source:id, …> are no longer reported by their source; choose current accounts for the <provider> pool` until the person updates the pool.
 
 ## Catalog, account metadata and model selection
 
@@ -89,6 +89,59 @@ Canonical OAuth state and its revision are atomically persisted together before 
 Concurrency boundary: the daemon serializes its own per-account operations and checks durable revision plus observed file content/time before committing; it hashes the materialized credential again afterward. A detected external change fails the current resolution and is adopted on the next poll/request. There is no shared lock protocol with the external CLI: a same-user process replacing a credential between the final check and replacement is a trusted-writer residual, not an atomic cross-process CAS guarantee. Windows checks each path component with `CreateFileW(FILE_FLAG_OPEN_REPARSE_POINT)`, rejects reparse points and detects changed ancestor identities; path-based operations retain the same same-user namespace-race boundary as native browser imports. The macOS service suffix must match the CLI’s 32-bit truncated hash: crafted/colliding user-selected configuration paths may alias a Keychain service, and that upstream namespace limit is not strengthened by openside. Same-user malware is outside this boundary; the daemon must never follow an observed link outside a managed home.
 
 Removing a default account records a durable hidden/disabled tombstone in openside; discovery does not recreate it, and no external home or Keychain item is wiped. Initial default-account enablement preserves the existing `credentials.subscriptions` setting (Claude defaults off, Codex defaults on), rather than silently enabling a previously excluded credential source.
+
+## Plugin sources
+
+A plugin source is a model relay that only some networks can reach (an office LAN or a tailnet). It is described by a local manifest in `plugins/*.toml` beside the config file (`~/.config/openside/plugins/` by default). Manifests are personal files: they live outside every repository, carry the person's own identity value, and openside never writes, lists or returns them. There is no Settings card, API route or CLI command for plugin sources.
+
+```toml
+id = "example-relay"              # [a-z0-9][a-z0-9-]{1,31}; unique; the pool account id
+url = "http://127.0.0.1:7844"     # http(s) origin only: no credentials, path, query or fragment
+identity = "alice"                # the person's value the relay knows them by; sent as the credential
+
+[providers.anthropic]             # anthropic | openai-codex | google
+path = ""                         # appended to url; optional
+auth = "claude_code"              # anthropic: claude_code | api_key | bearer
+[providers.openai-codex]
+path = "/backend"
+auth = "codex_cli"                # openai-codex: codex_cli (no upstream account id)
+[providers.google]
+path = "/v1beta"
+auth = "api_key"                  # google: api_key (x-goog-api-key) | bearer
+
+[[session_headers]]               # at most 4
+name = "x-example-task"           # lower-case x- header, never an auth header
+template = "openside:{session}"   # {session}, {subagent}; ids reduced to [A-Za-z0-9._:-]
+max_length = 64                   # 1-256, default 64
+
+[probe]
+path = "/health"                  # GET; 2xx = available
+identity_header = "x-api-key"     # optional: send the identity on the probe
+timeout_ms = 1500                 # 100-10000
+interval_seconds = 60             # 10-3600 while available; failures retry after 10 s
+
+[errors]
+hint_header = "x-example-hint"    # required when a rule matches a hint
+[[errors.rules]]                  # at most 16; first match wins
+status = 429
+hint = "unsupported-client"       # hint header value, case-insensitive
+# body_contains = "..."           # error message substring, case-insensitive
+outcome = "unsupported_client"    # unsupported_client | sign_in | capacity | rate_limit
+message = "Optional explanation shown instead of the status text"
+```
+
+Unknown keys or out-of-range values reject the whole manifest; a duplicate `id` keeps the first file in name order; at most 32 files of up to 64 KiB are read.
+
+**Trust.** A manifest is fully trusted: it decides where the identity and all model traffic of its accounts go, and its origin and probe address are not restricted (a relay is normally a private-network address). File trust is therefore the boundary. The daemon and `openside doctor` accept manifests only when the `plugins` directory is owned by the current user and not group- or other-writable, and each manifest is a regular file opened without following symlinks (`O_NOFOLLOW`; ownership and mode are checked on the opened descriptor) that is owned by the current user and grants group and other users no access at all (mode `600` or `400`), since it holds the identity. Anything else is rejected and counted in doctor's rejected-manifest count. The probe goes only to `url` + `probe.path`, sends the identity only there (when `identity_header` is set), and never follows redirects, so a redirect answer counts as unavailable.
+
+**Availability.** The daemon re-reads the directory at most every 10 seconds and probes each manifest. It also tracks the local address the host would use to reach the relay origin (a connected UDP socket; no packet is sent), and a change of that address (joining or leaving a network) re-probes immediately instead of waiting for the interval. While the probe succeeds, every provider the manifest serves gets one account `plugin:<id>`; when it fails the account disappears.
+
+**Routing.** A reachable plugin account is appended to the end of its provider's effective pool for credential resolution and report rotation, without being persisted. An explicitly empty pool stays disabled; a provider without a pool routes through plugin accounts alone. Plugin accounts never appear in `GET /v1/settings/pools`, catalog rows or `GET /v1/accounts`; a catalog model that only a plugin account can serve reports like any other available model (`available:true`, reason `Ready`) with no `source`/`account_id`. `PUT /v1/settings/pools/{provider}` refuses `plugin:` references (400). The identity is not registered as a redaction secret, because it is usually a login name that also appears in paths.
+
+**Lease.** The lease carries the identity as `value`, the provider route as private `auth.base_url`, the expanded session headers as `auth.headers` and the rules as `auth.error_rules` (see [Private credential RPC](#private-credential-rpc)). The sidecar routes the attempt to `base_url`, admits exactly that origin through the egress guard, skips the Codex upstream-account-id requirement, and adds the `claude-code-20250219` beta to Claude Code-shaped requests that pi-ai sends without it (tool-less requests). Relay refusals are classified by the rules first: `unsupported_client` → `policy` (no retry on the account), `sign_in` → `auth`, `capacity` and `rate_limit` → `rate_limit` with the `Retry-After` delay. The rule's `message`, or a fixed default, replaces the status-only error text; response text is never surfaced.
+
+**Diagnosis.** `openside doctor` reports `models.plugin_sources`: how many manifests loaded, how many origins accept a TCP connection now, their ids, and how many manifests were rejected. URLs and identities are not printed.
+
 
 ## Account pool & rotation
 

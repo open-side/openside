@@ -1341,6 +1341,10 @@ impl HostToolHandler for CredentialHost {
                     value: "synthetic-rust-wire-secret-canary".into(),
                     upstream_account_id: None,
                     expires_at_ms: None,
+                    base_url: None,
+                    headers: None,
+                    error_rules: None,
+                    request_metadata: None,
                 },
             })
         })

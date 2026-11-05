@@ -1093,6 +1093,52 @@ async fn broker_credentials_never_reach_diagnostics_events_or_sidecar_options() 
     daemon.shutdown().await;
 }
 
+/// Live regression: the pool pinned broker ids 25/24 that the broker no longer reports (its
+/// current credentials carry other ids). Selection must stay fail-closed, but the reason has to
+/// name the pinned accounts instead of a generic "no eligible account".
+#[tokio::test]
+async fn pool_pinning_only_unreported_broker_ids_fails_closed_and_names_them() {
+    use crate::model_broker::tests::{snapshot, FakeBroker, ACCESS, TOKEN};
+    let root = tempfile::tempdir().unwrap();
+    let mut data = snapshot();
+    data["credentials"][0]["provider"] = json!("anthropic");
+    data["credentials"][0]["id"] = json!(137);
+    data["credentials"][0]["models"] = json!(["anthropic:test-ready"]);
+    data["credentials"][0]["blocks"] = json!([]);
+    let server = FakeBroker::start(data, json!({"reports":[]}), json!({"ok":true})).await;
+    let token = root.path().join("broker.token");
+    std::fs::write(&token, TOKEN).unwrap();
+    let credentials = json!({"omp_broker":{"url":server.url,"token_file":token},
+        "order":{"anthropic":["omp-broker"]},
+        "pools":{"anthropic":[{"source":"omp-broker","account_id":"25"}]},
+        "env":{"anthropic":[],"openai":[],"google":[],"openai-codex":[],"github-copilot":[]}});
+    let (daemon, _) = fixture_sources(root.path(), Some(credentials)).await;
+    let local = api::router(daemon.shared.clone(), true);
+    let (status, catalog) = call(&local, "GET", "/v1/settings/models", json!({}), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let anthropic = &catalog["providers"][0];
+    assert_eq!(anthropic["provider"], "anthropic");
+    assert_eq!(anthropic["pool"]["accounts"][0]["account_id"], "25");
+    let model = &anthropic["models"][0];
+    assert_eq!(model["id"], "anthropic:test-ready");
+    assert_eq!(model["available"], false);
+    let reason = model["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("omp-broker:25") && reason.contains("no longer reported"),
+        "{reason}"
+    );
+    let current = model["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["account_id"] == "137")
+        .unwrap();
+    assert_eq!(current["in_pool"], false);
+    assert_eq!(current["available"], false);
+    assert!(!catalog.to_string().contains(ACCESS));
+    daemon.shutdown().await;
+}
+
 #[tokio::test]
 async fn fast_model_selection_validates_normalizes_and_clears() {
     let root = tempfile::tempdir().unwrap();

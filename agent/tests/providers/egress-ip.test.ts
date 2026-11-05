@@ -87,11 +87,11 @@ function stubBase(): { base: FetchImpl; calls: Dispatch[] } {
 describe("egress addresses", () => {
 	it("test_wildcard_names_must_resolve_to_public_addresses", () => {
 		const egress = new Egress(["*.example", "10.1.2.3"]);
-		egress.checkAddress("rebind.example", PUBLIC, 443);
-		egress.checkAddress("rebind.example", "2606:2800:220:1:248:1893:25c8:1946", 443);
-		egress.checkAddress("rebind.example", "10.1.2.3", 443);
-		egress.checkAddress("localhost", "127.0.0.1", 1);
-		egress.checkAddress("localhost", "::1", 1);
+		egress.checkAddress("https", "rebind.example", PUBLIC, 443);
+		egress.checkAddress("https", "rebind.example", "2606:2800:220:1:248:1893:25c8:1946", 443);
+		egress.checkAddress("https", "rebind.example", "10.1.2.3", 443);
+		egress.checkAddress("http", "localhost", "127.0.0.1", 1);
+		egress.checkAddress("http", "localhost", "::1", 1);
 		for (const internal of [
 			"10.0.0.5",
 			"127.0.0.1",
@@ -109,20 +109,38 @@ describe("egress addresses", () => {
 			"fd00::1",
 			"fe80::1",
 		]) {
-			expect(() => egress.checkAddress("rebind.example", internal, 443)).toThrow(EgressRefused);
+			expect(() => egress.checkAddress("https", "rebind.example", internal, 443)).toThrow(EgressRefused);
 		}
-		expect(() => egress.checkAddress("localhost", PUBLIC, 1)).toThrow(EgressRefused);
+		expect(() => egress.checkAddress("http", "localhost", PUBLIC, 1)).toThrow(EgressRefused);
 	});
 
 	it("test_exact_names_may_resolve_to_internal_addresses", () => {
 		const egress = new Egress(["ollama.lan", "gpu.lan:8000"]);
 		egress.allowEndpoint("http://models.lan:11434/v1");
-		egress.checkAddress("ollama.lan", "192.168.1.20", 11434);
-		egress.checkAddress("gpu.lan", "10.0.0.8", 8000);
-		egress.checkAddress("models.lan", "192.168.1.21", 11434);
+		egress.checkAddress("http", "ollama.lan", "192.168.1.20", 11434);
+		egress.checkAddress("https", "gpu.lan", "10.0.0.8", 8000);
+		egress.checkAddress("http", "models.lan", "192.168.1.21", 11434);
 		// The exact entry covers its own port only.
-		expect(() => egress.checkAddress("gpu.lan", "10.0.0.8", 80)).toThrow(EgressRefused);
-		expect(() => egress.checkAddress("models.lan", "192.168.1.21", 80)).toThrow(EgressRefused);
+		expect(() => egress.checkAddress("https", "gpu.lan", "10.0.0.8", 80)).toThrow(EgressRefused);
+		expect(() => egress.checkAddress("http", "models.lan", "192.168.1.21", 80)).toThrow(EgressRefused);
+	});
+
+	it("test_exact_entry_admits_internal_answers_only_for_its_scheme_and_port", () => {
+		const egress = new Egress(["https://lan.example", "10.9.9.9:8443", "*.example"]);
+		egress.allowEndpoint("https://relay.example:8443/v1");
+		egress.checkAddress("https", "lan.example", "10.0.0.2", 443);
+		egress.checkAddress("https", "lan.example", "10.0.0.2", 9443);
+		egress.checkAddress("https", "relay.example", "10.0.0.3", 8443);
+		egress.checkAddress("http", "any.example", "10.9.9.9", 8443);
+		// A wildcard admits these names by URL, so only the exact entry could vouch for an internal answer.
+		for (const [scheme, host, address, port] of [
+			["http", "lan.example", "10.0.0.2", 443],
+			["http", "relay.example", "10.0.0.3", 8443],
+			["https", "relay.example", "10.0.0.3", 443],
+			["https", "any.example", "10.9.9.9", 443],
+		] as const) {
+			expect(() => egress.checkAddress(scheme, host, address, port)).toThrow(EgressRefused);
+		}
 	});
 
 	it("test_allow_listed_name_resolving_to_a_disallowed_ip_is_refused", async () => {
@@ -141,6 +159,19 @@ describe("egress addresses", () => {
 		await fetch("https://public.example/", {});
 		await fetch("http://ollama.lan:11434/api/chat", {});
 		expect(calls.map(call => call.url)).toEqual([`https://${PUBLIC}/`, "http://192.168.1.20:11434/api/chat"]);
+	});
+
+	it("test_endpoint_scheme_does_not_vouch_for_another_scheme_on_the_same_host", async () => {
+		resolving({ "relay.example": ["10.0.0.3"] });
+		const { base, calls } = stubBase();
+		// The wildcard lets the other schemes and ports pass the URL check; the address check must still refuse them.
+		const fetch = makeEgressFetch(["*.example"], "https://relay.example:8443", base);
+		for (const url of ["http://relay.example:8443/", "https://relay.example/", "http://relay.example/"]) {
+			expect(await failure(fetch(url, {}))).toBeInstanceOf(EgressRefused);
+		}
+		expect(calls).toEqual([]);
+		await fetch("https://relay.example:8443/v1", {});
+		expect(calls.map(call => call.url)).toEqual(["https://10.0.0.3:8443/v1"]);
 	});
 
 	it("test_every_hop_dials_its_checked_address", async () => {

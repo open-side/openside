@@ -8,8 +8,9 @@ use std::collections::BTreeSet;
 
 use openside_core::{
     ApprovalTier, ContentKind, CredentialAction, CredentialAuth, CredentialAuthKind,
-    CredentialErrorCode, CredentialOutcome, CredentialScope, CredentialUsage,
-    CredentialUsageWindow, DeferKind, MessageId, ModelAccountRef, SessionId, TicketId,
+    CredentialErrorCode, CredentialOutcome, CredentialRequestMetadata, CredentialScope,
+    CredentialUsage, CredentialUsageWindow, DeferKind, MessageId, ModelAccountRef, SessionId,
+    TicketId,
 };
 use serde::Serialize;
 use serde_json::{json, Map, Value};
@@ -190,6 +191,21 @@ fn daemon_samples() -> Vec<DaemonMessage> {
                 value: "synthetic-wire-secret-canary".into(),
                 upstream_account_id: Some("synthetic-upstream-id".into()),
                 expires_at_ms: Some(1_000_000),
+                base_url: Some("http://192.0.2.7:7844/backend".into()),
+                headers: Some([("x-example-task".into(), "openside:session-1".into())].into()),
+                error_rules: Some(openside_core::CredentialErrorRules {
+                    hint_header: Some("x-example-hint".into()),
+                    rules: vec![openside_core::CredentialErrorRule {
+                        status: 429,
+                        hint: Some("unsupported-client".into()),
+                        body_contains: None,
+                        outcome: openside_core::CredentialRuleOutcome::UnsupportedClient,
+                        message: Some("The relay accepts another client only".into()),
+                    }],
+                }),
+                request_metadata: Some(CredentialRequestMetadata {
+                    project_id: Some("synthetic-project.id:1".into()),
+                }),
             },
         });
     }

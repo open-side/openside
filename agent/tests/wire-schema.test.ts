@@ -139,6 +139,33 @@ describe("wire schema", () => {
 		}
 	});
 
+	it("test_credential_request_metadata_is_bounded", () => {
+		const response = (request_metadata: unknown) => ({
+			v: 1,
+			type: "credential_response",
+			id: "credential-rpc",
+			request_id: "model-request",
+			lease_id: "lease-1",
+			generation: 1,
+			account: { source: "vault", account_id: "opaque-1" },
+			auth: { kind: "bearer", value: "synthetic-wire-secret", request_metadata },
+		});
+		for (const good of [null, {}, { project_id: "proj.alpha:beta-1_2" }, { project_id: "a".repeat(256) }]) {
+			expect(validateInbound(response(good)).ok).toBe(true);
+		}
+		for (const bad of [
+			{ project_id: "" },
+			{ project_id: "a".repeat(257) },
+			{ project_id: "has space" },
+			{ project_id: "slash/project" },
+			{ project_id: 7 },
+			{ project_id: "p", email: "person@example.test" },
+			"proj",
+		]) {
+			expect(validateInbound(response(bad)).ok).toBe(false);
+		}
+	});
+
 	it("test_this_package_is_inside_the_published_supported_range", () => {
 		const parse = (version: string) => version.split(/[+-]/)[0]?.split(".").slice(0, 3).map(Number) ?? [];
 		const before = (a: number[], b: number[]) => {

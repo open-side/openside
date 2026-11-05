@@ -21,6 +21,7 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { DEFAULT_ANTIGRAVITY_VERSION } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { logRequestIdentity } from "../features/prompt-epoch";
 import type { CredentialUsage } from "../protocol/types";
 import { applyClaudeCodeVersion } from "./anthropic";
@@ -29,7 +30,7 @@ import { activeEgress, anthropicDirectFetch, directFetch, Egress, EgressRefused,
 import { AuthUnavailable } from "./errors";
 import { resolveModel, sanitizedErrorMessage, splitModelId } from "./models";
 import { ClassifiedOutcome, classifyResponse } from "./outcomes";
-import { type CredentialAttempt, makeCredentialFetch } from "./request-auth";
+import { type CredentialAttempt, makeCredentialFetch, requestApiKey } from "./request-auth";
 
 export interface LeaseContext {
 	/** Credential provider: the prefix of `model`. */
@@ -98,9 +99,9 @@ function emptyMessage(model: Model<Api>, stopReason: "aborted" | "error"): Assis
 	};
 }
 
-function sanitized(error: AssistantMessage, streamStarted: boolean): AssistantMessage {
+function sanitized(error: AssistantMessage, streamStarted: boolean, notice?: string): AssistantMessage {
 	const { errorClassificationMessage: _dropped, ...rest } = error;
-	return { ...rest, errorMessage: sanitizedErrorMessage(error, streamStarted) };
+	return { ...rest, errorMessage: notice ?? sanitizedErrorMessage(error, streamStarted) };
 }
 
 function usageOf(message: AssistantMessage): CredentialUsage | undefined {
@@ -135,6 +136,10 @@ export function makeStreamFn(port: CredentialRpcPort, ctx: LeaseContext): Stream
 		guard.allowEndpoint(endpoint);
 	};
 	applyClaudeCodeVersion(ctx.claudeCodeVersion);
+	// Without a version pi-ai fetches Antigravity's update manifest from a non-provider
+	// origin through the request's credential fetch, which refuses it and fails every
+	// Antigravity lease. An operator value in the runtime environment still wins.
+	process.env.PI_AI_ANTIGRAVITY_VERSION ||= DEFAULT_ANTIGRAVITY_VERSION;
 	const rpc = credentialRpcFor(port);
 	const maxRetryDelayMs = ctx.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
 	const neverAborted = new AbortController().signal;
@@ -149,10 +154,14 @@ export function makeStreamFn(port: CredentialRpcPort, ctx: LeaseContext): Stream
 		options: SimpleStreamOptions | undefined,
 	): Promise<AttemptResult> => {
 		const attempt = lease.credential;
+		// A plugin relay account routes through its daemon-issued endpoint; the
+		// credential fetch then pins every request to that exact origin.
+		const routed = attempt.baseUrl === undefined ? candidate.model : { ...candidate.model, baseUrl: attempt.baseUrl };
+		if (attempt.baseUrl !== undefined) admit(attempt.baseUrl);
 		const model =
-			candidate.provider === "anthropic" && candidate.model.api === "anthropic-messages"
-				? { ...candidate.model, isOAuth: attempt.kind === "claude_code" }
-				: candidate.model;
+			candidate.provider === "anthropic" && routed.api === "anthropic-messages"
+				? { ...routed, isOAuth: attempt.kind === "claude_code" }
+				: routed;
 		// pi transports retry 408/429/5xx on the same key. A pool-level outcome belongs
 		// to the daemon, which rotates accounts instead of sleeping on this one.
 		const handoff = new AbortController();
@@ -180,10 +189,21 @@ export function makeStreamFn(port: CredentialRpcPort, ctx: LeaseContext): Stream
 				wait: outcome.kind !== "cancelled",
 			});
 		const callerAborted = (): boolean => options?.signal?.aborted === true;
+		const apiKey = requestApiKey(attempt, PLACEHOLDER_API_KEY);
+		if (apiKey === undefined) {
+			// No request was sent; the lease is still reported so the daemon's
+			// attempt accounting stays ordered before the refusal surfaces.
+			try {
+				await report(attempt.outcome, false);
+			} finally {
+				attempt.clear();
+			}
+			throw attempt.refusal;
+		}
 		const inner = streamSimple(model, context, {
 			...options,
 			signal: options?.signal ? AbortSignal.any([options.signal, handoff.signal]) : handoff.signal,
-			apiKey: PLACEHOLDER_API_KEY,
+			apiKey,
 			fetch,
 			preferWebsockets: false,
 			maxRetryDelayMs,
@@ -221,7 +241,7 @@ export function makeStreamFn(port: CredentialRpcPort, ctx: LeaseContext): Stream
 				}
 				const retry = await report(failureOutcome(attempt, error), false);
 				if (attempt.refusal) throw attempt.refusal;
-				return retry ? { kind: "retry" } : { kind: "failed", error: sanitized(error, false) };
+				return retry ? { kind: "retry" } : { kind: "failed", error: sanitized(error, false, attempt.notice) };
 			} finally {
 				attempt.clear();
 			}
@@ -245,7 +265,7 @@ export function makeStreamFn(port: CredentialRpcPort, ctx: LeaseContext): Stream
 					outer.push({
 						type: "error",
 						reason: "error",
-						error: sanitized(error, true),
+						error: sanitized(error, true, attempt.notice),
 					});
 				}
 			} catch {

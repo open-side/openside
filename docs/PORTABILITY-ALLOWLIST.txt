@@ -2,8 +2,8 @@
 # Entries are narrowly scoped to optional defaults, synthetic tests, or recorded evidence.
 crates/opensided/src/model_broker.rs:119  # optional omp auth broker default token file (used only when no token is configured)
 crates/opensided/src/model_broker.rs:130  # optional omp auth broker default URL
-crates/opensided/src/model_broker.rs:662  # synthetic home default-token test
-crates/opensided/src/model_broker.rs:688  # asserts the optional default URL
+crates/opensided/src/model_broker.rs:666  # synthetic home default-token test
+crates/opensided/src/model_broker.rs:692  # asserts the optional default URL
 docs/CONFIGURATION.md:121  # documents the optional broker defaults
 tools/check-portability.sh:*  # defines the gate regex
 crates/opensided/src/onboarding.rs:401  # synthetic home for tilde-path tests, not a runtime default

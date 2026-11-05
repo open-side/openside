@@ -35,7 +35,7 @@
 | `user_message` | `message_id`, `text`, `mode: "queue"\|"steer"\|"now"` | 유휴면 새 런 시작. 실행 중이면 `steer`/`now` 는 다음 모델 요청 직전에 주입, `queue` 는 현재 런의 작업이 끝난 뒤 처리 |
 | `abort` | — | 현재 런 취소. 유휴면 무시 |
 | `tool_result` | `rpc_id`, `outcome` | `tool_call` 응답(§6) |
-| `credential_response` | `id`, `request_id`, `lease_id`, `generation`, `account{source,account_id}`, `auth{kind,value,upstream_account_id?,expires_at_ms?}` | 시도별 비공개 자격 증명 리스. 모델에는 일절 노출되지 않음(§6.1) |
+| `credential_response` | `id`, `request_id`, `lease_id`, `generation`, `account{source,account_id}`, `auth{kind,value,upstream_account_id?,expires_at_ms?,base_url?,headers?,error_rules?,request_metadata?{project_id?}}` | 시도별 비공개 자격 증명 리스. 모델에는 일절 노출되지 않음(§6.1) |
 | `credential_error` | `id`, `request_id`, `code`, `reason`, `retry_at_ms?`, `generation` | 고정·정제된 자격 증명 거부 응답. 로컬 소스 다운그레이드 불가(§6.1) |
 | `credential_reported` | `id`, `request_id`, `lease_id`, `generation`, `action`, `retry_at_ms?`, `reason?` | 재취득 전 커밋된 리포트 반영을 확인(§6.1) |
 | `ticket_resolved` | `ticket_id`, `tool_call_id`, `resolution` | 보류 호출 해결(§7) |
@@ -99,6 +99,12 @@ chief는 조율을 총괄한다. 반복 작업에는 teammate를 배정하고, �
 비공개 자격 증명 채널은 `tool_call`과 독립적이며 모델 툴 게이트에 절대 노출되지 않는다. 요청에는 길이 제한이 있는 불투명 상관관계 `id`와 논리적 `request_id`를 사용한다. `request_id`는 재시도 전반에서 바뀌지 않는다. `attempt`는 0부터 63까지의 0 기반 인덱스로, 업스트림 시도는 최대 64회까지 허용된다. 선택 항목인 `subagent`는 데몬이 인식하는 자식 ID로 해당 Agent 제약을 적용하는 데 쓴다. 어떤 프레임도 다른 세션 ID를 지정할 수 없다. 유효한 정렬 계정 풀과 웜 세션 어피니티의 소유권은 오직 데몬에만 있다.
 
 `auth.kind`는 `api_key`, `claude_code`, `codex_cli`, `bearer` 중 하나다. 유일한 비밀값은 `auth.value`다. Codex는 요청 헤더에 필요한 비공개 업스트림 계정 ID도 함께 전달받을 수 있다. 리프레시 토큰이나 자격 증명 홈 디렉터리 필드는 허용되지 않는다. 사이드카는 현재 시도에만 토큰을 유지하고, pi-ai가 만든 자격 증명 헤더를 모두 제거한 뒤 선택된 프로바이더 오리진에만 인증 정보를 주입한다(`agent/src/providers/request-auth.ts`). pi-ai는 토큰을 문자열로 전달받으므로 자격 증명 파일을 읽거나 OAuth 갱신을 실행하지 않으며, 프로바이더 내부의 일시적 오류 재시도는 `maxRetryDelayMs` 안에서 같은 리스를 재사용하고 최종 결과만 보고한다.
+
+`auth.request_metadata`는 계정과 함께 리스되는 선택적 비공개 요청 컨텍스트이며 공개 계정 메타데이터가 아니다. 현재는 `project_id`(1–256자의 `[A-Za-z0-9._:-]`)만 허용하며, 다른 키나 값이 들어오면 리스 전체를 `invalid_credential_request`로 거부한다. Google Cloud Code 프로바이더인 `google-gemini-cli`와 `google-antigravity`의 경우, 사이드카가 pi-ai에 구조화된 키 `{"token":"<placeholder>","projectId":"<project_id>"}`를 넘겨 pi-ai가 해당 프로젝트를 담아 요청 본문을 구성하게 하고, 요청 계층에서 플레이스홀더를 `authorization: Bearer <lease value>`로 교체한다. 이 프로바이더들에 대한 리스에 `project_id`가 없으면 요청을 보내기 전에 이를 보고하고 `AuthUnavailable`로 거부한다(닫힌 채로 실패). 사이드카는 시도가 끝날 때 토큰과 함께 프로젝트 정보를 지우며, Rust는 drop 시 메모리를 0으로 덮어써 비운다.
+
+`auth.base_url`, `auth.headers` and `auth.error_rules` appear only on plugin-source leases (`account.source = "plugin"`, see `docs/specs/models-accounts.md` "Plugin sources"). The sidecar routes that attempt to `base_url` instead of the model's default endpoint and admits exactly its origin through the egress guard; `headers` are added after credential headers are stripped and can never set one; `error_rules` classify the relay's refusals before the generic status mapping. A field outside its bounds rejects the whole lease as `invalid_credential_request`.
+
+첫 Antigravity 요청 전에 pi-ai는 프로바이더가 아닌 오리진에서 Antigravity 클라이언트 버전 매니페스트를 가져오려 하는데, 요청별 자격 증명 fetch가 이 요청을 거부해 리스 전체가 실패한다. 따라서 사이드카는 스트림 함수를 구성할 때 런타임 환경에 `PI_AI_ANTIGRAVITY_VERSION`이 이미 설정되어 있지 않다면(운영자 재정의 우선) 이를 pi-ai의 고정 기본값(`DEFAULT_ANTIGRAVITY_VERSION`)으로 설정하여 매니페스트 조회가 일어나지 않게 한다.
 
 결과(outcome) 종류는 `success`, `auth`, `rate_limit`, `quota`, `policy`, `transient`, `cancelled`다. 세부 정보가 없는 단순 429는 계정 레이트 리밋이고, 구조화된 쿼터 코드는 쿼터 소진이며, 일반 401은 인증 실패, 그 외 403 권한 오류는 정책 거부다. 입증된 분당/동시성 한도 초과나 전송/5xx 실패는 일시적 오류(transient)로 분류한다. `retry_after_ms`는 프로바이더가 알린 유한하고 제한된 대기 시간만 담으며, 재시도/초기화 시각 정보가 없으면 임의로 60초를 채우지 않고 알 수 없음(unknown)으로 둔다. 범위는 구조화된 쿼터/정책 데이터로 `model` 범위임이 입증되지 않는 한 `account`다. 리포트에는 원시 응답 본문, 헤더, 예외 텍스트, 업스트림 식별자를 일절 포함하지 않는다.
 

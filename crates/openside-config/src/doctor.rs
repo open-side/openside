@@ -116,7 +116,7 @@ impl DoctorReport {
         text
     }
 
-    fn add(
+    pub(crate) fn add(
         &mut self,
         id: impl Into<String>,
         status: Status,
@@ -293,6 +293,7 @@ async fn run_with(
     }
     crate::native_messaging::doctor_check(&mut report, loaded, env);
     crate::crash_reports::doctor_check(&mut report, loaded);
+    crate::plugin_sources::doctor_check(&mut report, loaded).await;
     report
 }
 

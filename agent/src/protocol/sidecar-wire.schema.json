@@ -277,6 +277,161 @@
           ],
           "default": null,
           "title": "Expires At Ms"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "pattern": "^https?://[^/?#@\\s]+(/[^?#\\s]*)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Private endpoint replacing the provider default for this lease (a plugin relay); never public metadata.",
+          "title": "Base Url"
+        },
+        "headers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "maxLength": 256,
+                "pattern": "^[\\x20-\\x7e]*$",
+                "type": "string"
+              },
+              "maxProperties": 8,
+              "propertyNames": {
+                "pattern": "^x-[a-z0-9-]{1,62}$"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Private non-credential headers for this lease's endpoint (a relay's per-session label).",
+          "title": "Headers"
+        },
+        "error_rules": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "hint_header": {
+                  "anyOf": [
+                    {
+                      "pattern": "^x-[a-z0-9-]{1,62}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Hint Header"
+                },
+                "rules": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "maximum": 599,
+                        "minimum": 400,
+                        "type": "integer"
+                      },
+                      "hint": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "pattern": "^[\\x20-\\x7e]+$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "body_contains": {
+                        "anyOf": [
+                          {
+                            "maxLength": 128,
+                            "pattern": "^[\\x20-\\x7e]+$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "outcome": {
+                        "enum": [
+                          "unsupported_client",
+                          "sign_in",
+                          "capacity",
+                          "rate_limit"
+                        ],
+                        "type": "string"
+                      },
+                      "message": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "pattern": "^[\\x20-\\x7e]+$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "outcome"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 16,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "rules"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A plugin relay's refusal mapping, applied before generic status classification.",
+          "title": "Error Rules"
+        },
+        "request_metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "project_id": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9._:-]{1,256}$",
+                  "title": "Project Id",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Private request context for this lease (a Cloud Code project); never public metadata.",
+          "title": "Request Metadata"
         }
       },
       "required": [
@@ -1274,7 +1429,8 @@
             "command",
             "claude-code",
             "codex-cli",
-            "builtin"
+            "builtin",
+            "plugin"
           ],
           "title": "Source",
           "type": "string"

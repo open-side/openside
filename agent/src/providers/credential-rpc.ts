@@ -5,7 +5,9 @@
  */
 import type {
 	CredentialErrorCode,
+	CredentialErrorRules,
 	CredentialReply,
+	CredentialRequestMetadata,
 	CredentialResponse,
 	CredentialUsage,
 	OutcomeWire,
@@ -13,7 +15,7 @@ import type {
 import type { ReverseRpc } from "../transport/rpc";
 import { AuthUnavailable } from "./errors";
 import type { ClassifiedOutcome } from "./outcomes";
-import { CredentialAttempt } from "./request-auth";
+import { AUTH_HEADERS, CredentialAttempt } from "./request-auth";
 import { CredentialSecret } from "./secret";
 
 export const SAFE_ERRORS: Record<CredentialErrorCode, string> = {
@@ -31,6 +33,31 @@ const AUTH_FIELDS: Record<string, true> = {
 	value: true,
 	upstream_account_id: true,
 	expires_at_ms: true,
+	base_url: true,
+	headers: true,
+	error_rules: true,
+	request_metadata: true,
+};
+const MAX_BASE_URL_LENGTH = 512;
+const MAX_LEASE_HEADERS = 8;
+const LEASE_HEADER_NAME = /^x-[a-z0-9-]{1,62}$/;
+const LEASE_HEADER_VALUE = /^[\x20-\x7e]{0,256}$/;
+const PROJECT_ID = /^[A-Za-z0-9._:-]{1,256}$/;
+const MAX_ERROR_RULES = 16;
+const MAX_UPSTREAM_ID_LENGTH = 1024;
+const AUTH_KINDS: Record<string, true> = { api_key: true, claude_code: true, codex_cli: true, bearer: true };
+const RULE_OUTCOMES: Record<string, true> = {
+	unsupported_client: true,
+	sign_in: true,
+	capacity: true,
+	rate_limit: true,
+};
+const RULE_FIELDS: Record<string, true> = {
+	status: true,
+	hint: true,
+	body_contains: true,
+	outcome: true,
+	message: true,
 };
 const REDACTED = "CredentialLease(credentials=**********)";
 
@@ -92,15 +119,115 @@ function scrub(reply: CredentialReply | undefined): void {
 	if (reply?.type !== "credential_response") return;
 	reply.auth.value = "";
 	delete reply.auth.upstream_account_id;
+	delete reply.auth.request_metadata;
+}
+
+/** An absolute http(s) URL without credentials, query or fragment. */
+function validBaseUrl(value: unknown): value is string {
+	if (typeof value !== "string" || value.length > MAX_BASE_URL_LENGTH) return false;
+	try {
+		const url = new URL(value);
+		return (
+			(url.protocol === "http:" || url.protocol === "https:") &&
+			url.hostname !== "" &&
+			url.username === "" &&
+			url.password === "" &&
+			url.search === "" &&
+			url.hash === "" &&
+			!value.includes("?") &&
+			!value.includes("#")
+		);
+	} catch {
+		return false;
+	}
+}
+
+function validHeaders(value: unknown): value is Record<string, string> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const entries = Object.entries(value);
+	return (
+		entries.length <= MAX_LEASE_HEADERS &&
+		entries.every(
+			([name, text]) =>
+				LEASE_HEADER_NAME.test(name) &&
+				!(AUTH_HEADERS as readonly string[]).includes(name) &&
+				typeof text === "string" &&
+				LEASE_HEADER_VALUE.test(text),
+		)
+	);
+}
+
+function optionalText(value: unknown, max: number): boolean {
+	return (
+		value === undefined ||
+		value === null ||
+		(typeof value === "string" && /^[\x20-\x7e]+$/.test(value) && value.length <= max)
+	);
+}
+
+function validErrorRules(value: unknown): value is CredentialErrorRules {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const { hint_header, rules, ...rest } = value as Record<string, unknown>;
+	return (
+		Object.keys(rest).length === 0 &&
+		(hint_header === undefined ||
+			hint_header === null ||
+			(typeof hint_header === "string" && LEASE_HEADER_NAME.test(hint_header))) &&
+		Array.isArray(rules) &&
+		rules.length <= MAX_ERROR_RULES &&
+		rules.every((rule: unknown) => {
+			if (typeof rule !== "object" || rule === null || Array.isArray(rule)) return false;
+			// Every key is checked against RULE_FIELDS below before any value is trusted.
+			const fields: Record<string, unknown> = { ...rule };
+			const { status, outcome } = fields;
+			return (
+				Object.keys(fields).every(key => Object.hasOwn(RULE_FIELDS, key)) &&
+				typeof status === "number" &&
+				Number.isInteger(status) &&
+				status >= 400 &&
+				status <= 599 &&
+				typeof outcome === "string" &&
+				Object.hasOwn(RULE_OUTCOMES, outcome) &&
+				optionalText(fields.hint, 64) &&
+				optionalText(fields.body_contains, 128) &&
+				optionalText(fields.message, 200)
+			);
+		})
+	);
+}
+
+function validRequestMetadata(value: unknown): value is CredentialRequestMetadata {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const { project_id, ...rest } = value as Record<string, unknown>;
+	return (
+		Object.keys(rest).length === 0 &&
+		(project_id === undefined || (typeof project_id === "string" && PROJECT_ID.test(project_id)))
+	);
 }
 
 function validLease(reply: CredentialResponse): boolean {
 	const auth = reply.auth;
+	const upstream: unknown = auth.upstream_account_id;
+	const expires: unknown = auth.expires_at_ms;
 	return (
 		Object.keys(auth).every(key => Object.hasOwn(AUTH_FIELDS, key)) &&
+		typeof auth.kind === "string" &&
+		Object.hasOwn(AUTH_KINDS, auth.kind) &&
 		typeof auth.value === "string" &&
 		auth.value.length >= 1 &&
-		auth.value.length <= MAX_SECRET_LENGTH
+		auth.value.length <= MAX_SECRET_LENGTH &&
+		(upstream === undefined ||
+			upstream === null ||
+			(typeof upstream === "string" && upstream.length >= 1 && upstream.length <= MAX_UPSTREAM_ID_LENGTH)) &&
+		(expires === undefined ||
+			expires === null ||
+			(typeof expires === "number" && Number.isSafeInteger(expires) && expires >= 0)) &&
+		(auth.base_url === undefined || auth.base_url === null || validBaseUrl(auth.base_url)) &&
+		(auth.headers === undefined || auth.headers === null || validHeaders(auth.headers)) &&
+		(auth.error_rules === undefined || auth.error_rules === null || validErrorRules(auth.error_rules)) &&
+		(auth.request_metadata === undefined ||
+			auth.request_metadata === null ||
+			validRequestMetadata(auth.request_metadata))
 	);
 }
 
@@ -173,7 +300,13 @@ export class DaemonCredentialRpc implements CredentialRpc {
 			reply.account.source,
 			reply.auth.kind,
 			secret,
-			reply.auth.upstream_account_id,
+			reply.auth.upstream_account_id ?? undefined,
+			{
+				baseUrl: reply.auth.base_url ?? undefined,
+				headers: reply.auth.headers ?? undefined,
+				errorRules: reply.auth.error_rules ?? undefined,
+			},
+			reply.auth.request_metadata?.project_id,
 		);
 		scrub(reply);
 		return new CredentialLease(reply, credential);
@@ -202,7 +335,8 @@ export class DaemonCredentialRpc implements CredentialRpc {
 			});
 		}
 		if (reply.action === "stop" && ["auth", "rate_limit", "quota", "policy"].includes(outcome.kind)) {
-			throw new AuthUnavailable(provider, ["No eligible account in the configured pool"], {
+			// A plugin relay's refusal notice is manifest- or application-authored, never response text.
+			throw new AuthUnavailable(provider, [lease.credential.notice ?? "No eligible account in the configured pool"], {
 				reason: "auth_unavailable",
 				retryAtMs: reply.retry_at_ms,
 			});

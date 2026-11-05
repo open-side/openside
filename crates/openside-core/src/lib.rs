@@ -22,8 +22,9 @@ pub mod runtime;
 pub use content::{ContentKind, ContentPart};
 pub use credentials::{
     CredentialAction, CredentialAuth, CredentialAuthKind, CredentialError, CredentialErrorCode,
-    CredentialOutcome, CredentialReport, CredentialReportAck, CredentialRequest, CredentialScope,
-    CredentialSnapshot, CredentialUsage, CredentialUsageWindow, ModelAccountRef,
+    CredentialErrorRule, CredentialErrorRules, CredentialOutcome, CredentialReport,
+    CredentialReportAck, CredentialRequest, CredentialRequestMetadata, CredentialRuleOutcome,
+    CredentialScope, CredentialSnapshot, CredentialUsage, CredentialUsageWindow, ModelAccountRef,
     MAX_CREDENTIAL_ATTEMPTS,
 };
 pub use ids::{MessageId, SessionId, TicketId};

@@ -673,6 +673,10 @@ impl Service {
                 value: parsed.access.to_string(),
                 upstream_account_id: parsed.account_id.take(),
                 expires_at_ms: parsed.expires_at_ms,
+                base_url: None,
+                headers: None,
+                error_rules: None,
+                request_metadata: None,
             },
             revision: info.revision,
         })

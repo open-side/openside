@@ -166,12 +166,15 @@ export class Egress {
 	/**
 	 * Checks one resolved address of `host` (DNS rebinding). A name listed
 	 * exactly (a network.allow entry or an admitted endpoint) may resolve
-	 * anywhere, as may an IP listed literally. A loopback name must stay on
-	 * loopback, and a name reached only through a wildcard entry must resolve
-	 * to a public address, never loopback, private, link-local (metadata) or
-	 * other internal ranges.
+	 * anywhere, as may an IP listed literally, but only for the scheme and
+	 * port that entry names: `https://lan.example:443` never lets
+	 * `http://lan.example:443` reach an internal address. A loopback name must
+	 * stay on loopback, and a name reached only through a wildcard entry must
+	 * resolve to a public address, never loopback, private, link-local
+	 * (metadata) or other internal ranges.
 	 */
-	checkAddress(host: string, address: string, port: number): void {
+	checkAddress(scheme: string, host: string, address: string, port: number): void {
+		const normalizedScheme = scheme.toLowerCase();
 		const name = host
 			.replace(/^\[|\]$/g, "")
 			.replace(/\.+$/, "")
@@ -181,7 +184,9 @@ export class Egress {
 		if (isLoopback(name) && isLoopbackAddress(ip)) return;
 		const listed = this.#entries.some(
 			entry =>
-				(entry.port === undefined || entry.port === port) && (entry.host === name || canonicalIp(entry.host) === ip),
+				(entry.scheme === undefined || entry.scheme === normalizedScheme) &&
+				(entry.port === undefined || entry.port === port) &&
+				(entry.host === name || canonicalIp(entry.host) === ip),
 		);
 		if (listed) return;
 		if (!isLoopback(name) && !isInternalAddress(ip)) return;
@@ -239,12 +244,12 @@ function portOf(scheme: string, port: number | string | undefined): number {
  * Resolves `host` and checks every answer (DNS rebinding): an IP literal was
  * already checked by name, so only names resolve here.
  */
-async function resolveChecked(egress: Egress, host: string, port: number): Promise<ResolvedAddress[]> {
+async function resolveChecked(egress: Egress, scheme: string, host: string, port: number): Promise<ResolvedAddress[]> {
 	const bare = host.replace(/^\[|\]$/g, "");
 	if (isIP(bare)) return [{ address: bare, family: isIP(bare) }];
 	const addresses = await egressResolver.lookup(bare);
 	if (addresses.length === 0) throw reported(new EgressRefused(`${bare}:${port}`));
-	for (const { address } of addresses) refusing(() => egress.checkAddress(bare, address, port));
+	for (const { address } of addresses) refusing(() => egress.checkAddress(scheme, bare, address, port));
 	return addresses;
 }
 
@@ -310,12 +315,13 @@ async function checkedHop(egress: Egress, url: URL, request: RequestInit): Promi
 	if (proxy) {
 		refuseUnlessAllowed(egress, proxy);
 		const proxyName = proxy.hostname.replace(/^\[|\]$/g, "");
-		const proxyPort = portOf(proxy.protocol.slice(0, -1), proxy.port);
+		const proxyScheme = proxy.protocol.slice(0, -1);
+		const proxyPort = portOf(proxyScheme, proxy.port);
 		if (isIP(proxyName)) return [url.href, { ...request, headers, proxy: proxy.href } as RequestInit];
 		// Bun has no server-name option for the proxy connection, so an HTTPS
 		// proxy pinned to an IP could not verify its certificate by name.
 		if (proxy.protocol === "https:") throw reported(new EgressRefused(`${proxy.origin} (HTTPS proxy by name)`));
-		const [first] = await resolveChecked(egress, proxyName, proxyPort);
+		const [first] = await resolveChecked(egress, proxyScheme, proxyName, proxyPort);
 		if (!first) throw reported(new EgressRefused(proxy.host));
 		// The target URL stays as is: the proxy resolves it and receives it in CONNECT or the request line.
 		const pinnedProxy = new URL(proxy.href);
@@ -324,7 +330,8 @@ async function checkedHop(egress: Egress, url: URL, request: RequestInit): Promi
 	}
 	const name = url.hostname.replace(/^\[|\]$/g, "");
 	if (isIP(name)) return [url.href, { ...request, headers }];
-	const [first] = await resolveChecked(egress, name, portOf(url.protocol.slice(0, -1), url.port));
+	const scheme = url.protocol.slice(0, -1);
+	const [first] = await resolveChecked(egress, scheme, name, portOf(scheme, url.port));
 	if (!first) throw reported(new EgressRefused(url.host));
 	const pinned = new URL(url.href);
 	pinned.hostname = first.family === 6 ? `[${first.address}]` : first.address;
@@ -429,7 +436,7 @@ function guardedHost(scheme: string, host: string | undefined, port: number | st
 type LookupCallback = (error: Error | null, address?: unknown, family?: number) => void;
 
 /** `dns.lookup`-shaped hook for node sockets: every answer is checked before connecting. */
-function guardedLookup(port: number) {
+function guardedLookup(scheme: string, port: number) {
 	return (hostname: string, options: unknown, callback?: LookupCallback): void => {
 		const done = (typeof options === "function" ? options : callback) as LookupCallback;
 		const all = typeof options === "object" && options !== null && Reflect.get(options, "all") === true;
@@ -438,7 +445,7 @@ function guardedLookup(port: number) {
 			done(new EgressRefused(hostname));
 			return;
 		}
-		resolveChecked(guard, hostname, port).then(
+		resolveChecked(guard, scheme, hostname, port).then(
 			addresses => {
 				const [first] = addresses;
 				if (all) done(null, addresses);
@@ -464,13 +471,13 @@ function guardSocketArgs(scheme: string, args: unknown[]): unknown[] {
 		const host = typeof second === "string" ? second : "localhost";
 		guardedHost(scheme, host, first);
 		const tail = typeof second === "string" ? rest : [second, ...rest];
-		return [{ port: Number(first), host, lookup: guardedLookup(Number(first)) }, ...tail];
+		return [{ port: Number(first), host, lookup: guardedLookup(scheme, Number(first)) }, ...tail];
 	}
 	if (typeof first !== "object" || first === null) return args;
 	const target: NodeTarget = first;
 	if (target.path !== undefined && target.port === undefined) return args;
 	guardedHost(scheme, target.hostname ?? target.host, target.port);
-	return [{ ...target, lookup: guardedLookup(portOf(scheme, target.port)) }, second, ...rest];
+	return [{ ...target, lookup: guardedLookup(scheme, portOf(scheme, target.port)) }, second, ...rest];
 }
 
 /** `http.request(url | options, options?, cb?)`. */
@@ -480,7 +487,7 @@ function guardHttpArgs(defaultScheme: string, args: unknown[]): unknown[] {
 		const url = new URL(first);
 		const scheme = url.protocol.slice(0, -1);
 		guardedHost(scheme, url.hostname, url.port);
-		const lookup = guardedLookup(portOf(scheme, url.port));
+		const lookup = guardedLookup(scheme, portOf(scheme, url.port));
 		return typeof second === "object" && second !== null
 			? [first, { ...second, lookup }, ...rest]
 			: [first, { lookup }, second, ...rest];
@@ -497,7 +504,7 @@ function guardHttpArgs(defaultScheme: string, args: unknown[]): unknown[] {
 		return args;
 	}
 	guardedHost(scheme, target.hostname ?? target.host?.replace(/:\d+$/, ""), target.port);
-	return [{ ...target, lookup: guardedLookup(portOf(scheme, target.port)) }, second, ...rest];
+	return [{ ...target, lookup: guardedLookup(scheme, portOf(scheme, target.port)) }, second, ...rest];
 }
 
 function wrapMethod(owner: object, name: string, guard: (args: unknown[]) => unknown[]): void {
@@ -554,7 +561,7 @@ export function installEgress(allow: Iterable<string>): Egress {
 			const target: { hostname?: string; port?: number; tls?: unknown } = options;
 			const scheme = target.tls ? "https" : "http";
 			guardedHost(scheme, target.hostname, target.port);
-			await resolveChecked(active ?? egress, target.hostname ?? "localhost", portOf(scheme, target.port));
+			await resolveChecked(active ?? egress, scheme, target.hostname ?? "localhost", portOf(scheme, target.port));
 		}
 		return Reflect.apply(nativeConnect, Bun, [options]);
 	});

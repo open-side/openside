@@ -45,6 +45,7 @@ mod favicons;
 mod hire;
 mod import_delivery;
 mod login;
+mod model_plugins;
 #[path = "managed_subscriptions/tests.rs"]
 mod managed_subscriptions;
 mod memory;

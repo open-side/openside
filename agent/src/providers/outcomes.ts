@@ -1,4 +1,4 @@
-import type { CredentialOutcome, OutcomeWire } from "../protocol/types";
+import type { CredentialErrorRules, CredentialOutcome, CredentialRuleOutcome, OutcomeWire } from "../protocol/types";
 
 /** Credential health reports carry classifications, never provider response text. */
 export type OutcomeKind = CredentialOutcome;
@@ -84,4 +84,64 @@ export function classifyResponse(status: number, retryAfter?: string | null, bod
 		return new ClassifiedOutcome("rate_limit", delay);
 	}
 	return new ClassifiedOutcome("transient");
+}
+
+export interface RelayClassification {
+	outcome: ClassifiedOutcome;
+	/** Explanation shown instead of the status-only error text; never response content. */
+	notice: string | undefined;
+}
+
+export const RELAY_NOTICES: Record<CredentialRuleOutcome, string> = {
+	unsupported_client: "The plugin source refused this client; retrying will not help",
+	sign_in: "An account behind the plugin source needs to sign in again",
+	capacity: "The plugin source has no free capacity right now",
+	rate_limit: "The plugin source is rate-limited; retry later",
+};
+
+function relayMessage(body: unknown): string {
+	if (typeof body === "string") return body;
+	if (typeof body !== "object" || body === null) return "";
+	const error = "error" in body ? body.error : undefined;
+	if (typeof error === "string") return error;
+	if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
+		return error.message;
+	}
+	return "message" in body && typeof body.message === "string" ? body.message : "";
+}
+
+/**
+ * Plugin-source relay answers, mapped by the lease's manifest rules before the
+ * generic status classification. The body is read only to match a rule and
+ * never leaves this function.
+ */
+export function classifyRelayResponse(
+	status: number,
+	headers: Headers,
+	body: unknown,
+	rules: CredentialErrorRules | null | undefined,
+): RelayClassification {
+	const retryAfter = headers.get("retry-after");
+	const delay = retryAfterSeconds(retryAfter);
+	const hint = rules?.hint_header ? headers.get(rules.hint_header)?.trim().toLowerCase() : undefined;
+	const message = relayMessage(body).slice(0, 4096).toLowerCase();
+	const rule = rules?.rules.find(
+		rule =>
+			rule.status === status &&
+			((!rule.hint && !rule.body_contains) ||
+				(!!rule.hint && rule.hint.toLowerCase() === hint) ||
+				(!!rule.body_contains && message.includes(rule.body_contains.toLowerCase()))),
+	);
+	if (rule) {
+		const outcome =
+			rule.outcome === "unsupported_client"
+				? // The same client shape gets the same refusal: stop instead of retrying.
+					new ClassifiedOutcome("policy")
+				: rule.outcome === "sign_in"
+					? new ClassifiedOutcome("auth")
+					: new ClassifiedOutcome("rate_limit", delay);
+		return { outcome, notice: rule.message ?? RELAY_NOTICES[rule.outcome] };
+	}
+	const outcome = classifyResponse(status, retryAfter, body);
+	return { outcome, notice: outcome.kind === "rate_limit" ? RELAY_NOTICES.rate_limit : undefined };
 }

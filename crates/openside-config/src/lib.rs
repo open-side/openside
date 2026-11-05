@@ -18,12 +18,13 @@ mod drm;
 mod memory;
 mod native_messaging;
 mod paths;
+mod plugin_sources;
 mod profile;
 mod remote;
-pub mod tailscale;
 mod runtime_env;
 mod skills;
 mod sync;
+pub mod tailscale;
 mod ui;
 
 use std::ffi::OsString;
@@ -42,6 +43,11 @@ pub use channels::{
 pub use discovery::{agent_command, discover_browser, find_on_path, AgentCommand, BrowserNotFound};
 pub use memory::{EmbeddingConfig, MemoryConfig, MemoryRetentionSetting, EMBEDDING_MODEL_FILES};
 pub use paths::Paths;
+pub use plugin_sources::{
+    load_plugin_sources, normalized_origin, parse_plugin_source, plugin_dir, PluginAuth,
+    PluginErrors, PluginLoad, PluginOutcome, PluginProbe, PluginProvider, PluginRule,
+    PluginSessionHeader, PluginSource,
+};
 pub use profile::AgentProfile;
 pub use remote::{
     expand_home, read_secret, CloudflareConfig, CloudflareTunnel, OtpConfig, RelayConfig,

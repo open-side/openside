@@ -86,6 +86,7 @@ mod inhibit;
 mod lifecycle;
 mod managed_subscriptions;
 mod memory;
+mod model_plugins;
 mod memory_model;
 mod model_accounts;
 mod model_broker;

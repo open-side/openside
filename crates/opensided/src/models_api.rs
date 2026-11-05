@@ -35,6 +35,7 @@ pub(crate) struct Service {
     startups: AsyncRwLock<()>,
     pub(crate) policy: Mutex<crate::model_accounts::Policy>,
     catalog_refresh: Mutex<()>,
+    pub(crate) plugins: crate::model_plugins::Cache,
 }
 
 pub(crate) struct CredentialChange<'a> {
@@ -59,6 +60,7 @@ impl Service {
             startups: AsyncRwLock::new(()),
             policy: Mutex::new(crate::model_accounts::Policy::default()),
             catalog_refresh: Mutex::new(()),
+            plugins: crate::model_plugins::Cache::default(),
         }
     }
     pub(crate) fn default_generation(&self) -> u64 {

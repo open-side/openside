@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     process::Stdio,
     time::Duration,
 };
@@ -207,6 +207,10 @@ fn auth(value: String, provider: &str) -> CredentialAuth {
         value,
         upstream_account_id: None,
         expires_at_ms: None,
+        base_url: None,
+        headers: None,
+        error_rules: None,
+        request_metadata: None,
     }
 }
 fn error(
@@ -420,6 +424,7 @@ pub(crate) async fn inventory(s: &Shared) -> Inventory {
             });
         }
     }
+    accounts.extend(crate::model_plugins::accounts(s).await);
     Inventory {
         accounts,
         broker_present,
@@ -748,8 +753,15 @@ struct IndexModel {
 pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
     let inventory = inventory(s).await;
     let pools = pools(s, &inventory).await?;
-    let config =
-        json!({"models":s.models.models(),"provider_names":pools.keys().collect::<Vec<_>>()});
+    let mut provider_names: BTreeSet<&String> = pools.keys().collect();
+    provider_names.extend(
+        inventory
+            .accounts
+            .iter()
+            .filter(|account| account.reference.source == crate::model_plugins::SOURCE)
+            .map(|account| &account.provider),
+    );
+    let config = json!({"models":s.models.models(),"provider_names":provider_names});
     let environment = openside_config::runtime_environment(&s.models.credentials_config());
     let deadline = Duration::from_millis(s.config.loaded.config.agent.startup_timeout_ms)
         .max(Duration::from_secs(10));
@@ -790,6 +802,13 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                 provider: provider.provider.clone(),
                 accounts: vec![],
             });
+        // Plugin accounts route quietly: they never appear as rows or in the public pool,
+        // but they make a model available when the person's own accounts cannot serve it.
+        let plugin_pool = crate::model_plugins::effective(
+            pools.get(&provider.provider),
+            &inventory,
+            &provider.provider,
+        );
         let mut candidates: BTreeMap<_, _> = provider
             .models
             .iter()
@@ -825,13 +844,37 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                     });
             }
         }
+        // A source can stop reporting a pinned account (broker credential ids change when the
+        // broker re-creates a login); the pool fails closed until a person picks current ones.
+        let unreported: Vec<String> = pool
+            .accounts
+            .iter()
+            .filter(|reference| {
+                !inventory.accounts.iter().any(|account| {
+                    account.provider == provider.provider && &account.reference == *reference
+                })
+            })
+            .map(|reference| format!("{}:{}", reference.source, reference.account_id))
+            .collect();
+        let only_unreported = !pool.accounts.is_empty() && unreported.len() == pool.accounts.len();
         let models = candidates
             .into_iter()
             .map(|(id, metadata)| {
+                let plugin_ok = plugin_pool.as_ref().is_some_and(|effective| {
+                    inventory.accounts.iter().any(|account| {
+                        account.provider == provider.provider
+                            && account.reference.source == crate::model_plugins::SOURCE
+                            && effective.accounts.contains(&account.reference)
+                            && policy.status(account, &id, true).available
+                    })
+                });
                 let mut rows: Vec<_> = inventory
                     .accounts
                     .iter()
-                    .filter(|account| account.provider == provider.provider)
+                    .filter(|account| {
+                        account.provider == provider.provider
+                            && account.reference.source != crate::model_plugins::SOURCE
+                    })
                     .map(|account| {
                         let mut row =
                             policy.status(account, &id, pool.accounts.contains(&account.reference));
@@ -865,12 +908,20 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                     strengths: metadata.strengths,
                     id,
                     label: metadata.label,
-                    available: selected.is_some(),
+                    available: selected.is_some() || plugin_ok,
                     reason: selected.map(|row| row.reason.clone()).unwrap_or_else(|| {
-                        if inventory.broker_failed
+                        if plugin_ok {
+                            "Ready".into()
+                        } else if inventory.broker_failed
                             && pool.accounts.iter().any(|a| a.source == "omp-broker")
                         {
                             "Configured broker unavailable; no unlisted-source fallback".into()
+                        } else if only_unreported {
+                            format!(
+                                "Pool accounts {} are no longer reported by their source; choose current accounts for the {} pool",
+                                unreported.join(", "),
+                                provider.provider
+                            )
                         } else {
                             "No eligible account in the configured pool".into()
                         }
@@ -1210,7 +1261,12 @@ pub(crate) async fn credentials(
                 None,
             )
         })?;
-        let pool = pools.get(&request.provider).ok_or_else(|| {
+        let pool = crate::model_plugins::effective(
+            pools.get(&request.provider),
+            &inventory,
+            &request.provider,
+        )
+        .ok_or_else(|| {
             error(
                 s,
                 CredentialErrorCode::AuthUnavailable,
@@ -1218,7 +1274,7 @@ pub(crate) async fn credentials(
                 None,
             )
         })?;
-        let allowed = permitted(s, session, &request, pool).await?;
+        let allowed = permitted(s, session, &request, &pool).await?;
         if generation != s.models.credentials_generation() {
             continue;
         }
@@ -1315,13 +1371,25 @@ pub(crate) async fn credentials(
                 .min()
         };
         for account in candidates {
-            let resolved = resolve(
-                s,
-                &account,
-                refresh.as_ref() == Some(&account.reference),
-                &request.model,
-            )
-            .await;
+            let resolved = if account.reference.source == crate::model_plugins::SOURCE {
+                crate::model_plugins::resolve(
+                    s,
+                    &account.reference.account_id,
+                    &account.provider,
+                    session,
+                    request.subagent.as_deref(),
+                )
+                .await
+                .ok_or(())
+            } else {
+                resolve(
+                    s,
+                    &account,
+                    refresh.as_ref() == Some(&account.reference),
+                    &request.model,
+                )
+                .await
+            };
             let Ok((auth, revision)) = resolved else {
                 continue;
             };
@@ -1390,9 +1458,12 @@ pub(crate) async fn credentials(
                     ..Default::default()
                 };
             }
-            if policy
-                .registered
-                .insert((account.reference.clone(), revision))
+            // A plugin identity is the person's chosen relay name (often their login name);
+            // redacting it would mangle unrelated output such as home-directory paths.
+            if account.reference.source != crate::model_plugins::SOURCE
+                && policy
+                    .registered
+                    .insert((account.reference.clone(), revision))
             {
                 let value = openside_vault::Secret::new(auth.value.clone());
                 let identity = openside_vault::Secret::new(
@@ -1643,7 +1714,7 @@ pub(crate) async fn report(
     attempt.touched = Some(tokio::time::Instant::now());
     let refreshable = matches!(
         lease.account.source.as_str(),
-        "claude-code" | "codex-cli" | "omp-broker"
+        "claude-code" | "codex-cli" | "omp-broker" | crate::model_oauth::SOURCE
     );
     let refresh = current
         && report.outcome == CredentialOutcome::Auth
