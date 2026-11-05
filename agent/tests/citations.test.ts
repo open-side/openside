@@ -130,6 +130,45 @@ describe("citations", () => {
 		expect(report.claims[0]?.urls).toEqual([page]);
 	});
 
+	it("test_only_titled_http_links_cite_a_claim", () => {
+		const claim = "The Nile flows north to the sea";
+		const cited = (suffix: string) => citations.check(`${claim} ${suffix}.`, [A]).claims[0]?.cited;
+		expect(cited(`[Rivers of Africa](${A})`)).toBe(true);
+		expect(cited(A)).toBe(false);
+		expect(cited(`[](${A})`)).toBe(false);
+		expect(cited(`[ ](${A})`)).toBe(false);
+		expect(cited(`[${A}](${A})`)).toBe(false);
+		expect(cited(`[Rivers](javascript:alert(1))`)).toBe(false);
+		expect(cited(`[Rivers](ftp://127.0.0.1:41001/rivers)`)).toBe(false);
+		// A URL wrapped in punctuation is still not a title.
+		expect(cited(`[${A}.](${A})`)).toBe(false);
+		expect(cited(`[<${A}>](${A})`)).toBe(false);
+		expect(cited(`[ — ](${A})`)).toBe(false);
+		// Real titles: unicode, nested brackets, and text that merely mentions a URL.
+		expect(cited(`[나일강 — 위키백과](${A})`)).toBe(true);
+		expect(cited(`[Nile [river] facts](${A})`)).toBe(true);
+		expect(cited(`[Rivers at ${A}](${A})`)).toBe(true);
+	});
+
+	it("test_paren_url_title_is_not_a_title", () => {
+		const page = "https://en.wikipedia.org/wiki/Nile_(river)";
+		expect(citations.check(`The Nile flows north to the sea [${page}](${page}).`, [page]).claims[0]?.cited).toBe(false);
+	});
+
+	it("test_reference_style_links_are_not_citations", () => {
+		const text = `The Nile flows north to the sea [Rivers][r].\n\n[r]: ${A}`;
+		const report = citations.check(text, [A]);
+		expect(report.claims).toHaveLength(1);
+		expect(report.claims[0]?.cited).toBe(false);
+	});
+
+	it("test_link_with_nested_brackets_after_the_period_stays_with_its_sentence", () => {
+		const text = `Fact one has four words. [One [a]](${A}) Fact two has four words [two](${A}).`;
+		const report = citations.check(text, [A]);
+		expect(report.claims.map(claim => claim.cited)).toEqual([true, true]);
+		expect(report.claims[0]?.text.endsWith(`[One [a]](${A})`)).toBe(true);
+	});
+
 	it("test_result_urls_reads_only_structured_url_fields", () => {
 		const found = citations.resultUrls([
 			{ tab_id: "t", url: `${A}?q=1#x` },

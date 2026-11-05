@@ -63,6 +63,8 @@ daemon: 해결 → ticket_resolved → 사이드카가 같은 tool call 의 결�
 
 데몬은 최상위 문서와 origin, 프레임 ID와 로더 및 origin, 호스팅 OOPIF 타깃, 백엔드 노드 ID를 고정(pin)한다. 처리 요청은 `{values:{field_id:string|bool}}` 형태만 허용하며, 모든 필드를 검사하고 값 마스킹 처리기를 등록하며 고정된 문서를 다시 검증한다. 이후 문서를 비공개로 지정하고 값이 포함되지 않은 입력 의도를 영구 저장한 뒤 실제 입력을 진행한다. 입력은 클릭, Enter 키 입력, 양식 제출 없이 격리된 월드(isolated world)에서 수행된다. 성공 시 `{status:"filled",field_count,next:"review_page"}`만 반환한다. 의도를 저장한 뒤에 발생한 실패는 모두 `form_fill_indeterminate`로 처리하며, 재시도 시에도 절대 무작정 다시 채우지 않는다. 입력 전 페이지가 이동하면 `target_changed`나 기존 타깃 미제공 오류를 반환하며 거부한다. 결제 정보는 Vault에 저장되지 않는다. 이후 구매나 양식 제출을 진행하려면 별도의 승인 절차를 거쳐야 한다.
 
+에이전트가 필드에 직접 값을 입력할 때도 시스템 프롬프트(`FILL_ONLY`)가 동일한 경계를 유지한다. 요청받은 필드만 채우고 나머지 필드는 그대로 두며, 제출·전송·주문 버튼을 누르지 않고 새 스냅샷으로 입력 결과를 확인한 뒤, 채운 필드 이름을 답변에 밝히고 아무것도 제출하지 않았음을 알린다. 실제 제출에는 사용자의 명시적 요청이 필요하며, 정책에 따라 `confirm` 승인도 거쳐야 한다.
+
 
 ### request_otp — 인증 코드 한 가지 도구
 
@@ -134,6 +136,7 @@ daemon: 해결 → ticket_resolved → 사이드카가 같은 tool call 의 결�
 10. 해결(resolve) 시 오류: 형식이 잘못되었거나 모르는 필드 ID이면 `invalid_value`, 페이지가 바뀌었거나 고정 노드가 사라졌으면 `409 target_unavailable`(티켓은 대기 상태 유지), origin 불일치 시 `409 origin_mismatch`, 노드 입력 실패 시 `409 secret_input_failed`, 볼트 권한 부족 시 `403 vault_denied`를 반환한다. 이전 시도에서 값을 입력한 뒤 커밋 전에 중단된 적이 있다면 다시 입력하지 않고 `409 secret_input_indeterminate`로 거절한다.
 11. incognito 세션에서는 다른 볼트 진입점과 마찬가지로 `vault_incognito` 이유와 함께 `request_login`을 거부한다.
 12. 챗봇은 입력값을 수신하지 않는다. 카드에는 `{remote.public_url}/sessions/<session>` 링크와 CLI 명령어만 표시한다. MCP `ticket_resolve` 도구 역시 `secret_input`과 마찬가지로 `login` 티켓 처리를 거부한다.
+13. 로그인이나 인증 등 사용자 단계가 필요해 멈출 때, 에이전트는 답변에 사이트 이름과 사용자가 이어서 해야 할 일(예: 로그인 카드에서 로그인 마무리, 휴대폰 승인, takeover 완료)을 안내한다. 비밀번호, 코드, 토큰은 절대 묻거나 되풀이해 적지 않는다(`FINAL_ANSWER`).
 
 ### request_choice — 페이지가 묻는 선택
 

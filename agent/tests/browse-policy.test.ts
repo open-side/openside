@@ -1,4 +1,4 @@
-// Worker escalation policy and the browser profiles' language/continuation rules.
+// Worker escalation policy and the browser profiles' language, continuation and answer rules.
 // The takeover-continuation run (deferred human step, fresh snapshot before replying)
 // is a session behaviour and is covered by the runtime tests.
 
@@ -28,7 +28,7 @@ describe("browse policy", () => {
 	});
 
 	it.each(["browser-agent", "ultrabrowse"])(
-		"test_profile_snapshots_keep_language_and_human_step_continuation %p",
+		"test_profile_snapshots_keep_language_continuation_and_answer_rules %p",
 		async profile => {
 			const open = (await Bun.file(`${PROFILES}/${profile}.open.json`).json()) as { system_prompt_parts: string[] };
 			const prompt = open.system_prompt_parts.join("\n");
@@ -38,6 +38,10 @@ describe("browse policy", () => {
 			expect(prompt).toContain("start the continuation with a fresh browser_snapshot");
 			expect(prompt).toContain("before replying");
 			expect(prompt).toContain("Never reuse earlier snapshot ids or refs");
+			// Fill-only boundary and final-answer contract: one anchor per section, not wording.
+			expect(prompt).toContain("nothing was submitted");
+			expect(prompt).toContain("raw tool JSON");
+			expect(prompt).toContain("http(s) URL you opened");
 		},
 	);
 });

@@ -158,6 +158,27 @@ describe("prompt epoch", () => {
 		expect(reports()[2]?.causes).toEqual(["provider_or_model_boundary"]);
 	});
 
+	it.each(["browser-agent", "ultrabrowse"])("daemon prompt parts fingerprint only by their text %p", async profile => {
+		const open = (await Bun.file(`${import.meta.dir}/../../docs/specs/profiles/${profile}.open.json`).json()) as {
+			system_prompt_parts: string[];
+			tools: ToolSpec[];
+		};
+		const parts = open.system_prompt_parts;
+		const first = PromptEpoch.assemble(stableSections(parts), open.tools);
+		const second = PromptEpoch.assemble(stableSections([...parts]), [...open.tools].reverse());
+		expect(second.sectionsJson).toBe(first.sectionsJson);
+		expect(second.toolsJson).toBe(first.toolsJson);
+		const edited = PromptEpoch.assemble(stableSections([...parts.slice(0, -1), `${parts.at(-1)} `]), open.tools);
+		first.recordRequest([user("task")], { provider: "p", model: "m" });
+		edited.recordRequest([user("task")], { provider: "p", model: "m" });
+		const [before, after] = reports() as [SectionsReport, SectionsReport];
+		expect(
+			Object.keys(before.sections).filter(
+				key => JSON.stringify(before.sections[key]) !== JSON.stringify(after.sections[key]),
+			),
+		).toEqual(["base_system"]);
+	});
+
 	it("digests match the Python sidecar for the same sections", () => {
 		// Fixed by running the Python `stable_sections` + `_canonical` + `_digest` on these inputs.
 		const sections = stableSections(["base é", "<available_skills>\n- a: b\n</available_skills> tail"], {

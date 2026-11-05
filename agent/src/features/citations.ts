@@ -11,8 +11,11 @@
  *   "U.S.") or initials do not end a sentence.
  * - A sentence is a factual claim when, with links and URLs removed, it has at least
  *   MIN_CLAIM_WORDS words and does not end with "?".
- * - A claim is cited when it contains a URL that, normalized, equals a page visited in
- *   the session. A link to a page that was never opened counts as uncited.
+ * - A claim is cited when it contains an inline Markdown link `[title](url)` whose text is
+ *   a title and whose http(s) target, normalized, equals a page visited in the session.
+ *   Link text may hold one level of nested brackets. Text that is blank, or only a URL
+ *   once surrounding punctuation is trimmed, is not a title. Bare URLs, reference-style
+ *   links (`[title][id]`) and links to pages that were never opened count as uncited.
  * - Visited pages come only from structured `url` fields of browser tool results,
  *   never from URLs that appear inside page text.
  */
@@ -27,9 +30,15 @@ const URL_CHAR = `[^${PY_SPACE}<>()\\[\\]"'\`]`;
 const URL_BODY = `(?:${URL_CHAR}|\\(${URL_CHAR}*\\))+`;
 const URL_SOURCE = `https?://${URL_BODY}`;
 const URL_GLOBAL = new RegExp(URL_SOURCE, "gu");
-const LINK_GLOBAL = new RegExp(`\\[[^\\]]*\\]\\((${URL_SOURCE})\\)`, "gu");
+// Link text with one level of nested brackets, e.g. "[Nile [river] facts](url)".
+const LINK_TEXT = "(?:[^\\[\\]]|\\[[^\\[\\]]*\\])*";
+const LINK_GLOBAL = new RegExp(`\\[(${LINK_TEXT})\\]\\((${URL_SOURCE})\\)`, "gu");
+const EDGE = "[\\p{P}\\p{S}\\p{Z}\\s]*";
+// A URL wrapped only in punctuation ("<https://a/b>", "https://a/b.") is not a title.
+const URL_TITLE = new RegExp(`^${EDGE}${URL_SOURCE}${EDGE}$`, "u");
+const TITLE_CHAR = /[^\p{P}\p{S}\p{Z}\s]/u;
 const WORD = new RegExp(`[${PY_WORD}]+`, "gu");
-const SENTENCE_END_SOURCE = `(?<=[.!?])((?:[${PY_SPACE}]*\\[[^\\]]*\\]\\(${URL_BODY}\\))*)[${PY_SPACE}]+`;
+const SENTENCE_END_SOURCE = `(?<=[.!?])((?:[${PY_SPACE}]*\\[${LINK_TEXT}\\]\\(${URL_BODY}\\))*)[${PY_SPACE}]+`;
 const LIST_MARKER = new RegExp(`^[${PY_SPACE}]*(?:[-*+]|\\d+[.)])[${PY_SPACE}]+`, "u");
 // "etc." and "no." often end sentences, so they still split.
 const ABBREVIATIONS = new Set(
@@ -234,7 +243,9 @@ export function check(answer: string, visited: Iterable<string>): Report {
 		const text = strip(plain(sentence));
 		if ((text.match(WORD)?.length ?? 0) < MIN_CLAIM_WORDS || text.endsWith("?")) continue;
 		const urls = sentence.match(URL_GLOBAL) ?? [];
-		const cited = urls.some(url => sources.has(normalize(url)));
+		const cited = Array.from(sentence.matchAll(LINK_GLOBAL)).some(
+			([, title = "", url = ""]) => TITLE_CHAR.test(title) && !URL_TITLE.test(title) && sources.has(normalize(url)),
+		);
 		claims.push({ text: sentence, urls, cited, end });
 	}
 	return new Report(claims);

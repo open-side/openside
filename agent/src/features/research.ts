@@ -118,11 +118,11 @@ export function retryMessage(report: citations.Report, visited: Set<string>): st
 			.map(url => `- ${url}`)
 			.join("\n") || "- (none yet)";
 	return (
-		"These factual sentences have no link to a page you opened with a browser tool:\n" +
+		"These factual sentences have no titled link to a page you opened with a browser tool:\n" +
 		`${claims}\n` +
 		"Pages opened in this session:\n" +
 		`${pages}\n` +
-		"Rewrite the answer: cite each fact with a Markdown link to one of these pages, browse for a source first, or drop the fact or mark it " +
+		"Rewrite the answer: cite each fact with an inline Markdown link `[Page title](url)` to one of these pages (bare URLs and reference-style links do not count), browse for a source first, or drop the fact or mark it " +
 		`${citations.MARKER}.`
 	);
 }
