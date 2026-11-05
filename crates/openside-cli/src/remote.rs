@@ -39,6 +39,10 @@ pub(crate) struct SetupArgs {
     /// tailscale: also run `tailscale serve` (otherwise the command is printed).
     #[arg(long)]
     apply: bool,
+    /// tailscale: HTTPS port for openside's Serve handler (remote.tailscale.https_port;
+    /// default 443). A port another app already serves is refused with a free one named.
+    #[arg(long, value_name = "PORT", value_parser = clap::value_parser!(u16).range(1..))]
+    https_port: Option<u16>,
     /// cloudflare: use a named tunnel instead of a quick tunnel.
     #[arg(long)]
     named: bool,
@@ -103,33 +107,123 @@ fn set_modes(doc: &mut toml_edit::DocumentMut, modes: &[String]) -> Result<(), S
     Ok(())
 }
 
-fn tailscale_dns_name() -> Result<String, String> {
-    let output = std::process::Command::new(
-        openside_config::find_on_path("tailscale")
-            .ok_or("tailscale is not installed or not on PATH")?,
-    )
-    .args(["status", "--json"])
-    .output()
-    .map_err(|error| format!("cannot run tailscale: {error}"))?;
+/// What `openside remote setup tailscale` reads from the local Tailscale client.
+struct TailscaleHost {
+    /// MagicDNS name of this machine, without the trailing dot.
+    dns_name: String,
+    /// `tailscale serve status --json`.
+    serve: serde_json::Value,
+}
+
+fn tailscale_json(bin: &std::path::Path, args: &[&str]) -> Result<serde_json::Value, String> {
+    let output = std::process::Command::new(bin)
+        .args(args)
+        .output()
+        .map_err(|error| format!("cannot run tailscale: {error}"))?;
     if !output.status.success() {
-        return Err("`tailscale status` failed; is Tailscale running and logged in?".into());
+        return Err(format!(
+            "`tailscale {}` failed; is Tailscale running and logged in?",
+            args.join(" ")
+        ));
     }
-    let status: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|_| "tailscale status --json returned invalid JSON")?;
-    status["Self"]["DNSName"]
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| format!("`tailscale {}` returned invalid JSON", args.join(" ")))
+}
+
+fn tailscale_host() -> Result<TailscaleHost, String> {
+    let bin = openside_config::find_on_path("tailscale")
+        .ok_or("tailscale is not installed or not on PATH")?;
+    let status = tailscale_json(&bin, &["status", "--json"])?;
+    let dns_name = status["Self"]["DNSName"]
         .as_str()
         .map(|name| name.trim_end_matches('.').to_owned())
         .filter(|name| !name.is_empty())
-        .ok_or_else(|| "tailscale status has no DNS name for this machine (MagicDNS off?)".into())
+        .ok_or("tailscale status has no DNS name for this machine (MagicDNS off?)")?;
+    let serve = tailscale_json(&bin, &["serve", "status", "--json"])?;
+    Ok(TailscaleHost { dns_name, serve })
 }
 
-/// Edit the config document for `args`; returns lines to print. Separated from I/O so tests
-/// can drive it without Tailscale or a real config file.
+/// The `tailscale serve` argv that gives openside `port`, or `None` when it already has it.
+fn serve_command(
+    serve: &serde_json::Value,
+    port: u16,
+    address: &str,
+) -> Result<Option<Vec<String>>, String> {
+    use openside_config::tailscale::{free_https_port, serve_slot, ServeSlot};
+    let target = format!("http://{address}");
+    match serve_slot(serve, port, &target) {
+        ServeSlot::Ours(_) => Ok(None),
+        ServeSlot::Taken(holder) => Err(format!(
+            "Tailscale Serve port {port} on this computer belongs to another app ({holder}); openside never replaces it.{}",
+            free_https_port(serve)
+                .map(|free| format!(" Run this again with --https-port {free} (free)."))
+                .unwrap_or_default()
+        )),
+        ServeSlot::Free => Ok(Some(vec![
+            "serve".into(),
+            "--bg".into(),
+            format!("--https={port}"),
+            "--set-path=/".into(),
+            target,
+        ])),
+    }
+}
+
+/// Run the `tailscale serve` argv (when given) and only then write `text` to `path`, so a
+/// failed command leaves the config as it was; a failed write turns that handler off again.
+fn serve_then_write(
+    path: &std::path::Path,
+    text: &str,
+    serve: Option<(&std::path::Path, &[String])>,
+) -> Result<(), String> {
+    if let Some((bin, command)) = serve {
+        let status = std::process::Command::new(bin)
+            .args(command)
+            .status()
+            .map_err(|error| format!("cannot run tailscale serve: {error}"))?;
+        if !status.success() {
+            return Err(format!(
+                "`tailscale {}` failed; {} was not changed",
+                command.join(" "),
+                path.display()
+            ));
+        }
+    }
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, text));
+    if let Err(error) = written {
+        if let Some((bin, command)) = serve {
+            let https = command.iter().find(|arg| arg.starts_with("--https="));
+            let undone = https.is_some_and(|https| {
+                std::process::Command::new(bin)
+                    .args(["serve", https.as_str(), "--set-path=/", "off"])
+                    .status()
+                    .is_ok_and(|status| status.success())
+            });
+            if !undone {
+                return Err(format!(
+                    "cannot write {}: {error}; turn the new handler off with `tailscale serve {} --set-path=/ off`",
+                    path.display(),
+                    https.map_or("--https=<port>", String::as_str)
+                ));
+            }
+        }
+        return Err(format!("cannot write {}: {error}", path.display()));
+    }
+    Ok(())
+}
+
+/// Edit the config document for `args`; returns lines to print and, for Tailscale, the
+/// `tailscale` argv `--apply` runs (`None` when openside already has its handler). Separated
+/// from I/O so tests can drive it without Tailscale or a real config file.
 fn apply(
     doc: &mut toml_edit::DocumentMut,
     args: &SetupArgs,
-    tailscale_name: impl FnOnce() -> Result<String, String>,
-) -> Result<Vec<String>, String> {
+    tailscale: impl FnOnce() -> Result<TailscaleHost, String>,
+) -> Result<(Vec<String>, Option<Vec<String>>), String> {
+    let mut serve = None;
     let mut notes = Vec::new();
     let mut enabled = modes(doc);
     let listen =
@@ -148,17 +242,38 @@ fn apply(
         SetupMode::Off => {
             set_modes(doc, &[])?;
             notes.push("Remote transports are off. Paired devices keep their tokens; revoke them with `openside device revoke`.".into());
-            return Ok(notes);
+            return Ok((notes, None));
         }
         SetupMode::Tailscale => {
             let address = listen(doc, &mut notes)?;
-            let host = tailscale_name()?;
-            table(doc, &["remote"])?
-                .insert("public_url", toml_edit::value(format!("https://{host}")));
-            notes.push(format!("Phones in your tailnet will use https://{host}"));
-            notes.push(format!(
-                "Tailscale Serve command: tailscale serve --bg https / http://{address}"
-            ));
+            let host = tailscale()?;
+            let configured = doc
+                .get("remote")
+                .and_then(|remote| remote.get("tailscale"))
+                .and_then(|tailscale| tailscale.get("https_port"))
+                .and_then(toml_edit::Item::as_integer)
+                .and_then(|port| u16::try_from(port).ok());
+            let port = args
+                .https_port
+                .or(configured)
+                .unwrap_or(openside_config::tailscale::DEFAULT_HTTPS_PORT);
+            serve = serve_command(&host.serve, port, &address)?;
+            if args.https_port.is_some() {
+                table(doc, &["remote", "tailscale"])?
+                    .insert("https_port", toml_edit::value(i64::from(port)));
+            }
+            let url = openside_config::tailscale::serve_origin(&host.dns_name, port);
+            table(doc, &["remote"])?.insert("public_url", toml_edit::value(url.as_str()));
+            notes.push(format!("Phones in your tailnet will use {url}"));
+            match &serve {
+                Some(command) => notes.push(format!(
+                    "Tailscale Serve command: tailscale {}",
+                    command.join(" ")
+                )),
+                None => notes.push(format!(
+                    "Tailscale Serve already sends port {port} to openside."
+                )),
+            }
             "tailscale"
         }
         SetupMode::Cloudflare => {
@@ -206,7 +321,7 @@ fn apply(
         enabled.push(name.to_owned());
     }
     set_modes(doc, &enabled)?;
-    Ok(notes)
+    Ok((notes, serve))
 }
 
 pub(crate) async fn setup<W: Write>(
@@ -226,25 +341,19 @@ pub(crate) async fn setup<W: Write>(
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .map_err(|error| format!("{}: {error}", path.display()))?;
-    let notes = apply(&mut doc, args, tailscale_dns_name)?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-    }
-    std::fs::write(&path, doc.to_string())
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    if args.mode == SetupMode::Tailscale && args.apply {
-        let listen = doc["daemon"]["listen"]
-            .as_str()
-            .unwrap_or(DEFAULT_LISTEN)
-            .to_owned();
-        let status = std::process::Command::new("tailscale")
-            .args(["serve", "--bg", "https", "/", &format!("http://{listen}")])
-            .status()
-            .map_err(|error| format!("cannot run tailscale serve: {error}"))?;
-        if !status.success() {
-            return Err("`tailscale serve` failed; run it yourself with the command above".into());
-        }
-    }
+    let (notes, serve) = apply(&mut doc, args, tailscale_host)?;
+    let bin = match (args.apply, &serve) {
+        (true, Some(_)) => Some(
+            openside_config::find_on_path("tailscale")
+                .ok_or("tailscale is not installed or not on PATH")?,
+        ),
+        _ => None,
+    };
+    serve_then_write(
+        &path,
+        &doc.to_string(),
+        bin.as_deref().zip(serve.as_deref()),
+    )?;
     let report = match openside_config::load(Some(&path)) {
         Ok(loaded) => doctor::run(&loaded, DoctorOptions { vault: None }).await,
         Err(error) => doctor::DoctorReport {
@@ -376,11 +485,63 @@ mod tests {
             mode,
             config: None,
             apply: false,
+            https_port: None,
             named: false,
             hostname: None,
             token_file: None,
             relay_url: None,
         }
+    }
+
+    fn host(serve: serde_json::Value) -> Result<TailscaleHost, String> {
+        Ok(TailscaleHost {
+            dns_name: "desk.tail1.ts.net".into(),
+            serve,
+        })
+    }
+
+    #[test]
+    fn tailscale_setup_refuses_another_apps_port_and_writes_the_chosen_one() {
+        let others = serde_json::json!({
+            "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}},
+            "Web": {
+                "desk.tail1.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7317"}}},
+                "desk.tail1.ts.net:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7878"}}}
+            }
+        });
+        let mut doc = toml_edit::DocumentMut::new();
+        let error = apply(&mut doc, &args(SetupMode::Tailscale), || {
+            host(others.clone())
+        })
+        .unwrap_err();
+        assert!(error.contains("--https-port 10000"), "{error}");
+
+        let mut chosen = args(SetupMode::Tailscale);
+        chosen.https_port = Some(10000);
+        let (_, serve) = apply(&mut doc, &chosen, || host(others.clone())).unwrap();
+        assert_eq!(
+            serve.unwrap(),
+            [
+                "serve",
+                "--bg",
+                "--https=10000",
+                "--set-path=/",
+                "http://127.0.0.1:47820"
+            ]
+        );
+        let config = parse(&doc.to_string());
+        assert_eq!(config.remote.tailscale.https_port, 10000);
+        assert_eq!(
+            config.remote.public_url.as_deref(),
+            Some("https://desk.tail1.ts.net:10000")
+        );
+
+        // A second run reads the saved port and finds openside's handler already there.
+        let mut served = others;
+        served["Web"]["desk.tail1.ts.net:10000"] =
+            serde_json::json!({"Handlers": {"/": {"Proxy": "http://127.0.0.1:47820"}}});
+        let (_, serve) = apply(&mut doc, &args(SetupMode::Tailscale), || host(served)).unwrap();
+        assert_eq!(serve, None);
     }
 
     fn parse(text: &str) -> openside_config::Config {
@@ -397,7 +558,7 @@ mod tests {
                 .parse()
                 .unwrap();
         apply(&mut doc, &args(SetupMode::Tailscale), || {
-            Ok("desk.tail1.ts.net".into())
+            host(serde_json::json!({}))
         })
         .unwrap();
         let mut relay = args(SetupMode::Relay);
@@ -453,5 +614,55 @@ mod tests {
         let mut bad = args(SetupMode::Relay);
         bad.relay_url = Some("http://relay.example.test".into());
         assert!(apply(&mut doc, &bad, || unreachable!()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_writes_the_config_only_after_serve_and_undoes_serve_when_the_write_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fake = |name: &str, exit: u8| {
+            let bin = dir.path().join(name);
+            let log = dir.path().join(format!("{name}.log"));
+            std::fs::write(
+                &bin,
+                format!(
+                    "#!/bin/sh\necho \"$*\" >> '{}'\nexit {exit}\n",
+                    log.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+            (bin, log)
+        };
+        let command: Vec<String> = [
+            "serve",
+            "--bg",
+            "--https=10000",
+            "--set-path=/",
+            "http://127.0.0.1:47820",
+        ]
+        .map(String::from)
+        .into();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "# before\n").unwrap();
+
+        let (failing, _) = fake("failing", 1);
+        let error = serve_then_write(&path, "# after\n", Some((&failing, &command))).unwrap_err();
+        assert!(error.contains("was not changed"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# before\n");
+
+        let (working, log) = fake("working", 0);
+        let unwritable = dir.path().join("config.toml/inside.toml");
+        let error =
+            serve_then_write(&unwritable, "# after\n", Some((&working, &command))).unwrap_err();
+        assert!(error.starts_with("cannot write"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "serve --bg --https=10000 --set-path=/ http://127.0.0.1:47820\nserve --https=10000 --set-path=/ off\n"
+        );
+
+        serve_then_write(&path, "# after\n", Some((&working, &command))).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# after\n");
     }
 }

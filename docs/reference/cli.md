@@ -1971,6 +1971,7 @@ Usage: openside remote setup [OPTIONS] <MODE>
 | `<MODE>` | One of `tailscale`, `cloudflare`, `relay`, `off`. |
 | `--config <PATH>` | Configuration file to edit; default: the discovered config.toml |
 | `--apply` | tailscale: also run `tailscale serve` (otherwise the command is printed) |
+| `--https-port <PORT>` | tailscale: HTTPS port for openside's Serve handler (remote.tailscale.https_port; default 443). A port another app already serves is refused with a free one named |
 | `--named` | cloudflare: use a named tunnel instead of a quick tunnel |
 | `--hostname <HOST>` | cloudflare --named: the public hostname routed to the tunnel |
 | `--token-file <PATH>` | cloudflare --named: file with the tunnel token; relay: file with the registration token |

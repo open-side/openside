@@ -148,6 +148,7 @@ export const MESSAGES: Record<string, string> = {
   person_approval_required: "Only people’s devices can be connected here.",
   transport_unavailable: "That connection cannot start yet. Check the hint on its card and try again.",
   transport_not_enabled: "Turn that connection on before connecting a phone through it.",
+  tailscale_serve_conflict: "Another app on this computer already uses that Tailscale address. The Tailscale card names a free port to set under Configuration → remote.",
   invalid_config: "The daemon rejected these settings: a value is out of range or conflicts with another key.",
   file_only_section: "That section can only be edited in config.toml.",
   config_file_invalid: "config.toml on the daemon is invalid; fix it on the computer running openside.",

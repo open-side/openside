@@ -26,6 +26,14 @@ describe("transportViews", () => {
     expect(view(stopped, "tailscale").hint).toMatch(/Open the Tailscale app/);
   });
 
+  it("names the free port when another app holds Tailscale's, and stops offering it as one click", () => {
+    const last_error = "Tailscale Serve port 443 on this computer belongs to another app (proxy to http://127.0.0.1:7317); openside never replaces it. Set remote.tailscale.https_port = 10000 (free on this computer), then turn Tailscale on again.";
+    const taken = offStatus({ tailscale: { installed: true, state: "failed", url: null, last_error } });
+    expect(view(taken, "tailscale")).toMatchObject({ phase: "off", hint: last_error });
+    expect(oneClickTransport(taken)).toBe("cloudflare");
+    expect(view(offStatus(), "tailscale").hint).toBeNull();
+  });
+
   it("walks a Cloudflare tunnel through starting, on and failed", () => {
     const base = offStatus().configuration;
     const config = { ...base, cloudflare: { ...base.cloudflare, enabled: true } };

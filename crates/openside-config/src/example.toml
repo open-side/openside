@@ -170,6 +170,9 @@ mode = "off"             # or "tailscale", "cloudflare", "relay", or a list such
 # public_url = "https://host.example.ts.net"   # Tailscale Serve / reverse proxy address for pairing links
 # push_contact = "mailto:me@example.test"       # VAPID contact; defaults to public_url
 
+[remote.tailscale]
+https_port = 443         # Serve port for openside's handler; another app on 443? use e.g. 10000 (docs/REMOTE.md)
+
 [remote.cloudflare]
 tunnel = "quick"         # "quick": random trycloudflare.com URL, no account; "named": stable hostname
 # hostname = "desk.example.com"                 # named tunnel's public hostname

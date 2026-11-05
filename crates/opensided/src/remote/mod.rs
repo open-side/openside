@@ -362,7 +362,7 @@ async fn document(shared: &Shared, local: bool) -> Result<RemoteStatus, HttpErro
     status.pairing_allowed = local;
     status.configure_allowed = local;
     let listen = *shared.transports.listen.lock();
-    status.tailscale = tailscale::status(listen).await;
+    status.tailscale = tailscale::status(listen, configured.tailscale.https_port).await;
     Ok(status)
 }
 
@@ -463,8 +463,28 @@ async fn update_owned(shared: Shared, change: Change) -> Result<Json<RemoteStatu
                 .map_err(|_| HttpError::internal())?,
         );
     }
-    let value = serde_json::to_value(&config).map_err(|_| HttpError::internal())?;
-    crate::settings_api::persist(&shared, value).await?;
+    let serve_target = (mode == RemoteMode::Tailscale)
+        .then(|| listen.or(config.daemon.listen))
+        .flatten();
+    if let Some(target) = serve_target {
+        // Serve first: validation needs the https:// address it reports, and a refused
+        // port must leave the saved settings untouched. A failed save undoes the Serve
+        // change. Before the first restart with a listener, Serve points at the address
+        // the daemon will listen on.
+        let port = config.remote.tailscale.https_port;
+        let (saving, shared_ref) = (&mut config, &shared);
+        tailscale::configure(enabled, target, port, move |url| async move {
+            if let Some(url) = url {
+                saving.remote.public_url = Some(url);
+            }
+            let value = serde_json::to_value(&*saving).map_err(|_| HttpError::internal())?;
+            crate::settings_api::persist(shared_ref, value).await
+        })
+        .await?;
+    } else {
+        let value = serde_json::to_value(&config).map_err(|_| HttpError::internal())?;
+        crate::settings_api::persist(&shared, value).await?;
+    }
     let mut running = effective(&shared);
     match mode {
         RemoteMode::Cloudflare => {
@@ -504,17 +524,8 @@ async fn update_owned(shared: Shared, change: Change) -> Result<Json<RemoteStatu
             running.relay = config.remote.relay.clone();
         }
         RemoteMode::Tailscale => {
-            if let Some(listen) = listen {
-                if let Some(url) = tailscale::configure(enabled, listen).await? {
-                    config.remote.public_url = Some(url);
-                    crate::settings_api::persist(
-                        &shared,
-                        serde_json::to_value(&config).map_err(|_| HttpError::internal())?,
-                    )
-                    .await?;
-                }
-            }
             running.public_url = config.remote.public_url.clone();
+            running.tailscale = config.remote.tailscale.clone();
         }
     }
     if enabled && (mode == RemoteMode::Relay || listen.is_some()) {

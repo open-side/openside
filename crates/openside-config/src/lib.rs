@@ -20,6 +20,7 @@ mod native_messaging;
 mod paths;
 mod profile;
 mod remote;
+pub mod tailscale;
 mod runtime_env;
 mod skills;
 mod sync;
@@ -44,7 +45,7 @@ pub use paths::Paths;
 pub use profile::AgentProfile;
 pub use remote::{
     expand_home, read_secret, CloudflareConfig, CloudflareTunnel, OtpConfig, RelayConfig,
-    RemoteConfig, RemoteMode, ServiceConfig,
+    RemoteConfig, RemoteMode, ServiceConfig, TailscaleConfig,
 };
 pub use runtime_env::runtime_environment;
 pub use skills::SkillsConfig;
@@ -710,7 +711,14 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
         ),
         (
             "remote",
-            &["mode", "public_url", "push_contact", "cloudflare", "relay"],
+            &[
+                "mode",
+                "public_url",
+                "push_contact",
+                "tailscale",
+                "cloudflare",
+                "relay",
+            ],
         ),
         ("otp", &["senders", "sites", "ttl_secs"]),
         ("service", &["inhibit_sleep", "inhibit_cmd"]),

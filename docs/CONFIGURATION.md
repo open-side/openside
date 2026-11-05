@@ -295,6 +295,7 @@ timeout_seconds = 10
 |---|---|---|---|---|
 | `public_url` | string | — | — | 다른 기기가 접속하는 주소(예: `https://desk.tail1234.ts.net`). `openside pair` 의 QR 이 `<public_url>/pair#<코드>` 를 가리킨다. http(s) 주소만 받고, 사용자 정보·쿼리·프래그먼트가 있으면 거부한다. doctor 는 loopback 이 아닌 http 주소를 실패로 표시한다 |
 | `push_contact` | string | `public_url`(https 일 때), 없으면 `mailto:openside@localhost` | — | Web Push VAPID 토큰의 `sub` 연락처. 푸시 서비스 운영자가 문제가 생겼을 때 연락하는 주소다. `mailto:` 또는 `https://`로 시작해야 한다. 그렇지 않으면 설정 검증에 실패한다 |
+| `tailscale.https_port` | integer | `443` | — | 이 컴퓨터의 Tailscale Serve 주소에서 openside 루트 핸들러를 연결할 HTTPS 포트(1–65535). `443`이 아니면 `public_url`에 포트가 함께 들어간다. 다른 앱이 이미 서빙 중인 포트는 거부하고 빈 포트를 알려 준다(`docs/REMOTE.md` 참고) |
 
 ### `[otp]`
 

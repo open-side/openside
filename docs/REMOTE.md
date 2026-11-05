@@ -12,9 +12,11 @@ openside 데몬은 항상 loopback(127.0.0.1)에서만 수신 대기한다. 외�
 
 ### Tailscale Serve
 
-기존 tailnet 경로를 그대로 쓰며, 시스템에 Tailscale이 설치되어 로그인되어 있고 MagicDNS가 켜져 있어야 한다. TLS 종단은 사용자의 로컬 Tailscale 노드에서 직접 이루어지므로 제공업체 서버에 평문 트래픽이 노출되지 않는다.
+기존 tailnet 경로를 그대로 쓴다. 이 컴퓨터에 Tailscale을 설치해 로그인해 두어야 하며, tailnet에서 MagicDNS와 HTTPS 인증서가 켜져 있어야 한다. 사용자의 Tailscale 노드에서 TLS가 직접 종단되므로 제공업체 서버에는 평문이 노출되지 않는다. Cloudflare 빠른 터널과 달리 openside나 컴퓨터를 재시작해도 주소가 바뀌지 않아, 설치해 둔 PWA와 Web Push 알림이 계속 동작한다.
 
-`openside remote setup tailscale`을 실행하면 등록에 필요한 Serve 명령어를 출력하며, `--apply` 플래그를 붙이면 명령어를 바로 실행한다.
+openside는 이 컴퓨터의 Tailscale Serve 주소에서 HTTPS 포트 하나를 단독으로 사용하며, 그 포트에 openside로 연결되는 루트(`/`) 프록시 핸들러 하나만 등록되어 있을 때만 openside의 포트로 판단한다. 다른 경로나 다른 호스트 이름, TCP 전달, Funnel 등 다른 핸들러가 하나라도 있으면 다른 앱이 그 포트를 쓰고 있는 것으로 본다. 포트는 `remote.tailscale.https_port`(기본값 `443`)로 지정한다. 다른 앱이 이미 그 포트를 서빙하고 있으면(예: `https://<machine>.ts.net/`에서 다른 앱이 수신 중인 경우), openside는 `409 tailscale_serve_conflict`로 거부하며 기존 앱의 핸들러를 절대 덮어쓰거나 초기화하거나 끄지 않는다. 이때 Remote access의 Tailscale 카드가 빈 포트를 알려 주는데(`443`, `8443`, `10000`을 차례로 확인한 뒤 `10001`부터 위쪽으로 탐색), Configuration → `remote`나 `--https-port`로 그 값을 설정한 뒤 Tailscale을 다시 켜면 된다. 최신 클라이언트에서 Serve는 어떤 포트든 사용할 수 있지만, Tailscale이 Funnel 문서에서 안내하는 포트가 `443`, `8443`, `10000`이므로 이 포트들을 먼저 제안한다. 포트가 `443`이 아닐 때는 `remote.public_url`과 모든 페어링 링크에 포트 번호가 함께 들어간다(예: `https://desk.tail1234.ts.net:10000`). Tailscale을 끄면 해당 포트에 등록된 openside의 핸들러만 제거되며, 다른 포트에서 동작하는 다른 앱의 핸들러는 그대로 남는다. openside를 다른 포트로 옮길 때는 이전 핸들러가 남지 않도록 먼저 Tailscale을 끈 다음 포트를 바꾸고 다시 켜야 한다. Serve를 바꾼 뒤 설정 저장이 실패하면 openside는 Serve를 원래 상태로 되돌린다.
+
+`openside remote setup tailscale`은 이 컴퓨터의 주소와 현재 Serve 구성을 읽어 설정 파일에 기록하고 실행할 Serve 명령어를 출력하며, `--apply`를 붙이면 그 명령어를 바로 실행한다. 여기서도 같은 거부 규칙을 적용하여, 해당 포트를 다른 앱이 쓰고 있으면 작업을 멈추고 `--https-port`에 넘길 빈 포트를 알려 준다. 해당 포트에 이미 openside 핸들러가 등록되어 있으면 아무 작업도 실행하지 않는다. `--apply`를 붙이면 `tailscale serve`가 성공한 뒤에야 설정 파일에 기록하며, 명령이 실패하면 설정 파일을 그대로 두고 설정 파일 기록이 실패하면 새로 등록한 핸들러를 다시 끈다.
 
 ```toml
 [daemon]
@@ -22,16 +24,24 @@ listen = "127.0.0.1:47820"
 
 [remote]
 mode = "tailscale"
-public_url = "https://desk.tail1234.ts.net"
+public_url = "https://desk.tail1234.ts.net:10000"
+
+[remote.tailscale]
+https_port = 10000
 ```
 
-백그라운드에서 실행하는 명령어는 다음과 같다.
+백그라운드에서 실행하는 명령어는 다음과 같다(포트 `10000` 기준).
 
 ```sh
-tailscale serve --bg https / http://127.0.0.1:47820
+openside remote setup tailscale --https-port 10000 --apply
+# runs: tailscale serve --bg --https=10000 --set-path=/ http://127.0.0.1:47820
 ```
 
-페어링 시에는 `openside pair --via tailscale`을 쓴다. 같은 tailnet에 속한 기기만 접속할 수 있다. 리버스 프록시를 직접 쓰는 환경이라면 `mode` 없이 기존 `remote.public_url`만 지정해도 되며, Caddy를 쓸 때는 SSE 스트리밍이 끊기지 않도록 버퍼링을 꺼야 한다.
+`mode = ["tailscale", "cloudflare"]`로 설정하면 두 전송 방식이 함께 동작한다. 전송 방식을 따로 고르지 않은 페어링 제안은 목록의 첫 번째 방식을 쓰므로, 휴대폰이 tailnet에 연결되어 있다면 `"tailscale"`을 맨 앞에 두어야 QR 코드가 고정된 tailnet 주소를 가리킨다. 아직 페어링하지 않은 휴대폰이 tailnet 안에 있는지는 openside가 알 수 없으므로 사용자가 직접 고른다. 웹 앱에서는 페어링 카드의 Change connection으로 방식을 바꾸고, tailnet 밖의 휴대폰은 `openside pair --via cloudflare`로 페어링한다. tailnet 주소는 같은 tailnet에 속한 기기만 열 수 있다. 푸시 알림 링크는 휴대폰이 페어링하고 앱을 설치한 출처(origin)에서 열리는 경로(`/sessions/...`)이므로, Tailscale로 페어링한 휴대폰은 재시작 후에도 기존 링크가 그대로 유지되지만 빠른 터널로 페어링한 휴대폰은 터널 주소가 바뀐 뒤 다시 페어링해야 한다. PWA 매니페스트와 서비스 워커는 루트 상대 경로와 출처 검사를 쓰므로 `443`이 아닌 포트에서도 동작한다. 다만 포트 번호는 출처의 일부이므로 포트를 바꾸면 앱을 다시 설치해야 한다.
+
+사내망 전용 서비스(예: `http://192.168.1.20:8080`)에 사외에서 tailnet을 통해 접근하려면 다음 두 조건 중 하나를 만족해야 한다. (1) 사내 네트워크 내부 노드가 subnet router로 동작하여 `tailscale set --advertise-routes=192.168.1.0/24`를 실행하고, Tailscale 관리 콘솔에서 해당 경로가 승인되었으며, 외부 기기가 `--accept-routes`를 켜고 실행 중이거나(Linux 기준이며, 다른 플랫폼은 기본으로 경로를 수락한다), (2) 서비스 호스트 자체에서 Tailscale을 실행하고 클라이언트가 `192.168.1.20` 대신 해당 호스트의 tailnet 주소(`100.x.y.z` 또는 MagicDNS 이름)를 사용하는 경우다. 어느 피어가 `PrimaryRoutes`에 `192.168.1.0/24`를 등록했는지는 `tailscale status --json`으로 확인한다. openside의 Tailscale Serve 설정은 이 동작에 영향을 주지 않으며 openside 자체만 노출한다.
+
+리버스 프록시를 직접 쓰는 환경이라면 `mode` 없이 기존 `remote.public_url`만 지정해도 되며, Caddy를 쓸 때는 SSE 스트리밍이 끊기지 않도록 버퍼링을 꺼야 한다.
 
 ```caddy
 desk.example.com {

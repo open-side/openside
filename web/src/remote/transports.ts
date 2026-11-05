@@ -32,7 +32,9 @@ function tailscale(status: RemoteStatus): TransportView {
   const enabled = status.configuration.tailscale.enabled;
   const configured = status.configuration.tailscale.public_url;
   if (!enabled) {
-    return { id: "tailscale", phase: "off", url: null, hint: installed ? null : "Install the Tailscale app on this computer and sign in first." };
+    if (!installed) return { id: "tailscale", phase: "off", url: null, hint: "Install the Tailscale app on this computer and sign in first." };
+    // The daemon reports a port held by another app before anything is turned on.
+    return { id: "tailscale", phase: "off", url: null, hint: state === "failed" ? (last_error ?? null) : null };
   }
   if (state === "running") return { id: "tailscale", phase: "on", url: url ?? configured ?? null, hint: null };
   if (state === "stopped") {
@@ -155,11 +157,11 @@ export function connectionProblem(status: RemoteStatus, via: TransportId | null)
 
 /**
  * The one connection a first-time person can turn on with a single click: Tailscale where it is
- * installed, a relay whose address is already saved, otherwise a Cloudflare quick tunnel, which
- * needs no account. A relay without an address cannot be one click.
+ * installed and its Serve port is free, a relay whose address is already saved, otherwise a
+ * Cloudflare quick tunnel, which needs no account. A relay without an address cannot be one click.
  */
 export function oneClickTransport(status: RemoteStatus): TransportId {
-  if (status.tailscale.installed) return "tailscale";
+  if (status.tailscale.installed && status.tailscale.state !== "failed") return "tailscale";
   if (status.configuration.relay.url) return "relay";
   return "cloudflare";
 }

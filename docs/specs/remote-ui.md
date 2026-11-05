@@ -160,7 +160,7 @@ pnpm -C web test src/api/relay src/api/preview.test.ts src/pages/PairPage.test.t
 | 엔드포인트 | 요청 | 동작 |
 | --- | --- | --- |
 | `GET /v1/remote/status` | 선택적 local-secret 헤더 | 런타임 모드, 공개 URL, Tailscale 설치/Serve 상태, cloudflared 상태/URL/재시작 횟수/오류, 릴레이 등록/E2EE 상태, 영속화된 설정, `pairing_allowed`, `configure_allowed`, `restart_required`. 토큰 값은 제외. |
-| `PUT /v1/remote/tailscale` | `{enabled}` | openside의 HTTPS 루트 Serve 핸들러만 활성화/비활성화한다. 다른 애플리케이션의 핸들러를 덮어쓰는 것은 거부하며(`tailscale_serve_conflict`), Serve reset은 절대 실행하지 않는다. |
+| `PUT /v1/remote/tailscale` | `{enabled}` | HTTPS 포트 `remote.tailscale.https_port`에서 openside의 루트 Serve 핸들러만 켜거나 끈다. 설정을 저장하기 전에 먼저 적용하므로 포트가 거부되면 기존 설정은 바뀌지 않으며, Serve를 바꾼 뒤 설정 저장이 실패하면 openside는 Serve를 원래 상태로 되돌린다. 그 포트에 다른 경로나 다른 호스트 이름, TCP 전달, Funnel 등 다른 핸들러가 하나라도 있으면 다른 앱이 그 포트를 쓰고 있는 것으로 보고 `409 tailscale_serve_conflict`로 거부하며, Serve reset은 절대 실행하지 않고 상태의 `tailscale.last_error`에 빈 포트를 알려 준다. 켜지면 `remote.public_url`은 Serve 주소가 되며, 포트가 `443`이 아닐 때는 포트 번호도 함께 들어간다. |
 | `PUT /v1/remote/cloudflare` | `{enabled,tunnel:"quick"\|"named",hostname,token_file}` | 기존 감독 프로세스를 실시간으로 시작/중지/재구성한다. 동일한 활성화 설정을 반복 호출해도 프로세스와 빠른 URL을 유지한다. 바이너리 설정은 파일 전용으로 유지된다. |
 | `PUT /v1/remote/relay` | `{enabled,url,token_file}` | 기존 아웃바운드 릴레이 클라이언트를 실시간으로 등록/등록 해제한다. 변경 없이 활성화된 링크는 유지된다. 등록 자격 증명이 누락된 경우 안전한 설명과 함께 `failed`로 표시된다. |
 
@@ -168,7 +168,7 @@ pnpm -C web test src/api/relay src/api/preview.test.ts src/pages/PairPage.test.t
 
 릴레이 `e2ee:true`는 Noise가 릴레이를 거치는 데몬과 기기 간 트래픽을 암호화함을 의미한다. 그렇다고 해서 릴레이가 제공하는 웹 코드가 운영자로부터 독립적이 되는 것은 **아니다**. 사용자는 해당 코드를 제공하는 주체를 반드시 신뢰해야 한다.
 
-Tailscale 관리는 [현재 Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve) 방식을 따른다. 즉, 핸들러 등록에는 `serve --bg --https=443 --set-path=/ <target>` 명령을 사용하고, 해당 핸들러만 삭제할 때는 동일한 경로 플래그에 `off`를 붙여 실행한다.
+Tailscale 관리는 [현재 Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve) 방식을 따른다. 즉, 핸들러 등록에는 `serve --bg --https=<remote.tailscale.https_port> --set-path=/ <target>` 명령을 사용하고, 해당 핸들러만 삭제할 때는 동일한 경로 플래그에 `off`를 붙여 실행한다.
 
 ### Quick Tunnel 이벤트 전달
 

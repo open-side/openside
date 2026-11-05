@@ -20,10 +20,31 @@ pub struct RemoteConfig {
     /// Contact URI sent to push services in the VAPID `sub` claim (`mailto:` or
     /// `https:`); defaults to `public_url` when it is HTTPS.
     pub push_contact: Option<String>,
+    /// Tailscale Serve handler the daemon manages (`mode` contains `"tailscale"`).
+    pub tailscale: TailscaleConfig,
     /// Cloudflare Tunnel run by the daemon (`mode` contains `"cloudflare"`).
     pub cloudflare: CloudflareConfig,
     /// Self-hosted relay the daemon registers with (`mode` contains `"relay"`).
     pub relay: RelayConfig,
+}
+
+/// `[remote.tailscale]`.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct TailscaleConfig {
+    /// HTTPS port of this machine's Tailscale Serve address that openside's root handler
+    /// uses; `public_url` carries it when it is not 443. openside refuses a port another
+    /// app already serves and names a free one instead (docs/REMOTE.md).
+    #[schemars(range(min = 1))]
+    pub https_port: u16,
+}
+
+impl Default for TailscaleConfig {
+    fn default() -> Self {
+        Self {
+            https_port: crate::tailscale::DEFAULT_HTTPS_PORT,
+        }
+    }
 }
 
 /// A way for devices outside this network to reach the daemon.
@@ -283,6 +304,12 @@ pub(crate) fn validate(config: &crate::Config) -> Result<(), (&'static str, &'st
             "must be the https:// Tailscale Serve address when remote.mode includes \"tailscale\"",
         ));
     }
+    if remote.tailscale.https_port == 0 {
+        return Err((
+            "remote.tailscale.https_port",
+            "must be a port between 1 and 65535",
+        ));
+    }
     if config
         .otp
         .senders
@@ -523,33 +550,21 @@ fn transport_checks(
     use crate::doctor::Status;
     let remote = &loaded.config.remote;
     if remote.has(RemoteMode::Tailscale) {
-        let url = remote.public_url.as_deref().unwrap_or_default();
-        let host = url
-            .strip_prefix("https://")
-            .unwrap_or_default()
-            .trim_end_matches('/');
-        match (
-            crate::discovery::find_on_path("tailscale"),
-            host.ends_with(".ts.net"),
-        ) {
-            (None, _) => add(
+        match crate::discovery::find_on_path("tailscale") {
+            None => add(
                 "remote.tailscale",
                 Status::Fail,
                 "tailscale is not installed or not on PATH".into(),
                 Some("Install Tailscale, log in, then run `openside remote setup tailscale`."),
             ),
-            (Some(_), true) => add(
-                "remote.tailscale",
-                Status::Ok,
-                format!("Tailscale Serve address {url}"),
-                None,
-            ),
-            (Some(_), false) => add(
-                "remote.tailscale",
-                Status::Warn,
-                format!("{url} is not a *.ts.net address; is this really the Tailscale Serve URL?"),
-                Some("Run `openside remote setup tailscale` to read it from `tailscale status`."),
-            ),
+            Some(bin) => {
+                let (status, summary, next) = tailscale_address_check(
+                    remote.public_url.as_deref().unwrap_or_default(),
+                    remote.tailscale.https_port,
+                    magic_dns_name(&bin).as_deref(),
+                );
+                add("remote.tailscale", status, summary, next);
+            }
         }
     }
     if remote.has(RemoteMode::Cloudflare) {
@@ -640,6 +655,64 @@ fn transport_checks(
                 Some("Restart the daemon, then pair devices with `openside pair --via relay`."),
             ),
         }
+    }
+}
+
+/// This machine's MagicDNS name from `tailscale status --json`, without the trailing dot.
+fn magic_dns_name(bin: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new(bin)
+        .args(["status", "--json"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    status["Self"]["DNSName"]
+        .as_str()
+        .map(|name| name.trim_end_matches('.').to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+}
+
+/// Whether `public_url` is this machine's Serve address (`dns_name`, any tailnet domain) on
+/// the configured HTTPS port.
+fn tailscale_address_check(
+    public_url: &str,
+    https_port: u16,
+    dns_name: Option<&str>,
+) -> (crate::doctor::Status, String, Option<&'static str>) {
+    use crate::doctor::Status;
+    const SETUP: Option<&str> =
+        Some("Run `openside remote setup tailscale` to write this machine's address.");
+    let parsed = url::Url::parse(public_url)
+        .ok()
+        .filter(|url| url.scheme() == "https" && url.host_str().is_some());
+    let Some(url) = parsed else {
+        return (
+            Status::Warn,
+            format!("{public_url} is not an https:// address"),
+            SETUP,
+        );
+    };
+    let host = url.host_str().unwrap_or_default();
+    let port = url.port_or_known_default();
+    match dns_name {
+        None => (
+            Status::Warn,
+            format!("cannot read this machine's Tailscale name to confirm {public_url}; is Tailscale running and signed in?"),
+            None,
+        ),
+        Some(name) if !host.eq_ignore_ascii_case(name) => (
+            Status::Warn,
+            format!("{public_url} is not this machine's Tailscale address ({name})"),
+            SETUP,
+        ),
+        Some(_) if port != Some(https_port) => (
+            Status::Warn,
+            format!("{public_url} does not use remote.tailscale.https_port ({https_port})"),
+            SETUP,
+        ),
+        Some(_) => (Status::Ok, format!("Tailscale Serve address {public_url}"), None),
     }
 }
 
@@ -908,5 +981,43 @@ mod tests {
             .checks
             .iter()
             .any(|c| c.id.starts_with("remote.relay") || c.id == "remote.cloudflare"));
+    }
+
+    #[test]
+    fn tailscale_address_matches_this_machines_magic_dns_name_and_port() {
+        use super::tailscale_address_check as check;
+        let name = Some("desk.corp.example");
+        assert_eq!(check("https://desk.corp.example", 443, name).0, Status::Ok);
+        assert_eq!(
+            check("https://DESK.corp.example:10000/", 10000, name).0,
+            Status::Ok
+        );
+        let (status, summary, _) = check("https://desk.corp.example:10000", 443, name);
+        assert_eq!(status, Status::Warn);
+        assert!(summary.contains("(443)"), "{summary}");
+        let (status, summary, _) = check("https://other.tail1.ts.net", 443, name);
+        assert_eq!(status, Status::Warn);
+        assert!(summary.contains("desk.corp.example"), "{summary}");
+        // A bracketed IPv6 authority is parsed as a host, not split on its last colon.
+        let (status, summary, _) = check("https://[fd7a:115c:a1e0::1]:10000", 10000, name);
+        assert_eq!(status, Status::Warn);
+        assert!(
+            summary.contains("is not this machine's Tailscale address"),
+            "{summary}"
+        );
+        assert_eq!(
+            check(
+                "https://[fd7a:115c:a1e0::1]:10000",
+                10000,
+                Some("[fd7a:115c:a1e0::1]")
+            )
+            .0,
+            Status::Ok
+        );
+        assert_eq!(
+            check("https://desk.corp.example", 443, None).0,
+            Status::Warn
+        );
+        assert_eq!(check("not a url", 443, name).0, Status::Warn);
     }
 }

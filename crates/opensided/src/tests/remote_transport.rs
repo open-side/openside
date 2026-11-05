@@ -496,3 +496,56 @@ async fn tailscale_mode_keeps_the_existing_public_url_pairing_and_tcp_authorizat
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     daemon.shutdown().await;
 }
+
+#[tokio::test]
+async fn tailscale_first_in_a_transport_list_is_the_default_pairing_origin_with_its_port() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon_with(root.path(), &runtime, |config| {
+        config.remote.mode = vec![
+            openside_config::RemoteMode::Tailscale,
+            openside_config::RemoteMode::Cloudflare,
+        ];
+        config.remote.tailscale.https_port = 10000;
+        config.remote.public_url = Some("https://desk.tail1234.ts.net:10000".into());
+    })
+    .await;
+    // No listener, so no cloudflared: only the stable tailnet origin can carry a link.
+    crate::remote::start(&daemon.shared, None);
+    let unix = api::router(daemon.shared.clone(), true);
+    let (status, offer) = call(
+        &unix,
+        "POST",
+        "/v1/pairing",
+        json!({"name":"phone","scopes":["read"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{offer}");
+    assert_eq!(offer["transport"], "tailscale");
+    assert_eq!(
+        offer["url"],
+        format!(
+            "https://desk.tail1234.ts.net:10000/pair#{}",
+            offer["code"].as_str().unwrap()
+        )
+    );
+    let (status, body) = call(
+        &unix,
+        "POST",
+        "/v1/pairing",
+        json!({"name":"phone","scopes":["read"],"via":"cloudflare"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    // Tailscale Serve keeps the port in Host, and the browser's Origin carries it too.
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("host", "desk.tail1234.ts.net:10000".parse().unwrap());
+    headers.insert(
+        "origin",
+        "https://desk.tail1234.ts.net:10000".parse().unwrap(),
+    );
+    assert!(crate::takeover::same_origin(&headers));
+    headers.insert("host", "desk.tail1234.ts.net".parse().unwrap());
+    assert!(!crate::takeover::same_origin(&headers));
+    daemon.shutdown().await;
+}
