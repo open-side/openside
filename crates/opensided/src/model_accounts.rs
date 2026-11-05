@@ -36,6 +36,7 @@ const SOURCES: &[&str] = &[
     "command",
     "claude-code",
     "codex-cli",
+    crate::model_oauth::SOURCE,
     "builtin",
 ];
 
@@ -138,7 +139,7 @@ fn reference(source: &str, id: &str) -> ModelAccountRef {
         account_id: id.into(),
     }
 }
-fn revision(value: &str) -> u64 {
+pub(crate) fn revision(value: &str) -> u64 {
     u64::from_be_bytes(
         Sha256::digest(value.as_bytes())[..8]
             .try_into()
@@ -309,6 +310,7 @@ pub(crate) async fn inventory(s: &Shared) -> Inventory {
                 revision: version,
             });
         }
+        accounts.extend(s.model_oauth.inventory(vault));
     }
     drop(vault);
     let mut providers: HashSet<String> = [
@@ -1165,6 +1167,17 @@ async fn resolve(
             }
             Ok((auth(value.into(), &account.provider), revision(value)))
         }
+        crate::model_oauth::SOURCE => {
+            s.model_oauth
+                .resolve(
+                    s,
+                    &account.provider,
+                    &account.reference.account_id,
+                    force,
+                    account.revision,
+                )
+                .await
+        }
         _ => Err(()),
     }
 }
@@ -1557,11 +1570,17 @@ pub(crate) async fn report(
     };
     let inventory = inventory(s).await;
     let configured = s.models.credentials_config();
-    let pool = ProviderPool {
-        provider: preview.provider.clone(),
-        accounts: serde_json::from_value(configured["pools"][&preview.provider].clone())
-            .unwrap_or_default(),
-    };
+    let configured = serde_json::from_value(configured["pools"][&preview.provider].clone())
+        .ok()
+        .map(|accounts| ProviderPool {
+            provider: preview.provider.clone(),
+            accounts,
+        });
+    let pool = crate::model_plugins::effective(configured.as_ref(), &inventory, &preview.provider)
+        .unwrap_or_else(|| ProviderPool {
+            provider: preview.provider.clone(),
+            accounts: vec![],
+        });
     let allowed = permitted(
         s,
         session,
@@ -1844,6 +1863,7 @@ pub(crate) async fn update_pool(
             || request.accounts.len() > 64
             || request.accounts.iter().any(|reference| {
                 !seen.insert(reference)
+                    || reference.source == crate::model_plugins::SOURCE
                     || !inventory.accounts.iter().any(|account| {
                         account.provider == provider && &account.reference == reference
                     })
@@ -1878,6 +1898,101 @@ pub(crate) async fn update_pool(
     })
     .await
     .map_err(|_| HttpError::internal())?
+}
+
+/// Append an account to the end of its provider pool (creating the pool) through the
+/// same serialized settings write as `update_pool`.
+pub(crate) async fn join_pool(
+    s: &Shared,
+    provider: &str,
+    reference: ModelAccountRef,
+) -> Result<(), HttpError> {
+    let _writer = crate::settings_api::WRITE.lock().await;
+    let change = s.models.change_credentials().await;
+    let mut current = crate::settings_api::stored(s).await?;
+    if !current.credentials.is_object() {
+        current.credentials = json!({});
+    }
+    let mut accounts: Vec<ModelAccountRef> = current.credentials["pools"]
+        .get(provider)
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| HttpError::invalid_value())?
+        .unwrap_or_default();
+    // Same cap as `update_pool`; a full pool just doesn't gain the new account.
+    if accounts.contains(&reference) || accounts.len() >= 64 {
+        return Ok(());
+    }
+    accounts.push(reference);
+    current.credentials["pools"][provider] = json!(accounts);
+    crate::settings_api::persist(
+        s,
+        serde_json::to_value(current).map_err(|_| HttpError::internal())?,
+    )
+    .await?;
+    s.models.set_pools(&BTreeMap::from([(
+        provider.to_owned(),
+        ProviderPool {
+            provider: provider.to_owned(),
+            accounts,
+        },
+    )]));
+    drop(change);
+    s.models.invalidate(s).await;
+    Ok(())
+}
+
+/// Remove a deleted account from every pool and drop its routing state.
+pub(crate) async fn forget_account(
+    s: &Shared,
+    reference: &ModelAccountRef,
+) -> Result<(), HttpError> {
+    {
+        let mut policy = s.models.policy.lock().await;
+        policy.health.retain(|(_, account), _| account != reference);
+        policy.sticky.retain(|_, account| account != reference);
+        policy.preferred.retain(|_, account| account != reference);
+    }
+    let _writer = crate::settings_api::WRITE.lock().await;
+    let change = s.models.change_credentials().await;
+    let mut current = crate::settings_api::stored(s).await?;
+    let mut changed = BTreeMap::new();
+    if let Some(pools) = current
+        .credentials
+        .get_mut("pools")
+        .and_then(Value::as_object_mut)
+    {
+        for (provider, accounts) in pools.iter_mut() {
+            let Ok(mut refs) = serde_json::from_value::<Vec<ModelAccountRef>>(accounts.clone())
+            else {
+                continue;
+            };
+            let before = refs.len();
+            refs.retain(|account| account != reference);
+            if refs.len() != before {
+                *accounts = json!(refs);
+                changed.insert(
+                    provider.clone(),
+                    ProviderPool {
+                        provider: provider.clone(),
+                        accounts: refs,
+                    },
+                );
+            }
+        }
+    }
+    if !changed.is_empty() {
+        crate::settings_api::persist(
+            s,
+            serde_json::to_value(current).map_err(|_| HttpError::internal())?,
+        )
+        .await?;
+        s.models.set_pools(&changed);
+    }
+    drop(change);
+    s.models.invalidate(s).await;
+    Ok(())
 }
 pub(crate) async fn set_preference(
     State(s): State<Shared>,

@@ -102,6 +102,8 @@ impl Entry {
             channel_secret: None,
             subscription: None,
             subscription_tokens: Vec::new(),
+            oauth: None,
+            oauth_tokens: Vec::new(),
         })
     }
 }

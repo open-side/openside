@@ -56,8 +56,8 @@ pub(crate) enum ModelCommand {
         session: String,
         account: Option<String>,
     },
-    /// Model subscription accounts (Claude Code and Codex CLI homes); lists them without a
-    /// subcommand.
+    /// Model subscription accounts (Claude Code and Codex CLI homes, OAuth sign-ins); lists
+    /// them without a subcommand.
     Accounts {
         #[command(subcommand)]
         command: Option<crate::model_accounts::SubscriptionCommand>,
@@ -202,6 +202,7 @@ fn account(value: &str) -> Result<ModelAccountRef, String> {
         "claude-code",
         "codex-cli",
         "builtin",
+        "pi-oauth",
     ]
     .contains(&source)
     {
@@ -212,18 +213,28 @@ fn account(value: &str) -> Result<ModelAccountRef, String> {
         account_id: component(id)?.into(),
     })
 }
-pub(crate) async fn run<W: Write>(
+pub(crate) async fn run<W: Write, E: Write>(
     command: Option<&ModelCommand>,
     client: &Client,
     json_output: bool,
     stdout: &mut W,
+    stderr: &mut E,
+    interrupted: &mut bool,
 ) -> Result<(), String> {
     let Some(command) = command else {
         return list(client, json_output, stdout).await;
     };
     match command {
         ModelCommand::Accounts { command } => {
-            crate::model_accounts::run(command.as_ref(), client, json_output, stdout).await
+            crate::model_accounts::run(
+                command.as_ref(),
+                client,
+                json_output,
+                stdout,
+                stderr,
+                interrupted,
+            )
+            .await
         }
         ModelCommand::Set {
             model,

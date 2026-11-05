@@ -11,9 +11,9 @@ import { providerLabel, SUBSCRIPTION_LABELS } from "./providers";
 /** How often the sign-in dialog re-reads the account while the person signs in from a terminal. */
 export const SIGN_IN_POLL_MS = 2500;
 
-const SECRET_INPUT = { autoComplete: "new-password", autoCapitalize: "none", autoCorrect: "off", spellCheck: false } as const;
+export const SECRET_INPUT = { autoComplete: "new-password", autoCapitalize: "none", autoCorrect: "off", spellCheck: false } as const;
 
-function useSubmit() {
+export function useSubmit() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function run(action: () => Promise<void>): Promise<boolean> {
@@ -32,7 +32,7 @@ function useSubmit() {
   return { busy, error, run };
 }
 
-function LabelField({ value, onChange, autoFocus }: { value: string; onChange: (label: string) => void; autoFocus?: boolean }) {
+export function LabelField({ value, onChange, autoFocus }: { value: string; onChange: (label: string) => void; autoFocus?: boolean }) {
   return (
     <label className="field">
       <span>Name</span>
@@ -255,14 +255,17 @@ export function ManageAccountDialog({
   onClose,
   onSave,
   onRemove,
+  onRelogin,
 }: {
   open: boolean;
   row: AccountRow;
   onClose: () => void;
   onSave: (row: AccountRow, changes: ManageChanges) => Promise<void>;
   onRemove: (row: AccountRow) => void;
+  /** Signs an account openside signed in to in again. */
+  onRelogin: (row: AccountRow) => void;
 }) {
-  const currentReserve = row.key?.reserve_percent ?? row.subscription?.reserve_percent ?? 10;
+  const currentReserve = row.key?.reserve_percent ?? row.subscription?.reserve_percent ?? row.oauth?.reserve_percent ?? 10;
   const [label, setLabel] = useState(row.label);
   const [reserve, setReserve] = useState(String(currentReserve));
   const [key, setKey] = useState("");
@@ -303,6 +306,20 @@ export function ManageAccountDialog({
             <span>Replace key (optional)</span>
             <input type="password" value={key} onChange={(event) => setKey(event.target.value)} {...SECRET_INPUT} data-1p-ignore data-lpignore="true" />
           </label>
+        ) : null}
+        {row.oauth ? (
+          <div className="oauth-relogin">
+            <span className="settings-text">{row.oauth.auth_invalid ? "This sign-in stopped working." : "Sign in again if this account stops working."}</span>
+            <Button
+              size="compact"
+              onClick={() => {
+                close();
+                onRelogin(row);
+              }}
+            >
+              Sign in again
+            </Button>
+          </div>
         ) : null}
         {error ? <ErrorNote>{error}</ErrorNote> : null}
         <DialogActions>

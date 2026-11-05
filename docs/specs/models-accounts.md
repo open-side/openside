@@ -1,6 +1,6 @@
 # Models & accounts
 
-This specification defines the owner-approved multi-account cutover: labelled provider API keys, isolated external-CLI subscription accounts, an explicit provider account pool, and daemon-owned per-request selection. It intentionally supersedes the earlier single-key-per-provider and source-wide subscription-toggle contract. There are no deprecated route aliases after cutover. openside does not implement an OAuth sign-in flow: the person signs in with the external CLI using the command displayed for that account.
+This specification defines the owner-approved multi-account cutover: labelled provider API keys, isolated external-CLI subscription accounts, openside-held OAuth accounts (`pi-oauth`), an explicit provider account pool, and daemon-owned per-request selection. It intentionally supersedes the earlier single-key-per-provider and source-wide subscription-toggle contract. There are no deprecated route aliases after cutover. External-CLI subscription accounts are signed in with the external CLI using the command displayed for that account; `pi-oauth` accounts are signed in by openside itself through a daemon-owned helper (see [OAuth accounts](#oauth-accounts-pi-oauth)).
 
 ## Public API
 
@@ -23,6 +23,16 @@ The authoritative route/schema sources are `openside-proto::ROUTES` and the gene
 | GET | `/v1/settings/pools` | Read | `{pools:ProviderPool[]}` |
 | PUT | `/v1/settings/pools/{provider}` | Admin + person, or local socket | `{accounts:ModelAccountRef[]}` → ordered provider pool |
 | PUT | `/v1/sessions/{id}/account` | Steer | `{account:ModelAccountRef|null}` → next-request preference |
+| GET | `/v1/settings/oauth/providers` | Admin + person, or local socket | `{providers:OAuthProviderInfo[]}` in fixed order |
+| GET | `/v1/settings/oauth/accounts` | Admin + person, or local socket | `{accounts:OAuthAccount[]}` sorted by provider, then creation time |
+| POST | `/v1/settings/oauth/accounts/{provider}` | Admin + person, or local socket | `{label,join_pool?,method?}` → 202 `OAuthTransaction` |
+| GET | `/v1/settings/oauth/accounts/{provider}/{account_id}` | Admin + person, or local socket | `OAuthAccount` |
+| PATCH | `/v1/settings/oauth/accounts/{provider}/{account_id}` | Admin + person, or local socket | `{label?,enabled?,reserve_percent?}` → `OAuthAccount` |
+| DELETE | `/v1/settings/oauth/accounts/{provider}/{account_id}` | Admin + person, or local socket | 204; local removal only |
+| POST | `/v1/settings/oauth/accounts/{provider}/{account_id}/relogin` | Admin + person, or local socket | `{method?}` → 202 `OAuthTransaction` |
+| GET | `/v1/settings/oauth/transactions/{transaction_id}` | Admin + person, or local socket | Poll one sign-in |
+| POST | `/v1/settings/oauth/transactions/{transaction_id}/input` | Admin + person, or local socket | `{code}` → 202 `OAuthTransaction` |
+| POST | `/v1/settings/oauth/transactions/{transaction_id}/cancel` | Admin + person, or local socket | 204 |
 
 A read-scoped paired phone cannot inspect key metadata or alter managed credentials/pools. Admin-scoped agent clients cannot perform person-only credential/pool mutations. A local socket is the local operator. Revoked devices are rechecked inside serialized writes. Session account preference may only select a member of the effective, already authorized provider/Agent pool; it cannot enable an account or introduce another source.
 
@@ -90,6 +100,63 @@ Concurrency boundary: the daemon serializes its own per-account operations and c
 
 Removing a default account records a durable hidden/disabled tombstone in openside; discovery does not recreate it, and no external home or Keychain item is wiped. Initial default-account enablement preserves the existing `credentials.subscriptions` setting (Claude defaults off, Codex defaults on), rather than silently enabling a previously excluded credential source.
 
+## OAuth accounts (`pi-oauth`)
+
+`pi-oauth` accounts are signed in by openside on the daemon host. Rust owns the provider allowlist, authorization, storage and refresh policy; a one-shot helper process does only the provider protocol. Source `pi-oauth` is listed in `GET /v1/accounts` but is in no default source order, so a new account never joins a pool by itself: `join_pool:true` appends it to the end of its provider pool (creating the pool) through the same serialized settings write as `PUT /v1/settings/pools/{provider}`; otherwise the person adds `pi-oauth:<account_id>` later.
+
+| Provider (pool namespace) | Name | Methods (first = default) | Pasted code | Lease | Required sign-in detail |
+| --- | --- | --- | --- | --- | --- |
+| `anthropic` | Claude (Pro/Max) | browser | browser | `claude_code` | none |
+| `openai-codex` | ChatGPT (Codex) | browser, device | browser | `codex_cli` + upstream account id | account id |
+| `google-gemini-cli` | Google Gemini CLI | browser | browser | `bearer` + private `request_metadata.project_id` | project id |
+| `google-antigravity` | Google Antigravity | browser | browser | `bearer` + private `request_metadata.project_id` | project id |
+| `github-copilot` | GitHub Copilot | device | none | `bearer` | none |
+
+Other providers return `oauth_provider_unknown` (400); a method not listed returns `oauth_flow_unsupported` (400). An account missing its required detail is listed with `available:false` and reason `Account is missing required sign-in details`; other reasons are `OAuth account ready`, `Account disabled` and `Sign in again`. `OAuthAccount` is `{source,provider,account_id,label,enabled,reserve_percent,available,reason,auth_invalid,created_at_ms}`. Its `account_id` is openside's own local handle: a random opaque id the daemon generates when the transaction starts, never derived from provider data, and the only id routes and pool references use. Replies carry no provider-side identifier: no email, plan, organization, project id, upstream account id, token or token metadata.
+
+**Transactions.** Create and relogin return 202 with an in-memory `OAuthTransaction` `{transaction_id,kind,provider,account_id,method,status,reason,authorization,manual_input,expires_at_ms,account}`. Status runs `starting` → `awaiting_browser` (browser) or `awaiting_code` (device, `authorization.user_code`) → `exchanging` → `ready` (with `account`), or ends `failed` (`oauth_callback_busy`, `oauth_invalid_grant`, `oauth_failed`, `oauth_flow_unsupported`, `oauth_helper_unavailable`, `oauth_account_removed`), `cancelled` (`oauth_cancelled`) or `expired` (`oauth_expired`, also used when the helper reports that the provider's own wait timed out). `authorization` is cleared once the transaction finishes. `manual_input` is true only while the helper asked for a pasted code and the status is `awaiting_browser`; `POST …/input` otherwise returns `oauth_manual_input_not_allowed` (409), and on a finished transaction `oauth_transaction_finished` (409). A paste moves the transaction to `exchanging`; if the helper asks again before it reports the exchange, the paste was rejected and the transaction returns to `awaiting_browser` with `manual_input:true`. The code is 1–4096 characters, write-only and never echoed. Transactions expire 10 minutes after creation (the helper is killed then), are kept 10 minutes after finishing, and are never persisted. At most 4 run at once and one per account (`oauth_busy`, 409); the limit of 4 is shared by every caller on the daemon, a known limit of the first release. A transaction belongs to the device that started it: another paired device gets `oauth_transaction_unknown` (404); the local socket sees all. Cancelling kills the helper; cancelling a finished transaction is a no-op 204.
+
+**Create** validates label, provider, method and an open Vault (`vault_unavailable`, 409) before starting; nothing is stored until the provider returns credentials, then the account is written with `enabled:true`, `reserve_percent:10`. The store and the move to `ready` happen together: a cancel or delete that reaches the transaction first means nothing is stored, and one that arrives after the store no longer changes its outcome. With `join_pool` the account is then appended to its provider pool unless that pool already holds the maximum of 64 accounts. **Relogin** requires an existing account (`unknown_account`, 404) and replaces its credentials under revision compare-and-swap, keeping label, enablement, reserve and pool membership and clearing `auth_invalid`; if the account is deleted first the transaction fails with `oauth_account_removed` and nothing is recreated. **Delete** fails that account's live relogins with `oauth_account_removed`, removes the Vault record, removes the reference from every pool and drops its health, sticky and preferred state; a second delete returns `unknown_account`. If the pool cleanup fails after the record is gone, the delete still succeeds and the daemon logs the failure without detail; the leftover reference resolves to no account and can be removed with `PUT /v1/settings/pools/{provider}`. Deletion is local only: openside never claims to revoke the grant at the provider.
+
+**Helper boundary.** The daemon spawns `<agent argv> auth-login` or `<agent argv> auth-refresh` on the daemon host with a cleared environment plus the runtime environment, piped stdin/stdout, no stderr, its own process group and kill-on-drop. They exchange JSON lines (≤ 65,536 bytes each, each ending in a newline); an oversize line, an unterminated final line or an unknown message fails the transaction with `oauth_failed`. The helper keeps no state, writes nothing to disk and only reaches the selected provider's auth origins plus its own loopback callback. Callback listeners bind the daemon host's loopback, so a remote person device opens the authorization URL and, where the provider supports it, pastes the code or redirect URL back through `…/input`. Agent clients and channel callers (paired agent devices and `x-openside-client: mcp|channel`) are refused with `person_device_required` (403).
+
+**Callback listener proof (pi-ai 18.16.0, pinned in `agent/package.json`).** The helper calls pi-ai's own login and adds no listener of its own. The browser providers advertise their registered redirect unchanged; pi-ai binds only loopback addresses for it, never `0.0.0.0` or `::`. Paths below are under `agent/node_modules/@oh-my-pi/`.
+
+- **Callback host per provider** (`pi-catalog/src/compat/rules/auth/*.kdl`, the `callback` line of each `login "oauth-code"` block):
+  - `anthropic` uses `localhost:54545/callback` (`anthropic.kdl:18`).
+  - `openai-codex` uses the exact `redirect-uri="http://localhost:1455/auth/callback"` with `port-fallback=#false` (`openai-codex.kdl:16`).
+  - `google-gemini-cli` uses `hostname="127.0.0.1"`, port 8085 (`google-gemini-cli.kdl:11`).
+  - `google-antigravity` uses `hostname="127.0.0.1"`, port 51121 (`google-antigravity.kdl:14`).
+  - `openai-codex-device` and `github-copilot` are `login "custom"` device-code flows (`openai-codex-device.kdl:3`, `github-copilot.kdl:4`). They poll the provider and open no listener: no `Bun.serve` call exists in `pi-ai/src/registry` outside `oauth/callback-server.ts`.
+- **Bind addresses:**
+  - `resolveCallbackOptions` passes the rule's hostname through (`pi-ai/src/registry/engine/oauth-code.ts:39-51`). A redirect override can only re-point the listener at a loopback host (`oauth-code.ts:25-27, 68-79`); none of these rules declares an override variable.
+  - `#createServer` binds a non-`localhost` hostname exactly as given (`pi-ai/src/registry/oauth/callback-server.ts:480-481`). For `localhost` it binds the literals `127.0.0.1` and, when the host has IPv6 loopback, `::1` (`callback-server.ts:22-25, 490-520`).
+  - Every listener is a `Bun.serve` with an explicit `hostname` and `reusePort: false` (`callback-server.ts:525-532`).
+- **State check:**
+  - The default state is 16 random bytes, hex-encoded (`callback-server.ts:220-226`; the rule's `state` default is used by `oauth-code.ts:112-121`).
+  - A callback whose `state` differs is answered 500 and never resolves the flow (`callback-server.ts:573-574`). An `error` redirect is honoured only when it carries the expected state (`callback-server.ts:584-595`).
+  - Pasted input with a different state is ignored (`callback-server.ts:641-646`).
+- **PKCE:**
+  - The verifier is 96 random bytes, base64url-encoded, and the challenge is its SHA-256 (`pi-ai/src/registry/oauth/pkce.ts:5-17`).
+  - The verifier is kept in a private field (`oauth-code.ts:93, 131-135`). Only the `S256` challenge goes in the authorization URL (`oauth-code.ts:152-155`); the verifier is sent only in the token exchange (`oauth-code.ts:191, 206`).
+  - `google-gemini-cli` declares no PKCE; its state check still applies.
+- **Single use:**
+  - The callback is one `Promise.withResolvers` (`callback-server.ts:618-620`). Its resolvers are cleared on abort and once the race settles (`callback-server.ts:622-630, 654-658`).
+  - `login()` stops the server and clears the pending `/launch` URL in `finally` (`callback-server.ts:322-337`). A replayed callback therefore has no listener to reach.
+- **Egress:**
+  - The OAuth code paths reach the network only through the free `fetch` identifier, resolved at call time, or `ctrl.fetch`, which the helper leaves unset. This covers `oauth-code.ts:109`, `engine/device-code.ts:42`, `engine/refresh.ts:64`, `oauth/openai-codex.ts:158, 216, 262`, `oauth/github-copilot.ts:337` and `oauth/google-oauth-shared.ts:55`. The helper's egress guard therefore covers them.
+  - The only `node:net`/`node:tls` namespace imports in pi-ai are in `utils/proxy.ts`, which only the cursor provider uses.
+
+`agent/tests/auth-helper.test.ts` covers this list. Each browser provider runs its real pi-ai login, with only the token exchange stubbed. The tests check five things:
+
+- The listener accepts on `127.0.0.1` and is unreachable on every non-loopback interface address.
+- A wrong-state callback gets a 500 and nothing is exchanged.
+- The PKCE verifier matches the challenge.
+- The listener is closed once the flow settles.
+- A login or refresh that fetches an unlisted origin ends with `failed`, and the request never leaves the process (a child process runs with the real guard installed).
+
+**Refresh.** Resolution is single-flight per account. The daemon refreshes when access expires within 60 seconds, or once after an auth report against the leased revision, through the `auth-refresh` helper (60-second deadline). A refreshed payload is stored with compare-and-swap against the revision it read. If the revision moved while the helper ran but the stored refresh token is still the one it sent, only metadata changed (a rename or toggle), and the refreshed tokens are stored on top of the new metadata; a different refresh token is a newer sign-in, which is used and never overwritten. `invalid_grant` marks `auth_invalid` by the same rule, never on a newer sign-in; other failures are transient and change nothing, and a token that is still valid (inside the 60-second window) is leased anyway unless the refresh was forced by an auth report. Readiness of accounts with required sign-in details is cached per revision, so listing accounts does not read their tokens each time. Leases carry `{kind,value:access,upstream_account_id,expires_at_ms,request_metadata}` per the table; refresh tokens never leave the daemon.
+
 ## Plugin sources
 
 A plugin source is a model relay that only some networks can reach (an office LAN or a tailnet). It is described by a local manifest in `plugins/*.toml` beside the config file (`~/.config/openside/plugins/` by default). Manifests are personal files: they live outside every repository, carry the person's own identity value, and openside never writes, lists or returns them. There is no Settings card, API route or CLI command for plugin sources.
@@ -142,7 +209,6 @@ Unknown keys or out-of-range values reject the whole manifest; a duplicate `id` 
 
 **Diagnosis.** `openside doctor` reports `models.plugin_sources`: how many manifests loaded, how many origins accept a TCP connection now, their ids, and how many manifests were rejected. URLs and identities are not printed.
 
-
 ## Account pool & rotation
 
 The daemon is the single selection, usage and rotation policy owner. The sidecar's custom `streamFn` (`agent/src/providers/stream.ts`) obtains a fresh private credential snapshot for every outbound model-request attempt; model objects may stay warm, but captured credentials do not remain authorized until the session ends. An already-sent request may finish. A later request observes removal, replacement, disablement, pool edits and refresh without restarting the conversation.
@@ -174,7 +240,7 @@ Agent model/account_pool/status changes participate in the same generation write
 
 The private authenticated v1 session socket carries `credential_request` → `credential_response` or `credential_error`, and `credential_report` → `credential_reported`. These are not public HTTP routes or model tools; Host binds session authority. Core typed callbacks resolve and report, while the sidecar is only a request client, not another selector/refresher.
 
-Resolve includes opaque request_id, provider, qualified model, zero-based attempt0–63 and nullable daemon-known subagent. Success carries a lease, generation, opaque account ref and selected auth `{kind,value,upstream_account_id,expires_at_ms}`; kind is api_key/claude_code/codex_cli/bearer. Only an API key/access token and necessary private request identity cross this boundary. No refresh token, home, broker bearer or complete source configuration is sent. Redacting Debug/repr and zeroized serialized buffers protect ordinary output/lifetime; no credential disk snapshot cache is added.
+Resolve includes opaque request_id, provider, qualified model, zero-based attempt0–63 and nullable daemon-known subagent. Success carries a lease, generation, opaque account ref and selected auth `{kind,value,upstream_account_id,expires_at_ms}`; kind is api_key/claude_code/codex_cli/bearer. Plugin-source leases add private `base_url` (≤512-char http(s) URL without credentials, query or fragment), `headers` (≤8 lower-case `x-` headers, printable ASCII values ≤256, never an auth header) and `error_rules` (`{hint_header?, rules:[{status 400–599, hint?, body_contains?, outcome, message?}]}`, ≤16 rules); an invalid field rejects the whole lease. Only an API key/access token and necessary private request identity cross this boundary. No refresh token, home, broker bearer or complete source configuration is sent. Redacting Debug/repr and zeroized serialized buffers protect ordinary output/lifetime; no credential disk snapshot cache is added.
 
 Report outcome is success/auth/rate_limit/quota/policy/transient/cancelled, with stream_started, nullable provider retry duration, account/model scope, sanitized usage counts/windows. Ack action is complete/refresh/rotate/stop. Report effects commit before ack, which must be awaited before reacquiring. Refresh/rotate ack carries no credential: the sidecar resolves again with incremented attempt under the same logical request id. Delayed/idempotent lease-bound reports cannot block a replacement credential or recreate an account. On cancellation/abort/shutdown only, send-only cancelled reports may discard their late ack; no resolve/retry follows, avoiding cleanup dispatcher deadlock.
 
@@ -191,5 +257,7 @@ Only session-sidecar children receive soft/hard RLIMIT_CORE=0 before exec, plus 
 ## CLI and verification
 
 `openside models` lists catalog/pool eligibility; `models set <model> --fallback <model>` selects defaults for new sessions. `models pool list` and `models pool set <provider> [source:account_id ...]` manage the explicit ordered trust boundary; an empty list disables the provider. `models account <session> [source:account_id]` sets/clears the next-request preference. `openside models accounts` lists all source accounts; `models accounts add <source> --label <label>`, `show`, `enable`, `disable` and `rm <source> <account_id>` manage subscriptions and print exact external login guidance only on the admin surface. (`openside account` is a different command: it picks the team agent a CLI session runs as.) `openside key set <provider> --label <label>` reads hidden stdin only; `--key-id <id>` replaces. `key update <provider> <key_id>` edits metadata and `key rm <provider> <key_id>` removes one account. No key argument is accepted; parse errors cannot echo an accidentally supplied key.
+
+OAuth sign-ins use the same command with source `oauth` over `/v1/settings/oauth/*`: `models accounts providers` lists provider, name, methods and the methods that accept a pasted code; `add oauth --provider <provider> --label <label> [--method browser|device] [--pool]` creates a transaction (`--pool` sets `join_pool`; without it the account joins no pool and the CLI prints the `pi-oauth:<account_id>` reference for `models pool set`); `login oauth <provider>/<account_id> [--method ...]` signs in again; `show`, `enable`, `disable`, `rm oauth <provider>/<account_id>` and `update oauth <provider>/<account_id> [--label ...] [--reserve-percent N]` map to GET/PATCH/DELETE. `add` and `login` poll the transaction every second until it ends, write the authorization URL, instructions and user code to stderr once per change, and print only the account (JSON: the final transaction, whose `authorization` is cleared) on stdout. When the daemon sets `manual_input` and stdin is a terminal, the CLI asks for the code or redirect URL at a hidden prompt (Enter alone keeps waiting for the browser); otherwise it tells the person to finish in the browser. A code is never accepted in argv, and a parse error for `add oauth`/`login oauth` does not echo the arguments. Ctrl-C calls the transaction's cancel route and exits 130. Failed, cancelled and expired transactions exit 1 with a short message and the reason code.
 
 Acceptance requires multiple same-provider keys and isolated CLI homes; person/scope refusal; no key/token in public/config/log output; explicit-pool fail-close and affinity; auth versus rate/quota classification; bounded distinct-account retry and no partial-stream replay; single-flight refresh/revision race protection; default-home read-only behavior and managed-file wipe; deleted/disabled accounts observed by later requests; generation/startup fencing; and spawned child core/dumpability assertions. Disposable daemon smoke and scripted/mocked upstream boundaries avoid touching live installations/accounts. No live upstream entitlement or OAuth login claim follows from metadata readiness alone.

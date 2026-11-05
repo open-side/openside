@@ -44,8 +44,7 @@ async fn send(
 fn concrete(path: &str) -> String {
     let out = path
         .replace("{mid}", "message")
-        .replace("{tab_id}", "tab")
-            .replace("{sid}", "child")
+        .replace("{sid}", "child")
         .replace("{name}", "skill")
         .replace("{path}", "transcript.jsonl")
         .replace("{thumbnail_id}", "thumbnail")
@@ -58,6 +57,8 @@ fn concrete(path: &str) -> String {
         .replace("{ticket}", "ticket")
         .replace("{origin}", "invalid-origin")
         .replace("{space_id}", "space")
+        .replace("{transaction_id}", "transaction")
+        .replace("{tab_id}", "tab")
         .replace("{id}", "session");
     assert!(!out.contains('{'), "unsubstituted path parameter in {out}");
     out

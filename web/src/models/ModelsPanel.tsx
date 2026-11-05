@@ -3,10 +3,11 @@ import { useEffect, useState } from "react";
 import type { ModelAccountRef, ModelCatalog, ModelProvider, ModelRole, ModelTier, SubscriptionAccount } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
-import { ErrorNote, ResourceCard, ResourceView, SectionList, useConfirm, useDialogState } from "../pages/blocks";
+import { AddButton, ErrorNote, ResourceCard, ResourceView, SectionList, useConfirm, useDialogState } from "../pages/blocks";
 import { Button, IconButton, ICON_STROKE, Select, useToast, type SelectGroup } from "../ui";
 import { accountsOf, refKey, type AccountRow } from "./accounts";
 import { AddKeyDialog, AddSubscriptionDialog, ManageAccountDialog, SignInDialog, type ManageChanges } from "./AccountDialogs";
+import { ConnectAccountDialog, ReloginDialog } from "./OAuthDialogs";
 import { ProviderCard } from "./ProviderCard";
 import { anyModelReady, providerLabel } from "./providers";
 import { useModelSettings } from "./useModelSettings";
@@ -144,25 +145,34 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
   const client = useClient();
   const toast = useToast();
   const settings = useModelSettings();
-  const { catalog, keys, subscriptions, pools, accounts, readOnly } = settings;
+  const { catalog, keys, subscriptions, oauth, pools, accounts, readOnly } = settings;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const keyDialog = useDialogState<{ provider: string; first: boolean }>();
   const subscriptionDialog = useDialogState<{ source: string; first: boolean }>();
   const signInDialog = useDialogState<SubscriptionAccount>();
   const manageDialog = useDialogState<AccountRow>();
+  const connectDialog = useDialogState<true>();
+  const reloginDialog = useDialogState<AccountRow>();
   useEffect(() => {
     if (catalog.data) onCatalog?.(catalog.data);
   }, [catalog.data, onCatalog]);
   const [confirmElement, ask] = useConfirm();
 
   const poolOf = (provider: string): ModelAccountRef[] => pools.data?.pools.find((pool) => pool.provider === provider)?.accounts ?? [];
+  const bare = (provider: string): ModelProvider => ({ provider, models: [], pool: { provider, accounts: poolOf(provider) } });
+  // Signed-in accounts can name a provider the catalog does not list yet; they still get a card.
+  const providersOf = (data: ModelCatalog): ModelProvider[] => [
+    ...data.providers,
+    ...[...new Set((oauth.data?.accounts ?? []).map((account) => account.provider))].filter((provider) => !data.providers.some((candidate) => candidate.provider === provider)).map(bare),
+  ];
   const rowsOf = (provider: string) =>
     accountsOf(
-      catalog.data!.providers.find((candidate) => candidate.provider === provider)!,
+      providersOf(catalog.data!).find((candidate) => candidate.provider === provider) ?? bare(provider),
       poolOf(provider),
       keys.data?.keys ?? [],
       subscriptions.data?.sources.flatMap((source) => source.accounts) ?? [],
+      oauth.data?.accounts ?? [],
     );
 
   async function run(id: string, action: () => Promise<void>) {
@@ -212,6 +222,8 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
       if (Object.keys(rest).length) await client.updateApiKey(row.provider, row.key.key_id, rest);
     } else if (row.subscription) {
       await client.updateSubscriptionAccount(row.subscription.source, row.subscription.account_id, patch);
+    } else if (row.oauth) {
+      await client.updateOAuthAccount(row.oauth.provider, row.oauth.account_id, patch);
     }
     toast.notify("Saved.");
     await settings.reload();
@@ -221,8 +233,18 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
     run(refKey(row.ref), async () => {
       if (row.key) await client.updateApiKey(row.provider, row.key.key_id, { enabled });
       else if (row.subscription) await client.updateSubscriptionAccount(row.subscription.source, row.subscription.account_id, { enabled });
+      else if (row.oauth) await client.updateOAuthAccount(row.oauth.provider, row.oauth.account_id, { enabled });
       await settings.reload();
     });
+
+  // A signed-in account may have been renamed, signed in again or removed from another device; edit the current record.
+  const manage = (row: AccountRow) =>
+    row.oauth
+      ? run(refKey(row.ref), async () => {
+          const fresh = await client.oauthAccount(row.oauth!.provider, row.oauth!.account_id);
+          manageDialog.show({ ...row, oauth: fresh, label: fresh.label, enabled: fresh.enabled });
+        })
+      : manageDialog.show(row);
 
   const setPool = (provider: string, next: ModelAccountRef[]) =>
     run(`pool:${provider}`, async () => {
@@ -235,14 +257,17 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
       title: row.subscription && !row.subscription.managed ? `Stop using ${row.label}?` : `Remove ${row.label}?`,
       description: row.key
         ? "The key is deleted from the vault on this computer. Requests made from now on stop using it; one already running may finish. This does not revoke the key with the provider."
-        : row.subscription && !row.subscription.managed
-          ? "openside stops listing and using this sign-in. Your terminal's own sign-in is not touched."
-          : "The sign-in openside stored for this account is wiped. Requests made from now on stop using it. Your own terminal sign-in is not touched.",
+        : row.oauth
+          ? "openside removes this account and its sign-in from the vault on this computer. Requests made from now on stop using it; one already running may finish."
+          : row.subscription && !row.subscription.managed
+            ? "openside stops listing and using this sign-in. Your terminal's own sign-in is not touched."
+            : "The sign-in openside stored for this account is wiped. Requests made from now on stop using it. Your own terminal sign-in is not touched.",
       confirmLabel: row.subscription && !row.subscription.managed ? "Stop using" : "Remove",
       onConfirm: () =>
         void run(refKey(row.ref), async () => {
           if (row.key) await client.deleteApiKey(row.provider, row.key.key_id);
           else if (row.subscription) await client.deleteSubscriptionAccount(row.subscription.source, row.subscription.account_id);
+          else if (row.oauth) await client.deleteOAuthAccount(row.oauth.provider, row.oauth.account_id);
           toast.notify("Account removed.");
           await settings.reload();
         }),
@@ -256,7 +281,7 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
             {anyModelReady(data) ? null : (
               <div className="models-callout" role="status">
                 <CircleAlert size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                <p>No model is ready yet. Add an API key or a subscription account below, then start a conversation.</p>
+                <p>No model is ready yet. Connect an account or add an API key below, then start a conversation.</p>
               </div>
             )}
             {readOnly ? (
@@ -276,13 +301,16 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
               summary={compact ? "Connect at least one provider to use a model." : undefined}
               label="Providers"
               actions={
-                <Button size="compact" onClick={() => void settings.reload()}>
-                  <RefreshCw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                  Refresh
-                </Button>
+                <>
+                  {readOnly ? null : <AddButton onClick={() => connectDialog.show(true)}>Connect account</AddButton>}
+                  <Button size="compact" onClick={() => void settings.reload()}>
+                    <RefreshCw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                    Refresh
+                  </Button>
+                </>
               }
             >
-              {data.providers.map((provider) => {
+              {providersOf(data).map((provider) => {
                 const rows = rowsOf(provider.provider);
                 return (
                   <ProviderCard
@@ -296,7 +324,8 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
                     onAddKey={(id) => keyDialog.show({ provider: id, first: rows.length === 0 })}
                     onAddSubscription={(source) => subscriptionDialog.show({ source, first: rows.length === 0 })}
                     onSignIn={(row) => row.subscription && signInDialog.show(row.subscription)}
-                    onManage={(row) => manageDialog.show(row)}
+                    onRelogin={(row) => reloginDialog.show(row)}
+                    onManage={(row) => void manage(row)}
                     onToggle={(row, enabled) => void toggle(row, enabled)}
                     onPool={(id, next) => void setPool(id, next)}
                   />
@@ -335,7 +364,15 @@ export function ModelsPanel({ compact = false, onCatalog }: { compact?: boolean;
         />
       ) : null}
       {signInDialog.value ? <SignInDialog open={signInDialog.open} account={signInDialog.value} onClose={signInDialog.close} onSignedIn={() => void settings.reload()} /> : null}
-      {manageDialog.value ? <ManageAccountDialog open={manageDialog.open} row={manageDialog.value} onClose={manageDialog.close} onSave={saveAccount} onRemove={removeAccount} /> : null}
+      {manageDialog.value ? (
+        <ManageAccountDialog open={manageDialog.open} row={manageDialog.value} onClose={manageDialog.close} onSave={saveAccount} onRemove={removeAccount} onRelogin={(row) => reloginDialog.show(row)} />
+      ) : null}
+      {connectDialog.value ? (
+        <ConnectAccountDialog open={connectDialog.open} isFirst={(provider) => rowsOf(provider).length === 0} onClose={connectDialog.close} onReady={() => void settings.reload()} />
+      ) : null}
+      {reloginDialog.value?.oauth ? (
+        <ReloginDialog open={reloginDialog.open} account={reloginDialog.value.oauth} onClose={reloginDialog.close} onReady={() => void settings.reload()} />
+      ) : null}
       {confirmElement}
     </div>
   );

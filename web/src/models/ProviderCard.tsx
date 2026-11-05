@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, KeyRound, Plus, Terminal, UserRound, X } from "lucide-react";
+import { ArrowDown, ArrowUp, KeyRound, LogIn, Plus, Terminal, UserRound, X } from "lucide-react";
 import { useState } from "react";
 import type { ModelAccountRef, ModelProvider } from "../api/types";
 import { Badge, Disclosure, ResourceCard } from "../pages/blocks";
@@ -22,6 +22,8 @@ export interface ProviderCardProps {
   onAddKey: (provider: string) => void;
   onAddSubscription: (source: string) => void;
   onSignIn: (row: AccountRow) => void;
+  /** Signs an account openside signed in to in again. */
+  onRelogin: (row: AccountRow) => void;
   onManage: (row: AccountRow) => void;
   onToggle: (row: AccountRow, enabled: boolean) => void;
   onPool: (provider: string, accounts: ModelAccountRef[]) => void;
@@ -34,6 +36,7 @@ function statusOf(row: AccountRow): { text: string; tone: "success" | "attention
   if (row.blockedUntilMs != null && row.blockedUntilMs > Date.now()) return { text: `Rate limited until ${formatDateTime(row.blockedUntilMs)}`, tone: "attention" };
   if (row.subscription && !row.subscription.installed) return { text: "Not installed", tone: "neutral" };
   if (row.subscription && !row.subscription.logged_in) return { text: "Not signed in", tone: "neutral" };
+  if (row.oauth?.auth_invalid) return { text: "Sign in again", tone: "attention" };
   return row.ready ? { text: "Ready", tone: "success" } : { text: "Unavailable", tone: "attention" };
 }
 
@@ -55,14 +58,19 @@ function detailOf(row: AccountRow) {
     // The status badge already says "Not signed in" / "Not installed"; repeating the reason adds noise.
     return `${name}${row.subscription.managed ? "" : " · your terminal's sign-in"}${rotation}`;
   }
+  if (row.oauth) {
+    // Readiness is all the daemon publishes for these accounts; the reason only matters when it is not ready.
+    return `${providerLabel(row.provider)} sign-in${rotation}${row.ready || row.oauth.auth_invalid ? "" : ` · ${row.reason}`}`;
+  }
   return `Source ${row.ref.source}${rotation}${row.reason && !row.ready ? ` · ${row.reason}` : ""}`;
 }
 
-function AccountRowView({ row, readOnly, busy, onSignIn, onManage, onToggle }: { row: AccountRow; readOnly: boolean; busy: boolean } & Pick<ProviderCardProps, "onSignIn" | "onManage" | "onToggle">) {
+function AccountRowView({ row, readOnly, busy, onSignIn, onRelogin, onManage, onToggle }: { row: AccountRow; readOnly: boolean; busy: boolean } & Pick<ProviderCardProps, "onSignIn" | "onRelogin" | "onManage" | "onToggle">) {
   const status = statusOf(row);
   const needsSignIn = row.subscription && row.subscription.managed && !row.subscription.logged_in;
-  const Icon = row.kind === "api-key" ? KeyRound : row.kind === "other" ? UserRound : Terminal;
-  const editable = !readOnly && (row.key || row.subscription);
+  const needsRelogin = row.oauth?.auth_invalid === true;
+  const Icon = row.kind === "api-key" ? KeyRound : row.kind === "pi-oauth" ? LogIn : row.kind === "other" ? UserRound : Terminal;
+  const editable = !readOnly && (row.key || row.subscription || row.oauth);
   return (
     <ResourceCard
       icon={Icon}
@@ -78,6 +86,10 @@ function AccountRowView({ row, readOnly, busy, onSignIn, onManage, onToggle }: {
             {needsSignIn ? (
               <Button size="compact" variant="primary" disabled={busy} aria-label={`Sign in ${row.label}`} onClick={() => onSignIn(row)}>
                 Sign in
+              </Button>
+            ) : needsRelogin ? (
+              <Button size="compact" variant="primary" disabled={busy} aria-label={`Sign in again ${row.label}`} onClick={() => onRelogin(row)}>
+                Sign in again
               </Button>
             ) : (
               <Switch checked={row.enabled} disabled={busy} label={`Use ${row.label}`} onChange={(enabled) => onToggle(row, enabled)} />
@@ -219,13 +231,13 @@ export function ProviderCard(props: ProviderCardProps) {
         <ul className="resource-list" aria-label={`Accounts for ${name}`}>
           {rows.map((row) => (
             <li key={refKey(row.ref)}>
-              <AccountRowView row={row} readOnly={readOnly} busy={busy === refKey(row.ref)} onSignIn={props.onSignIn} onManage={props.onManage} onToggle={props.onToggle} />
+              <AccountRowView row={row} readOnly={readOnly} busy={busy === refKey(row.ref)} onSignIn={props.onSignIn} onRelogin={props.onRelogin} onManage={props.onManage} onToggle={props.onToggle} />
             </li>
           ))}
         </ul>
       )}
       {compact || rows.length === 0 ? null : <Rotation provider={provider.provider} rows={rows} pool={pool} readOnly={readOnly} busy={busy === `pool:${provider.provider}`} onPool={props.onPool} />}
-      {compact ? null : <ModelRows provider={provider} />}
+      {compact || provider.models.length === 0 ? null : <ModelRows provider={provider} />}
     </section>
   );
 }

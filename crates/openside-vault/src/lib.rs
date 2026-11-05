@@ -44,6 +44,7 @@
 
 mod audit;
 mod channel;
+mod oauth;
 mod origin;
 mod passkey;
 mod platform;
@@ -54,6 +55,7 @@ mod sync;
 
 pub use audit::{read_audit, AuditAction, AuditContext, AuditQuery, AuditRecord};
 pub use channel::ChannelSecretInfo;
+pub use oauth::OAuthInfo;
 pub use origin::AllowedOrigin;
 pub use passkey::{PasskeyCredential, PasskeyRelease, SignCount};
 #[cfg(any(target_os = "macos", windows))]
@@ -239,6 +241,8 @@ pub struct Entry {
     channel_secret: Option<ChannelSecretInfo>,
     subscription: Option<SubscriptionInfo>,
     subscription_tokens: Vec<Secret>,
+    oauth: Option<OAuthInfo>,
+    oauth_tokens: Vec<Secret>,
 }
 impl fmt::Debug for Entry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -306,6 +310,8 @@ impl Entry {
             channel_secret: None,
             subscription: None,
             subscription_tokens: Vec::new(),
+            oauth: None,
+            oauth_tokens: Vec::new(),
         })
     }
 
@@ -321,6 +327,7 @@ impl Entry {
             .chain(self.totp.iter().map(|totp| &totp.seed))
             .chain(self.passkeys.iter().map(|passkey| &passkey.private_key))
             .chain(self.subscription_tokens.iter())
+            .chain(self.oauth_tokens.iter())
     }
 }
 
@@ -654,6 +661,7 @@ impl<L: PlatformLock> Vault<L> {
                 item.provider_key.is_some(),
                 item.channel_secret.is_some(),
                 item.subscription.is_some(),
+                item.oauth.is_some(),
             ]
             .into_iter()
             .filter(|present| *present)
@@ -697,6 +705,11 @@ impl<L: PlatformLock> Vault<L> {
                     return Err(Error::Format);
                 }
                 Entry::subscription(info, item.password.0)?
+            } else if let Some(info) = item.oauth {
+                if !origins.is_empty() || !passkeys.is_empty() || item.totp_seed.is_some() {
+                    return Err(Error::Format);
+                }
+                Entry::oauth(info, item.password.0)?
             } else {
                 Entry::build(
                     item.site.clone(),
@@ -783,6 +796,7 @@ impl<L: PlatformLock> Vault<L> {
                 entry.provider_key.is_none()
                     && entry.channel_secret.is_none()
                     && entry.subscription.is_none()
+                    && entry.oauth.is_none()
             })
             .map(|entry| self.info(entry))
             .collect())
@@ -1697,6 +1711,8 @@ struct WriteEntry<'a> {
     channel_secret: Option<&'a ChannelSecretInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     subscription: Option<&'a SubscriptionInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    oauth: Option<&'a OAuthInfo>,
 }
 #[derive(Serialize)]
 struct WritePasskey<'a> {
@@ -1735,6 +1751,7 @@ impl<'a> From<&'a Entry> for WriteEntry<'a> {
             provider_key: entry.provider_key.as_ref(),
             channel_secret: entry.channel_secret.as_ref(),
             subscription: entry.subscription.as_ref(),
+            oauth: entry.oauth.as_ref(),
         }
     }
 }
@@ -1762,6 +1779,8 @@ struct ReadEntry {
     channel_secret: Option<ChannelSecretInfo>,
     #[serde(default)]
     subscription: Option<SubscriptionInfo>,
+    #[serde(default)]
+    oauth: Option<OAuthInfo>,
 }
 impl ReadEntry {
     fn totp(seed: Option<ReadSecret>, params: Option<TotpParams>) -> Result<Option<Totp>, Error> {

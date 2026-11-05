@@ -97,11 +97,11 @@
   flex-direction: column;
   padding: 0 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
 }
 .default-model > * {
-  min-height: 44px;
+  min-height: var(--settings-row-height);
   padding: 10px 0;
 }
 .default-model > * + * {
@@ -114,9 +114,9 @@
   justify-content: space-between;
   gap: 8px 12px;
 }
-.default-model-row > label {
-  font-size: var(--text-md);
-  font-weight: 600;
+.default-model-row > :is(label, span:first-child) {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .model-role {
   display: flex;
@@ -130,14 +130,14 @@
   min-width: 0;
 }
 .model-role-copy label {
-  font-size: var(--text-md);
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .model-role-copy p {
   margin: 2px 0 0;
   color: var(--muted);
-  font-size: 0.8125rem;
-  line-height: 1.45;
+  font-size: var(--text-xs);
+  line-height: var(--leading-ui);
 }
 .model-role > .ui-select,
 .model-role > .default-model-value {
@@ -191,7 +191,7 @@
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: color-mix(in srgb, var(--warn) 8%, transparent);
   font-size: 0.875rem;
   line-height: 1.5;
@@ -393,4 +393,71 @@
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+}
+
+/* Connect account: provider choice and the sign-in steps. */
+.oauth-choices {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-group);
+  overflow: hidden;
+}
+.oauth-choices legend {
+  padding: 0 0 6px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.oauth-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--settings-row-height);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.oauth-choice + .oauth-choice {
+  border-top: 1px solid var(--border);
+}
+.oauth-choice-copy {
+  display: grid;
+  min-width: 0;
+}
+.oauth-choice-copy strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.oauth-choice-copy small {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.oauth-open,
+.oauth-relogin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.oauth-relogin {
+  justify-content: space-between;
+}
+.oauth-user-code code {
+  font-size: var(--text-md);
+  letter-spacing: 0.08em;
+}
+.oauth-manual {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.oauth-manual .field {
+  width: 100%;
+}
+.oauth-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.oauth-note {
+  margin: 0;
 }

@@ -24,6 +24,7 @@ mod import;
 mod mcp;
 mod memory;
 mod models;
+mod oauth;
 mod policy;
 mod reference;
 mod repl;

@@ -33,8 +33,8 @@ Generated from `docs/specs/openapi.json` by `tools/gen-api-docs.py`; do not edit
 | push | 5 |
 | remote | 5 |
 | routines | 8 |
-| sessions | 26 |
-| settings | 22 |
+| sessions | 27 |
+| settings | 32 |
 | skills | 5 |
 | sync | 6 |
 | team | 2 |
@@ -1493,6 +1493,24 @@ Read-only WebSocket preview of the session's current owned tab. Requires browse 
 | 429 | Too many preview viewers | `application/json` [ApiError](#apierror) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/sessions/{id}/browser/tabs/{tab_id}/control
+
+Required capability: `steer`
+
+WebSocket upgrade that gives a person control of one of the session's agent tabs without a takeover ticket (the browser sheet). Requires steer, a person_device token or the local socket (agent_client tokens and MCP socket clients get 403 person_device_required), and an Origin matching the Host; the bearer subprotocol works as on the takeover stream. The daemon streams TakeoverServerMessage frames and `page` updates and accepts TakeoverInput, including navigate/back/forward/reload/close_tab. Navigation accepts only http(s) URLs without credentials and is refused with input_error policy_denied when the policy denies the origin, as for agent navigation. While the stream is open, agent browser tools on the tab are refused with takeover_active. One controller per tab (409 control_in_use); a pending takeover ticket on the tab returns 409 takeover_active; private sessions return 409 private_session. The control ends when the client closes the socket, after 300 s without accepted input (ended idle), on token revocation (ended revoked) or when the tab is gone (ended tab_unavailable); the agent then regains the tab with its earlier snapshots and references voided. Opening, navigation, tab closing and the end of control are written to the audit log; typed text is not.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+| `tab_id` | path | string | yes | Agent tab of this session, from GET /v1/browser/tabs. |
+
+| Status | Description | Body |
+|---|---|---|
+| 101 | Switching to WebSocket |  |
+| 403 | Not a person's device, or the Origin does not match | `application/json` [ApiError](#apierror) |
+| 409 | Another controller, a pending takeover or a private session | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/sessions/{id}/browser/thumbnails/{thumbnail_id}
 
 Required capability: `browse`
@@ -1555,6 +1573,7 @@ Request body (required): `application/json` [SubmitMessageRequest](#submitmessag
 | Status | Description | Body |
 |---|---|---|
 | 202 | Success | `application/json` [Message](#message) |
+| 503 | The agent runtime could not start or its connection is gone; a later request starts a new process | `application/json` [ApiError](#apierror) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### POST /v1/sessions/{id}/prewarm
@@ -1632,6 +1651,7 @@ Required capability: `steer`
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [Message](#message) |
+| 503 | The agent runtime could not start or its connection is gone; a later request starts a new process | `application/json` [ApiError](#apierror) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### POST /v1/sessions/{id}/repl
@@ -1691,6 +1711,7 @@ Cancel a running or waiting child; its pending tickets are rejected and the pare
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [Subagent](#subagent) |
+| 503 | The agent runtime could not start or its connection is gone; a later request starts a new process | `application/json` [ApiError](#apierror) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### POST /v1/sessions/{id}/subagents/{sid}/steer
@@ -1709,6 +1730,7 @@ Request body (required): `application/json` [SteerSubagentRequest](#steersubagen
 | Status | Description | Body |
 |---|---|---|
 | 202 | Success | `application/json` [Subagent](#subagent) |
+| 503 | The agent runtime could not start or its connection is gone; a later request starts a new process | `application/json` [ApiError](#apierror) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### POST /v1/sessions/{id}/tools/{name}
@@ -1974,6 +1996,160 @@ Request body (required): `application/json` [UpdateModelsRequest](#updatemodelsr
 | 200 | Success | `application/json` [ModelSelection](#modelselection) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/settings/oauth/accounts
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [OAuthAccountList](#oauthaccountlist) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/settings/oauth/accounts/{provider}
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `provider` | path | string | yes |  |
+
+Request body (required): `application/json` [CreateOAuthAccountRequest](#createoauthaccountrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 202 | Success | `application/json` [OAuthTransaction](#oauthtransaction) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/settings/oauth/accounts/{provider}/{account_id}
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `provider` | path | string | yes |  |
+| `account_id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [OAuthAccount](#oauthaccount) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PATCH /v1/settings/oauth/accounts/{provider}/{account_id}
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `provider` | path | string | yes |  |
+| `account_id` | path | string | yes |  |
+
+Request body (required): `application/json` [UpdateOAuthAccountRequest](#updateoauthaccountrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [OAuthAccount](#oauthaccount) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### DELETE /v1/settings/oauth/accounts/{provider}/{account_id}
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `provider` | path | string | yes |  |
+| `account_id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/settings/oauth/accounts/{provider}/{account_id}/relogin
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `provider` | path | string | yes |  |
+| `account_id` | path | string | yes |  |
+
+Request body (required): `application/json` [ReloginOAuthAccountRequest](#reloginoauthaccountrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 202 | Success | `application/json` [OAuthTransaction](#oauthtransaction) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/settings/oauth/providers
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [OAuthProviderList](#oauthproviderlist) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/settings/oauth/transactions/{transaction_id}
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `transaction_id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [OAuthTransaction](#oauthtransaction) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/settings/oauth/transactions/{transaction_id}/cancel
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `transaction_id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/settings/oauth/transactions/{transaction_id}/input
+
+Required capability: `admin`
+
+openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `transaction_id` | path | string | yes |  |
+
+Request body (required): `application/json` [OAuthInputRequest](#oauthinputrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 202 | Success | `application/json` [OAuthTransaction](#oauthtransaction) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/settings/pools
 
 Required capability: `read`
@@ -2004,7 +2180,7 @@ Request body (required): `application/json` [UpdateProviderPoolRequest](#updatep
 
 Required capability: `admin`
 
-Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
+Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
 
 | Status | Description | Body |
 |---|---|---|
@@ -2015,7 +2191,7 @@ Admin-only external CLI account inventory/status; mutations also require person_
 
 Required capability: `admin`
 
-Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
+Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -2032,7 +2208,7 @@ Request body (required): `application/json` [CreateSubscriptionAccountRequest](#
 
 Required capability: `admin`
 
-Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
+Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -2048,7 +2224,7 @@ Admin-only external CLI account inventory/status; mutations also require person_
 
 Required capability: `admin`
 
-Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
+Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -2066,7 +2242,7 @@ Request body (required): `application/json` [UpdateSubscriptionAccountRequest](#
 
 Required capability: `admin`
 
-Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
+Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -2933,6 +3109,7 @@ Canonical Card wire contract; presentation never grants authority.
 | `actions` | [Action](#action)[] | yes | Typed intents validated against the authoritative source. |
 | `blocks` | [Block](#block)[] | yes | Ordered typed content; no HTML or executable templates. |
 | `collapsed_summary` | string | yes | Value-free receipt or pending summary, bounded to 240 characters. |
+| `expires_at` | string (date-time) \| null (date-time) | no | Deadline of the pending ticket behind an ask, for a countdown; absent once settled and in model presentations. |
 | `id` | string | yes | Stable identity within its card namespace; never an authorization token. |
 | `interaction` | [CardInteraction](#cardinteraction) | yes | Interactive cards require a daemon-issued ticket. |
 | `kind` | [CardKind](#cardkind) | yes | Semantic presentation family, not permission to act. |
@@ -3513,6 +3690,18 @@ Unknown fields are rejected.
 | `content` | string | yes | Text to remember; rejected with `secret_detected` when it looks like a secret. |
 | `retention` | [Retention](#retention) \| null | no | Defaults to `memory.default_retention`. |
 | `tags` | string[] | no | Optional labels. Default: `[]`. |
+
+Unknown fields are rejected.
+
+### CreateOAuthAccountRequest
+
+Start signing in a new account; nothing is stored until the sign-in completes.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `join_pool` | boolean | no | Append the new account to the end of its provider pool once signed in. Default: `false`. |
+| `label` | string | yes | Non-control person-assigned label, 1–80 characters. |
+| `method` | [OAuthMethod](#oauthmethod) \| null | no | Sign-in method; missing uses the provider's default. |
 
 Unknown fields are rejected.
 
@@ -4965,6 +5154,134 @@ Canonical NoticeTone wire contract; presentation never grants authority.
 | `"attention"` | Typed Attention presentation variant; source authorization remains unchanged. |
 | `"danger"` | Typed Danger presentation variant; source authorization remains unchanged. |
 
+### OAuthAccount
+
+An openside-held OAuth account; never tokens, identity, plan or project details.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `account_id` | string | yes | Opaque openside-assigned account id. |
+| `auth_invalid` | boolean | yes | The provider definitively rejected the stored sign-in; sign in again. |
+| `available` | boolean | yes | Enabled, signed in and carrying every detail the provider requires. |
+| `created_at_ms` | integer (uint64) | yes | Creation time, milliseconds since the Unix epoch. |
+| `enabled` | boolean | yes | Operator-controlled enablement. |
+| `label` | string | yes | Person-assigned display label. |
+| `provider` | string | yes | Storage provider namespace. |
+| `reason` | string | yes | Sanitized readiness explanation. |
+| `reserve_percent` | integer (uint8) | yes | Remaining measured usage protected from automatic selection, 0–99. |
+| `source` | string | yes | Credential source, always `pi-oauth`. |
+
+Unknown fields are rejected.
+
+### OAuthAccountList
+
+OAuth accounts sorted by provider, then creation time.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `accounts` | [OAuthAccount](#oauthaccount)[] | yes | Accounts sorted by provider, then creation time. |
+
+Unknown fields are rejected.
+
+### OAuthAuthorization
+
+What the person needs to complete the sign-in.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `instructions` | string \| null | no | Provider instructions for the person. |
+| `launch_url` | string \| null | no | Daemon-host loopback page that starts the browser flow, when the provider uses one. |
+| `url` | string | yes | Provider authorization or verification page. |
+| `user_code` | string \| null | no | Device-flow code to enter at `url`. |
+
+Unknown fields are rejected.
+
+### OAuthInputRequest
+
+Pasted authorization code or redirect URL; write-only, never echoed.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `code` | string | yes | Code or full redirect URL, 1–4096 characters. |
+
+Unknown fields are rejected.
+
+### OAuthMethod
+
+Sign-in method a provider supports.
+
+| Value | Description |
+|---|---|
+| `"browser"` | Authorization page with a loopback callback on the daemon host. |
+| `"device"` | Device-code flow: the person enters a short code on the provider's page. |
+
+### OAuthProviderInfo
+
+One provider that openside can sign in to on the daemon host.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `manual_input_methods` | [OAuthMethod](#oauthmethod)[] | yes | Methods that accept a pasted code or redirect URL when the callback cannot reach the daemon host. |
+| `methods` | [OAuthMethod](#oauthmethod)[] | yes | Supported methods; the first is the default. |
+| `name` | string | yes | Display name. |
+| `provider` | string | yes | Storage provider namespace, also the provider pool and catalog name. |
+
+Unknown fields are rejected.
+
+### OAuthProviderList
+
+Providers openside can sign in to, in a fixed order.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `providers` | [OAuthProviderInfo](#oauthproviderinfo)[] | yes | Fixed first-release provider order. |
+
+Unknown fields are rejected.
+
+### OAuthTransaction
+
+In-memory sign-in transaction, visible to the device that started it.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `account` | [OAuthAccount](#oauthaccount) \| null | no | The signed-in account once `ready`. |
+| `account_id` | string | yes | Account the transaction stores into; for `create` it exists only once `ready`. |
+| `authorization` | [OAuthAuthorization](#oauthauthorization) \| null | no | Authorization details; cleared once the transaction finishes. |
+| `expires_at_ms` | integer (uint64) | yes | Expiry time, milliseconds since the Unix epoch. |
+| `kind` | [OAuthTransactionKind](#oauthtransactionkind) | yes | New account or sign-in again. |
+| `manual_input` | boolean | yes | True while the provider is waiting for a pasted code or redirect URL. |
+| `method` | [OAuthMethod](#oauthmethod) | yes | Sign-in method in use. |
+| `provider` | string | yes | Storage provider namespace. |
+| `reason` | string \| null | no | Stable reason code for `failed`, `cancelled` and `expired`. |
+| `status` | [OAuthTransactionStatus](#oauthtransactionstatus) | yes | Current progress. |
+| `transaction_id` | string | yes | Opaque transaction id. |
+
+Unknown fields are rejected.
+
+### OAuthTransactionKind
+
+Whether a transaction adds a new account or signs an existing one in again.
+
+| Value | Description |
+|---|---|
+| `"create"` | New account. |
+| `"relogin"` | Existing account. |
+
+### OAuthTransactionStatus
+
+Sign-in transaction progress.
+
+| Value | Description |
+|---|---|
+| `"starting"` | The sign-in helper is starting. |
+| `"awaiting_browser"` | Open `authorization.url` in a browser. |
+| `"awaiting_code"` | Enter `authorization.user_code` at `authorization.url`. |
+| `"exchanging"` | The provider is exchanging the authorization for credentials. |
+| `"ready"` | Signed in; `account` is set. |
+| `"failed"` | Sign-in failed; see `reason`. |
+| `"cancelled"` | Cancelled by the person. |
+| `"expired"` | Not completed in time. |
+
 ### OnboardingState
 
 Where the first-run guide stands. `pending` until a person finishes or skips it once; the flag lives on the daemon, so every device and browser agrees.
@@ -5456,6 +5773,16 @@ Select an existing shared session, or the default sign-in session.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `session_id` | [SessionId](#sessionid) \| null | no | Omission selects the chief agent's durable home session. |
+
+Unknown fields are rejected.
+
+### ReloginOAuthAccountRequest
+
+Sign an existing account in again, keeping its label, settings and pool membership.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `method` | [OAuthMethod](#oauthmethod) \| null | no | Sign-in method; missing uses the provider's default. |
 
 Unknown fields are rejected.
 
@@ -6199,12 +6526,17 @@ Why a takeover stream ended.
 
 ### TakeoverInput
 
-Client-to-daemon takeover input, forwarded to the ticket's tab only. Typed text and key values are never logged or persisted.
+Client-to-daemon input, forwarded to the stream's tab only. Typed text and key values are never logged or persisted. `navigate`, `back`, `forward`, `reload` and `close_tab` are accepted on control streams only; a takeover stream answers them with `invalid_input`.
 
 - `type=mouse`: Pointer press, release or move. Fields: `button`: [TakeoverMouseButton](#takeovermousebutton) \| null (optional), `click_count`: integer (uint32) \| null (uint32) (optional), `event`: [TakeoverMouseEvent](#takeovermouseevent), `modifiers`: integer (uint32) \| null (uint32) (optional), `x`: number (double), `y`: number (double).
 - `type=wheel`: Scroll at a point. Fields: `delta_x`: number (double), `delta_y`: number (double), `x`: number (double), `y`: number (double).
 - `type=key`: Raw key press or release (navigation and editing keys, shortcuts). Fields: `code`: string \| null (optional), `event`: [TakeoverKeyEvent](#takeoverkeyevent), `key`: string, `key_code`: integer (uint32) \| null (uint32) (optional), `modifiers`: integer (uint32) \| null (uint32) (optional), `text`: string \| null (optional).
 - `type=text`: Insert text at the focused element (IME-composed or pasted text). Fields: `text`: string.
+- `type=navigate`: Load a typed address in the tab. Only http(s) URLs without embedded credentials are accepted (`invalid_url` otherwise, `about:blank` included), and the session's browse policy judges the origin as it does for the agent: `deny` is `policy_denied`, and an `ask` origin loads because the typed address is the person's approval, for this navigation and its same-origin redirects only. Redirects to other http(s) origins and later link or script navigations follow the owner policy without that approval; page-initiated moves to non-network documents are not filtered. Fields: `url`: string.
+- `type=back`: Go one entry back in the tab's history. An entry on an `ask` origin is refused with `approval_required`, and one that is not http(s) or `about:blank` with `invalid_url`.
+- `type=forward`: Go one entry forward in the tab's history, under the same rules as `Back`.
+- `type=reload`: Reload the current page, under the same rules as `Back`.
+- `type=close_tab`: Close the tab; the stream then ends with `tab_unavailable`.
 
 ### TakeoverKeyEvent
 
@@ -6243,6 +6575,7 @@ Daemon-to-client takeover message.
 - `type=frame`: One frame of the ticket's tab. Fields: `data`: string, `height`: number (double), `width`: number (double).
 - `type=withheld`: A frame was withheld; the stream and input continue. Fields: `code`: string.
 - `type=input_error`: The daemon refused one input message; the stream continues. Fields: `code`: string.
+- `type=page`: The page the controlled tab shows now. Control streams only: sent when the stream opens and whenever the address, title or history position changes. Fields: `can_go_back`: boolean, `can_go_forward`: boolean, `title`: string, `url`: string.
 - `type=ended`: The stream ended; the daemon closes the socket after this message. Fields: `reason`: [TakeoverEndReason](#takeoverendreason).
 
 ### TeamCardCommand
@@ -6676,6 +7009,18 @@ Unknown fields are rejected.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `allow` | string[] | yes | Replacement `network.allow` list: `host`, `*.domain`, `host:port` or `scheme://host[:port]`. |
+
+Unknown fields are rejected.
+
+### UpdateOAuthAccountRequest
+
+Change account metadata; missing fields keep their current values.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `enabled` | boolean \| null | no | New enablement. |
+| `label` | string \| null | no | New label, 1–80 characters. |
+| `reserve_percent` | integer (uint8) \| null (uint8) | no | New protected remaining percentage, 0–99. |
 
 Unknown fields are rejected.
 

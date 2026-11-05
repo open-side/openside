@@ -293,6 +293,40 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
                 .patch(crate::model_subscriptions_api::update)
                 .delete(crate::model_subscriptions_api::remove),
         )
+        .route(
+            "/v1/settings/oauth/providers",
+            get(crate::model_oauth_api::providers),
+        )
+        .route(
+            "/v1/settings/oauth/accounts",
+            get(crate::model_oauth_api::list),
+        )
+        .route(
+            "/v1/settings/oauth/accounts/{provider}",
+            post(crate::model_oauth_api::create),
+        )
+        .route(
+            "/v1/settings/oauth/accounts/{provider}/{account_id}",
+            get(crate::model_oauth_api::get)
+                .patch(crate::model_oauth_api::update)
+                .delete(crate::model_oauth_api::remove),
+        )
+        .route(
+            "/v1/settings/oauth/accounts/{provider}/{account_id}/relogin",
+            post(crate::model_oauth_api::relogin),
+        )
+        .route(
+            "/v1/settings/oauth/transactions/{transaction_id}",
+            get(crate::model_oauth_api::transaction),
+        )
+        .route(
+            "/v1/settings/oauth/transactions/{transaction_id}/input",
+            post(crate::model_oauth_api::input),
+        )
+        .route(
+            "/v1/settings/oauth/transactions/{transaction_id}/cancel",
+            post(crate::model_oauth_api::cancel),
+        )
         .route("/v1/settings/pools", get(crate::model_accounts::list_pools))
         .route(
             "/v1/settings/pools/{provider}",

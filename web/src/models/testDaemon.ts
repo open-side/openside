@@ -1,5 +1,6 @@
-import type { AccountsResponse, ModelAccountRef, ModelCatalog, ProviderKeyInfo, SubscriptionAccount } from "../api/types";
+import type { AccountsResponse, ModelAccountRef, ModelCatalog, OAuthAccount, OAuthMethod, OAuthProviderInfo, OAuthTransaction, ProviderKeyInfo, SubscriptionAccount } from "../api/types";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
+import { TERMINAL_STATUS } from "./OAuthDialogs";
 
 const NEEDS_CREDENTIAL = "No credential yet: add an API key or sign in to a subscription.";
 const NOT_IN_POOL = "No account is in the rotation.";
@@ -28,6 +29,22 @@ const CURATED: Record<string, Curated[]> = {
 
 const SUBSCRIPTION_PROVIDER: Record<string, string> = { "claude-code": "anthropic", "codex-cli": "openai" };
 
+/** The contract's first-release allowlist, in its order. */
+export const OAUTH_PROVIDERS: OAuthProviderInfo[] = [
+  { provider: "anthropic", name: "Claude (Pro/Max)", methods: ["browser"], manual_input_methods: ["browser"] },
+  { provider: "openai-codex", name: "ChatGPT (Codex)", methods: ["browser", "device"], manual_input_methods: ["browser"] },
+  { provider: "google-gemini-cli", name: "Google Gemini CLI", methods: ["browser"], manual_input_methods: ["browser"] },
+  { provider: "google-antigravity", name: "Google Antigravity", methods: ["browser"], manual_input_methods: ["browser"] },
+  { provider: "github-copilot", name: "GitHub Copilot", methods: ["device"], manual_input_methods: [] },
+];
+
+/** A transaction plus what the fake needs to commit it. */
+interface FakeTransaction {
+  transaction: OAuthTransaction;
+  label: string;
+  joinPool: boolean;
+}
+
 export interface ModelState {
   /** False: a read-scope device (key and subscription lists and every write answer 403). */
   admin: boolean;
@@ -51,6 +68,12 @@ export interface ModelState {
   extra: Record<string, Partial<Candidate>[]>;
   /** Accounts whose next GET reports a finished sign-in. */
   signInLands: string[];
+  oauthAccounts: OAuthAccount[];
+  oauthTransactions: Record<string, FakeTransaction>;
+  /** What the next poll of a transaction reports: `ready` commits it, any other value fails it with that reason. */
+  oauthOutcome: Record<string, string>;
+  /** Holds the next poll of a transaction until the promise settles, answering with the state it had when asked. */
+  oauthGate: Record<string, Promise<void>>;
   nextId: number;
 }
 
@@ -72,6 +95,10 @@ export function modelState(patch: Partial<ModelState> = {}): ModelState {
     sessionAccounts: {},
     extra: {},
     signInLands: [],
+    oauthAccounts: [],
+    oauthTransactions: {},
+    oauthOutcome: {},
+    oauthGate: {},
     nextId: 1,
     ...patch,
   };
@@ -98,6 +125,151 @@ export function subscriptionAccount(source: string, accountId: string, label: st
     reserve_percent: 10,
     ...patch,
   };
+}
+
+function oauthReadiness(account: OAuthAccount): OAuthAccount {
+  const available = account.enabled && !account.auth_invalid;
+  const reason = !account.enabled ? "Account disabled" : account.auth_invalid ? "Sign in again" : "OAuth account ready";
+  return Object.assign(account, { available, reason });
+}
+
+export function oauthAccount(provider: string, accountId: string, label: string, patch: Partial<OAuthAccount> = {}): OAuthAccount {
+  return oauthReadiness({
+    source: "pi-oauth",
+    provider,
+    account_id: accountId,
+    label,
+    enabled: true,
+    reserve_percent: 10,
+    available: true,
+    reason: "OAuth account ready",
+    auth_invalid: false,
+    created_at_ms: 1_760_261_400_000,
+    ...patch,
+  });
+}
+
+/** Moves a started transaction to the step its method waits on, as the helper's `auth` event does. */
+function authorize(fake: FakeTransaction) {
+  const tx = fake.transaction;
+  if (tx.status !== "starting") return;
+  const url = `https://auth.example.test/authorize?tx=${tx.transaction_id}`;
+  if (tx.method === "device") {
+    Object.assign(tx, { status: "awaiting_code", authorization: { url, user_code: "ABCD-1234", instructions: "Enter code: ABCD-1234" } });
+  } else {
+    const manual = OAUTH_PROVIDERS.find((info) => info.provider === tx.provider)!.manual_input_methods.includes("browser");
+    Object.assign(tx, { status: "awaiting_browser", authorization: { url, launch_url: "http://127.0.0.1:53692/start" }, manual_input: manual });
+  }
+}
+
+function settle(state: ModelState, fake: FakeTransaction, outcome: string) {
+  const tx = fake.transaction;
+  Object.assign(tx, { authorization: null, manual_input: false });
+  if (outcome !== "ready") {
+    Object.assign(tx, { status: "failed", reason: outcome });
+    return;
+  }
+  let account = state.oauthAccounts.find((candidate) => candidate.provider === tx.provider && candidate.account_id === tx.account_id);
+  if (account) {
+    oauthReadiness(Object.assign(account, { auth_invalid: false }));
+  } else {
+    account = oauthAccount(tx.provider, tx.account_id, fake.label);
+    state.oauthAccounts.push(account);
+    // Like the daemon: the pool changes only once the sign-in is committed.
+    if (fake.joinPool) state.pools[tx.provider] = [...(state.pools[tx.provider] ?? []), { source: "pi-oauth", account_id: tx.account_id }];
+  }
+  Object.assign(tx, { status: "ready", reason: null, account: { ...account } });
+}
+
+function oauthRoutes(state: ModelState, key: string, body: Record<string, unknown>): Response | Promise<Response> | undefined {
+  if (key === "GET /v1/settings/oauth/providers") return json(200, { providers: OAUTH_PROVIDERS });
+  if (key === "GET /v1/settings/oauth/accounts") return json(200, { accounts: state.oauthAccounts });
+  const start = (provider: string, accountId: string, kind: "create" | "relogin", method: OAuthMethod, label: string, joinPool: boolean) => {
+    const id = `tx-${state.nextId++}`;
+    const transaction: OAuthTransaction = {
+      transaction_id: id,
+      kind,
+      provider,
+      account_id: accountId,
+      method,
+      status: "starting",
+      reason: null,
+      authorization: null,
+      manual_input: false,
+      expires_at_ms: Date.now() + 600_000,
+      account: null,
+    };
+    state.oauthTransactions[id] = { transaction, label, joinPool };
+    return json(202, transaction);
+  };
+
+  const create = /^POST \/v1\/settings\/oauth\/accounts\/([^/]+)$/.exec(key);
+  if (create) {
+    const info = OAUTH_PROVIDERS.find((candidate) => candidate.provider === create[1]);
+    if (!info) return json(400, { code: "oauth_provider_unknown", message: "unknown" });
+    const method = (body.method as OAuthMethod | undefined) ?? info.methods[0]!;
+    if (!info.methods.includes(method)) return json(400, { code: "oauth_flow_unsupported", message: "unsupported" });
+    return start(info.provider, `oa-${state.nextId++}`, "create", method, String(body.label), body.join_pool === true);
+  }
+
+  const account = /^(GET|PATCH|DELETE|POST) \/v1\/settings\/oauth\/accounts\/([^/]+)\/([^/]+)(\/relogin)?$/.exec(key);
+  if (account) {
+    const [, method, provider, accountId, relogin] = account as unknown as [string, string, string, string, string | undefined];
+    const stored = state.oauthAccounts.find((candidate) => candidate.provider === provider && candidate.account_id === accountId);
+    if (!stored) return json(404, { code: "unknown_account", message: "none" });
+    if (relogin && method === "POST") {
+      const info = OAUTH_PROVIDERS.find((candidate) => candidate.provider === provider)!;
+      return start(provider, accountId, "relogin", (body.method as OAuthMethod | undefined) ?? info.methods[0]!, stored.label, false);
+    }
+    if (method === "DELETE") {
+      state.oauthAccounts = state.oauthAccounts.filter((candidate) => candidate !== stored);
+      for (const [pool, refs] of Object.entries(state.pools)) state.pools[pool] = refs.filter((ref) => !(ref.source === "pi-oauth" && ref.account_id === accountId));
+      return new Response(null, { status: 204 });
+    }
+    if (method === "PATCH") {
+      if (typeof body.label === "string") stored.label = body.label;
+      if (typeof body.enabled === "boolean") stored.enabled = body.enabled;
+      if (typeof body.reserve_percent === "number") stored.reserve_percent = body.reserve_percent;
+      oauthReadiness(stored);
+    }
+    return json(200, stored);
+  }
+
+  const transaction = /^(GET|POST) \/v1\/settings\/oauth\/transactions\/([^/]+)(?:\/(input|cancel))?$/.exec(key);
+  if (transaction) {
+    const [, method, id, action] = transaction as unknown as [string, string, string, string | undefined];
+    const fake = state.oauthTransactions[id];
+    if (!fake) return json(404, { code: "oauth_transaction_unknown", message: "unknown" });
+    const tx = fake.transaction;
+    if (method === "GET" && !action) {
+      authorize(fake);
+      const gate = state.oauthGate[id];
+      if (gate) {
+        delete state.oauthGate[id];
+        const snapshot = structuredClone(tx);
+        return gate.then(() => json(200, snapshot));
+      }
+      const outcome = state.oauthOutcome[id];
+      if (outcome && !TERMINAL_STATUS[tx.status]) {
+        delete state.oauthOutcome[id];
+        settle(state, fake, outcome);
+      }
+      return json(200, tx);
+    }
+    if (action === "cancel") {
+      if (!TERMINAL_STATUS[tx.status]) Object.assign(tx, { status: "cancelled", reason: "oauth_cancelled", authorization: null, manual_input: false });
+      return new Response(null, { status: 204 });
+    }
+    if (action === "input") {
+      if (TERMINAL_STATUS[tx.status]) return json(409, { code: "oauth_transaction_finished", message: "finished" });
+      if (!tx.manual_input) return json(409, { code: "oauth_manual_input_not_allowed", message: "not now" });
+      state.received.push(String(body.code));
+      Object.assign(tx, { status: "exchanging", manual_input: false });
+      state.oauthOutcome[id] ??= "ready";
+      return json(202, tx);
+    }
+  }
+  return undefined;
 }
 
 export interface Candidate {
@@ -133,6 +305,7 @@ function candidates(state: ModelState, provider: string): Candidate[] {
   return [
     ...state.keys.filter((key) => key.provider === provider).map((key) => make("vault", key.key_id, key.label, key.enabled, true, "")),
     ...state.subscriptions.filter((sub) => sub.provider === provider).map((sub) => make(sub.source, sub.account_id, sub.label, sub.enabled, sub.logged_in, sub.reason || "Not signed in.")),
+    ...state.oauthAccounts.filter((account) => account.provider === provider).map((account) => make("pi-oauth", account.account_id, account.label, account.enabled, !account.auth_invalid, account.reason)),
     ...(state.extra[provider] ?? []).map((extra) => ({ ...make(extra.source!, extra.account_id!, extra.label ?? extra.account_id!, true, true, ""), ...extra })),
   ];
 }
@@ -167,7 +340,7 @@ const forbidden = () => json(403, { code: "forbidden", message: "needs admin" })
 const absent = () => json(404, { code: "key_not_found", message: "none" });
 
 /** The Models & accounts endpoints of the daemon; undefined for any other request. */
-export function modelRoutes(state: ModelState): (call: Call) => Response | undefined {
+export function modelRoutes(state: ModelState): (call: Call) => Response | Promise<Response> | undefined {
   return (call) => {
     const path = new URL(call.path, "http://daemon.test").pathname;
     const key = `${call.method} ${path}`;
@@ -176,8 +349,10 @@ export function modelRoutes(state: ModelState): (call: Call) => Response | undef
     if (key === "GET /v1/accounts") return json(200, state.accounts);
     if (key === "GET /v1/settings/pools") return json(200, { pools: Object.entries(state.pools).map(([provider, accounts]) => ({ provider, accounts })) });
     if (!state.admin) {
-      if (call.method !== "GET" || path === "/v1/settings/keys" || path.startsWith("/v1/settings/subscriptions")) return path.startsWith("/v1/settings") || call.method !== "GET" ? forbidden() : undefined;
+      const adminOnly = path === "/v1/settings/keys" || path.startsWith("/v1/settings/subscriptions") || path.startsWith("/v1/settings/oauth");
+      if (call.method !== "GET" || adminOnly) return path.startsWith("/v1/settings") || call.method !== "GET" ? forbidden() : undefined;
     }
+    if (path.startsWith("/v1/settings/oauth/")) return oauthRoutes(state, key, body);
     if (key === "GET /v1/settings/keys") return json(200, { keys: state.keys });
     if (key === "GET /v1/settings/subscriptions") {
       return json(200, {

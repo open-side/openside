@@ -36,6 +36,7 @@ mod connections;
 mod events;
 mod memory;
 mod models;
+mod oauth;
 mod onboarding;
 mod openapi;
 mod operator;
@@ -63,6 +64,7 @@ pub use connections::*;
 pub use events::*;
 pub use memory::*;
 pub use models::*;
+pub use oauth::*;
 pub use onboarding::*;
 pub use openapi::{openapi, schemas, HttpMethod, Route, ROUTES};
 pub use openside_core::{

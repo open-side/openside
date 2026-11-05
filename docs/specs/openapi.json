@@ -1706,6 +1706,14 @@
             "description": "Value-free receipt or pending summary, bounded to 240 characters.",
             "type": "string"
           },
+          "expires_at": {
+            "description": "Deadline of the pending ticket behind an ask, for a countdown; absent once settled and in model presentations.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "description": "Stable identity within its card namespace; never an authorization token.",
             "type": "string"
@@ -3429,6 +3437,37 @@
           "content"
         ],
         "title": "CreateMemoryRequest",
+        "type": "object"
+      },
+      "CreateOAuthAccountRequest": {
+        "additionalProperties": false,
+        "description": "Start signing in a new account; nothing is stored until the sign-in completes.",
+        "properties": {
+          "join_pool": {
+            "default": false,
+            "description": "Append the new account to the end of its provider pool once signed in.",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "Non-control person-assigned label, 1–80 characters.",
+            "type": "string"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OAuthMethod"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sign-in method; missing uses the provider's default."
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "CreateOAuthAccountRequest",
         "type": "object"
       },
       "CreatePairingRequest": {
@@ -10210,6 +10249,347 @@
           }
         ]
       },
+      "OAuthAccount": {
+        "additionalProperties": false,
+        "description": "An openside-held OAuth account; never tokens, identity, plan or project details.",
+        "properties": {
+          "account_id": {
+            "description": "Opaque openside-assigned account id.",
+            "type": "string"
+          },
+          "auth_invalid": {
+            "description": "The provider definitively rejected the stored sign-in; sign in again.",
+            "type": "boolean"
+          },
+          "available": {
+            "description": "Enabled, signed in and carrying every detail the provider requires.",
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "description": "Creation time, milliseconds since the Unix epoch.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "description": "Operator-controlled enablement.",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "Person-assigned display label.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "Storage provider namespace.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Sanitized readiness explanation.",
+            "type": "string"
+          },
+          "reserve_percent": {
+            "description": "Remaining measured usage protected from automatic selection, 0–99.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "description": "Credential source, always `pi-oauth`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "provider",
+          "account_id",
+          "label",
+          "enabled",
+          "reserve_percent",
+          "available",
+          "reason",
+          "auth_invalid",
+          "created_at_ms"
+        ],
+        "type": "object"
+      },
+      "OAuthAccountList": {
+        "additionalProperties": false,
+        "description": "OAuth accounts sorted by provider, then creation time.",
+        "properties": {
+          "accounts": {
+            "description": "Accounts sorted by provider, then creation time.",
+            "items": {
+              "$ref": "#/components/schemas/OAuthAccount"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "accounts"
+        ],
+        "title": "OAuthAccountList",
+        "type": "object"
+      },
+      "OAuthAuthorization": {
+        "additionalProperties": false,
+        "description": "What the person needs to complete the sign-in.",
+        "properties": {
+          "instructions": {
+            "description": "Provider instructions for the person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "launch_url": {
+            "description": "Daemon-host loopback page that starts the browser flow, when the provider uses one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Provider authorization or verification page.",
+            "type": "string"
+          },
+          "user_code": {
+            "description": "Device-flow code to enter at `url`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "OAuthInputRequest": {
+        "additionalProperties": false,
+        "description": "Pasted authorization code or redirect URL; write-only, never echoed.",
+        "properties": {
+          "code": {
+            "description": "Code or full redirect URL, 1–4096 characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "OAuthInputRequest",
+        "type": "object"
+      },
+      "OAuthMethod": {
+        "description": "Sign-in method a provider supports.",
+        "oneOf": [
+          {
+            "const": "browser",
+            "description": "Authorization page with a loopback callback on the daemon host.",
+            "type": "string"
+          },
+          {
+            "const": "device",
+            "description": "Device-code flow: the person enters a short code on the provider's page.",
+            "type": "string"
+          }
+        ]
+      },
+      "OAuthProviderInfo": {
+        "additionalProperties": false,
+        "description": "One provider that openside can sign in to on the daemon host.",
+        "properties": {
+          "manual_input_methods": {
+            "description": "Methods that accept a pasted code or redirect URL when the callback cannot reach the daemon host.",
+            "items": {
+              "$ref": "#/components/schemas/OAuthMethod"
+            },
+            "type": "array"
+          },
+          "methods": {
+            "description": "Supported methods; the first is the default.",
+            "items": {
+              "$ref": "#/components/schemas/OAuthMethod"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "Display name.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "Storage provider namespace, also the provider pool and catalog name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "name",
+          "methods",
+          "manual_input_methods"
+        ],
+        "type": "object"
+      },
+      "OAuthProviderList": {
+        "additionalProperties": false,
+        "description": "Providers openside can sign in to, in a fixed order.",
+        "properties": {
+          "providers": {
+            "description": "Fixed first-release provider order.",
+            "items": {
+              "$ref": "#/components/schemas/OAuthProviderInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "providers"
+        ],
+        "title": "OAuthProviderList",
+        "type": "object"
+      },
+      "OAuthTransaction": {
+        "additionalProperties": false,
+        "description": "In-memory sign-in transaction, visible to the device that started it.",
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OAuthAccount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The signed-in account once `ready`."
+          },
+          "account_id": {
+            "description": "Account the transaction stores into; for `create` it exists only once `ready`.",
+            "type": "string"
+          },
+          "authorization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OAuthAuthorization"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authorization details; cleared once the transaction finishes."
+          },
+          "expires_at_ms": {
+            "description": "Expiry time, milliseconds since the Unix epoch.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OAuthTransactionKind",
+            "description": "New account or sign-in again."
+          },
+          "manual_input": {
+            "description": "True while the provider is waiting for a pasted code or redirect URL.",
+            "type": "boolean"
+          },
+          "method": {
+            "$ref": "#/components/schemas/OAuthMethod",
+            "description": "Sign-in method in use."
+          },
+          "provider": {
+            "description": "Storage provider namespace.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Stable reason code for `failed`, `cancelled` and `expired`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/OAuthTransactionStatus",
+            "description": "Current progress."
+          },
+          "transaction_id": {
+            "description": "Opaque transaction id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "kind",
+          "provider",
+          "account_id",
+          "method",
+          "status",
+          "manual_input",
+          "expires_at_ms"
+        ],
+        "title": "OAuthTransaction",
+        "type": "object"
+      },
+      "OAuthTransactionKind": {
+        "description": "Whether a transaction adds a new account or signs an existing one in again.",
+        "oneOf": [
+          {
+            "const": "create",
+            "description": "New account.",
+            "type": "string"
+          },
+          {
+            "const": "relogin",
+            "description": "Existing account.",
+            "type": "string"
+          }
+        ]
+      },
+      "OAuthTransactionStatus": {
+        "description": "Sign-in transaction progress.",
+        "oneOf": [
+          {
+            "const": "starting",
+            "description": "The sign-in helper is starting.",
+            "type": "string"
+          },
+          {
+            "const": "awaiting_browser",
+            "description": "Open `authorization.url` in a browser.",
+            "type": "string"
+          },
+          {
+            "const": "awaiting_code",
+            "description": "Enter `authorization.user_code` at `authorization.url`.",
+            "type": "string"
+          },
+          {
+            "const": "exchanging",
+            "description": "The provider is exchanging the authorization for credentials.",
+            "type": "string"
+          },
+          {
+            "const": "ready",
+            "description": "Signed in; `account` is set.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "Sign-in failed; see `reason`.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Cancelled by the person.",
+            "type": "string"
+          },
+          {
+            "const": "expired",
+            "description": "Not completed in time.",
+            "type": "string"
+          }
+        ]
+      },
       "OnboardingState": {
         "description": "Where the first-run guide stands. `pending` until a person finishes or skips it once;\nthe flag lives on the daemon, so every device and browser agrees.",
         "oneOf": [
@@ -11509,6 +11889,25 @@
           }
         },
         "title": "ReloginConnectionRequest",
+        "type": "object"
+      },
+      "ReloginOAuthAccountRequest": {
+        "additionalProperties": false,
+        "description": "Sign an existing account in again, keeping its label, settings and pool membership.",
+        "properties": {
+          "method": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OAuthMethod"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sign-in method; missing uses the provider's default."
+          }
+        },
+        "title": "ReloginOAuthAccountRequest",
         "type": "object"
       },
       "ReloginResult": {
@@ -13695,7 +14094,7 @@
         "title": "TakeoverEndReason"
       },
       "TakeoverInput": {
-        "description": "Client-to-daemon takeover input, forwarded to the ticket's tab only. Typed text and key\nvalues are never logged or persisted.",
+        "description": "Client-to-daemon input, forwarded to the stream's tab only. Typed text and key values are\nnever logged or persisted. `navigate`, `back`, `forward`, `reload` and `close_tab` are\naccepted on control streams only; a takeover stream answers them with `invalid_input`.",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -13869,6 +14268,81 @@
               "text"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Load a typed address in the tab. Only http(s) URLs without embedded credentials are\naccepted (`invalid_url` otherwise, `about:blank` included), and the session's browse\npolicy judges the origin as it does for the agent: `deny` is `policy_denied`, and an\n`ask` origin loads because the typed address is the person's approval, for this\nnavigation and its same-origin redirects only. Redirects to other http(s) origins and\nlater link or script navigations follow the owner policy without that approval;\npage-initiated moves to non-network documents are not filtered.",
+            "properties": {
+              "type": {
+                "const": "navigate",
+                "type": "string"
+              },
+              "url": {
+                "description": "Absolute http(s) URL without embedded credentials.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Go one entry back in the tab's history. An entry on an `ask` origin is refused with\n`approval_required`, and one that is not http(s) or `about:blank` with `invalid_url`.",
+            "properties": {
+              "type": {
+                "const": "back",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Go one entry forward in the tab's history, under the same rules as `Back`.",
+            "properties": {
+              "type": {
+                "const": "forward",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Reload the current page, under the same rules as `Back`.",
+            "properties": {
+              "type": {
+                "const": "reload",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Close the tab; the stream then ends with `tab_unavailable`.",
+            "properties": {
+              "type": {
+                "const": "close_tab",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
           }
         ],
         "title": "TakeoverInput"
@@ -13991,7 +14465,7 @@
             "description": "The daemon refused one input message; the stream continues.",
             "properties": {
               "code": {
-                "description": "Stable code: `invalid_input` or `out_of_bounds` or `input_failed`.",
+                "description": "Stable code: `invalid_input`, `out_of_bounds` or `input_failed`; on control streams\nalso `invalid_url`, `policy_denied`, `approval_required`, `connection_denied`,\n`navigation_failed` or `no_history`.",
                 "type": "string"
               },
               "type": {
@@ -14002,6 +14476,39 @@
             "required": [
               "type",
               "code"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The page the controlled tab shows now. Control streams only: sent when the stream\nopens and whenever the address, title or history position changes.",
+            "properties": {
+              "can_go_back": {
+                "description": "Whether `back` has an entry to go to.",
+                "type": "boolean"
+              },
+              "can_go_forward": {
+                "description": "Whether `forward` has an entry to go to.",
+                "type": "boolean"
+              },
+              "title": {
+                "description": "Document title, at most 200 characters.",
+                "type": "string"
+              },
+              "type": {
+                "const": "page",
+                "type": "string"
+              },
+              "url": {
+                "description": "Top-frame URL without embedded credentials, query or fragment. A page that moved\nitself to a non-network document reports only its scheme (`data:`, `about:`, …);\n`about:blank` is reported as is.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url",
+              "title",
+              "can_go_back",
+              "can_go_forward"
             ],
             "type": "object"
           },
@@ -15538,6 +16045,38 @@
           "allow"
         ],
         "title": "UpdateNetworkPolicyRequest",
+        "type": "object"
+      },
+      "UpdateOAuthAccountRequest": {
+        "additionalProperties": false,
+        "description": "Change account metadata; missing fields keep their current values.",
+        "properties": {
+          "enabled": {
+            "description": "New enablement.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "New label, 1–80 characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reserve_percent": {
+            "description": "New protected remaining percentage, 0–99.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "UpdateOAuthAccountRequest",
         "type": "object"
       },
       "UpdateOnboardingRequest": {
@@ -20904,6 +21443,85 @@
         "x-required-capability": "browse"
       }
     },
+    "/v1/sessions/{id}/browser/tabs/{tab_id}/control": {
+      "get": {
+        "description": "WebSocket upgrade that gives a person control of one of the session's agent tabs without a takeover ticket (the browser sheet). Requires steer, a person_device token or the local socket (agent_client tokens and MCP socket clients get 403 person_device_required), and an Origin matching the Host; the bearer subprotocol works as on the takeover stream. The daemon streams TakeoverServerMessage frames and `page` updates and accepts TakeoverInput, including navigate/back/forward/reload/close_tab. Navigation accepts only http(s) URLs without credentials and is refused with input_error policy_denied when the policy denies the origin, as for agent navigation. While the stream is open, agent browser tools on the tab are refused with takeover_active. One controller per tab (409 control_in_use); a pending takeover ticket on the tab returns 409 takeover_active; private sessions return 409 private_session. The control ends when the client closes the socket, after 300 s without accepted input (ended idle), on token revocation (ended revoked) or when the tab is gone (ended tab_unavailable); the agent then regains the tab with its earlier snapshots and references voided. Opening, navigation, tab closing and the end of control are written to the audit log; typed text is not.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionId"
+            }
+          },
+          {
+            "description": "Agent tab of this session, from GET /v1/browser/tabs.",
+            "in": "path",
+            "name": "tab_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching to WebSocket",
+            "x-websocket-client-message": {
+              "$ref": "#/components/schemas/TakeoverInput"
+            },
+            "x-websocket-server-message": {
+              "$ref": "#/components/schemas/TakeoverServerMessage"
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "person_device_required",
+                  "message": "person device required"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not a person's device, or the Origin does not match"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "control_in_use",
+                  "message": "control in use"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Another controller, a pending takeover or a private session"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "steer"
+      }
+    },
     "/v1/sessions/{id}/browser/thumbnails/{thumbnail_id}": {
       "get": {
         "description": "Read a bounded JPEG thumbnail referenced by browser.state. Requires browse; secret-tainted tabs, changed documents, takeover, private/stopped/archived/deleted sessions, expired IDs and IDs from another session are withheld. IDs expire after ten minutes and after daemon restart; responses are never cached.",
@@ -21126,6 +21744,20 @@
               }
             },
             "description": "Success"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "runtime_unavailable",
+                  "message": "runtime unavailable"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "The agent runtime could not start or its connection is gone; a later request starts a new process"
           },
           "default": {
             "content": {
@@ -21382,6 +22014,20 @@
             },
             "description": "Success"
           },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "runtime_unavailable",
+                  "message": "runtime unavailable"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "The agent runtime could not start or its connection is gone; a later request starts a new process"
+          },
           "default": {
             "content": {
               "application/json": {
@@ -21573,6 +22219,20 @@
             },
             "description": "Success"
           },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "runtime_unavailable",
+                  "message": "runtime unavailable"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "The agent runtime could not start or its connection is gone; a later request starts a new process"
+          },
           "default": {
             "content": {
               "application/json": {
@@ -21634,6 +22294,20 @@
               }
             },
             "description": "Success"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "runtime_unavailable",
+                  "message": "runtime unavailable"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "The agent runtime could not start or its connection is gone; a later request starts a new process"
           },
           "default": {
             "content": {
@@ -22543,6 +23217,470 @@
         "x-required-capability": "admin"
       }
     },
+    "/v1/settings/oauth/accounts": {
+      "get": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAccountList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/settings/oauth/accounts/{provider}": {
+      "post": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOAuthAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTransaction"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/settings/oauth/accounts/{provider}/{account_id}": {
+      "delete": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      },
+      "get": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAccount"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      },
+      "patch": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOAuthAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAccount"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/settings/oauth/accounts/{provider}/{account_id}/relogin": {
+      "post": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReloginOAuthAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTransaction"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/settings/oauth/providers": {
+      "get": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthProviderList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/settings/oauth/transactions/{transaction_id}": {
+      "get": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTransaction"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/settings/oauth/transactions/{transaction_id}/cancel": {
+      "post": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
+    "/v1/settings/oauth/transactions/{transaction_id}/input": {
+      "post": {
+        "description": "openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthInputRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTransaction"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Sanitized error"
+          }
+        },
+        "security": [
+          {
+            "capabilityToken": []
+          }
+        ],
+        "x-required-capability": "admin"
+      }
+    },
     "/v1/settings/pools": {
       "get": {
         "responses": {
@@ -22630,7 +23768,7 @@
     },
     "/v1/settings/subscriptions": {
       "get": {
-        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
+        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
         "responses": {
           "200": {
             "content": {
@@ -22663,7 +23801,7 @@
     },
     "/v1/settings/subscriptions/{source}": {
       "post": {
-        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
+        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
         "parameters": [
           {
             "in": "path",
@@ -22720,7 +23858,7 @@
     },
     "/v1/settings/subscriptions/{source}/{account_id}": {
       "delete": {
-        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
+        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
         "parameters": [
           {
             "in": "path",
@@ -22766,7 +23904,7 @@
         "x-required-capability": "admin"
       },
       "get": {
-        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
+        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
         "parameters": [
           {
             "in": "path",
@@ -22819,7 +23957,7 @@
         "x-required-capability": "admin"
       },
       "patch": {
-        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
+        "description": "Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.",
         "parameters": [
           {
             "in": "path",

@@ -1,10 +1,13 @@
-import type { AccountUsageWindow, ModelAccountRef, ModelProvider, ProviderKeyInfo, SubscriptionAccount } from "../api/types";
+import type { AccountUsageWindow, ModelAccountRef, ModelProvider, OAuthAccount, ProviderKeyInfo, SubscriptionAccount } from "../api/types";
 
 /** The sources a person manages in the UI; the rest (broker, env, command, builtin) are configured in config.toml. */
 export const SUBSCRIPTION_SOURCES = ["claude-code", "codex-cli"] as const;
 export type SubscriptionSource = (typeof SUBSCRIPTION_SOURCES)[number];
 
-export type AccountKind = "api-key" | SubscriptionSource | "other";
+/** Accounts openside signed in to itself (contract source `pi-oauth`). */
+export const OAUTH_SOURCE = "pi-oauth";
+
+export type AccountKind = "api-key" | SubscriptionSource | typeof OAUTH_SOURCE | "other";
 
 export interface AccountRow {
   ref: ModelAccountRef;
@@ -21,13 +24,16 @@ export interface AccountRow {
   blockedUntilMs: number | null;
   key?: ProviderKeyInfo;
   subscription?: SubscriptionAccount;
+  oauth?: OAuthAccount;
 }
 
 export const refKey = (ref: ModelAccountRef) => `${ref.source}\u0000${ref.account_id}`;
 export const sameRef = (a: ModelAccountRef, b: ModelAccountRef) => a.source === b.source && a.account_id === b.account_id;
 
 function kindOf(source: string): AccountKind {
-  return source === "vault" ? "api-key" : (SUBSCRIPTION_SOURCES as readonly string[]).includes(source) ? (source as SubscriptionSource) : "other";
+  if (source === "vault") return "api-key";
+  if (source === OAUTH_SOURCE) return OAUTH_SOURCE;
+  return (SUBSCRIPTION_SOURCES as readonly string[]).includes(source) ? (source as SubscriptionSource) : "other";
 }
 
 interface Candidate {
@@ -44,12 +50,18 @@ interface Candidate {
 }
 
 /**
- * Every account that can serve one provider, merged from three views of the same thing: the
- * catalog's candidates (all sources, safe for any device), the Admin-only key list and the
- * Admin-only subscription list (which add last four, login command and reserve). Keys and
- * subscription accounts the catalog has not listed yet still appear.
+ * Every account that can serve one provider, merged from four views of the same thing: the
+ * catalog's candidates (all sources, safe for any device) and the Admin-only key, subscription
+ * and signed-in account lists (which add last four, login command and reserve). Accounts the
+ * catalog has not listed yet still appear.
  */
-export function accountsOf(provider: ModelProvider, pool: ModelAccountRef[], keys: ProviderKeyInfo[], subscriptions: SubscriptionAccount[]): AccountRow[] {
+export function accountsOf(
+  provider: ModelProvider,
+  pool: ModelAccountRef[],
+  keys: ProviderKeyInfo[],
+  subscriptions: SubscriptionAccount[],
+  oauth: OAuthAccount[] = [],
+): AccountRow[] {
   const rows = new Map<string, AccountRow>();
   const poolIndex = (ref: ModelAccountRef) => {
     const index = pool.findIndex((member) => sameRef(member, ref));
@@ -105,6 +117,19 @@ export function accountsOf(provider: ModelProvider, pool: ModelAccountRef[], key
       ...(base ?? row(ref, {})),
       subscription: account,
       kind: kindOf(account.source),
+      label: account.label,
+      enabled: account.enabled,
+      ready: account.available,
+      reason: account.reason,
+    });
+  }
+  for (const account of oauth.filter((candidate) => candidate.provider === provider.provider)) {
+    const ref = { source: OAUTH_SOURCE, account_id: account.account_id };
+    const base = rows.get(refKey(ref));
+    rows.set(refKey(ref), {
+      ...(base ?? row(ref, {})),
+      oauth: account,
+      kind: OAUTH_SOURCE,
       label: account.label,
       enabled: account.enabled,
       ready: account.available,

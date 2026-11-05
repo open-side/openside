@@ -13,6 +13,32 @@ const USAGE = "usage: openside-agent [doctor|accounts|models|probe] [--json]";
 const RLIMIT_CORE = 4;
 const PR_SET_DUMPABLE = 4;
 
+/**
+ * `auth-login` / `auth-refresh`: the daemon's one-shot OAuth helpers (private
+ * stdio IPC). They hold tokens, so they get the session's dump protection, and
+ * pi-ai's file logger is switched off so nothing reaches disk. Imports are
+ * dynamic so a session never loads helper code and a helper never loads the session.
+ */
+async function authHelper(command: "auth-login" | "auth-refresh"): Promise<number> {
+	const { stdioHelperIo } = await import("./protocol/auth-helper");
+	const io = stdioHelperIo();
+	try {
+		protectSidecarProcess();
+		const { logger } = await import("@oh-my-pi/pi-utils");
+		logger.setTransports({ file: false });
+		if (command === "auth-login") {
+			const { authLogin } = await import("./auth-login");
+			return await authLogin(io);
+		}
+		const { authRefresh } = await import("./auth-refresh");
+		return await authRefresh(io);
+	} catch {
+		// Exception text can carry provider responses; the daemon only needs the code.
+		io.write({ type: "error", code: "failed" });
+		return 1;
+	}
+}
+
 function packageVersions(): Record<string, string> {
 	return {
 		"@oh-my-pi/pi-agent-core": agentPackage.dependencies["@oh-my-pi/pi-agent-core"],
@@ -169,6 +195,9 @@ export async function main(argv: string[]): Promise<number> {
 		}
 		console.log(JSON.stringify({ ok: true }));
 		return 0;
+	}
+	if ((command === "auth-login" || command === "auth-refresh") && rest.length === 0) {
+		return authHelper(command);
 	}
 	if (command !== undefined) {
 		console.error(USAGE);

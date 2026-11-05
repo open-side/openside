@@ -813,6 +813,10 @@ where
     let channel_input = argv
         .windows(2)
         .any(|pair| pair[0] == "channels" && pair[1] == "add");
+    // A code pasted as an extra argument must not come back in clap's error text.
+    let oauth_input = argv.windows(3).any(|words| {
+        words[0] == "accounts" && (words[1] == "add" || words[1] == "login") && words[2] == "oauth"
+    });
     let legacy_remote = uses_legacy_remote_flag(&argv);
     let parsed = match ui::pretty() {
         Some(ui) => {
@@ -836,6 +840,8 @@ where
                     writeln!(stderr, "openside: invalid key command; use `openside key set <provider>` and supply the key on stdin")
                 } else if channel_input {
                     writeln!(stderr, "openside: invalid channel command; use `openside channels add <kind> <id> --label <label>` and supply credentials on hidden stdin")
+                } else if oauth_input {
+                    writeln!(stderr, "openside: invalid OAuth command; use `openside models accounts add oauth --provider <provider> --label <label>` or `openside models accounts login oauth <provider>/<account_id>`; paste codes only at the hidden prompt")
                 } else if let Some(ui) = ui::pretty() {
                     write!(stderr, "{}", ui::render_help_error(&error, ui))
                 } else {
@@ -1124,7 +1130,15 @@ async fn execute<R: Read, W: Write, E: Write>(
             settings::execute(command, account, stdout)
         }
         Some(Command::Models { command }) => {
-            models::run(command.as_ref(), client, args.connection.json, stdout).await
+            models::run(
+                command.as_ref(),
+                client,
+                args.connection.json,
+                stdout,
+                stderr,
+                &mut summary.interrupted,
+            )
+            .await
         }
         Some(Command::Key { command }) => {
             models::key(command, client, args.connection.json, stdin, stdout, stderr).await

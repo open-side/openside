@@ -342,6 +342,96 @@ pub const ROUTES: &[Route] = &[
     },
     Route {
         method: HttpMethod::Get,
+        path: "/v1/settings/oauth/providers",
+        request_schema: None,
+        response_schema: Some("OAuthProviderList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/oauth/accounts",
+        request_schema: None,
+        response_schema: Some("OAuthAccountList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/settings/oauth/accounts/{provider}",
+        request_schema: Some("CreateOAuthAccountRequest"),
+        response_schema: Some("OAuthTransaction"),
+        scope: CapabilityScope::Admin,
+        success_status: 202,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/oauth/accounts/{provider}/{account_id}",
+        request_schema: None,
+        response_schema: Some("OAuthAccount"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/settings/oauth/accounts/{provider}/{account_id}",
+        request_schema: Some("UpdateOAuthAccountRequest"),
+        response_schema: Some("OAuthAccount"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/settings/oauth/accounts/{provider}/{account_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/settings/oauth/accounts/{provider}/{account_id}/relogin",
+        request_schema: Some("ReloginOAuthAccountRequest"),
+        response_schema: Some("OAuthTransaction"),
+        scope: CapabilityScope::Admin,
+        success_status: 202,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/oauth/transactions/{transaction_id}",
+        request_schema: None,
+        response_schema: Some("OAuthTransaction"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/settings/oauth/transactions/{transaction_id}/input",
+        request_schema: Some("OAuthInputRequest"),
+        response_schema: Some("OAuthTransaction"),
+        scope: CapabilityScope::Admin,
+        success_status: 202,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/settings/oauth/transactions/{transaction_id}/cancel",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
         path: "/v1/settings/pools",
         request_schema: None,
         response_schema: Some("ProviderPoolList"),
@@ -1889,6 +1979,19 @@ pub fn schemas() -> Map<String, Value> {
         SubscriptionList,
         CreateSubscriptionAccountRequest,
         UpdateSubscriptionAccountRequest,
+        OAuthMethod,
+        OAuthProviderInfo,
+        OAuthProviderList,
+        OAuthAccount,
+        OAuthAccountList,
+        CreateOAuthAccountRequest,
+        ReloginOAuthAccountRequest,
+        UpdateOAuthAccountRequest,
+        OAuthInputRequest,
+        OAuthTransactionKind,
+        OAuthTransactionStatus,
+        OAuthAuthorization,
+        OAuthTransaction,
         UpdateSessionAccountRequest,
         SessionAccountSelection,
         AttachmentUpload,
@@ -2412,7 +2515,17 @@ pub fn openapi() -> Value {
             if route.path.contains("{account_id}") {
                 parameters.push(json!({"name":"account_id","in":"path","required":true,"schema":{"type":"string"}}));
             }
-            operation["description"] = json!("Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; no openside OAuth sign-in flow. PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.");
+            operation["description"] = json!("Admin-only external CLI account inventory/status; mutations also require person_device (local socket exempt). POST creates an isolated private home and exact external login command; openside does not sign these CLI accounts in (openside-held sign-in is /v1/settings/oauth). PATCH edits one account; DELETE wipes only managed homes and hides defaults without writing/deleting user homes. Managed OAuth is canonical encrypted Vault state; daemon-only refresh. Refresh/access tokens never enter public replies.");
+        }
+        if route.path.starts_with("/v1/settings/oauth/") {
+            for name in ["provider", "account_id", "transaction_id"] {
+                if route.path.contains(&format!("{{{name}}}")) {
+                    parameters.push(
+                        json!({"name":name,"in":"path","required":true,"schema":{"type":"string"}}),
+                    );
+                }
+            }
+            operation["description"] = json!("openside-held OAuth accounts (source pi-oauth). Requires admin plus person_device (local socket exempt); agent clients and channel callers get 403 person_device_required. Sign-in runs as an in-memory transaction owned by the starting device (others get 404): poll it, paste a code only while manual_input is true, cancel it. A helper on the daemon host talks to the provider; tokens are stored only in the Vault and never appear in replies. join_pool appends a new account to its provider pool; DELETE removes it locally and from every pool without provider revocation.");
         }
         if route.path == "/v1/settings/pools/{provider}" {
             parameters.push(

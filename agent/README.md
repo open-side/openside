@@ -125,6 +125,34 @@ standalone, they detect only whether a CLI is installed and leave login readines
 They never read CLI auth files, broker snapshots, environment key values or credential
 command output.
 
+### OAuth sign-in helpers
+
+`src/main.ts auth-login` and `auth-refresh` are one-shot helpers the daemon spawns for
+per-person OAuth registration (`src/auth-login.ts`, `src/auth-refresh.ts`). They have no
+model loop, tools, session or auth store, write nothing to disk (pi-ai's file logger is
+off), and talk JSONL over stdio, one object per line of at most 64 KiB
+(`src/protocol/auth-helper.ts`); any unknown or malformed line is a protocol error.
+
+- `auth-login`: the first line is `{"type":"login","provider":<pi-ai login id>}` for one of
+  `anthropic`, `openai-codex`, `openai-codex-device`, `google-gemini-cli`,
+  `google-antigravity`, `github-copilot` (others: `unsupported`). The helper emits `auth`
+  (`url`, optional `launch_url`, `instructions`, `user_code` taken from `Enter code: X`),
+  `manual_input_wanted` when the flow accepts a pasted code or redirect URL (answered by a
+  `manual_input` line), `progress` with stage `exchanging` only, then one `credentials`
+  line and exit 0. `cancel` or stdin EOF aborts with `cancelled`. Copilot's enterprise
+  prompt is answered empty (github.com); any other prompt or browser-session flow is
+  `unsupported`.
+- `auth-refresh`: one `{"type":"refresh","provider":<storage provider>,"credentials":…}`
+  line in, one `credentials` line out (a refresh token or project the provider did not
+  rotate is kept), or `error` `invalid_grant` | `failed`.
+
+Credentials are snake_case (`access`, `refresh`, `expires`, optional `project_id`,
+`account_id`, `enterprise_url`, `api_endpoint`); email, organization and plan fields are
+dropped. Errors are fixed codes (`callback_busy`, `cancelled`, `timeout`, `invalid_grant`,
+`unsupported`, `failed`); provider messages never leave the process. The egress guard
+admits only the selected provider's token, userinfo and project origins plus loopback for
+the flow's own callback server.
+
 ## Structured results with `present`
 
 `present` is exposed only through the daemon-supplied catalog and the existing reverse-RPC

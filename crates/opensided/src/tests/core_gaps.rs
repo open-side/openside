@@ -62,6 +62,8 @@ fn concrete(path: &str) -> String {
         .replace("{ticket}", "ticket")
         .replace("{origin}", "invalid-origin")
         .replace("{space_id}", "space")
+        .replace("{transaction_id}", "transaction")
+        .replace("{tab_id}", "tab")
         .replace("{id}", "session");
     assert!(!out.contains('{'), "unsubstituted path parameter in {out}");
     out
@@ -143,6 +145,45 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         (
             "DELETE",
             "/v1/settings/subscriptions/{source}/{account_id}",
+            Admin,
+        ),
+        // Person-only on top of Admin: handlers also refuse agent-client and channel callers.
+        ("GET", "/v1/settings/oauth/providers", Admin),
+        ("GET", "/v1/settings/oauth/accounts", Admin),
+        ("POST", "/v1/settings/oauth/accounts/{provider}", Admin),
+        (
+            "GET",
+            "/v1/settings/oauth/accounts/{provider}/{account_id}",
+            Admin,
+        ),
+        (
+            "PATCH",
+            "/v1/settings/oauth/accounts/{provider}/{account_id}",
+            Admin,
+        ),
+        (
+            "DELETE",
+            "/v1/settings/oauth/accounts/{provider}/{account_id}",
+            Admin,
+        ),
+        (
+            "POST",
+            "/v1/settings/oauth/accounts/{provider}/{account_id}/relogin",
+            Admin,
+        ),
+        (
+            "GET",
+            "/v1/settings/oauth/transactions/{transaction_id}",
+            Admin,
+        ),
+        (
+            "POST",
+            "/v1/settings/oauth/transactions/{transaction_id}/input",
+            Admin,
+        ),
+        (
+            "POST",
+            "/v1/settings/oauth/transactions/{transaction_id}/cancel",
             Admin,
         ),
         ("GET", "/v1/settings/pools", Read),

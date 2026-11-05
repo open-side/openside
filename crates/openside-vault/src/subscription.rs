@@ -122,6 +122,8 @@ impl Entry {
             channel_secret: None,
             subscription: Some(info),
             subscription_tokens,
+            oauth: None,
+            oauth_tokens: Vec::new(),
         })
     }
 }

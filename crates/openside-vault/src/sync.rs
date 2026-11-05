@@ -26,6 +26,7 @@ impl PreparedImport {
             || item.provider_key.is_some()
             || item.channel_secret.is_some()
             || item.subscription.is_some()
+            || item.oauth.is_some()
         {
             return Err(Error::InvalidEntry);
         }
@@ -76,6 +77,7 @@ impl<L: PlatformLock> Vault<L> {
                 entry.provider_key.is_none()
                     && entry.channel_secret.is_none()
                     && entry.subscription.is_none()
+                    && entry.oauth.is_none()
             })
             .map(|entry| entry.site.clone())
             .collect())
@@ -97,6 +99,7 @@ impl<L: PlatformLock> Vault<L> {
                     && entry.provider_key.is_none()
                     && entry.channel_secret.is_none()
                     && entry.subscription.is_none()
+                    && entry.oauth.is_none()
             })
             .ok_or(Error::UnknownItem)?;
         self.audit(
@@ -139,6 +142,7 @@ impl<L: PlatformLock> Vault<L> {
         if self.is_provider_key(&site)
             || self.is_channel_secret(&site)
             || self.is_subscription(&site)
+            || self.is_oauth(&site)
         {
             return Err(Error::InvalidEntry);
         }
@@ -169,6 +173,7 @@ impl<L: PlatformLock> Vault<L> {
                 && entry.provider_key.is_none()
                 && entry.channel_secret.is_none()
                 && entry.subscription.is_none()
+                && entry.oauth.is_none()
         }) else {
             return Ok(());
         };

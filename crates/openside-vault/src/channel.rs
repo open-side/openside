@@ -48,6 +48,8 @@ impl Entry {
             registration: None,
             subscription: None,
             subscription_tokens: Vec::new(),
+            oauth: None,
+            oauth_tokens: Vec::new(),
             provider_key: None,
             channel_secret: Some(ChannelSecretInfo {
                 kind: kind.into(),

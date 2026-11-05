@@ -495,7 +495,14 @@ impl Client {
                 } else if error.code == "repl_busy" {
                     Err(format!("{message}. Too many REPL snippets are queued for this session (or the daemon has too many REPL contexts busy); wait for the running ones to finish, then send it again."))
                 } else if error.code == "runtime_unavailable" {
-                    Err(format!("{message}. The daemon could not start the agent runtime (sidecar); the message stays queued and the next send starts a new process. Run `openside doctor` on the daemon host if it keeps failing."))
+                    Err(format!("{message}. The daemon could not start the agent runtime (sidecar); the message stays queued and the next send starts a new process. Run openside doctor on the daemon host and read the daemon's stderr (systemd unit: journalctl --user -u openside) for the reason."))
+                } else if let Some(text) = route
+                    .path
+                    .starts_with("/v1/settings/oauth/")
+                    .then(|| crate::model_accounts::oauth_message(&error.code))
+                    .flatten()
+                {
+                    Err(format!("{text} ({})", error.code))
                 } else {
                     Err(message)
                 }

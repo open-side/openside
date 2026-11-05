@@ -115,6 +115,19 @@ chief는 조율을 총괄한다. 반복 작업에는 teammate를 배정하고, �
 데몬이 실행한 사이드카는 신뢰받는 실행 코드이며 공격 성향을 지닌 보안 주체로 취급되지 않는다. 비공개 소켓과 nonce는 해당 프로세스를 인증하고, 리스 및 최대 64회 시도 규칙은 상호 협력 프로토콜 요청을 제어한다. 즉, 보안이 손상된 사이드카가 복사된 업스트림 토큰을 RPC 외부에서 사용하거나 분류된 결과/사용량 리포트를 조작하는 행위 자체를 방지하지는 못한다. 적대적 사이드카를 완전히 격리하려면 데몬 소유의 업스트림 아웃바운드 제어나 독립 검증된 상태 증명이 필요하다.
 
 
+### 6.2 OAuth 로그인 헬퍼
+
+개인별 OAuth 계정을 등록할 때 데몬은 동일한 에이전트 엔트리포인트에 `auth-login` 또는 `auth-refresh` 인자 하나를 추가해 실행한다(초기화된 환경 변수, 파이프 연결된 stdin/stdout, null stderr, 독립 프로세스 그룹, drop 시 종료). 이 헬퍼들은 세션이 아니므로 `hello`, 모델 루프, 도구, 세션 상태, 인증 저장소가 없으며 디스크에 아무것도 기록하지 않는다. 표준 입출력(stdio)으로 한 줄당 최대 65,536바이트의 JSON 객체를 하나씩 담는 JSONL로 통신하며, 알 수 없는 `type`, 여분의 키, 크기 초과 또는 개행으로 끝나지 않은 줄은 프로토콜 오류로 처리한다. 헬퍼는 선택된 프로바이더의 토큰·userinfo·프로젝트 오리진과 자체 콜백 서버용 루프백만 허용하는 egress 가드를 설치한다. 토큰 자료는 단 하나의 `credentials` 줄로만 전달되며, 프로바이더 응답과 예외 텍스트는 프로세스 밖으로 절대 나가지 않는다.
+
+`auth-login`, 데몬 → 헬퍼: 첫 줄로 `{"type":"login","provider":<pi-ai login id>}`를 보내며, ID는 `anthropic`, `openai-codex`, `openai-codex-device`, `google-gemini-cli`, `google-antigravity`, `github-copilot` 중 하나여야 한다(그 외에는 `error` `unsupported`). `manual_input_wanted` 이후에만 `{"type":"manual_input","value":<pasted code or redirect URL>}`를 보낼 수 있다. `{"type":"cancel"}`을 보내거나 stdin EOF에 도달하면 헬퍼는 작업을 중단하고 `error` `cancelled`를 내보낸다.
+
+`auth-login`, 헬퍼 → 데몬: `{"type":"auth","url",launch_url?,instructions?,user_code?}`(`user_code`는 `Enter code: X` 기기 안내문에서 추출), `{"type":"manual_input_wanted"}`, `{"type":"progress","stage":"exchanging"}`(다른 단계나 자유 형식 텍스트 없음)을 보내고, 완료 시 `{"type":"credentials","credentials":<OAuthPayload>}`를 보낸 뒤 종료 코드 0으로 종료하거나, 실패 시 `{"type":"error","code":"callback_busy"|"cancelled"|"timeout"|"invalid_grant"|"unsupported"|"failed"}`를 보낸 뒤 0이 아닌 종료 코드로 종료한다. GitHub Copilot의 엔터프라이즈 도메인 프롬프트에는 빈 값으로 응답하고(github.com 전용), 그 외의 프롬프트나 브라우저 세션 플로우는 `unsupported`로 처리한다.
+
+`auth-refresh`: 데몬이 `{"type":"refresh","provider":<storage provider>,"credentials":<OAuthPayload>}`를 쓰면, 헬퍼는 정확히 한 줄의 `credentials`(프로바이더가 교체하지 않은 리프레시 토큰, 프로젝트, 엔드포인트는 입력값을 그대로 유지) 또는 `error` `invalid_grant` | `failed`로 응답한 뒤 종료한다.
+
+`OAuthPayload`는 snake_case 형식으로 `access`(비어 있지 않음), `refresh`, `expires`(Unix ms)와 선택 필드인 `project_id`, `account_id`, `enterprise_url`, `api_endpoint`를 가지며, 그 외의 키는 거부한다. pi-ai에서 받은 이메일, 조직, 플랜, 리전 필드는 헬퍼에서 버린다.
+
+
 ## 7. 티켓 해결과 재개
 `ticket_resolved.resolution`:
 - `approval` 종류: `{"status":"approved"}` → 사이드카가 `approval_ticket`을 붙여 호출을 다시 실행, `{"status":"denied","reason":"…"}` → 사유를 담은 오류 툴 결과 반환(만료·거부 포함).

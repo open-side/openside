@@ -22,6 +22,12 @@ import type {
   SessionAccountSelection,
   SubscriptionAccount,
   SubscriptionList,
+  OAuthAccount,
+  OAuthAccountList,
+  OAuthMethod,
+  OAuthProviderList,
+  OAuthTransaction,
+  UpdateOAuthAccountRequest,
   SubmitMessageRequest,
   Ticket,
   TicketList,
@@ -168,6 +174,13 @@ export const MESSAGES: Record<string, string> = {
   key_not_found: "That key no longer exists. Reload the list.",
   invalid_source: "That subscription is not one openside can use.",
   person_device_required: "Only the computer running openside or a device you paired as yourself can make this change.",
+  oauth_provider_unknown: "openside cannot sign in to that provider.",
+  oauth_flow_unsupported: "That sign-in method is not available for this provider.",
+  oauth_manual_input_not_allowed: "This sign-in is not waiting for a code right now.",
+  oauth_transaction_finished: "This sign-in already finished. Start a new one if you still need it.",
+  oauth_transaction_unknown: "This sign-in is no longer running. Start a new one.",
+  oauth_busy: "Too many sign-ins are running, or this account is already signing in. Finish or cancel one, then try again.",
+  unknown_account: "That account no longer exists. Reload the list.",
   vault_already_set_up: "The vault is already set up.",
   vault_not_set_up: "The vault is not set up yet.",
   vault_unsupported: "This computer cannot keep a vault with the configured unlock method. Choose another unlock method under Configuration → vault.",
@@ -360,11 +373,27 @@ export interface Client {
   subscriptionAccount(source: string, accountId: string): Promise<SubscriptionAccount>;
   updateSubscriptionAccount(source: string, accountId: string, patch: AccountPatch): Promise<SubscriptionAccount>;
   deleteSubscriptionAccount(source: string, accountId: string): Promise<void>;
+  /** Providers openside can sign in to itself, with their sign-in methods. */
+  oauthProviders(): Promise<OAuthProviderList>;
+  /** Accounts openside signed in to; label, provider and readiness only. */
+  oauthAccounts(): Promise<OAuthAccountList>;
+  /** 202: starts a sign-in; the account exists only once the transaction is `ready`. */
+  createOAuthAccount(provider: string, request: { label: string; join_pool: boolean; method?: OAuthMethod }): Promise<OAuthTransaction>;
+  oauthAccount(provider: string, accountId: string): Promise<OAuthAccount>;
+  updateOAuthAccount(provider: string, accountId: string, patch: UpdateOAuthAccountRequest): Promise<OAuthAccount>;
+  deleteOAuthAccount(provider: string, accountId: string): Promise<void>;
+  reloginOAuthAccount(provider: string, accountId: string, request?: { method?: OAuthMethod }): Promise<OAuthTransaction>;
+  /** Polled while the person signs in. */
+  oauthTransaction(transactionId: string): Promise<OAuthTransaction>;
+  /** The pasted code or final page address; write-only. */
+  submitOAuthInput(transactionId: string, code: string): Promise<OAuthTransaction>;
+  cancelOAuthTransaction(transactionId: string): Promise<void>;
   listPools(): Promise<ProviderPoolList>;
   setPool(provider: string, accounts: ModelAccountRef[]): Promise<ProviderPool>;
   /** Preferred account for a conversation's later requests; `null` returns to automatic rotation. */
   setSessionAccount(id: string, account: ModelAccountRef | null): Promise<SessionAccountSelection>;
-  listSessions(query?: ListSessionsQuery): Promise<SessionList>;
+  /** `signal` cancels a search the person has already typed past. */
+  listSessions(query?: ListSessionsQuery, signal?: AbortSignal): Promise<SessionList>;
   /** The team: the chief and every teammate, with live thread state for the sidebar. */
   listAgents(): Promise<AgentList>;
   /** Admin from a person's device: hires directly, without a proposal card. */
@@ -625,16 +654,28 @@ export function createClient(options: ClientOptions): Client {
     updateSubscriptionAccount: (source, accountId, patch) =>
       json<SubscriptionAccount>("PATCH", `/v1/settings/subscriptions/${enc(source)}/${enc(accountId)}`, patch),
     deleteSubscriptionAccount: (source, accountId) => json<void>("DELETE", `/v1/settings/subscriptions/${enc(source)}/${enc(accountId)}`),
+    oauthProviders: () => json<OAuthProviderList>("GET", "/v1/settings/oauth/providers"),
+    oauthAccounts: () => json<OAuthAccountList>("GET", "/v1/settings/oauth/accounts"),
+    createOAuthAccount: (provider, request) => json<OAuthTransaction>("POST", `/v1/settings/oauth/accounts/${enc(provider)}`, request),
+    oauthAccount: (provider, accountId) => json<OAuthAccount>("GET", `/v1/settings/oauth/accounts/${enc(provider)}/${enc(accountId)}`),
+    updateOAuthAccount: (provider, accountId, patch) => json<OAuthAccount>("PATCH", `/v1/settings/oauth/accounts/${enc(provider)}/${enc(accountId)}`, patch),
+    deleteOAuthAccount: (provider, accountId) => json<void>("DELETE", `/v1/settings/oauth/accounts/${enc(provider)}/${enc(accountId)}`),
+    reloginOAuthAccount: (provider, accountId, request = {}) =>
+      json<OAuthTransaction>("POST", `/v1/settings/oauth/accounts/${enc(provider)}/${enc(accountId)}/relogin`, request),
+    oauthTransaction: (transactionId) => json<OAuthTransaction>("GET", `/v1/settings/oauth/transactions/${enc(transactionId)}`),
+    submitOAuthInput: (transactionId, code) => json<OAuthTransaction>("POST", `/v1/settings/oauth/transactions/${enc(transactionId)}/input`, { code }),
+    cancelOAuthTransaction: (transactionId) => json<void>("POST", `/v1/settings/oauth/transactions/${enc(transactionId)}/cancel`),
     listPools: () => json<ProviderPoolList>("GET", "/v1/settings/pools"),
     setPool: (provider, accounts) => json<ProviderPool>("PUT", `/v1/settings/pools/${enc(provider)}`, { accounts }),
     setSessionAccount: (id, account) => json<SessionAccountSelection>("PUT", `/v1/sessions/${enc(id)}/account`, { account }),
-    listSessions: (query: ListSessionsQuery = {}) => {
+    listSessions: async (query: ListSessionsQuery = {}, signal?: AbortSignal) => {
       const params = new URLSearchParams();
       if (query.q?.trim()) params.set("q", query.q.trim());
       if (query.archived) params.set("archived", "true");
       if (query.agent) params.set("agent", query.agent);
       const suffix = params.size ? `?${params}` : "";
-      return json<SessionList>("GET", `/v1/sessions${suffix}`);
+      const response = await send(`/v1/sessions${suffix}`, { headers: headers(), signal });
+      return (await response.json()) as SessionList;
     },
     listAgents: () => json<AgentList>("GET", "/v1/agents"),
     createAgent: (draft) => json<Agent>("POST", "/v1/agents", draft),

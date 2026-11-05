@@ -1058,7 +1058,6 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
             .path
             .replace("{id}", "unknown")
             .replace("{mid}", "unknown")
-            .replace("{tab_id}", "unknown-tab")
             .replace("{sid}", "unknown")
             .replace("{thumbnail_id}", "unknown")
             .replace("{path}", "transcript.jsonl")
@@ -1071,6 +1070,8 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
             .replace("{key_id}", "unknown-key")
             .replace("{space_id}", "unknown-space")
             .replace("{ticket}", "unknown-ticket")
+            .replace("{transaction_id}", "unknown-transaction")
+            .replace("{tab_id}", "unknown-tab")
             .replace("{name}", "unknown");
         assert!(
             !path.contains('{'),

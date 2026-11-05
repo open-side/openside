@@ -9,6 +9,8 @@ const LABELS: Record<string, string> = {
   google: "Google",
   "google-gla": "Google",
   "google-vertex": "Google",
+  "google-gemini-cli": "Google Gemini CLI",
+  "google-antigravity": "Google Antigravity",
   "github-copilot": "GitHub Copilot",
 };
 

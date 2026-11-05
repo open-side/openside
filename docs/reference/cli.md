@@ -691,15 +691,23 @@ Usage: openside models account [OPTIONS] <SESSION> [ACCOUNT]
 
 #### `openside models accounts`
 
-Model subscription accounts (Claude Code and Codex CLI homes); lists them without a subcommand
+Model subscription accounts (Claude Code and Codex CLI homes, OAuth sign-ins); lists them without a subcommand
 
 ```text
 Usage: openside models accounts [OPTIONS] [COMMAND]
 ```
 
+##### `openside models accounts providers`
+
+List the providers this daemon can sign in to with OAuth and their sign-in methods
+
+```text
+Usage: openside models accounts providers [OPTIONS]
+```
+
 ##### `openside models accounts add`
 
-Create an isolated CLI home and print the external sign-in command
+Create an isolated CLI home and print the external sign-in command (claude-code, codex-cli), or sign in to a new OAuth account (`oauth --provider <provider>`)
 
 ```text
 Usage: openside models accounts add [OPTIONS] --label <LABEL> <SOURCE>
@@ -709,10 +717,27 @@ Usage: openside models accounts add [OPTIONS] --label <LABEL> <SOURCE>
 |---|---|
 | `<SOURCE>` |  |
 | `--label <LABEL>` | Required. |
+| `--provider <PROVIDER>` | OAuth provider from `providers`; required for `oauth` |
+| `--method <METHOD>` | OAuth sign-in method; default: the provider's first method One of `browser`, `device`. |
+| `--pool` | Append the new OAuth account to the end of its provider's pool once signed in |
+
+##### `openside models accounts login`
+
+Sign an existing OAuth account in again: `login oauth <provider>/<account_id>`
+
+```text
+Usage: openside models accounts login [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+| `--method <METHOD>` | One of `browser`, `device`. |
 
 ##### `openside models accounts show`
 
-Show login readiness and the exact external sign-in command for this account
+Show login readiness and the exact external sign-in command for this account (`oauth <provider>/<account_id>` for OAuth accounts)
 
 ```text
 Usage: openside models accounts show [OPTIONS] <SOURCE> <ACCOUNT_ID>
@@ -761,6 +786,21 @@ Usage: openside models accounts rm [OPTIONS] <SOURCE> <ACCOUNT_ID>
 |---|---|
 | `<SOURCE>` |  |
 | `<ACCOUNT_ID>` |  |
+
+##### `openside models accounts update`
+
+Change OAuth account metadata: `update oauth <provider>/<account_id>`
+
+```text
+Usage: openside models accounts update [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+| `--label <LABEL>` |  |
+| `--reserve-percent <RESERVE_PERCENT>` |  |
 
 ### `openside key`
 

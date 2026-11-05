@@ -45,11 +45,12 @@ mod favicons;
 mod hire;
 mod import_delivery;
 mod login;
-mod model_plugins;
 #[path = "managed_subscriptions/tests.rs"]
 mod managed_subscriptions;
 mod memory;
 mod message_authority;
+mod model_oauth;
+mod model_plugins;
 mod models;
 mod onboarding;
 mod operator;
@@ -554,7 +555,6 @@ async fn every_protocol_method_and_path_is_routed() {
             .path
             .replace("{mid}", "message")
             .replace("{thumbnail_id}", "thumbnail")
-            .replace("{tab_id}", "tab")
             .replace("{sid}", "child")
             .replace("{name}", "skill")
             .replace("{key}", "proposal")
@@ -567,6 +567,8 @@ async fn every_protocol_method_and_path_is_routed() {
             .replace("{key_id}", "unknown-key")
             .replace("{space_id}", "unknown-space")
             .replace("{ticket}", "ticket")
+            .replace("{transaction_id}", "transaction")
+            .replace("{tab_id}", "tab")
             .replace("{id}", id);
         assert!(
             !path.contains('{'),
