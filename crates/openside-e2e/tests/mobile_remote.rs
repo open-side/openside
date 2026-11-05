@@ -509,8 +509,9 @@ async fn phone(
         } else {
             eprintln!("MOBILE_REMOTE {} {profile} NOT_RUN badge: native Badging API unavailable in this Chromium build", transport.name());
         }
-        page.wait("browser preview JPEG over remote WebSocket", "!!document.querySelector('.browser-card img')?.naturalWidth").await;
-        let color = page.eval("(() => { const i=document.querySelector('.browser-card img'); const c=document.createElement('canvas'); c.width=i.naturalWidth; c.height=i.naturalHeight; const x=c.getContext('2d'); x.drawImage(i,0,0); return Array.from(x.getImageData(300,200,1,1).data).slice(0,3); })()").await;
+        // Matched by alt text: the card's footer also carries the site's favicon.
+        page.wait("browser preview JPEG over remote WebSocket", "!!document.querySelector('.browser-card img[alt=\"Remote browser tab\"]')?.naturalWidth").await;
+        let color = page.eval("(() => { const i=document.querySelector('.browser-card img[alt=\"Remote browser tab\"]'); const c=document.createElement('canvas'); c.width=i.naturalWidth; c.height=i.naturalHeight; const x=c.getContext('2d'); x.drawImage(i,0,0); return Array.from(x.getImageData(300,200,1,1).data).slice(0,3); })()").await;
         assert!(color[0].as_u64().unwrap() > 180 && color[2].as_u64().unwrap() < 30, "red preview pixels: {color}");
         assert_eq!(page.eval("document.documentElement.scrollWidth <= innerWidth").await, true);
         page.capture(&out.join(format!("{profile}-approval-pip.png"))).await;
@@ -578,7 +579,7 @@ async fn phone(
             Some(json!({"args":{"url":remote.blue_preview}})),
         ).await;
         assert_eq!(preview.status, 200, "{}", preview.body);
-        page.wait("blue browser preview pixels", "(() => { const i=document.querySelector('.browser-card img'); if(!i?.naturalWidth)return false; const c=document.createElement('canvas'); c.width=i.naturalWidth;c.height=i.naturalHeight; const x=c.getContext('2d');x.drawImage(i,0,0);const p=x.getImageData(300,200,1,1).data;return p[2]>180 && p[0]<30;})()").await;
+        page.wait("blue browser preview pixels", "(() => { const i=document.querySelector('.browser-card img[alt=\"Remote browser tab\"]'); if(!i?.naturalWidth)return false; const c=document.createElement('canvas'); c.width=i.naturalWidth;c.height=i.naturalHeight; const x=c.getContext('2d');x.drawImage(i,0,0);const p=x.getImageData(300,200,1,1).data;return p[2]>180 && p[0]<30;})()").await;
         page.capture(&out.join(format!("{profile}-completed.png"))).await;
         page.call("Emulation.setEmulatedMedia", json!({"features":[{"name":"prefers-color-scheme","value":"dark"},{"name":"prefers-reduced-motion","value":"reduce"}]})).await;
         page.capture(&out.join(format!("{profile}-completed-dark.png"))).await;
@@ -644,7 +645,7 @@ async fn journey(transport: Transport) {
         ]));
     }
     let script = json!({"delay_ms":400,"responses":responses,"subagents":subagents});
-    let mut harness = Harness::prepare(DAEMON, &script).expect("uv sync --project agent required");
+    let mut harness = Harness::prepare(DAEMON, &script).expect("bun install --cwd agent required");
     let push = FakePushService::spawn().await.unwrap();
     harness.append_config(&format!(
         "[daemon]\nlisten = \"127.0.0.1:0\"\n[ui]\ndir = {}\n[browser]\nexecutable = {}\n[network]\nallow = [\"http://{}\"]\n",
@@ -761,7 +762,7 @@ async fn journey(transport: Transport) {
 }
 
 #[tokio::test]
-#[ignore = "requires production web bundle, Chromium, Python sidecar and zbarimg; gate runs explicitly"]
+#[ignore = "requires production web bundle, Chromium, Bun sidecar and zbarimg; gate runs explicitly"]
 async fn relay_phone_qr_chat_approval_preview_attachment_and_notification() {
     journey(Transport::Relay).await;
 }

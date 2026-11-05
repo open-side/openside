@@ -39,7 +39,7 @@ fn encryption_matches_rfc8291_appendix_a() {
 
 #[test]
 fn tampering_wrong_auth_and_oversized_payloads_fail() {
-    let ua = SecretKey::random(&mut OsRng);
+    let ua = SecretKey::generate();
     let p256dh = B64.encode(uncompressed(&ua.public_key()));
     let auth = [7_u8; 16];
     let mut body = encrypt(&p256dh, &B64.encode(auth), b"hello").unwrap();
@@ -77,6 +77,44 @@ fn vapid_token_verifies_and_rejects_another_key() {
     assert!(verify_vapid(&forged).is_err());
 }
 
+/// A VAPID key file written before the p256 0.14 migration must load to the same identity:
+/// the RFC 8291 Appendix A application-server scalar maps to its published public key.
+#[test]
+fn existing_vapid_key_file_keeps_its_public_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("push-vapid.key");
+    std::fs::write(&path, "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let key = VapidKey::load_or_create(&path).unwrap();
+    assert_eq!(
+        key.public_key(),
+        "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8"
+    );
+}
+
+/// Browsers require a 65-byte uncompressed `applicationServerKey` and a 64-byte raw
+/// (r ‖ s) ES256 signature, not DER.
+#[test]
+fn wire_key_and_signature_sizes() {
+    let key = VapidKey::generate();
+    assert_eq!(b64(&key.public_key()).len(), 65);
+    let header = key
+        .authorization("https://push.example.net/x", "mailto:a@b.c", 1_000)
+        .unwrap();
+    let token = header
+        .strip_prefix("vapid t=")
+        .and_then(|rest| rest.split(", k=").next())
+        .unwrap();
+    let signature = token.rsplit('.').next().unwrap();
+    assert_eq!(b64(signature).len(), 64);
+    let ua = SecretKey::generate();
+    assert_eq!(uncompressed(&ua.public_key()).len(), 65);
+}
+
 #[cfg(unix)]
 #[test]
 fn vapid_key_is_created_once_with_private_permissions() {
@@ -111,6 +149,7 @@ fn vapid_key_is_created_once_with_private_permissions() {
 async fn fake_service_decrypts_verified_messages_and_reports_gone() {
     let service = FakePushService::spawn().await.unwrap();
     let subscription = service.subscribe();
+    assert_eq!(b64(&subscription.p256dh).len(), 65);
     let key = VapidKey::generate();
     let sender = Sender::new().unwrap();
     let target = Subscription {

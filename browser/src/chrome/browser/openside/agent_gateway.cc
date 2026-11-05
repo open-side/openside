@@ -57,6 +57,7 @@
 #include "chrome/browser/openside/tab_ownership.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/tabs/features.h"
@@ -75,6 +76,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/javascript_dialogs/openside_dialog_hook.h"
 #include "components/sessions/core/session_id.h"
+#include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_service.h"
@@ -456,9 +458,13 @@ void Emit(std::string_view type,
 // long as the WebContents, so tab_id is stable across navigation and
 // tab-strip moves, and is never reused within the instance.
 class GatewayTab : public content::WebContentsObserver,
-                   public content::WebContentsUserData<GatewayTab> {
+                   public content::WebContentsUserData<GatewayTab>,
+                   public tab_groups::TabGroupSyncService::Observer {
  public:
-  ~GatewayTab() override { Registry().erase(sequence_); }
+  ~GatewayTab() override {
+    StopObservingTabGroupSync();
+    Registry().erase(sequence_);
+  }
 
   const std::string& tab_id() const { return tab_id_; }
   uint64_t primary_generation() const { return primary_generation_; }
@@ -493,21 +499,45 @@ class GatewayTab : public content::WebContentsObserver,
   // already attached TabOwnership when the tab is classified.
   void Announce() {
     content::WebContents* contents = web_contents();
-    if (IsAgentTab(contents)) {
-      // A hidden capturer keeps a background agent tab rendering without
-      // making it visible or active; it never holds a wake lock.
-      keep_rendering_ = contents->IncrementCapturerCount(
-          gfx::Size(), /*stay_hidden=*/true, /*stay_awake=*/false,
-          /*is_activity=*/false);
+    if (!IsAgentTab(contents)) {
+      FinishAnnounce(/*join_group=*/false);
+      return;
+    }
+    // A hidden capturer keeps a background agent tab rendering without
+    // making it visible or active; it never holds a wake lock.
+    keep_rendering_ = contents->IncrementCapturerCount(
+        gfx::Size(), /*stay_hidden=*/true, /*stay_awake=*/false,
+        /*is_activity=*/false);
+    WatchTabStrip();
+    ScheduleViewportFix();
+    // Saved-tab-group sync reconciles every local group with its stored copy
+    // once its model loads, and that reconcile navigates the group's tabs
+    // (about:blank), aborting the agent's first navigation. Joining only after
+    // initialization makes the group a plain local addition. Off-the-record
+    // profiles have no service and join at once.
+    tab_groups::TabGroupSyncService* sync =
+        tab_groups::TabGroupSyncServiceFactory::GetForProfile(
+            Profile::FromBrowserContext(contents->GetBrowserContext()));
+    if (!sync) {
+      FinishAnnounce(/*join_group=*/true);
+      return;
+    }
+    // An initialized service calls OnInitialized from inside AddObserver.
+    tab_group_sync_ = sync;
+    sync->AddObserver(this);
+  }
+
+  // tab.opened goes out after the join so its record carries the group title.
+  void FinishAnnounce(bool join_group) {
+    if (join_group) {
       JoinAgentTabsGroup();
-      WatchTabStrip();
-      ScheduleViewportFix();
     }
     announced_ = true;
     base::DictValue opened;
     opened.Set("tab", Record());
     Emit("tab.opened", this, std::move(opened));
 
+    content::WebContents* contents = web_contents();
     content::WebContents* opener =
         contents->HasLiveOriginalOpenerChain()
             ? contents->GetFirstWebContentsInLiveOriginalOpenerChain()
@@ -630,6 +660,32 @@ class GatewayTab : public content::WebContentsObserver,
     strip->ChangeTabGroupVisuals(
         id, tab_groups::TabGroupVisualData(kAgentTabsTitle,
                                            tab_groups::TabGroupColorId::kBlue));
+  }
+
+  // tab_groups::TabGroupSyncService::Observer:
+  void OnInitialized() override {
+    if (!tab_group_sync_) {
+      return;
+    }
+    StopObservingTabGroupSync();
+    // Ownership may have left the agent while the service loaded.
+    FinishAnnounce(/*join_group=*/IsAgentTab(web_contents()));
+  }
+
+  // Only reached at profile teardown; joining then would feed a group into a
+  // service that is going away, so the tab is announced ungrouped.
+  void OnWillBeDestroyed() override {
+    if (!tab_group_sync_) {
+      return;
+    }
+    StopObservingTabGroupSync();
+    FinishAnnounce(/*join_group=*/false);
+  }
+
+  void StopObservingTabGroupSync() {
+    if (tab_group_sync_) {
+      std::exchange(tab_group_sync_, nullptr)->RemoveObserver(this);
+    }
   }
 
   // Every agent page is emulated at 1440x900, DSF 1, wherever it lives: in
@@ -813,6 +869,9 @@ class GatewayTab : public content::WebContentsObserver,
     std::ignore = keep_rendering_.Release();
     emulation_.reset();
     tab_subscriptions_.clear();
+    // A tab closed while sync was still loading was never announced and
+    // reports no tab.closed either.
+    StopObservingTabGroupSync();
     // Pending captures answer tab_not_found once this tab left the registry.
     for (base::OnceCallback<void(bool)>& waiter : capture_waiters_) {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -832,6 +891,8 @@ class GatewayTab : public content::WebContentsObserver,
   const uint64_t sequence_;
   const std::string tab_id_;
   bool announced_ = false;
+  // Set while the announcement waits for saved-tab-group sync to initialize.
+  raw_ptr<tab_groups::TabGroupSyncService> tab_group_sync_ = nullptr;
   uint64_t primary_generation_ = 0;
   base::ScopedClosureRunner keep_rendering_;
   uint64_t next_dialog_ = 1;

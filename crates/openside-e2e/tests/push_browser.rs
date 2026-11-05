@@ -237,47 +237,87 @@ async fn chromium_service_worker_shows_the_pushed_ticket_with_its_deep_link() {
         json!("granted")
     );
 
-    let output = harness
-        .cli(
+    // `exec` keeps following through the open ticket, so the push is checked, and the ticket
+    // answered from its deep link, while that process is still running.
+    let (output, link) = tokio::join!(
+        harness.cli(
             env!("CARGO_BIN_EXE_e2e-openside"),
             &["--json", "ship it"],
             None,
-        )
-        .await;
-    assert!(output.status.success());
-    let deliveries = push.wait_for(1, Duration::from_secs(15)).await;
-    assert_eq!(deliveries.len(), 1, "no push: {:?}", push.rejections());
-    let payload = String::from_utf8(deliveries[0].plaintext.clone()).unwrap();
-    let link = deliveries[0].json()["url"].as_str().unwrap().to_owned();
+        ),
+        async {
+            let deliveries = push.wait_for(1, Duration::from_secs(15)).await;
+            assert_eq!(deliveries.len(), 1, "no push: {:?}", push.rejections());
+            let payload = String::from_utf8(deliveries[0].plaintext.clone()).unwrap();
+            let link = deliveries[0].json()["url"].as_str().unwrap().to_owned();
+            assert!(
+                link.starts_with("/sessions/") && link.contains("?ticket="),
+                "{link}"
+            );
+            cdp.call(
+                Some(&session),
+                "ServiceWorker.deliverPushMessage",
+                json!({"origin": origin, "registrationId": registration, "data": payload}),
+            )
+            .await;
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+            let shown = loop {
+                let shown = browser
+                    .evaluate(
+                        &tab.id,
+                        "navigator.serviceWorker.ready.then((r) => r.getNotifications()).then((all) => all.map((n) => ({title: n.title, body: n.body, url: n.data && n.data.url})))",
+                    )
+                    .await
+                    .unwrap();
+                if shown.as_array().is_some_and(|all| !all.is_empty())
+                    || tokio::time::Instant::now() > deadline
+                {
+                    break shown;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            };
+            assert_eq!(shown[0]["title"], "Question from the agent", "{shown}");
+            assert_eq!(shown[0]["url"], json!(link));
+
+            // Opening the deep link answers that ticket with the browser's own token.
+            let ticket = link.split_once("?ticket=").unwrap().1;
+            let answered = harness
+                .tcp_request(
+                    "POST",
+                    &format!("/v1/tickets/{ticket}/resolve"),
+                    Some(&token),
+                    Some(json!({"value":"yes"})),
+                )
+                .await;
+            assert_eq!(answered.status, 200, "{}", answered.body);
+            link
+        }
+    );
     assert!(
-        link.starts_with("/sessions/") && link.contains("?ticket="),
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records: Vec<Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect();
+    let summary = records.last().unwrap();
+    assert_eq!(summary["status"], "settled", "{summary}");
+    assert_eq!(
+        link.strip_prefix("/sessions/")
+            .and_then(|rest| rest.split_once('?'))
+            .map(|(id, _)| id),
+        summary["session_id"].as_str(),
         "{link}"
     );
-    cdp.call(
-        Some(&session),
-        "ServiceWorker.deliverPushMessage",
-        json!({"origin": origin, "registrationId": registration, "data": payload}),
-    )
-    .await;
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    let shown = loop {
-        let shown = browser
-            .evaluate(
-                &tab.id,
-                "navigator.serviceWorker.ready.then((r) => r.getNotifications()).then((all) => all.map((n) => ({title: n.title, body: n.body, url: n.data && n.data.url})))",
-            )
-            .await
-            .unwrap();
-        if shown.as_array().is_some_and(|all| !all.is_empty())
-            || tokio::time::Instant::now() > deadline
-        {
-            break shown;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    assert_eq!(shown[0]["title"], "Question from the agent", "{shown}");
-    assert_eq!(shown[0]["url"], json!(link));
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "assistant.final" && record["text"] == "shipped"),
+        "{records:?}"
+    );
     drop(cdp);
     browser.shutdown().await.unwrap();
     harness.kill().await;

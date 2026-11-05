@@ -25,6 +25,7 @@ source_set("openside") {
     # Chromium's documented way to keep that circular include graph complete.
     public_deps += [ "//chrome/browser:browser_public_dependencies" ]
     deps += [
+      "//chrome/browser/tab_group_sync:factories",
       "//components/password_manager/content/browser",
       "//components/download/content/public",
       "//components/download/public/common:public",
@@ -32,6 +33,7 @@ source_set("openside") {
       "//components/infobars/core",
       "//components/prefs",
       "//components/search_engines",
+      "//components/saved_tab_groups/public",
       "//components/javascript_dialogs",
       "//components/sessions",
       "//components/tab_groups",

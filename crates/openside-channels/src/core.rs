@@ -405,6 +405,9 @@ impl<M: Messenger> Core<M> {
                 workspace: None,
                 incognito: false,
                 browser_space: Default::default(),
+                effort: None,
+                speed: None,
+                profile: None,
             })
             .await?;
         if !self.daemon.owns_session(&session) {

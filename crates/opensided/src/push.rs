@@ -601,7 +601,9 @@ impl Answers {
     }
 
     fn take(&mut self, session: &SessionId) -> Option<String> {
-        self.by_session.remove(session).and_then(|(_, excerpt)| excerpt)
+        self.by_session
+            .remove(session)
+            .and_then(|(_, excerpt)| excerpt)
     }
 }
 
@@ -848,8 +850,14 @@ mod tests {
         );
         assert_eq!(excerpt("```\nonly code\n```\n---\n"), None);
         assert_eq!(excerpt("   "), None);
-        assert_eq!(excerpt("1. step one\n2) step _two_"), Some("step one step two".into()));
-        assert_eq!(excerpt(r"a \*literal\* star"), Some("a *literal* star".into()));
+        assert_eq!(
+            excerpt("1. step one\n2) step _two_"),
+            Some("step one step two".into())
+        );
+        assert_eq!(
+            excerpt(r"a \*literal\* star"),
+            Some("a *literal* star".into())
+        );
     }
 
     #[test]
@@ -868,7 +876,11 @@ mod tests {
         let id = SessionId::new("s1");
         let shown = settled_notification(&id, "Find flights", false, excerpt("**Found** it."));
         assert_eq!(
-            (shown.kind.as_str(), shown.title.as_str(), shown.body.as_str()),
+            (
+                shown.kind.as_str(),
+                shown.title.as_str(),
+                shown.body.as_str()
+            ),
             ("settled", "Find flights", "Found it.")
         );
         assert_eq!(shown.url, "/sessions/s1");
@@ -876,22 +888,34 @@ mod tests {
         let private = settled_notification(&id, "Find flights", true, excerpt("Found it."));
         assert_eq!(private.body, "Task finished");
         let silent = settled_notification(&id, "", false, excerpt("```\ncode\n```"));
-        assert_eq!((silent.title.as_str(), silent.body.as_str()), ("Task finished", "Task finished"));
-        assert_eq!(settled_notification(&id, "t", false, None).body, "Task finished");
+        assert_eq!(
+            (silent.title.as_str(), silent.body.as_str()),
+            ("Task finished", "Task finished")
+        );
+        assert_eq!(
+            settled_notification(&id, "t", false, None).body,
+            "Task finished"
+        );
     }
 
     #[test]
     fn answers_keep_excerpts_and_evict_the_oldest_session() {
         let mut answers = Answers::default();
         answers.record(SessionId::new("old"), &"word ".repeat(1000));
-        let kept = answers.by_session[&SessionId::new("old")].1.as_deref().unwrap();
+        let kept = answers.by_session[&SessionId::new("old")]
+            .1
+            .as_deref()
+            .unwrap();
         assert_eq!(kept.chars().count(), 140);
         for n in 0..MAX_ANSWERS {
-            answers.record(SessionId::new(&format!("s{n}")), "answer");
+            answers.record(SessionId::new(format!("s{n}")), "answer");
         }
         assert_eq!(answers.by_session.len(), MAX_ANSWERS);
         assert_eq!(answers.take(&SessionId::new("old")), None);
-        assert_eq!(answers.take(&SessionId::new("s0")).as_deref(), Some("answer"));
+        assert_eq!(
+            answers.take(&SessionId::new("s0")).as_deref(),
+            Some("answer")
+        );
         assert_eq!(answers.take(&SessionId::new("s0")), None);
     }
 }

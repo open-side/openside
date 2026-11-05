@@ -1,4 +1,4 @@
-//! Remote device flows against the real daemon, CLI and Python sidecar (F-3, PP-22, PP-4):
+//! Remote device flows against the real daemon, CLI and Bun sidecar (F-3, PP-22, PP-4):
 //! QR pairing, Web Push to a 127.0.0.1 push service, answering from the pushed deep link,
 //! revocation, and recovery when the daemon is started the way the service unit starts it.
 
@@ -111,47 +111,76 @@ async fn phone_pairs_by_qr_is_pushed_answers_from_the_deep_link_and_hears_the_ta
         .await;
     assert_eq!(created.status, 201, "{}", created.body);
 
-    // A headless task asks a question and parks; the phone is pushed.
-    let output = harness.cli(CLI, &["--json", "deploy it"], None).await;
-    assert!(output.status.success());
-    let summary: Value = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .rev()
-        .find_map(|line| serde_json::from_str::<Value>(line).ok())
-        .unwrap();
-    assert_eq!(summary["status"], "waiting_human", "{summary}");
-    let session = summary["session_id"].as_str().unwrap().to_owned();
-    let deliveries = push.wait_for(1, Duration::from_secs(15)).await;
-    assert_eq!(deliveries.len(), 1, "no push: {:?}", push.rejections());
-    let message = deliveries[0].json();
-    assert_eq!(
-        deliveries[0].vapid_key,
-        vapid.body["public_key"].as_str().unwrap()
-    );
-    assert_eq!(message["kind"], "ticket");
-    assert_eq!(message["title"], "Question from the agent");
-    let link = message["url"].as_str().unwrap();
-    let ticket = link
-        .strip_prefix(&format!("/sessions/{session}?ticket="))
-        .unwrap_or_else(|| panic!("deep link {link} does not target the session's ticket"));
+    // A headless task asks a question and parks; the phone is pushed. `exec` keeps following
+    // through the open ticket, so the phone answers while that process is still running.
+    let (output, session) = tokio::join!(harness.cli(CLI, &["--json", "deploy it"], None), async {
+        let deliveries = push.wait_for(1, Duration::from_secs(15)).await;
+        assert_eq!(deliveries.len(), 1, "no push: {:?}", push.rejections());
+        let message = deliveries[0].json();
+        assert_eq!(
+            deliveries[0].vapid_key,
+            vapid.body["public_key"].as_str().unwrap()
+        );
+        assert_eq!(message["kind"], "ticket");
+        assert_eq!(message["title"], "Question from the agent");
+        let link = message["url"].as_str().unwrap();
+        let (session, ticket) = link
+            .strip_prefix("/sessions/")
+            .and_then(|rest| rest.split_once("?ticket="))
+            .unwrap_or_else(|| panic!("deep link {link} does not target a session's ticket"));
+        let pending = harness
+            .request("GET", "/v1/tickets?status=pending", None)
+            .await;
+        assert!(
+            pending.body["tickets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["id"] == ticket && t["session_id"] == session),
+            "deep link {link} does not target the session's pending ticket: {}",
+            pending.body
+        );
 
-    // Following the link: the phone reads and answers that ticket with its own token.
-    let shown = harness
-        .tcp_request("GET", &format!("/v1/tickets/{ticket}"), Some(&token), None)
-        .await;
-    assert_eq!(
-        (shown.status, shown.body["status"].as_str()),
-        (200, Some("pending"))
+        // Following the link: the phone reads and answers that ticket with its own token.
+        let shown = harness
+            .tcp_request("GET", &format!("/v1/tickets/{ticket}"), Some(&token), None)
+            .await;
+        assert_eq!(
+            (shown.status, shown.body["status"].as_str()),
+            (200, Some("pending"))
+        );
+        let answered = harness
+            .tcp_request(
+                "POST",
+                &format!("/v1/tickets/{ticket}/resolve"),
+                Some(&token),
+                Some(json!({"value":"yes"})),
+            )
+            .await;
+        assert_eq!(answered.status, 200, "{}", answered.body);
+        session.to_owned()
+    });
+
+    // The waiting `exec` follows the answered run to its end and exits 0 with the final answer.
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let answered = harness
-        .tcp_request(
-            "POST",
-            &format!("/v1/tickets/{ticket}/resolve"),
-            Some(&token),
-            Some(json!({"value":"yes"})),
-        )
-        .await;
-    assert_eq!(answered.status, 200, "{}", answered.body);
+    let records: Vec<Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect();
+    let summary = records.last().unwrap();
+    assert_eq!(summary["status"], "settled", "{summary}");
+    assert_eq!(summary["exit_code"], 0);
+    assert_eq!(summary["session_id"], session.as_str());
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "assistant.final" && record["text"] == "deployed"),
+        "{records:?}"
+    );
 
     let deliveries = push.wait_for(2, Duration::from_secs(30)).await;
     assert_eq!(

@@ -13,9 +13,11 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
-use p256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey};
+use p256::{
+    elliptic_curve::{sec1::ToSec1Point, Generate},
+    SecretKey,
+};
 use parking_lot::Mutex;
-use rand_core::{OsRng, RngCore};
 use serde_json::{json, Value};
 use tokio::sync::Notify;
 
@@ -115,15 +117,13 @@ impl FakePushService {
 
     /// Create a subscriber with fresh keys, as `pushManager.subscribe()` would.
     pub fn subscribe(&self) -> FakeSubscription {
-        let secret = SecretKey::random(&mut OsRng);
-        let mut auth = [0_u8; 16];
-        OsRng.fill_bytes(&mut auth);
-        let mut id = [0_u8; 8];
-        OsRng.fill_bytes(&mut id);
+        let secret = SecretKey::generate();
+        let auth = <[u8; 16]>::generate();
+        let id = <[u8; 8]>::generate();
         let id = B64.encode(id);
         let subscription = FakeSubscription {
             endpoint: format!("{}/push/{id}", self.shared.origin),
-            p256dh: B64.encode(secret.public_key().to_encoded_point(false).as_bytes()),
+            p256dh: B64.encode(secret.public_key().to_sec1_point(false).as_bytes()),
             auth: B64.encode(auth),
             id: id.clone(),
         };

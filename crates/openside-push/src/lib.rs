@@ -24,10 +24,9 @@ use p256::{
         signature::{Signer, Verifier},
         Signature, SigningKey, VerifyingKey,
     },
-    elliptic_curve::sec1::ToEncodedPoint,
+    elliptic_curve::{sec1::ToSec1Point, Generate},
     PublicKey, SecretKey,
 };
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -77,7 +76,7 @@ fn decode(value: &str, what: &'static str) -> Result<Vec<u8>> {
 }
 
 fn uncompressed(key: &PublicKey) -> Vec<u8> {
-    key.to_encoded_point(false).as_bytes().to_vec()
+    key.to_sec1_point(false).as_bytes().to_vec()
 }
 
 /// The daemon's VAPID signing key (application-server identity, RFC 8292).
@@ -89,7 +88,7 @@ impl VapidKey {
     /// Fresh random key.
     pub fn generate() -> Self {
         Self {
-            secret: SecretKey::random(&mut OsRng),
+            secret: SecretKey::generate(),
         }
     }
 
@@ -269,15 +268,8 @@ fn derive(
 /// Encrypt `plaintext` for a subscription (`p256dh`, `auth` as base64url) into an
 /// `aes128gcm` body: salt ‖ rs ‖ idlen ‖ keyid (application-server public key) ‖ record.
 pub fn encrypt(p256dh: &str, auth: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
-    let mut salt = [0_u8; 16];
-    OsRng.fill_bytes(&mut salt);
-    encrypt_with(
-        &SecretKey::random(&mut OsRng),
-        salt,
-        p256dh,
-        auth,
-        plaintext,
-    )
+    let salt = <[u8; 16]>::generate();
+    encrypt_with(&SecretKey::generate(), salt, p256dh, auth, plaintext)
 }
 
 fn encrypt_with(
