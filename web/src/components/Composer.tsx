@@ -1,13 +1,20 @@
 import { ArrowUp, Eye, FileText, Hand, Plus, Square, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import type { AttachmentUpload, SkillSummary } from "../api/types";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useNavigate } from "react-router";
+import { ApiError } from "../api/client";
+import type { AttachmentUpload, CreateSessionRequest, ModelCatalog, PolicyMode, SkillSummary } from "../api/types";
 import { mayUse } from "../auth";
 import { newMessageId, useClient } from "../context";
+import { AgentTabsContext } from "../hooks/useAgentTabs";
+import { useTeam } from "../hooks/useAgents";
 import { OutboxNotice } from "../pwa/OutboxNotice";
 import { outbox } from "../pwa/outbox";
 import type { ShareDraft } from "../pwa/share";
 import { outgoing } from "../state/outgoing";
 import { ICON_STROKE, IconButton } from "../ui";
+import { ComposerContextMenu, CONTEXT_TYPING, contextItems, type ContextCommand, type ContextItem } from "./ComposerContextMenu";
+import { EffortMenu, ModelMenu, PermissionMenu, PlusMenu, SpeedMenu } from "./ComposerOptions";
+import { createSessionRequest, DEFAULT_SESSION_OPTIONS, hasOverrides, type SessionOptions } from "./sessionOptions";
 
 // Same rules as the sidecar (agent/src/features/skills.ts `MENTION_SOURCE`): a mention starts
 // a word and ends before whitespace or punctuation; `/a/b` and `/a.md` are paths, not mentions.
@@ -64,9 +71,10 @@ export interface ComposerProps {
   /**
    * Called once a message is on its way. In a thread that is right away (the transcript shows its
    * delivery and scrolls back to it); on Home only after the daemon accepted it or the outbox
-   * holds it, since the person is taken to the thread that shows it.
+   * holds it, since the person is taken to the thread that shows it. A new task started with its
+   * own settings passes the conversation it created.
    */
-  onSent?: () => void;
+  onSent?: (createdSessionId?: string) => void;
   /** Compact controls in the composer's bottom bar, after Add files (model picker, browser preview). */
   tools?: ReactNode;
   /** Content shared to the app (share target) or a picked starter; applied once, then `onDraftApplied` fires. */
@@ -81,6 +89,12 @@ export interface ComposerProps {
    * and nothing to stop, queue or switch.
    */
   variant?: "thread" | "home";
+  /**
+   * Home only: the toolbar offers the new task's permission, model, effort, profile, speed and
+   * private mode. Untouched, the message joins `sessionId` as before; any choice starts a new
+   * conversation for `agentId` with them, since a conversation's settings are fixed at creation.
+   */
+  newTask?: { agentId: string };
 }
 
 export function Composer({
@@ -98,6 +112,7 @@ export function Composer({
   quote,
   onQuoteApplied,
   variant = "thread",
+  newTask,
 }: ComposerProps) {
   const home = variant === "home";
   const running = !home && runningProp;
@@ -124,6 +139,44 @@ export function Composer({
   const [files, setFiles] = useState<PendingFile[]>([]);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const form = useRef<HTMLFormElement>(null);
+  const navigate = useNavigate();
+  const team = useTeam();
+  const tabs = useContext(AgentTabsContext);
+  const taskAgent = newTask && home ? team.agents?.find((agent) => agent.id === newTask.agentId) : undefined;
+  const [options, setOptions] = useState<SessionOptions>(DEFAULT_SESSION_OPTIONS);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  // What this device may ask for: unknown until read, and the daemon still has the last word.
+  const [limits, setLimits] = useState<{ deviceMode: PolicyMode | null; agentClient: boolean }>({ deviceMode: null, agentClient: false });
+  const [context, setContext] = useState<{ query: string; below: boolean } | null>(null);
+  const [contextActive, setContextActive] = useState(0);
+  // A conversation created for a send whose message then failed: sending again reuses it.
+  const started = useRef<{ request: string; id: string } | null>(null);
+  const changeOptions = (patch: Partial<SessionOptions>) => setOptions((current) => ({ ...current, ...patch }));
+  const permission = taskAgent ? { onChange: changeOptions, ceiling: taskAgent.mode, deviceLimit: limits.deviceMode, agentName: taskAgent.name } : null;
+
+  // Labels for the model trigger and the options this device may not pick; without them the
+  // toolbar still offers Default and the daemon refuses what it must.
+  const taskAgentId = taskAgent?.id;
+  useEffect(() => {
+    if (!taskAgentId) return;
+    let live = true;
+    client.modelCatalog().then(
+      (next) => live && setCatalog(next),
+      () => undefined,
+    );
+    client.settings().then(
+      (settings) => live && setLimits((current) => ({ ...current, deviceMode: settings.policy_mode })),
+      () => undefined,
+    );
+    client.myDevice().then(
+      (me) => live && setLimits((current) => ({ ...current, agentClient: me.kind === "agent_client" })),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, taskAgentId]);
 
   // Something was shared to the app: it becomes this composer's starting message.
   useEffect(() => {
@@ -215,26 +268,51 @@ export function Composer({
   const chips = mentionedSkills(text, known);
   const open = query !== null && candidates.length > 0;
   const hasInput = text.trim().length > 0 || files.length > 0;
+  // Only actions this screen can really take: Home is already a new task and has nothing to stop.
+  const commands: ContextCommand[] = [
+    ...(home ? [] : [{ id: "new", label: "New task", detail: "Start a separate task from Home", run: () => navigate("/") }]),
+    ...(running && onStop ? [{ id: "stop", label: "Stop the task", detail: "Ask before stopping what is running", run: onStop }] : []),
+  ];
+  const contextRows = context ? contextItems(context.query, tabs, team.agents ?? [], commands) : [];
+  const contextOpen = contextRows.length > 0;
 
   function update(value: string, caret: number) {
     setText(value);
     const typing = TYPING.exec(value.slice(0, caret));
     setQuery(typing ? (typing[1] ?? "") : null);
     if (!typing) setCandidates([]);
+    const at = CONTEXT_TYPING.exec(value.slice(0, caret));
+    if (!at) {
+      setContext(null);
+      return;
+    }
+    // Opens above the card unless the card sits too close to the top of the window for its 240px.
+    const top = form.current?.getBoundingClientRect().top ?? Infinity;
+    if (context?.query !== at[1]) setContextActive(0);
+    setContext({ query: at[1] ?? "", below: top < 256 });
   }
 
-  function choose(skill: SkillSummary) {
+  function replaceTyped(pattern: RegExp, replacement: string) {
     const element = textarea.current;
     const caret = element?.selectionStart ?? text.length;
-    const before = text.slice(0, caret).replace(/\/[a-z0-9-]*$/, `/${skill.name} `);
-    const value = before + text.slice(caret);
-    setText(value);
-    setQuery(null);
-    setCandidates([]);
+    const before = text.slice(0, caret).replace(pattern, replacement);
+    setText(before + text.slice(caret));
     requestAnimationFrame(() => {
       element?.focus();
       element?.setSelectionRange(before.length, before.length);
     });
+  }
+
+  function choose(skill: SkillSummary) {
+    replaceTyped(/\/[a-z0-9-]*$/, `/${skill.name} `);
+    setQuery(null);
+    setCandidates([]);
+  }
+
+  function pickContext(item: ContextItem) {
+    replaceTyped(/@[^\s@]*$/, item.insert ? `${item.insert} ` : "");
+    setContext(null);
+    item.run?.();
   }
 
   function removeMention(name: string) {
@@ -292,14 +370,21 @@ export function Composer({
       onSent?.();
       setBusy(false);
     }
-    const failure = await outgoing.submit(client, { message_id: messageId, session_id: sessionId, text: body, attachments });
+    const creating = taskAgent && hasOverrides(options) ? createSessionRequest(taskAgent.id, options) : null;
+    let target = sessionId;
+    if (creating) {
+      const created = await startTask(creating);
+      if (created === null) return;
+      target = created;
+    }
+    const failure = await outgoing.submit(client, { message_id: messageId, session_id: target, text: body, attachments });
     let kept = failure === null;
     if (failure?.status === 0) {
       // Unreachable daemon: the outbox delivers it later, and its notice replaces the bubble.
       try {
         await outbox.enqueue({
           message_id: messageId,
-          session_id: sessionId,
+          session_id: target,
           text: body,
           attachments,
           queued_at: Date.now(),
@@ -314,11 +399,36 @@ export function Composer({
     setBusy(false);
     if (kept) {
       clearInput();
-      onSent?.();
+      if (creating) {
+        started.current = null;
+        setOptions(DEFAULT_SESSION_OPTIONS);
+      }
+      onSent?.(creating ? target : undefined);
     } else {
       // The words are still here to send again, so the thread must not hold a Not sent copy too.
       outgoing.forget(messageId);
       setError(failure?.status === 0 ? "Can’t reach openside. Try again." : (failure?.message ?? "Couldn’t send the task. Try again."));
+    }
+  }
+
+  /**
+   * Creates the new task's conversation, or reuses the one an earlier failed send created with
+   * the same settings. `null` when the daemon refused or could not be reached: the error is
+   * shown and the words and settings stay. Creation is never queued offline, because a replay
+   * after a lost response would start a second conversation.
+   */
+  async function startTask(request: CreateSessionRequest): Promise<string | null> {
+    const key = JSON.stringify(request);
+    if (started.current?.request === key) return started.current.id;
+    try {
+      const session = await client.createSession(request);
+      started.current = { request: key, id: session.id };
+      return session.id;
+    } catch (cause) {
+      setBusy(false);
+      const offline = cause instanceof ApiError && cause.status === 0;
+      setError(offline ? "Can’t start a new task while offline. Your words and settings are kept." : cause instanceof Error ? cause.message : "Couldn’t start the task. Try again.");
+      return null;
     }
   }
 
@@ -331,6 +441,8 @@ export function Composer({
   // Focus means a message is coming: start the agent process and browser now instead of
   // after Send. Best effort, at most once per session per half minute.
   function prewarm() {
+    // A new task with its own settings goes to a conversation that does not exist yet.
+    if (taskAgent && hasOverrides(options)) return;
     const now = Date.now();
     if (warmed.current.key === sessionId && now - warmed.current.at < PREWARM_EVERY_MS) return;
     warmed.current = { key: sessionId, at: now };
@@ -341,6 +453,25 @@ export function Composer({
     // Safari reports the Enter that commits an IME composition after compositionend, with
     // isComposing already false but keyCode 229.
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (contextOpen) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setContextActive((index) => (Math.min(index, contextRows.length - 1) + step + contextRows.length) % contextRows.length);
+        return;
+      }
+      const picked = contextRows[Math.min(contextActive, contextRows.length - 1)];
+      if ((event.key === "Enter" || event.key === "Tab") && picked) {
+        event.preventDefault();
+        pickContext(picked);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setContext(null);
+        return;
+      }
+    }
     if (open) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -389,7 +520,7 @@ export function Composer({
           {error}
         </p>
       ) : null}
-      <form className="composer" data-variant={variant} onSubmit={send}>
+      <form ref={form} className="composer" data-variant={variant} onSubmit={send}>
         {chips.length || files.length ? (
           <ul className="composer-chips" aria-label="Message context">
             {chips.map((name) => (
@@ -438,8 +569,14 @@ export function Composer({
             autoFocus={home}
             placeholder={placeholder}
             aria-autocomplete="list"
-            aria-controls={open ? "skill-mentions" : undefined}
-            aria-activedescendant={open && candidates[active] ? `skill-mention-${candidates[active].name}` : undefined}
+            aria-controls={contextOpen ? "context-menu" : open ? "skill-mentions" : undefined}
+            aria-activedescendant={
+              contextOpen
+                ? `context-${contextRows[Math.min(contextActive, contextRows.length - 1)]?.id}`
+                : open && candidates[active]
+                  ? `skill-mention-${candidates[active].name}`
+                  : undefined
+            }
           />
         </label>
         <div className="composer-bar">
@@ -455,11 +592,27 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          <IconButton label="Add files" className="composer-attach" onClick={() => picker.current?.click()}>
-            <Plus size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          </IconButton>
-          {home ? null : <div className="composer-tools">{tools}</div>}
+          <div className="composer-bar-start">
+            {permission ? (
+              <>
+                <PlusMenu onUpload={() => picker.current?.click()} task={{ options, ...permission }} />
+                <PermissionMenu options={options} {...permission} />
+              </>
+            ) : (
+              <IconButton label="Add files" className="composer-attach" onClick={() => picker.current?.click()}>
+                <Plus size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              </IconButton>
+            )}
+            {home ? null : <div className="composer-tools">{tools}</div>}
+          </div>
           <div className="composer-actions">
+            {taskAgent ? (
+              <>
+                <ModelMenu catalog={catalog} model={options.model} fallback={taskAgent.model ?? catalog?.default_model ?? null} onChange={changeOptions} />
+                <EffortMenu options={options} onChange={changeOptions} agentClient={limits.agentClient} />
+                <SpeedMenu options={options} onChange={changeOptions} agentClient={limits.agentClient} />
+              </>
+            ) : null}
             {onShowPending ? (
               <IconButton label="Show the request waiting for you" className="composer-needs" onClick={onShowPending}>
                 <Hand size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
@@ -479,7 +632,16 @@ export function Composer({
             ) : null}
           </div>
         </div>
-        {open ? (
+        {contextOpen ? (
+          <ComposerContextMenu
+            items={contextRows}
+            active={Math.min(contextActive, contextRows.length - 1)}
+            below={context?.below ?? false}
+            query={context?.query ?? ""}
+            onPick={pickContext}
+            onClose={() => setContext(null)}
+          />
+        ) : open ? (
           <ul id="skill-mentions" className="mention-list surface-overlay" role="listbox" aria-label="Skills">
             {candidates.map((skill, index) => (
               <li

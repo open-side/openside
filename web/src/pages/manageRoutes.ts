@@ -1,20 +1,23 @@
 import { Bot, BookOpen, Brain, CalendarClock, KeyRound, Link2, MonitorSmartphone, RefreshCw, ShieldCheck, Stethoscope, Users, Wrench } from "lucide-react";
 import type { Location } from "react-router";
 
-/** Workspace sections; each keeps its own deep-link route and opens inside the Workspace dialog. */
+/**
+ * Workspace sections; each keeps its own deep-link route and opens inside the Workspace dialog.
+ * `group` is the nav heading; sections of one group stay contiguous.
+ */
 export const WORKSPACE_SECTIONS = [
-  { path: "/team", title: "Team", description: "Your assistant and teammates, and who owns what", Icon: Users },
-  { path: "/skills", title: "Skills", description: "Create, edit and enable skills", Icon: BookOpen },
-  { path: "/routines", title: "Routines", description: "Scheduled prompts and run history", Icon: CalendarClock },
-  { path: "/memory", title: "Memory", description: "Saved context and retention", Icon: Brain },
-  { path: "/vault", title: "Vault", description: "Item use policy and audit log", Icon: KeyRound },
-  { path: "/connections", title: "Connections", description: "Sites your agents are signed in to", Icon: Link2 },
-  { path: "/devices", title: "Devices", description: "Paired devices and pairing", Icon: MonitorSmartphone },
-  { path: "/agents", title: "Agents", description: "Coding agents and their skills folders", Icon: Bot },
-  { path: "/sync", title: "Sync", description: "Keep your devices in step, and pinned tabs", Icon: RefreshCw },
-  { path: "/policy", title: "Policy", description: "What agents may do and where openside may connect", Icon: ShieldCheck },
-  { path: "/diagnostics", title: "Diagnostics", description: "Check this computer and fix what is wrong", Icon: Stethoscope },
-  { path: "/config", title: "Configuration", description: "Every daemon setting from config.toml", Icon: Wrench },
+  { path: "/team", group: "Assistant", title: "Team", description: "Your assistant and teammates, and who owns what", Icon: Users },
+  { path: "/skills", group: "Assistant", title: "Skills", description: "Create, edit and enable skills", Icon: BookOpen },
+  { path: "/routines", group: "Assistant", title: "Routines", description: "Scheduled prompts and run history", Icon: CalendarClock },
+  { path: "/memory", group: "Assistant", title: "Memory", description: "Saved context and retention", Icon: Brain },
+  { path: "/vault", group: "Access", title: "Vault", description: "Item use policy and audit log", Icon: KeyRound },
+  { path: "/connections", group: "Access", title: "Connections", description: "Sites your agents are signed in to", Icon: Link2 },
+  { path: "/devices", group: "Access", title: "Devices", description: "Paired devices and pairing", Icon: MonitorSmartphone },
+  { path: "/agents", group: "Access", title: "Agents", description: "Coding agents and their skills folders", Icon: Bot },
+  { path: "/sync", group: "System", title: "Sync", description: "Sync devices and pinned tabs", Icon: RefreshCw },
+  { path: "/policy", group: "System", title: "Policy", description: "What agents may do and where openside may connect", Icon: ShieldCheck },
+  { path: "/diagnostics", group: "System", title: "Diagnostics", description: "Check this computer and fix what is wrong", Icon: Stethoscope },
+  { path: "/config", group: "System", title: "Configuration", description: "Every daemon setting from config.toml", Icon: Wrench },
 ] as const;
 
 export type WorkspacePath = (typeof WORKSPACE_SECTIONS)[number]["path"];

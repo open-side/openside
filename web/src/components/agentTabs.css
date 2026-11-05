@@ -1,0 +1,153 @@
+/* Desktop Agent Tabs column beside the conversation (AgentTabsPanel). */
+
+/*
+ * The column takes its own track so the transcript and composer reflow beside it instead of
+ * sitting under it. The header keeps spanning the full width; the panel only exists where
+ * AGENT_TABS_MIN_WIDTH fits, so there is no phone variant.
+ */
+.conversation[data-agent-tabs="open"] {
+  --agent-tabs-width: 300px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--agent-tabs-width);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  column-gap: var(--space-4);
+  padding-right: var(--space-4);
+}
+.conversation[data-agent-tabs="open"] > .app-header {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  /* The header keeps its own right edge; the padding above is for the column only. */
+  margin-right: calc(-1 * var(--space-4));
+}
+.conversation[data-agent-tabs="open"] > .conversation-scroll {
+  grid-column: 1;
+  grid-row: 2;
+}
+.conversation[data-agent-tabs="open"] > .composer-anchor {
+  grid-column: 1;
+  grid-row: 3;
+}
+.conversation[data-agent-tabs="open"] > .jump-latest {
+  left: calc((100% - var(--agent-tabs-width) - 2 * var(--space-4)) / 2);
+}
+
+.agent-tabs-panel {
+  grid-column: 2;
+  grid-row: 2 / 4;
+  min-height: 0;
+  /* Starts where the transcript's content does (`.conversation-scroll` margin and padding). */
+  margin-top: var(--otp-dock-space, 0px);
+  padding: var(--space-6) 0 var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.agent-tabs-list {
+  display: grid;
+  /* minmax(0, …): a long title truncates instead of widening the card past the column. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.agent-tab-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  animation: agent-tab-in var(--normal) var(--ease-out);
+}
+@keyframes agent-tab-in {
+  from {
+    opacity: 0;
+    translate: 0 -6px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-tab-card {
+    animation: none;
+  }
+}
+.agent-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: 32px;
+  padding: 0 2px 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-tab-favicon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  color: var(--muted);
+}
+.agent-tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agent-tab-hide {
+  flex: none;
+  color: var(--muted);
+}
+.agent-tab-screen {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: zoom-in;
+}
+.agent-tab-screen > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+}
+.agent-tab-screen:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.agent-tab-screen[data-empty] {
+  justify-content: start;
+  justify-items: start;
+  aspect-ratio: auto;
+  min-height: 44px;
+  padding: 0 10px;
+  background: transparent;
+  cursor: pointer;
+}
+.agent-tab-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.agent-tab-empty .agent-tab-favicon {
+  opacity: 0.7;
+}
+.agent-tab-empty-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agent-tabs-toggle[aria-pressed="true"] {
+  background: var(--active);
+  color: var(--text);
+}

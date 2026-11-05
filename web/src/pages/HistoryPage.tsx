@@ -1,4 +1,4 @@
-import { Ellipsis, Search } from "lucide-react";
+import { Archive, Ellipsis, History as HistoryIcon, Search } from "lucide-react";
 import { Link } from "react-router";
 import type { Session } from "../api/types";
 import { AppHeader } from "../components/AppHeader";
@@ -9,6 +9,7 @@ import { useClient } from "../context";
 import { useTeam } from "../hooks/useAgents";
 import { useSessionList, type SessionListState } from "../hooks/useSessionList";
 import { Chip, ICON_STROKE, IconButton, Spinner } from "../ui";
+import { EmptyState } from "./blocks";
 import "../components/team.css";
 
 const VIEWS = [
@@ -63,7 +64,13 @@ export function HistoryPage() {
                 </p>
               )
             ) : sessions.length === 0 ? (
-              <p className="sidebar-note">{query ? `No conversations match “${query}”.` : archived ? "Nothing archived yet." : "Conversations from before your team appear here."}</p>
+              query ? (
+                <p className="sidebar-note">No conversations match “{query}”.</p>
+              ) : archived ? (
+                <EmptyState icon={Archive} title="No archived conversations" detail="Archive a conversation from its menu to move it here. You can unarchive it any time." />
+              ) : (
+                <EmptyState icon={HistoryIcon} title="No earlier conversations" detail="Conversations from before your team appear here." />
+              )
             ) : (
               <ul className="sessions history-list" aria-label={archived ? "Archived conversations" : "Earlier conversations"}>
                 {sessions.map((session) => (

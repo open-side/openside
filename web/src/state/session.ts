@@ -21,6 +21,7 @@ export type TimelineItem =
    * `documents` are the Markdown documents the agent attached to that message.
    */
   | { type: "assistant"; id: string; text: string; final: boolean; finalSeq?: number; at?: string; documents?: MessageDocument[] }
+  /** `startedAt`/`endedAt` are the `tool.started`/`tool.ended` event times, the only source of a run's duration. */
   | {
       type: "tool";
       id: string;
@@ -30,6 +31,8 @@ export type TimelineItem =
       result?: unknown;
       isError?: boolean;
       done: boolean;
+      startedAt?: string;
+      endedAt?: string;
     }
   | { type: "card"; id: string }
   | { type: "error"; id: string; code: string; message: string; userMessage?: string; retryable?: boolean };
@@ -331,15 +334,32 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
         ],
       };
     }
-    case "tool.started":
+    case "tool.started": {
+      const items = state.items.filter((item) => item.type !== "assistant" || item.finalSeq !== undefined);
+      // `tool_call_id` survives resumption (an approval, a restart), so a call started again is the
+      // same row: it stays where it was and keeps its first start time, but runs again from scratch,
+      // so the earlier attempt's progress, result and end time are dropped.
+      if (items.some((item) => item.type === "tool" && item.id === event.tool_call_id)) {
+        return {
+          ...next,
+          thinking: false,
+          items: patchItem(items, "tool", event.tool_call_id, (item) => ({
+            type: "tool",
+            id: item.id,
+            name: event.name,
+            args: event.args,
+            updates: [],
+            done: false,
+            startedAt: item.startedAt ?? event.ts,
+          })),
+        };
+      }
       return {
         ...next,
         thinking: false,
-        items: [
-          ...state.items.filter((item) => item.type !== "assistant" || item.finalSeq !== undefined),
-          { type: "tool", id: event.tool_call_id, name: event.name, args: event.args, updates: [], done: false },
-        ],
+        items: [...items, { type: "tool", id: event.tool_call_id, name: event.name, args: event.args, updates: [], done: false, startedAt: event.ts }],
       };
+    }
     case "tool.updated":
       return {
         ...next,
@@ -356,6 +376,7 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
           result: event.result,
           isError: event.is_error,
           done: true,
+          endedAt: event.ts,
         })),
       };
     case "ticket.opened":

@@ -11,7 +11,7 @@
 //! Run through `tools/qa/web-screens-browser.sh [out-dir]`, which rebuilds the web app first.
 //! Env: `OPENSIDE_SCREENS_DIR` (default `/tmp/openside-qa/redesign/browser`),
 //! `OPENSIDE_SCREENS_DIST` (the built app to serve, default `web/dist`),
-//! `OPENSIDE_SCREENS_ONLY`, a comma-separated subset of: card-running, card-cancel,
+//! `OPENSIDE_SCREENS_ONLY`, a comma-separated subset of: agent-tabs, card-running, card-cancel,
 //! card-minimized, browser-sheet, browser-tabs, browser-zoom, card-done, card-folded,
 //! card-action, otp-inline, otp-sheet, otp-dock,
 //! otp-dock-settings, takeover-card, takeover, takeover-pip, register-card, and
@@ -805,6 +805,7 @@ async fn web_screens_browser_capture() {
 
     // Pass 1: the live browser card, before any ticket waits on the person.
     let card_screens = [
+        "agent-tabs",
         "card-running",
         "card-cancel",
         "card-minimized",
@@ -826,6 +827,20 @@ async fn web_screens_browser_capture() {
             let file = |screen: &str| out.join(format!("{theme}-{}-{screen}.png", viewport.name));
             ui.goto(&format!("/sessions/{browse}")).await;
             ui.wait("idle card", "!!document.querySelector('.browser-card img')?.naturalWidth && document.querySelector('.browser-card')?.dataset.tone === 'idle'").await;
+            if wanted("agent-tabs") {
+                // The desktop column lists both of the conversation's tabs beside the thread and
+                // replaces the PiP; a phone keeps the inline card and sheet instead.
+                if viewport.mobile {
+                    ui.wait(
+                        "no agent tabs column",
+                        "!document.querySelector('.agent-tabs-panel')",
+                    )
+                    .await;
+                } else {
+                    ui.wait("agent tabs column", "document.querySelectorAll('.agent-tabs-panel .agent-tab-card').length === 2 && !!document.querySelector('.agent-tabs-panel img[alt=\"Remote browser tab\"]')?.naturalWidth && !document.querySelector('.pip')").await;
+                }
+                ui.snap(&file("agent-tabs")).await;
+            }
             recheck += 1;
             // The restarted runtime reads the script when this first rerun starts it.
             harness.replace_script(&json!({"responses":browse_script}));

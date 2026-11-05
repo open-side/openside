@@ -4,7 +4,8 @@
 //! code, SVG/HTML visuals, an image attachment, a subagent's pending approval and two queued
 //! follow-ups), a short thread, a turn still streaming with a running subagent, an
 //! interrupted run with a failed tool, every pending card kind (question with options, free
-//! answer, secret, inline verification code, desktop step, device approval), an archived
+//! answer, secret, inline verification code, desktop step, device approval, routine proposal,
+//! sign-in, fill-only form and its receipt, in-tab takeover), an archived
 //! conversation and the daemon going away. Each is captured in headless Chromium at 390x844
 //! and 1440x900, light and dark.
 //!
@@ -12,12 +13,19 @@
 //! - `OPENSIDE_SCREENS_DIR`: output directory (default `/tmp/openside-qa/redesign/core`).
 //! - `OPENSIDE_SCREENS_ROUTES`: extra comma-separated app paths to capture, such as
 //!   `/skills,/settings`; each is saved as `route-<path>`.
-//! - `OPENSIDE_SCREENS_ONLY`: comma-separated screen names to limit a run to: home, assistant,
+//! - `OPENSIDE_SCREENS_ONLY`: comma-separated screen names to limit a run to: home, home-search
+//!   (Home's Search mode with matches), home-suggestion (a suggested task picked into Ask), assistant,
 //!   profile, conversation, long-thread-top, tool-activity, code-response, ticket, agents,
 //!   visuals, files, short-thread, streaming, stop-confirm, working, failed, ask-options, ask-text, secret, otp,
-//!   takeover, device, queue-menu, queue-edit, session-menu, drawer (phone only), archived,
-//!   search, search-empty, settings, appearance, theme-preset (Solarized light / Nord dark
-//!   palettes), offline (captured last: the daemon is stopped for it).
+//!   takeover, device, routine, login, form, form-filled, takeover-tab, queue-menu, queue-edit, session-menu, drawer (phone only), people (the
+//!   sidebar roster and agent tabs, in the drawer on phones), account-menu (the sidebar's account
+//!   row menu), archived, composer-plus, composer-permission, composer-model, composer-effort,
+//!   composer-speed (Home's new-task toolbar menus), composer-set (choices made, text typed),
+//!   composer-at (the `@` context menu in the assistant's thread),
+//!   search, search-empty, palette (the Mod+Shift+A search palette over Home), palette-results
+//!   (the palette with a typed query), settings, appearance, shortcuts (Settings' keyboard
+//!   shortcut table), theme-preset (Solarized light / Nord dark palettes), offline (captured
+//!   last: the daemon is stopped for it).
 //! - `OPENSIDE_SCREENS_SKIP_LIVE=1`: skip seeding the otp and secret states, which drive a live
 //!   agent tab (and so also the cross-conversation code dock on every other screen).
 //!
@@ -515,6 +523,18 @@ const OTP_PAGE: &str = r#"<!doctype html><title>Check your email</title>
 <form method="post" action="/login"><label>Email code <input name="code" aria-label="Email code" autocomplete="one-time-code"></label></form>"#;
 const DEPLOY_PAGE: &str = r#"<!doctype html><title>Deploy settings</title>
 <form><label>Deploy key <input name="key" type="password" aria-label="Deploy key"></label></form>"#;
+const SIGNIN_PAGE: &str = r#"<!doctype html><title>Vendor portal</title>
+<h1>Sign in to the vendor portal</h1>
+<form method="post" action="/signin"><label>Email <input name="email" type="email" autocomplete="username"></label>
+<label>Password <input name="password" type="password" autocomplete="current-password"></label>
+<button type="submit">Sign in</button></form>
+<button type="button">Continue with Google</button>"#;
+const SHIPPING_PAGE: &str = r#"<!doctype html><title>Shipping details</title>
+<form><label>Full name <input name="name" autocomplete="name" required></label>
+<label>Street address <input name="street" autocomplete="address-line1" required></label>
+<label>City <input name="city" autocomplete="address-level2" required></label>
+<label>Postal code <input name="postal" autocomplete="postal-code"></label>
+<button type="submit">Continue to payment</button></form>"#;
 
 /// Agent (sidecar) processes started so far, live or not.
 fn agent_pids(harness: &Harness) -> std::collections::HashSet<i32> {
@@ -550,7 +570,9 @@ async fn otp_site() -> (String, tokio::task::JoinHandle<()>) {
     use axum::{response::Html, routing::get, Router};
     let app = Router::new()
         .route("/login", get(|| async { Html(OTP_PAGE) }))
-        .route("/deploy", get(|| async { Html(DEPLOY_PAGE) }));
+        .route("/deploy", get(|| async { Html(DEPLOY_PAGE) }))
+        .route("/signin", get(|| async { Html(SIGNIN_PAGE) }))
+        .route("/shipping", get(|| async { Html(SHIPPING_PAGE) }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let site = format!("http://localhost:{}", listener.local_addr().unwrap().port());
     let server = tokio::spawn(async move {
@@ -573,6 +595,153 @@ struct Seeded {
     device: String,
     suggestion: String,
     admin: String,
+    cards: CardStates,
+}
+
+/// One conversation per ticket card the cards QA pass captures; empty when not seeded.
+#[derive(Default)]
+struct CardStates {
+    login: String,
+    form: String,
+    filled: String,
+    takeover_tab: String,
+    routine: String,
+}
+
+/// A conversation whose agent opens `path` on the fixture site and then makes the call `ask`
+/// builds for that tab. Only this conversation's agent is restarted to read the longer script.
+async fn live_tab(
+    harness: &mut Harness,
+    site: &str,
+    title: &str,
+    path: &str,
+    ask: impl FnOnce(&str) -> Value,
+) -> String {
+    let others = agent_pids(harness);
+    let mut responses = vec![
+        tool(
+            "browser_open_tab",
+            json!({"url":format!("{site}{path}")}),
+            "open",
+        ),
+        text("The page is open."),
+    ];
+    harness.replace_script(&json!({ "responses": responses }));
+    let session = create_in(harness, title, "full").await;
+    let mut stream = harness.events(&session, 0).await;
+    submit(harness, &session, "c1", title, "now").await;
+    let events = until_final(&mut stream, "The page is open.").await;
+    let tab = ended_ok(&events, "open")["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    responses.extend([ask(&tab), text("Done.")]);
+    harness.replace_script(&json!({ "responses": responses }));
+    restart_agent(harness, &others);
+    stream.settled().await;
+    submit(harness, &session, "c2", "Go ahead.", "now").await;
+    session
+}
+
+async fn card_states(harness: &mut Harness, site: &str, live: bool) -> CardStates {
+    let routine = seed(
+        harness,
+        "Morning inbox digest",
+        "guard",
+        json!({"responses":[
+            tool("propose_routine", json!({"name":"Weekday inbox digest","schedule":{"type":"cron","expr":"0 8 * * 1-5","timezone":"Asia/Seoul"},"action":{"type":"new_session","prompt":"Summarize unread email from overnight and flag anything that needs a reply today."}}), "routine"),
+            text("Scheduled."),
+        ]}),
+        "Every weekday morning, summarize my overnight email.",
+    )
+    .await;
+    pending_ticket(harness, &routine, "confirm").await;
+    if !live {
+        return CardStates {
+            routine,
+            ..CardStates::default()
+        };
+    }
+    let login = live_tab(
+        harness,
+        site,
+        "Sign in to the vendor portal",
+        "/signin",
+        |tab| {
+            tool(
+                "request_login",
+                json!({"tab_id":tab,"reason":"The invoice is behind the sign-in"}),
+                "login",
+            )
+        },
+    )
+    .await;
+    pending_ticket(harness, &login, "login").await;
+    let form = live_tab(
+        harness,
+        site,
+        "Ship the replacement part",
+        "/shipping",
+        |tab| {
+            tool(
+                "request_form",
+                json!({"tab_id":tab,"purpose":"form","reason":"Where should the part go?"}),
+                "form",
+            )
+        },
+    )
+    .await;
+    pending_ticket(harness, &form, "info").await;
+    let filled = live_tab(
+        harness,
+        site,
+        "Ship the spare charger",
+        "/shipping",
+        |tab| {
+            tool(
+                "request_form",
+                json!({"tab_id":tab,"purpose":"form","reason":"Where should the charger go?"}),
+                "form",
+            )
+        },
+    )
+    .await;
+    let ticket = pending_ticket(harness, &filled, "info").await;
+    let values: serde_json::Map<String, Value> = ticket["form"]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|field| {
+            let sample = match field["label"].as_str().unwrap_or_default() {
+                "Full name" => "Sam Rivera",
+                "Street address" => "12 Harbor Lane",
+                "City" => "Portland",
+                _ => "97201",
+            };
+            (field["id"].as_str().unwrap().to_owned(), json!(sample))
+        })
+        .collect();
+    let id = ticket["id"].as_str().unwrap();
+    let resolved = harness
+        .human_request(
+            "POST",
+            &format!("/v1/tickets/{id}/resolve"),
+            Some(json!({"value":{"values":values}})),
+        )
+        .await;
+    assert!(resolved.status < 300, "{}", resolved.body);
+    let takeover_tab = live_tab(harness, site, "Finish the vendor checkout", "/signin", |tab| {
+        tool("request_human_step", json!({"kind":"takeover","summary":"Complete the security check on the vendor portal","tab_id":tab}), "takeover")
+    })
+    .await;
+    pending_ticket(harness, &takeover_tab, "takeover").await;
+    CardStates {
+        login,
+        form,
+        filled,
+        takeover_tab,
+        routine,
+    }
 }
 
 /// A conversation on its own script, its first message submitted.
@@ -787,13 +956,16 @@ async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<
     .await;
 
     let (site, server) = otp_site().await;
-    // OPENSIDE_SCREENS_SKIP_LIVE=1 leaves out the two states that drive a live agent tab (the code
-    // and secret cards), for runs where those hang the capture renderer.
-    let (otp, secret) = if std::env::var_os("OPENSIDE_SCREENS_SKIP_LIVE").is_some() {
-        (String::new(), String::new())
-    } else {
+    // OPENSIDE_SCREENS_SKIP_LIVE=1 leaves out the states that drive a live agent tab (the code,
+    // secret, sign-in, fill-only form and in-tab takeover cards), for runs where those hang the
+    // capture renderer.
+    let live = std::env::var_os("OPENSIDE_SCREENS_SKIP_LIVE").is_none();
+    let (otp, secret) = if live {
         live_states(harness, &site).await
+    } else {
+        (String::new(), String::new())
     };
+    let cards = card_states(harness, &site, live).await;
 
     let ask_options = seed(
         harness,
@@ -955,6 +1127,7 @@ async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<
             device,
             suggestion,
             admin,
+            cards,
         },
         server,
     )
@@ -1252,6 +1425,153 @@ async fn web_screens_capture() {
                 .await;
                 ui.snap(&file("home")).await;
             }
+            if wanted("home-search") {
+                ui.goto("/").await;
+                ui.wait("home", "!!document.querySelector('.home-modes')")
+                    .await;
+                ui.eval("__qs.text(document.querySelector('.home-modes'), 'Search').click(); true")
+                    .await;
+                ui.wait(
+                    "home search field",
+                    "!!document.querySelector('.home-omnibox input')",
+                )
+                .await;
+                ui.eval(&format!(
+                    "(() => {{ const el = document.querySelector('.home-omnibox input'); \
+                       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, {}); \
+                       el.dispatchEvent(new Event('input', {{ bubbles: true }})); return true }})()",
+                    json!("release")
+                ))
+                .await;
+                ui.wait(
+                    "home search results",
+                    "!!document.querySelector('.home-results a')",
+                )
+                .await;
+                ui.snap(&file("home-search")).await;
+            }
+            if wanted("home-suggestion") {
+                ui.goto("/").await;
+                ui.wait(
+                    "suggested tasks",
+                    "!!document.querySelector('.suggested-card')",
+                )
+                .await;
+                ui.eval("document.querySelector('.suggested-card[data-suggestion=\"compare\"]').click(); true")
+                    .await;
+                ui.wait(
+                    "the picked prompt",
+                    "(document.querySelector('main.home .composer textarea')?.value ?? '').startsWith('Compare')",
+                )
+                .await;
+                ui.snap(&file("home-suggestion")).await;
+            }
+            // The new-task toolbar: each menu open over Home, then the choices made.
+            for (screen, trigger, menu) in [
+                (
+                    "composer-plus",
+                    "button.composer-attach[aria-label='Add files and options']",
+                    "Add to this task",
+                ),
+                (
+                    "composer-permission",
+                    "button.composer-option[aria-label^='Permission']",
+                    "Permission",
+                ),
+                (
+                    "composer-model",
+                    "button.composer-option[aria-label^='Model']",
+                    "Model",
+                ),
+                (
+                    "composer-effort",
+                    "button.composer-option[aria-label^='Effort']",
+                    "Effort",
+                ),
+                (
+                    "composer-speed",
+                    "button.composer-option[aria-label^='Speed']",
+                    "Speed",
+                ),
+            ] {
+                if !wanted(screen) {
+                    continue;
+                }
+                ui.goto("/").await;
+                ui.wait(
+                    "new-task toolbar",
+                    &format!("!!document.querySelector({})", json!(trigger)),
+                )
+                .await;
+                ui.eval(&format!(
+                    "__qs.press(document.querySelector({}))",
+                    json!(trigger)
+                ))
+                .await;
+                ui.wait(
+                    "toolbar menu",
+                    &format!(
+                        "!!document.querySelector('.composer-menu[aria-label={}]')",
+                        json!(menu)
+                    ),
+                )
+                .await;
+                ui.snap(&file(screen)).await;
+            }
+            if wanted("composer-set") {
+                ui.goto("/").await;
+                for (trigger, choice) in [
+                    ("Effort", "High"),
+                    ("Effort", "Ultrabrowse"),
+                    ("Speed", "Fast"),
+                ] {
+                    let selector = format!("button.composer-option[aria-label^='{trigger}']");
+                    ui.wait(
+                        "toolbar trigger",
+                        &format!("!!document.querySelector({})", json!(selector)),
+                    )
+                    .await;
+                    ui.eval(&format!(
+                        "__qs.press(document.querySelector({}))",
+                        json!(selector)
+                    ))
+                    .await;
+                    ui.wait(
+                        "toolbar menu",
+                        "!!document.querySelector('.composer-menu [role=menuitemradio]')",
+                    )
+                    .await;
+                    ui.eval(&format!(
+                        "__qs.press(Array.from(document.querySelectorAll('.composer-menu [role=menuitemradio]')).find((item) => item.textContent.startsWith({})))",
+                        json!(choice)
+                    ))
+                    .await;
+                    ui.wait("menu closed", "!document.querySelector('.composer-menu')")
+                        .await;
+                }
+                ui.eval(&format!(
+                    "(() => {{ const el = document.querySelector('main.home .composer textarea'); \
+                       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, {}); \
+                       el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.focus(); return true }})()",
+                    json!("Compare three laptops under $1,500 and summarize the trade-offs")
+                ))
+                .await;
+                ui.snap(&file("composer-set")).await;
+            }
+            if wanted("composer-at") {
+                ui.goto("/agents/chief").await;
+                ui.wait("composer", "!!document.querySelector('.composer textarea')")
+                    .await;
+                ui.eval(
+                    "(() => { const el = document.querySelector('.composer textarea'); el.focus(); \
+                       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, 'Look at @'); \
+                       el.setSelectionRange(9, 9); el.dispatchEvent(new Event('input', { bubbles: true })); return true })()",
+                )
+                .await;
+                ui.wait("context menu", "!!document.querySelector('.context-menu')")
+                    .await;
+                ui.snap(&file("composer-at")).await;
+            }
             if wanted("assistant") || wanted("profile") {
                 ui.goto("/agents/chief").await;
                 ui.wait(
@@ -1331,7 +1651,8 @@ async fn web_screens_capture() {
                 }
                 let found = ui
                     .eval(&format!(
-                        "(() => {{ const el = document.querySelector({}); if (!el) return false; if (el.tagName === 'DETAILS') el.open = true; \
+                        "(() => {{ const el = document.querySelector({}); if (!el) return false; \
+                         if (el.tagName === 'DETAILS') {{ el.open = true; const call = el.querySelector('.tool-details'); if (call) call.open = true; }} \
                          el.scrollIntoView({{ block: {} }}); return true }})()",
                         json!(selector),
                         json!(block)
@@ -1363,13 +1684,23 @@ async fn web_screens_capture() {
                 ("otp", &seeded.otp, "!!document.querySelector('.oc-card[data-kind=otp]')"),
                 ("takeover", &seeded.takeover, "!!document.querySelector('.oc-card[data-kind=takeover][data-status=pending]')"),
                 ("device", &seeded.device, "!!document.querySelector('.oc-card[data-kind=confirmation][data-status=pending]')"),
+                ("routine", &seeded.cards.routine, "!!document.querySelector('.oc-card[data-kind=confirmation][data-status=pending]')"),
+                ("login", &seeded.cards.login, "!!document.querySelector('.oc-card[data-kind=secure_login][data-status=pending]')"),
+                ("form", &seeded.cards.form, "!!document.querySelector('.oc-card[data-kind=form][data-status=pending]')"),
+                ("form-filled", &seeded.cards.filled, "!!document.querySelector('.oc-card[data-kind=form][data-status=done]')"),
+                ("takeover-tab", &seeded.cards.takeover_tab, "!!document.querySelector('.oc-card[data-kind=takeover][data-status=pending]')"),
             ] {
                 if !wanted(screen) || session.is_empty() {
                     continue;
                 }
                 ui.goto(&format!("/sessions/{session}")).await;
                 ui.wait(screen, ready).await;
-                ui.eval("document.querySelectorAll('.oc-card[data-ticket] .oc-pill').forEach(b => b.click()); true").await;
+                // The card screens show the thread's own card; an opened dock would cover it on phones.
+                if matches!(screen, "routine" | "login" | "form" | "form-filled" | "takeover-tab") {
+                    ui.eval("(() => { const own = [...document.querySelectorAll('.oc-card[data-ticket]')].filter(c => !c.closest('.card-dock')); own.forEach(c => { const b = c.querySelector('.oc-pill'); if (b) b.click() }); own.at(-1)?.scrollIntoView({block: 'start'}); return true })()").await;
+                } else {
+                    ui.eval("document.querySelectorAll('.oc-card[data-ticket] .oc-pill').forEach(b => b.click()); true").await;
+                }
                 if matches!(screen, "failed" | "streaming") {
                     ui.eval("document.querySelectorAll('.activity:not(.status-line-group)').forEach((el) => { el.open = true }); true")
                         .await;
@@ -1435,6 +1766,25 @@ async fn web_screens_capture() {
                     open_drawer().await;
                 }
                 ui.snap(&file("people")).await;
+            }
+            if wanted("account-menu") {
+                ui.goto("/agents/chief").await;
+                if phone {
+                    open_drawer().await;
+                }
+                ui.wait(
+                    "sidebar account row",
+                    "Array.from(document.querySelectorAll('button.sidebar-account')).some(b => b.getClientRects().length)",
+                )
+                .await;
+                ui.eval("Array.from(document.querySelectorAll('button.sidebar-account')).find(b => b.getClientRects().length).click(); true")
+                    .await;
+                ui.wait(
+                    "account menu",
+                    "!!document.querySelector('.ui-menu[aria-label=\"Account\"]')",
+                )
+                .await;
+                ui.snap(&file("account-menu")).await;
             }
             // The assistant's thread: a result table and list, and a hire suggestion collapsed, then open.
             if [
@@ -1510,6 +1860,40 @@ async fn web_screens_capture() {
                 .await;
                 ui.snap(&file("history")).await;
             }
+            // The search palette over Home: the opening list, then a typed query.
+            if wanted("palette") || wanted("palette-results") {
+                ui.goto("/").await;
+                ui.wait(
+                    "home",
+                    "!!document.querySelector('main.home .composer textarea')",
+                )
+                .await;
+                ui.eval("window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyA', key: 'A', ctrlKey: true, shiftKey: true, bubbles: true })); true")
+                    .await;
+                ui.wait(
+                    "search palette",
+                    "document.activeElement?.classList.contains('search-palette-input') && !!document.querySelector('.search-palette-row')",
+                )
+                .await;
+                if wanted("palette") {
+                    ui.snap(&file("palette")).await;
+                }
+                if wanted("palette-results") {
+                    ui.eval(&format!(
+                        "(() => {{ const el = document.querySelector('.search-palette-input'); \
+                           Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, {}); \
+                           el.dispatchEvent(new Event('input', {{ bubbles: true }})); return true }})()",
+                        json!("re")
+                    ))
+                    .await;
+                    ui.wait(
+                        "palette results",
+                        "!!document.querySelector('.search-palette-row[data-kind=\"conversation\"]') || !!document.querySelector('.search-palette-empty')",
+                    )
+                    .await;
+                    ui.snap(&file("palette-results")).await;
+                }
+            }
             // History holds the archived filter and the conversation search, results and none.
             for (screen, query, ready) in [
                 (
@@ -1578,7 +1962,7 @@ async fn web_screens_capture() {
                     .await;
                 ui.snap(&file("welcome-name")).await;
             }
-            if wanted("settings") || wanted("appearance") {
+            if wanted("settings") || wanted("appearance") || wanted("shortcuts") {
                 open_conversation().await;
                 let scope = if phone {
                     open_drawer().await;
@@ -1606,6 +1990,11 @@ async fn web_screens_capture() {
                     ui.snap(&file("appearance")).await;
                 } else if wanted("appearance") {
                     eprintln!("skipped appearance: the Settings dialog has no .appearance");
+                }
+                if wanted("shortcuts") {
+                    ui.eval("document.querySelector('.ui-dialog section[aria-label=\"Keyboard shortcuts\"]').scrollIntoView({ block: 'start' }); true")
+                        .await;
+                    ui.snap(&file("shortcuts")).await;
                 }
             }
             // A preset palette per scheme, applied the way the Appearance settings store it.

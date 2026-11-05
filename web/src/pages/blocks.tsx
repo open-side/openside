@@ -135,10 +135,17 @@ export function CardActions({ children }: { children: ReactNode }) {
   return <div className="card-actions">{children}</div>;
 }
 
-export function StatusRow({ label, children }: { label: ReactNode; children: ReactNode }) {
+/**
+ * One row of a `settings-group`: a title with an optional muted description on the next line,
+ * and the value or control at the row's end.
+ */
+export function StatusRow({ label, description, children }: { label: ReactNode; description?: ReactNode; children: ReactNode }) {
   return (
     <div className="status-row">
-      <span>{label}</span>
+      <span className="status-row-copy">
+        <span className="status-row-label">{label}</span>
+        {description ? <span className="status-row-description">{description}</span> : null}
+      </span>
       <span className="status-row-value">{children}</span>
     </div>
   );

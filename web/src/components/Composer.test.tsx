@@ -1,9 +1,14 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render as renderPlain, screen, waitFor, within, type RenderOptions } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClientContext } from "../context";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
 import { Composer, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_TEXT_BYTES, mentionedSkills } from "./Composer";
+
+// The `@` menu's New task command navigates, so the composer lives under a router.
+const render = (ui: ReactElement, options?: RenderOptions) => renderPlain(ui, { wrapper: MemoryRouter, ...options });
 
 const SKILLS = [
   { name: "research", description: "Deep web research", source: "user", enabled: true },

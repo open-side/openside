@@ -1,6 +1,6 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSummary } from "../api/types";
 import { ClientContext } from "../context";
@@ -25,24 +25,34 @@ function team(agents: AgentSummary[] | null): AgentsState {
 }
 
 const toggleSidebar = vi.fn();
+const openSearch = vi.fn();
+const THIS_DEVICE = { device_id: "d1", kind: "person_device", name: "Work laptop", scopes: ["read", "admin"] };
 
-function setup(agents: AgentSummary[] | null, path = "/history", onClose?: () => void) {
+function setup(agents: AgentSummary[] | null, path = "/history", onClose?: () => void, me: () => Response = () => json(404, { code: "not_found", message: "none" })) {
   // Pinned tabs and agent tabs are absent: those sections render nothing.
-  const { client } = fakeClient(() => json(404, { code: "not_found", message: "none" }));
+  const { client } = fakeClient((call) => (call.path === "/v1/devices/me" ? me() : json(404, { code: "not_found", message: "none" })));
   return render(
     <ClientContext.Provider value={client}>
-      <ShellContext.Provider value={{ openDrawer: () => undefined, refreshSessions: () => undefined, sidebarCollapsed: false, toggleSidebar }}>
+      <ShellContext.Provider value={{ openDrawer: () => undefined, openSearch, refreshSessions: () => undefined, sidebarCollapsed: false, toggleSidebar }}>
         <MemoryRouter initialEntries={[path]}>
           <Sidebar team={team(agents)} tabs={[]} onClose={onClose} />
+          <Path />
         </MemoryRouter>
       </ShellContext.Provider>
     </ClientContext.Provider>,
   );
 }
 
+function Path() {
+  return <output data-testid="path">{useLocation().pathname}</output>;
+}
+
 const names = () => within(screen.getByRole("list", { name: "Team" })).getAllByRole("link").map((link) => link.querySelector(".person-name")?.textContent);
 
-beforeEach(() => seen.reset());
+beforeEach(() => {
+  seen.reset();
+  openSearch.mockClear();
+});
 
 describe("people order", () => {
   it("puts the assistant first, then pinned teammates, then the latest conversation; retired and hidden stay out", () => {
@@ -55,7 +65,7 @@ describe("people order", () => {
   it("renders the same order and links each person to their thread", () => {
     setup(roster());
     expect(names()).toEqual(["openside", "Ada", "Theo", "Mina"]);
-    expect(within(screen.getByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ }).querySelector(".avatar svg")).not.toBeNull();
+    expect(screen.getByRole("list", { name: "Team" }).querySelector(".avatar")).toBeNull();
     expect(screen.getByRole("link", { name: /^Theo/ })).toHaveAttribute("href", "/agents/theo");
     expect(screen.queryByText("Old")).toBeNull();
   });
@@ -97,6 +107,75 @@ describe("people order", () => {
     expect(screen.queryByRole("button", { name: "Collapse sidebar" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Close menu" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("account and search", () => {
+  it("shows this device with a menu into Devices and Remote access", async () => {
+    const user = userEvent.setup();
+    setup(roster(), "/history", undefined, () => json(200, THIS_DEVICE));
+    const account = await screen.findByRole("button", { name: "Account: Work laptop" });
+    expect(account).toHaveTextContent("WLWork laptop");
+    await user.click(account);
+    const menu = await screen.findByRole("menu", { name: "Account" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Devices", "Remote access"]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Devices" }));
+    expect(screen.getByTestId("path")).toHaveTextContent("/devices");
+  });
+
+  it("keeps search without an identity, and closes the drawer before opening the palette", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    setup(roster(), "/history", onClose);
+    const search = screen.getByRole("button", { name: "Search" });
+    expect(search.getAttribute("title")).toMatch(/^Search \((⇧⌘A|Ctrl\+Shift\+K)\)$/);
+    await user.click(search);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(openSearch).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(openSearch.mock.invocationCallOrder[0]!);
+    expect(screen.queryByRole("button", { name: /^Account/ })).toBeNull();
+  });
+
+  /** Lets the pending identity request and its `finally` run before the next event. */
+  async function settle() {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 0);
+    await act(() => promise);
+  }
+
+  it("stays hidden without asking again when the daemon has no identity route (404)", async () => {
+    const me = vi.fn(() => json(404, { code: "not_found", message: "none" }));
+    setup(roster(), "/history", undefined, me);
+    await waitFor(() => expect(me).toHaveBeenCalledTimes(1));
+    await settle();
+    fireEvent.focus(window);
+    fireEvent(document, new Event("visibilitychange"));
+    await settle();
+    expect(me).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /^Account/ })).toBeNull();
+  });
+
+  it("asks again on the next focus or visibility change after a network failure or 5xx", async () => {
+    const replies: (() => Response)[] = [
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+      () => json(503, { code: "unavailable", message: "starting" }),
+      () => json(200, THIS_DEVICE),
+    ];
+    const me = vi.fn(() => replies[me.mock.calls.length - 1]!());
+    setup(roster(), "/history", undefined, me);
+    await waitFor(() => expect(me).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.queryByRole("button", { name: /^Account/ })).toBeNull();
+    fireEvent.focus(window);
+    await waitFor(() => expect(me).toHaveBeenCalledTimes(2));
+    await settle();
+    fireEvent(document, new Event("visibilitychange"));
+    expect(await screen.findByRole("button", { name: "Account: Work laptop" })).toBeInTheDocument();
+    fireEvent.focus(window);
+    await settle();
+    expect(me).toHaveBeenCalledTimes(3);
   });
 });
 

@@ -1,6 +1,17 @@
-import { Check, ChevronRight, CircleAlert } from "lucide-react";
+import { ChevronRight, CircleAlert } from "lucide-react";
 import { ICON_STROKE, Spinner } from "../ui";
-import { describeTool, groupSummary, isPageStep, opensPage, technicalView, type ToolFactsMap, type ToolItem } from "./toolCopy";
+import {
+  describeTool,
+  groupSentence,
+  isPageStep,
+  opensPage,
+  technicalView,
+  toolKind,
+  workedLabel,
+  type ToolFactsMap,
+  type ToolItem,
+  type ToolKindId,
+} from "./toolCopy";
 import "./toolActivity.css";
 
 const PREVIEW_LIMIT = 4000;
@@ -34,30 +45,30 @@ function ToolRow({ item, facts, step = false }: { item: ToolItem; facts: ToolFac
               {detail}
             </span>
           ) : null}
-          <span className="tool-state">{state === "running" ? <Spinner size={13} /> : state === "failed" ? "Failed" : "Done"}</span>
+          {/* Success is the quiet default; only a running or failed call says so. The span stays to keep the chevron at the end. */}
+          <span className="tool-state">{state === "running" ? <Spinner size={13} /> : state === "failed" ? "Failed" : null}</span>
           <ChevronRight className="tool-chevron" size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
           {navigating ? <span className="tool-progress" aria-hidden="true" /> : null}
         </summary>
-        <div className="tool-body">
-          <details className="tool-tech">
-            <summary>Technical details</summary>
-            <h4>Arguments</h4>
-            <pre>{pretty(technicalView(item, item.args))}</pre>
-            {item.updates.length ? (
-              <>
-                <h4>Progress</h4>
-                {item.updates.map((update, index) => (
-                  <pre key={index}>{pretty(technicalView(item, update))}</pre>
-                ))}
-              </>
-            ) : null}
-            {item.done ? (
-              <>
-                <h4>{item.isError ? "Error" : "Result"}</h4>
-                <pre>{pretty(technicalView(item, item.result))}</pre>
-              </>
-            ) : null}
-          </details>
+        <div className="tool-card">
+          <h4>Arguments</h4>
+          <pre tabIndex={0}>{pretty(technicalView(item, item.args))}</pre>
+          {item.updates.length ? (
+            <>
+              <h4>Progress</h4>
+              {item.updates.map((update, index) => (
+                <pre key={index} tabIndex={0}>
+                  {pretty(technicalView(item, update))}
+                </pre>
+              ))}
+            </>
+          ) : null}
+          {item.done ? (
+            <>
+              <h4>{item.isError ? "Error" : "Result"}</h4>
+              <pre tabIndex={0}>{pretty(technicalView(item, item.result))}</pre>
+            </>
+          ) : null}
         </div>
       </details>
     </li>
@@ -87,13 +98,41 @@ export function visits(tools: readonly ToolItem[]): Visit[] {
   return result;
 }
 
+/** Consecutive visits of one kind: an opened run reads as a few sentences, not a wall of calls. */
+export interface ActivityGroup {
+  kind: ToolKindId;
+  visits: Visit[];
+}
+
+export function activityGroups(tools: readonly ToolItem[]): ActivityGroup[] {
+  const groups: ActivityGroup[] = [];
+  for (const visit of visits(tools)) {
+    const kind = toolKind(visit.head.name);
+    const last = groups.at(-1);
+    if (last?.kind === kind) last.visits.push(visit);
+    else groups.push({ kind, visits: [visit] });
+  }
+  return groups;
+}
+
 function ActionList({ tools, facts }: { tools: ToolItem[]; facts: ToolFactsMap }) {
   return (
-    <ol className="activity-actions">
-      {visits(tools).map(({ head, steps }) => (
-        <ToolGroup key={head.id} head={head} steps={steps} facts={facts} />
-      ))}
-    </ol>
+    <div className="activity-groups">
+      {activityGroups(tools).map((group) => {
+        const calls = group.visits.flatMap(({ head, steps }) => [head, ...steps]);
+        return (
+          <section key={group.visits[0]!.head.id} className="activity-group">
+            {/* A lone call is its own sentence; a heading would only repeat it. */}
+            {calls.length > 1 ? <p className="activity-group-title">{groupSentence(calls, facts)}</p> : null}
+            <ol className="activity-actions">
+              {group.visits.map(({ head, steps }) => (
+                <ToolGroup key={head.id} head={head} steps={steps} facts={facts} />
+              ))}
+            </ol>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -114,22 +153,22 @@ function ToolGroup({ head, steps, facts }: Visit & { facts: ToolFactsMap }) {
   );
 }
 
-/** A run of tool calls: a quiet event chip ("✓ Browsed example.com · 5 steps") that opens the calls. */
+/**
+ * A run of tool calls folded to one quiet line ("Worked for 12s") that opens onto its groups.
+ * The time comes from the daemon's event times only; without them the line says "Worked".
+ */
 export function Activity({ tools, facts, inline = false }: { tools: ToolItem[]; facts: ToolFactsMap; inline?: boolean }) {
   const failed = tools.filter((tool) => tool.isError).length;
+  const running = tools.some((tool) => !tool.done);
   return (
     <details className={`activity${inline ? " activity-inline" : ""}`}>
-      <summary className="event-chip">
-        <span className="activity-icon" aria-hidden="true">
-          {tools.some((tool) => !tool.done) ? (
-            <Spinner size={13} />
-          ) : failed ? (
-            <CircleAlert size={15} strokeWidth={ICON_STROKE} />
-          ) : (
-            <Check size={15} strokeWidth={2.2} />
-          )}
-        </span>
-        <span className="activity-label">{groupSummary(tools, facts)}</span>
+      <summary className="activity-summary">
+        {running || failed ? (
+          <span className="activity-icon" aria-hidden="true">
+            {running ? <Spinner size={13} /> : <CircleAlert size={15} strokeWidth={ICON_STROKE} />}
+          </span>
+        ) : null}
+        <span className="activity-label">{running ? "Working" : workedLabel(tools)}</span>
         {failed ? <span className="activity-failed">{failed} failed</span> : null}
         <ChevronRight className="activity-chevron" size={15} strokeWidth={ICON_STROKE} aria-hidden="true" />
       </summary>

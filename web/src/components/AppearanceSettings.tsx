@@ -26,8 +26,8 @@ const MODES: SelectOption[] = [
 
 // The built-in palette has no preset entry; these are its canvas, text and accent from styles.css.
 const DEFAULT_SWATCH = {
-  light: { background: "#ffffff", foreground: "#171717", accent: DEFAULT_ACCENT },
-  dark: { background: "#000000", foreground: "#f3f3f3", accent: DEFAULT_ACCENT },
+  light: { background: "#ffffff", foreground: "#1b1b1b", accent: DEFAULT_ACCENT },
+  dark: { background: "#1f1f1f", foreground: "#e5e5e5", accent: DEFAULT_ACCENT },
 } as const;
 
 /** A palette preview: its canvas with an "Aa" in its text colour and a dot in its accent. */
@@ -39,10 +39,15 @@ function ThemeSwatch({ background, foreground, accent }: { background: string; f
   );
 }
 
-function SelectRow({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }) {
+function SelectRow({ id, label, description, value, options, onChange }: { id: string; label: string; description: string; value: string; options: SelectOption[]; onChange: (value: string) => void }) {
   return (
     <div className="appearance-row">
-      <label htmlFor={id}>{label}</label>
+      <span className="status-row-copy">
+        <label htmlFor={id} className="status-row-label">
+          {label}
+        </label>
+        <span className="status-row-description">{description}</span>
+      </span>
       <Select id={id} variant="inline" value={value} options={options} onChange={onChange} />
     </div>
   );
@@ -74,6 +79,7 @@ export function AppearanceSettings() {
       <SelectRow
         id="appearance-mode"
         label="Theme mode"
+        description="Follow this device, or stay light or dark. Saved in this browser only."
         value={theme}
         options={MODES}
         onChange={(value) => {
@@ -87,6 +93,7 @@ export function AppearanceSettings() {
           key={which}
           id={`appearance-${which}`}
           label={which === "light" ? "Light theme" : "Dark theme"}
+          description={which === "light" ? "Palette used in light mode" : "Palette used in dark mode"}
           value={palettes[which]}
           options={[
             { value: DEFAULT_PALETTE, label: "openside", icon: <ThemeSwatch {...DEFAULT_SWATCH[which]} /> },
@@ -100,7 +107,12 @@ export function AppearanceSettings() {
         />
       ))}
       <div className="appearance-row">
-        <label htmlFor="appearance-accent">Primary color</label>
+        <span className="status-row-copy">
+          <label htmlFor="appearance-accent" className="status-row-label">
+            Primary color
+          </label>
+          <span className="status-row-description">Buttons, switches and focus rings</span>
+        </span>
         <span className="appearance-accent">
           <button type="button" className="appearance-reset" disabled={!accent} onClick={() => chooseAccent("")}>
             Theme default

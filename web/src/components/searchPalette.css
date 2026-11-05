@@ -1,0 +1,173 @@
+/* Search palette (components/SearchPalette.tsx): a floating field and result list over the shell. */
+.search-palette-viewport {
+  position: fixed;
+  inset: 0;
+  z-index: 41;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+}
+.search-palette {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+  max-height: min(560px, calc(100dvh - 2 * var(--space-4)));
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  outline: none;
+  transition:
+    opacity var(--normal) var(--ease-out),
+    transform var(--normal) var(--ease-out);
+}
+.search-palette[data-starting-style],
+.search-palette[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.98);
+}
+.search-palette-field {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+.search-palette-icon {
+  flex: none;
+  color: var(--muted);
+}
+.search-palette .search-palette-input {
+  flex: 1;
+  min-width: 0;
+  height: 48px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+  outline: none;
+  box-shadow: none;
+}
+.search-palette-input::placeholder {
+  color: var(--muted);
+}
+.search-palette-results {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 0;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.search-palette-group {
+  display: grid;
+}
+.search-palette-heading {
+  padding: 8px 10px 4px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.search-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: var(--radius-row);
+  color: var(--text);
+  cursor: pointer;
+}
+.search-palette-row.active {
+  background: var(--hover);
+}
+.search-palette-lead {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
+.search-palette-favicon {
+  border-radius: var(--radius-xs);
+}
+.search-palette-text {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.search-palette-title,
+.search-palette-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-palette-title {
+  min-width: 0;
+  font-size: var(--text-md);
+}
+.search-palette-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.search-palette-trailing {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.search-palette-empty {
+  margin: 0;
+  padding: 20px 10px;
+  color: var(--muted);
+  font-size: var(--text-md);
+  text-align: center;
+}
+
+/* Phones: the same bottom-sheet rule as dialogs, with 44px rows and safe-area padding. */
+@media (max-width: 820px) {
+  .search-palette-viewport {
+    place-items: end stretch;
+    padding: 0;
+  }
+  .search-palette {
+    width: 100%;
+    max-height: 85dvh;
+    border-width: 1px 0 0;
+    border-radius: var(--radius-dialog) var(--radius-dialog) 0 0;
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    transition:
+      opacity var(--slow) var(--ease-out),
+      transform var(--slow) var(--ease-out);
+  }
+  .search-palette[data-starting-style],
+  .search-palette[data-ending-style] {
+    opacity: 1;
+    transform: translateY(100%);
+  }
+  .search-palette-field {
+    min-height: 56px;
+    padding-top: 6px;
+  }
+  /* The chord needs a hardware keyboard; on a phone the field alone is the entry point. */
+  .search-palette-key {
+    display: none;
+  }
+  .search-palette-row {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-palette {
+    transition: none;
+  }
+}

@@ -25,6 +25,32 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/*
+ * On a desktop a thread's header is a compact title row, not a page heading: a 14px title with
+ * its status beside it on one 44px line. Phones keep the shell's 64px anchored bar.
+ */
+@media (min-width: 821px) {
+  .conversation > .app-header {
+    height: calc(44px + env(safe-area-inset-top));
+  }
+  .conversation > .app-header :is(.app-header-heading:not(.person-heading), .person-heading-text) {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .conversation > .app-header .app-title {
+    flex: 0 1 auto;
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+  }
+  .conversation > .app-header .app-subtitle {
+    flex: 0 1 auto;
+    min-width: 0;
+    color: var(--muted);
+    font-size: var(--text-sm);
+  }
+}
 .conversation-column {
   display: grid;
   /* minmax(0, …): wide tables, code and long paths scroll inside their own box instead of widening the column. */
@@ -368,7 +394,11 @@ summary.status-line {
 .markdown blockquote,
 .markdown .code-block,
 .markdown .table-scroll {
-  margin: 0 0 14px;
+  margin: 0 0 12px;
+}
+/* Prose reads at about 680px; tables, code and visuals may still use the column's full width. */
+.bubble.assistant .markdown :is(p, ul, ol, blockquote, h1, h2, h3, h4) {
+  max-width: min(680px, 100%);
 }
 .markdown p {
   white-space: pre-wrap;
@@ -470,9 +500,13 @@ summary.status-line {
   vertical-align: top;
 }
 .markdown th {
-  color: var(--muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
+  color: var(--text);
+  font-size: 0.875rem;
+  font-weight: var(--weight-semibold);
+}
+.markdown td[data-numeric] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .code-block {
   overflow: hidden;
@@ -548,17 +582,20 @@ summary.status-line {
   color: var(--danger);
 }
 
-/* Tool activity: a run of finished calls folds into one quiet line that opens onto its steps. */
+/*
+ * Tool activity: a finished run folds into one quiet full-width line ("Worked for 12s"), no pill,
+ * chevron at the end; it opens in place onto its groups.
+ */
 
 .activity > summary {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-  max-width: 100%;
+  width: 100%;
   min-height: 32px;
   padding: 0;
   color: var(--muted);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   list-style: none;
   cursor: pointer;
@@ -597,12 +634,11 @@ summary.status-line {
   display: inline-grid;
   flex: none;
   place-items: center;
-  width: 22px;
-  color: var(--success);
-}
-.activity:has(.ui-spinner) .activity-icon,
-.activity:has(.activity-failed) .activity-icon {
+  width: 16px;
   color: inherit;
+}
+.activity:has(.activity-failed) > summary .activity-icon {
+  color: var(--danger);
 }
 .activity-chevron {
   flex: none;
@@ -703,17 +739,27 @@ summary.status-line {
   margin: 0 auto;
 }
 /*
- * One row like a message field: + on the left, the text, Stop/Send on the right. The bar is
- * flattened into the composer grid; its chips get their own row only when there are any.
+ * The field spans the card and the controls get their own row under it: `+`, permission and
+ * the thread's tools on the left, the new task's model/effort/speed and Send/Stop on the right.
+ * The row wraps on a narrow phone instead of scrolling sideways.
  */
 .composer-bar {
-  display: contents;
+  grid-area: bar;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  min-width: 0;
 }
-.composer-attach {
-  grid-area: attach;
+.composer-bar-start {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
 .composer-tools {
-  grid-area: tools;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -723,6 +769,149 @@ summary.status-line {
 }
 .composer-tools:empty {
   display: none;
+}
+/* Toolbar triggers: text and a chevron, no pill until hovered; 28px tall, 44px under a finger. */
+.composer-option {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 180px;
+  height: var(--toolbar-control);
+  min-height: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition:
+    background-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+}
+.composer-option:hover,
+.composer-option[data-popup-open] {
+  background: var(--hover);
+  color: var(--text);
+}
+.composer-option:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.composer-option > svg {
+  flex: none;
+}
+.composer-option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (pointer: coarse) {
+  .composer-option {
+    height: 44px;
+    padding: 0 10px;
+  }
+}
+.composer-menu {
+  width: min(300px, calc(100vw - 16px));
+  max-height: min(var(--available-height), 420px);
+}
+.composer-menu-group {
+  display: grid;
+  gap: 2px;
+}
+.composer-menu-list {
+  display: grid;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.composer-menu-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.composer-menu-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-menu-copy > small {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.composer-menu-check {
+  display: inline-grid;
+  flex: none;
+  margin-left: auto;
+  color: var(--text);
+}
+.composer-menu-search {
+  width: 100%;
+  height: 36px;
+  margin-bottom: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-row);
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  outline: none;
+}
+.composer-menu-search:focus-visible {
+  border-color: var(--primary);
+}
+.composer-menu-empty {
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.composer-menu-empty:empty {
+  display: none;
+}
+a.composer-menu-item {
+  color: inherit;
+  text-decoration: none;
+}
+.composer-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+}
+/* Phones get the same choices as a bottom sheet, like Select (ui.css). */
+@media (max-width: 820px) {
+  .composer-menu-backdrop {
+    background: var(--scrim);
+  }
+  /* floating-ui writes inline top/left/transform; the sheet pins itself to the bottom edge instead. */
+  .composer-menu-positioner {
+    position: fixed !important;
+    inset: auto 0 0 0 !important;
+    width: auto !important;
+    transform: none !important;
+  }
+  .composer-menu {
+    width: 100%;
+    max-height: min(70dvh, 520px);
+    padding: 12px 12px max(16px, env(safe-area-inset-bottom));
+    border-width: 1px 0 0;
+    border-radius: var(--radius-dialog) var(--radius-dialog) 0 0;
+  }
+  .composer-menu[data-starting-style],
+  .composer-menu[data-ending-style] {
+    opacity: 1;
+    transform: translateY(100%);
+  }
+  .composer-menu-item {
+    min-height: 48px;
+  }
+  .composer-menu-list {
+    max-height: none;
+  }
 }
 /* Compact controls in the composer's chip row (files, model): the shared chip, a little lighter. */
 .tool-pill {
@@ -791,30 +980,23 @@ summary.status-line {
 .composer {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "chips chips chips"
-    "attach field actions"
-    "tools tools tools";
-  align-items: end;
-  column-gap: var(--space-1);
-  padding: 6px;
+    "chips"
+    "field"
+    "bar";
+  row-gap: 2px;
+  padding: 6px 8px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-composer);
-  background: var(--surface);
+  background: var(--surface-raised);
   box-shadow: var(--shadow-sm);
   transition: border-color var(--fast) var(--ease);
 }
 .composer:focus-within {
   border-color: var(--control-border);
 }
-/* Home: the field spans the card and the controls share its bottom row, as in a task prompt. */
 .composer[data-variant="home"] {
-  grid-template-areas:
-    "chips chips chips"
-    "field field field"
-    "attach . actions";
-  align-items: center;
   padding: var(--space-2);
 }
 .composer-field {
@@ -860,7 +1042,7 @@ summary.status-line {
   }
 }
 .composer-field textarea::placeholder {
-  color: var(--faint);
+  color: var(--muted);
   white-space: nowrap;
 }
 /*
@@ -875,11 +1057,18 @@ summary.status-line {
   mask-image: linear-gradient(to left, transparent 8px, #000 40px);
 }
 .composer-actions {
-  grid-area: actions;
   display: flex;
+  flex: 0 1 auto;
   align-items: center;
-  min-height: 40px;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: 0;
+  min-height: 36px;
+  margin-left: auto;
+}
+.composer-actions > .composer-send,
+.composer-actions > .composer-needs {
+  margin-left: 4px;
 }
 /* Send is a monochrome circle once there is something to send; Stop is the same circle with a square. */
 .composer-send {
@@ -1025,6 +1214,119 @@ summary.status-line {
 }
 .mention-list li[aria-selected="true"] {
   background: var(--hover);
+}
+/* The `@` menu: same overlay as the skill list, grouped, flipping under the card near the top. */
+.context-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 2;
+  display: grid;
+  gap: 2px;
+  width: min(290px, 100%);
+  max-height: 240px;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-lg);
+}
+.context-menu[data-placement="below"] {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+/* minmax(0, 1fr): grid tracks otherwise grow to the rows' content and push the details off the edge. */
+.context-menu,
+.context-menu-group {
+  grid-template-columns: minmax(0, 1fr);
+}
+.context-menu-group {
+  display: grid;
+  gap: 2px;
+}
+.context-menu-label {
+  padding: 8px 10px 4px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+.context-menu-item > svg {
+  flex: none;
+  color: var(--muted);
+}
+.context-menu-item[aria-selected="true"] {
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--control-border);
+}
+.context-menu-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-menu-detail {
+  flex: 0 1 auto;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-menu-scrim,
+.context-menu-sheet-head {
+  display: none;
+}
+/* Phones: a bottom sheet over a scrim, like the toolbar menus. It covers the box, so its head
+   echoes the `@` text being typed; the keyboard stays up because focus never leaves the box. */
+@media (max-width: 820px) {
+  .context-menu-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    display: block;
+    background: var(--scrim);
+  }
+  .context-menu,
+  .context-menu[data-placement="below"] {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 56;
+    width: 100%;
+    max-height: min(60dvh, 480px);
+    padding: 8px 12px max(16px, env(safe-area-inset-bottom));
+    border-width: 1px 0 0;
+    border-radius: var(--radius-dialog) var(--radius-dialog) 0 0;
+  }
+  .context-menu-sheet-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    font-weight: var(--weight-medium);
+  }
+  .context-menu-query {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-weight: normal;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .context-menu-item {
+    min-height: 48px;
+  }
 }
 .composer-readonly {
   display: flex;
@@ -1222,7 +1524,7 @@ summary.status-line {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--faint);
+  color: var(--muted);
   font-size: var(--text-xs);
   line-height: 1.2;
 }
@@ -1274,10 +1576,10 @@ summary.status-line {
 .time-separator {
   justify-self: center;
   padding: 6px 0 2px;
-  color: var(--faint);
+  color: var(--muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
-  line-height: 1.3;
+  line-height: 16px;
 }
 .typing-dot {
   width: 7px;

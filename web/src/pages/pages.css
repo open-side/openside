@@ -3,8 +3,9 @@
  * Workspace.tsx (MIT; see NOTICE). Tokens live in tokens.css.
  *
  * One pattern for every list: a flat group (`.settings-group`, `.resource-list`) on
- * --surface-raised with a 1px border and 16px radius, rows split by hairlines, controls at the
- * row's end, no icon boxes. Colour marks state only (badges); the accent is reserved for primary
+ * --surface-raised with a 1px border and the 10px group radius, 56px rows split by hairlines
+ * (title, muted description underneath, control at the row's end), no icon boxes. Section labels
+ * are small and muted. Colour marks state only (badges); the accent is reserved for primary
  * buttons, switches and focus.
  */
 
@@ -19,9 +20,11 @@
 }
 
 .settings-heading {
-  margin: 0 0 10px;
-  font-size: 0.875rem;
-  font-weight: 650;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-ui);
 }
 .settings-text {
   margin: 10px 0 0;
@@ -50,11 +53,11 @@
   margin-top: 12px;
 }
 
-/* A grouped list of label/value rows (Settings: connection, notifications, appearance). */
+/* A grouped list of setting rows (Settings: connection, notifications, appearance, access). */
 .settings-group {
   padding: 0 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
 }
 .status-row {
@@ -62,18 +65,42 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 4px 12px;
-  min-height: 44px;
-  padding: 8px 0;
+  gap: 8px 16px;
+  min-height: var(--settings-row-height);
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
-  font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 .settings-group > :last-child {
   border-bottom: 0;
 }
-.status-row-value {
+/* The copy takes the row; on a narrow screen a wide control wraps below it instead of squeezing it. */
+.status-row-copy {
+  display: flex;
+  flex: 1 1 10rem;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.status-row-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.4;
+}
+.status-row-description {
   color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-ui);
+}
+.status-row-value {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
 /*
@@ -92,14 +119,51 @@
   min-width: 0;
 }
 
+/* `.settings-nav` holds headed groups; on phones (and on /workspace) each group is a card of rows. */
 .settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+.settings-nav-heading {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-ui);
+}
+.settings-nav-list {
   display: flex;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
+}
+.settings-nav-search {
+  position: relative;
+  display: none;
+  align-items: center;
+}
+.settings-nav-search > svg {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.settings-nav-search input {
+  min-height: 36px;
+  padding: 6px 10px 6px 32px;
+  border-radius: var(--radius-row);
+}
+.settings-nav-empty {
+  margin: 0;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
 }
 .settings-nav-row {
   display: flex;
@@ -107,7 +171,7 @@
   gap: 12px;
   width: 100%;
   min-width: 0;
-  min-height: 52px;
+  min-height: var(--settings-row-height);
   padding: 10px 12px 10px 16px;
   border: 0;
   border-radius: 0;
@@ -142,13 +206,13 @@
   overflow-wrap: anywhere;
 }
 .settings-nav-copy strong {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .settings-nav-detail {
   color: var(--muted);
-  font-size: var(--text-sm);
-  line-height: 1.45;
+  font-size: var(--text-xs);
+  line-height: var(--leading-ui);
 }
 .settings-nav-chevron {
   flex: 0 0 auto;
@@ -166,10 +230,28 @@
   }
 }
 
-/* Wide screens: a 200px rail of 36px rows; the back control is redundant next to it. */
+/*
+ * Wide screens: just wide enough for the 200px rail beside a 640px body, a 22px title, and a rail
+ * of 36px pills under muted group headings; the back control is redundant next to the rail.
+ */
 @media (min-width: 821px) {
+  .manage-dialog--rail.ui-dialog--wide {
+    width: min(960px, 100%);
+  }
+  /* The Workspace index is the list alone: as wide as a settings body, not rail plus body. */
+  .manage-dialog:not(.manage-dialog--rail).ui-dialog--wide {
+    width: min(720px, 100%);
+  }
+  .manage-dialog .ui-dialog-title {
+    font-size: var(--text-title);
+    font-weight: var(--weight-semibold);
+  }
+  .settings-nav-search {
+    display: flex;
+  }
   .manage-layout {
-    grid-template-columns: 200px minmax(0, 1fr);
+    grid-template-columns: var(--settings-nav-width) minmax(0, 640px);
+    gap: 32px;
     align-items: start;
   }
   .manage-dialog--rail .ui-dialog-header > .ui-icon-button:first-child {
@@ -178,7 +260,16 @@
   .manage-layout > .settings-nav {
     position: sticky;
     top: 0;
+    gap: 16px;
+  }
+  .manage-layout > .settings-nav .settings-nav-heading {
+    margin-bottom: 4px;
+    padding: 0 10px;
+    font-size: var(--text-xs);
+  }
+  .manage-layout > .settings-nav .settings-nav-list {
     gap: 2px;
+    overflow: visible;
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -192,9 +283,6 @@
   }
   .manage-layout > .settings-nav .settings-nav-row[aria-current="page"] {
     background: var(--active);
-  }
-  .manage-layout > .settings-nav .settings-nav-copy strong {
-    font-weight: var(--weight-medium);
   }
   .manage-layout > .settings-nav :is(.settings-nav-detail, .settings-nav-chevron) {
     display: none;
@@ -230,8 +318,10 @@
 }
 .section-list-title {
   margin: 0;
-  font-size: 0.875rem;
-  font-weight: 650;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-ui);
 }
 .section-list-summary {
   flex: 1 1 12rem;
@@ -263,7 +353,7 @@
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
   list-style: none;
 }
@@ -272,15 +362,19 @@
 }
 .resource-card {
   min-width: 0;
-  padding: 14px 16px;
+  padding: 12px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
 }
+/* 12px padding around a 32px header makes the 56px row; rows with a detail line grow past it. */
 .resource-list .resource-card {
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+.resource-list .resource-card-header {
+  min-height: calc(var(--settings-row-height) - 24px);
 }
 .resource-card-header {
   display: flex;
@@ -308,15 +402,15 @@
   align-items: center;
   gap: 4px 8px;
   margin: 0;
-  font-size: 0.9375rem;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   line-height: 1.4;
 }
 .resource-card-detail {
   margin: 2px 0 0;
   color: var(--muted);
-  font-size: 0.8125rem;
-  line-height: 1.45;
+  font-size: var(--text-xs);
+  line-height: var(--leading-ui);
   overflow-wrap: anywhere;
 }
 .resource-card-trailing {
@@ -428,7 +522,7 @@
   gap: 10px;
   margin: 10px 0 0;
   padding: 12px 14px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text) 4%, transparent);
   list-style: none;
 }
@@ -490,9 +584,9 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 32px 24px;
+  padding: 40px 24px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
   color: var(--muted);
   text-align: center;
@@ -502,16 +596,19 @@
 }
 .empty-state strong {
   color: var(--text);
-  font-size: 0.9375rem;
-  font-weight: 620;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 .empty-state p {
-  max-width: 34rem;
+  max-width: 28rem;
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.55;
+  font-size: var(--text-sm);
+  line-height: var(--leading-ui);
 }
 .empty-state .ui-button {
+  margin-top: 8px;
+}
+.history-group > .empty-state {
   margin-top: 8px;
 }
 
@@ -537,7 +634,7 @@
   align-items: center;
   gap: 10px 12px;
   padding: 12px 12px 12px 16px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--danger-surface);
 }
 .load-error > svg {
@@ -659,7 +756,7 @@
 .config-notice {
   margin: 0;
   padding: 12px 14px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: color-mix(in srgb, var(--text) 6%, transparent);
   font-size: 0.8125rem;
   line-height: 1.5;
@@ -691,7 +788,7 @@
   margin: 0;
   padding: 0 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
 }
 .config-field {
@@ -699,7 +796,8 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 15rem);
   align-items: center;
   gap: 8px 20px;
-  padding: 12px 0;
+  min-height: var(--settings-row-height);
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
 }
 .config-field:last-child {
@@ -723,7 +821,8 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .config-field-text > p {
   margin: 0;
@@ -740,7 +839,7 @@
   width: 100%;
   min-height: 40px;
   padding: 8px 12px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   font-size: 0.875rem;
 }
 .config-field-control > .ui-select {
@@ -833,7 +932,7 @@
   margin: 0;
   padding: 14px 16px 14px 36px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
   font-size: 0.875rem;
   line-height: 1.6;
@@ -847,12 +946,16 @@
 
 .appearance-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-height: 52px;
+  gap: 8px 12px;
+  min-height: var(--settings-row-height);
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 0.9375rem;
+}
+.appearance-row > .status-row-copy {
+  flex-basis: 8rem;
 }
 .appearance .ui-select--inline {
   max-width: 14rem;
@@ -1034,7 +1137,7 @@
   gap: 8px 12px;
   padding: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border));
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: color-mix(in srgb, var(--warn) 9%, transparent);
   font-size: 0.8125rem;
   line-height: 1.5;
@@ -1086,7 +1189,7 @@
 }
 .model-card .resource-card {
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
 }
 .model-card .restart-notice {
@@ -1202,7 +1305,7 @@
   gap: 4px;
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
 }
 .sync-report .settings-text {

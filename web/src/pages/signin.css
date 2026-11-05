@@ -55,7 +55,7 @@
   font-size: var(--text-base);
 }
 .token-card input::placeholder {
-  color: var(--faint);
+  color: var(--muted);
 }
 .token-card > .token-help {
   padding-top: var(--space-4);

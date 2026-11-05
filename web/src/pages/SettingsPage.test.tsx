@@ -108,6 +108,19 @@ describe("SettingsPage", () => {
     expect(onGuide).toHaveBeenCalledOnce();
   });
 
+  it("groups the nav and filters it from the search field", async () => {
+    const user = userEvent.setup();
+    setup();
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).getByRole("group", { name: "App" })).toBeInTheDocument();
+    await user.type(within(nav).getByRole("searchbox", { name: "Search settings" }), "qr code");
+    expect(within(nav).getAllByRole("button").map((row) => row.querySelector("strong")?.textContent)).toEqual(["Remote access"]);
+    await user.clear(within(nav).getByRole("searchbox", { name: "Search settings" }));
+    await user.type(within(nav).getByRole("searchbox", { name: "Search settings" }), "nothing like this");
+    expect(within(nav).queryAllByRole("button")).toHaveLength(0);
+    expect(within(nav).getByText("No sections match “nothing like this”.")).toBeInTheDocument();
+  });
+
   it("reports an unreachable daemon", async () => {
     setup({ healthy: false });
     expect(await within(screen.getByRole("region", { name: "Connection" })).findByText("Unavailable")).toBeInTheDocument();

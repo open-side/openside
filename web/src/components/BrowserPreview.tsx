@@ -5,6 +5,7 @@ import { AGENT_VIEWPORT as VIEWPORT } from "../hooks/useBrowserInput";
 import { previewNotice, useBrowserPreview } from "../hooks/useBrowserPreview";
 import { pendingTickets, type BrowserStateView, type SessionView, type TimelineItem } from "../state/session";
 import { ICON_STROKE } from "../ui";
+import { useAgentTabsPanel } from "./agentTabsStore";
 import { useBrowserDock, type BrowserDock } from "./browserDock";
 import { BrowserFrame } from "./BrowserFrame";
 import { BrowserPip } from "./BrowserPip";
@@ -83,6 +84,7 @@ export function BrowserPreview(props: BrowserPreviewProps) {
 
 function Docked({ sessionId, view, onShowPending, onCancel }: BrowserPreviewProps) {
   const dock = useBrowserDock(sessionId);
+  const panel = useAgentTabsPanel(sessionId);
   const browserCalls = useMemo(() => view.items.filter((item) => item.type === "tool" && item.name.toLowerCase().startsWith("browser")).length, [view.items]);
   // Closing the idle card hides it until the agent touches the browser again.
   const [dismissedAt, setDismissedAt] = useState(-1);
@@ -108,7 +110,9 @@ function Docked({ sessionId, view, onShowPending, onCancel }: BrowserPreviewProp
   const cardShown = browserCalls > dismissedAt && browserCalls > 0;
   // The PiP stands in for the front agent's card. Where only Tasks browse, each Task unit already
   // shows its tab inline, so the PiP waits for Show browser instead of floating over the thread.
-  const floatable = dock.pip !== "closed" && (cardShown || (dock.summoned && Object.keys(view.browserStates).length > 0));
+  // The desktop Agent Tabs column already shows the tabs, so the PiP waits while it is open.
+  const floatable =
+    dock.pip !== "closed" && !panel.shown && (cardShown || (dock.summoned && Object.keys(view.browserStates).length > 0));
   // Nothing to show: keep the preview socket and the tab polling closed.
   if (!cardShown && !floatable && !dock.sheet) return null;
   return (

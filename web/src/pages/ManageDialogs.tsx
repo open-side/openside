@@ -1,10 +1,9 @@
-import { ChevronRight } from "lucide-react";
-import { useState, type ComponentType } from "react";
+import { type ComponentType, useState } from "react";
 import { Link, useNavigate, type Location } from "react-router";
 import { ChannelsPanel } from "../channels/ChannelsPanel";
 import { ModelsPanel } from "../models/ModelsPanel";
 import { RemoteAccess } from "../remote/RemoteAccess";
-import { cx, Dialog, ICON_STROKE } from "../ui";
+import { cx, Dialog } from "../ui";
 import { ConnectionsPage } from "./ConnectionsPage";
 import { AgentsPage } from "./AgentsPage";
 import { ConfigPage } from "./ConfigPage";
@@ -14,7 +13,7 @@ import { backgroundOf, manageTarget, WORKSPACE_SECTIONS, type WorkspacePath } fr
 import { MemoryPage } from "./MemoryPage";
 import { PolicyPage } from "./PolicyPage";
 import { RoutinesPage } from "./RoutinesPage";
-import { SettingsNav, SettingsPage, type SettingsPane } from "./SettingsPage";
+import { GroupedNav, NavRowContent, SettingsNav, SettingsPage, type NavGroup, type SettingsPane } from "./SettingsPage";
 import { SkillsPage } from "./SkillsPage";
 import { SyncPage } from "./SyncPage";
 import { TeamPage } from "./TeamPage";
@@ -44,24 +43,32 @@ const SETTINGS_PANES: Record<SettingsPane, { title: string; description?: string
   remote: { title: "Remote access", description: "Reach openside from your phone, and connect it with a QR code." },
 };
 
+type WorkspaceItem = { key: string; path: WorkspacePath; title: string; detail: string; Icon: (typeof WORKSPACE_SECTIONS)[number]["Icon"] };
+
+const WORKSPACE_GROUPS: NavGroup<WorkspaceItem>[] = WORKSPACE_SECTIONS.reduce<NavGroup<WorkspaceItem>[]>((groups, { path, group, title, description, Icon }) => {
+  const item = { key: path, path, title, detail: description, Icon };
+  const last = groups.at(-1);
+  if (last?.heading === group) last.items = [...last.items, item];
+  else groups.push({ heading: group, items: [item] });
+  return groups;
+}, []);
+
 /**
  * The Workspace sections: the whole dialog on `/workspace`, the rail beside an open section.
  * `a.workspace-tile` with its `strong` title is how the e2e suites find a section.
  */
 function WorkspaceNav({ current, state }: { current?: WorkspacePath; state: unknown }) {
   return (
-    <nav className="settings-nav" aria-label="Workspace sections">
-      {WORKSPACE_SECTIONS.map(({ path, title, description, Icon }) => (
-        <Link key={path} to={path} replace state={state} className="settings-nav-row workspace-tile" aria-current={path === current ? "page" : undefined}>
-          <Icon className="settings-nav-icon" size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          <span className="settings-nav-copy">
-            <strong>{title}</strong>
-            <span className="settings-nav-detail">{description}</span>
-          </span>
-          <ChevronRight className="settings-nav-chevron" size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+    <GroupedNav
+      label="Workspace sections"
+      searchLabel="Search workspace"
+      groups={WORKSPACE_GROUPS}
+      row={({ path, title, detail, Icon }) => (
+        <Link to={path} replace state={state} className="settings-nav-row workspace-tile" aria-current={path === current ? "page" : undefined}>
+          <NavRowContent title={title} detail={detail} Icon={Icon} />
         </Link>
-      ))}
-    </nav>
+      )}
+    />
   );
 }
 

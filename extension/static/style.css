@@ -122,7 +122,7 @@ input {
   /* Never below 16px: smaller fields make mobile browsers zoom. */
   font-size: var(--text-base);
 }
-input::placeholder, textarea::placeholder { color: var(--faint); }
+input::placeholder, textarea::placeholder { color: var(--muted); }
 
 /* Toast */
 

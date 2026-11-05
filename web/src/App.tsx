@@ -6,11 +6,12 @@ import { relayTransport, type RelayTransport } from "./api/relay/transport";
 import { clearLocalSecret, clearToken, loadLocalSecret, loadToken, loadTransport, saveToken } from "./auth";
 import { AppHeader } from "./components/AppHeader";
 import { CardAttention } from "./components/CardAttention";
+import { SearchPalette } from "./components/SearchPalette";
 import { Sidebar } from "./components/Sidebar";
 import { TeamActionsProvider } from "./components/TeamActions";
 import { TokenEntry } from "./components/TokenEntry";
 import { ClientContext, useClient } from "./context";
-import { useAgentTabs } from "./hooks/useAgentTabs";
+import { AgentTabsContext, AgentTabsSettledContext, useAgentTabs } from "./hooks/useAgentTabs";
 import { AgentsContext, useAgents } from "./hooks/useAgents";
 import { useSessionList } from "./hooks/useSessionList";
 import { useDeliverPending } from "./import/delivery";
@@ -56,8 +57,9 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
   const list = useSessionList(client);
   const team = useAgents(client);
   // One poller for both sidebars: the desktop column stays mounted while the phone drawer is open.
-  const tabs = useAgentTabs(client);
+  const { tabs, settled: tabsSettled } = useAgentTabs(client);
   const [drawer, setDrawer] = useState(false);
+  const [search, setSearch] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === "collapsed");
   const root = useRef<HTMLDivElement>(null);
   // The real location: inside a dialog route, the routes below render the background one.
@@ -77,10 +79,12 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
     else localStorage.removeItem(SIDEBAR_KEY);
   }, [sidebarCollapsed]);
   const openDrawer = useCallback(() => setDrawer(true), []);
-  useShortcuts(toggleSidebar, openDrawer);
+  const openSearch = useCallback(() => setSearch(true), []);
+  useShortcuts({ toggleSidebar, openDrawer, openSearch });
   const shell = useMemo<Shell>(
     () => ({
       openDrawer,
+      openSearch,
       refreshSessions: () => {
         refresh();
         refreshTeam();
@@ -88,7 +92,7 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
       sidebarCollapsed,
       toggleSidebar,
     }),
-    [openDrawer, refresh, refreshTeam, sidebarCollapsed, toggleSidebar],
+    [openDrawer, openSearch, refresh, refreshTeam, sidebarCollapsed, toggleSidebar],
   );
   const openAgent = /^\/agents\/([^/]+)/.exec(pathname)?.[1];
   const visibleSession = manageTarget(pathname)
@@ -101,10 +105,12 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
     <ToastProvider>
       <ShellContext.Provider value={shell}>
         <AgentsContext.Provider value={team}>
+          <AgentTabsContext.Provider value={tabs}>
+          <AgentTabsSettledContext.Provider value={tabsSettled}>
           <TeamActionsProvider>
             <div className="shell" ref={root} data-sidebar={sidebarCollapsed ? "collapsed" : "open"} data-focus={pathname === "/welcome" || undefined}>
               <aside className="shell-sidebar" aria-label="Team sidebar">
-                <Sidebar team={team} tabs={tabs} />
+                <Sidebar team={team} tabs={tabs} sessions={list.sessions ?? undefined} />
               </aside>
               <div className="shell-content">
                 <OnboardingGate>
@@ -120,13 +126,16 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
                 <AccessRequestDock />
               </div>
               <Drawer open={drawer} onClose={() => setDrawer(false)} label="Team menu">
-                <Sidebar team={team} tabs={tabs} onClose={() => setDrawer(false)} />
+                <Sidebar team={team} tabs={tabs} sessions={list.sessions ?? undefined} onClose={() => setDrawer(false)} />
               </Drawer>
               <ManageDialogs location={location} onSignOut={onSignOut} />
+              <SearchPalette open={search} onClose={() => setSearch(false)} tabs={tabs} />
               {/* A conversation under a Settings or Workspace dialog is not visible, so its code request floats too. */}
               <CardAttention visibleSession={visibleSession} sessions={list.sessions} />
             </div>
           </TeamActionsProvider>
+          </AgentTabsSettledContext.Provider>
+          </AgentTabsContext.Provider>
         </AgentsContext.Provider>
       </ShellContext.Provider>
     </ToastProvider>

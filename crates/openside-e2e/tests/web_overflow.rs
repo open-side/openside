@@ -13,12 +13,22 @@ const OVERFLOWING: &str = r#"(() => {
   if (document.documentElement.scrollWidth > innerWidth)
     failures.push(`document: ${document.documentElement.scrollWidth} > ${innerWidth}`);
   const innerScroller = '.table-scroll, .oc-table-scroll, .code-block pre, .tool-body pre, .subagent-events';
+  // Home's card carousels (Suggested and Recent tasks on phones) scroll their cards sideways in
+  // place: a card's own position is the scroll, but nothing inside a card may leave the card.
+  const carouselCard = '.suggested-list > li, .recent-tasks-list > li';
   for (const el of document.querySelectorAll('body *')) {
     if (!el.getClientRects().length || !el.checkVisibility({visibilityProperty:true,contentVisibilityAuto:true}) ||
         el.closest('.sr-only, .oc-sr, .ui-offscreen, [hidden]') || el.matches('svg *')) continue;
     const scroller = el.closest(innerScroller);
     if (scroller && scroller !== el) continue;
     const r = el.getBoundingClientRect();
+    const card = el.closest(carouselCard);
+    if (card) {
+      const c = card.getBoundingClientRect();
+      if (card !== el && r.width && (r.left < c.left - 1 || r.right > c.right + 1))
+        failures.push(`${el.tagName}.${el.className}: [${r.left.toFixed(1)}, ${r.right.toFixed(1)}] outside its card [${c.left.toFixed(1)}, ${c.right.toFixed(1)}]`);
+      continue;
+    }
     if (r.width && (r.left < -1 || r.right > innerWidth + 1))
       failures.push(`${el.tagName}.${el.className}: [${r.left.toFixed(1)}, ${r.right.toFixed(1)}] outside [0, ${innerWidth}]`);
   }
@@ -220,6 +230,17 @@ async fn every_route_and_surface_fits_all_supported_widths() {
                 .wait("document.querySelectorAll('.history-list [data-session]').length === 1")
                 .await;
             check(&mut ui, &format!("{width}px history search"), &mut failures).await;
+            ui.goto("/", "!!document.querySelector('.home-modes [role=tab]')")
+                .await;
+            ui.cdp.eval("Array.from(document.querySelectorAll('.home-modes [role=tab]')).find(b => b.textContent === 'Search').click(); true").await;
+            ui.cdp
+                .wait("!!document.querySelector('.home-omnibox input')")
+                .await;
+            ui.cdp.eval("(() => { const el=document.querySelector('.home-omnibox input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,'example'); el.dispatchEvent(new Event('input',{bubbles:true})); return true; })()").await;
+            ui.cdp
+                .wait("!!document.querySelector('.home-results a')")
+                .await;
+            check(&mut ui, &format!("{width}px home search"), &mut failures).await;
         }
     }
     ui.browser.shutdown().await.unwrap();

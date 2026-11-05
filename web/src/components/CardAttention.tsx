@@ -11,8 +11,8 @@ import { ConversationCard } from "./ConversationCard";
 import "./card-surfaces.css";
 
 const POLL_MS = 5000;
-// ui Dialog and Drawer popups: Base UI modals that trap focus and hide the rest of the page.
-const MODAL = ".ui-dialog, .ui-drawer";
+// ui Dialog and Drawer popups and the search palette: Base UI modals that trap focus and hide the rest of the page.
+const MODAL = ".ui-dialog, .ui-drawer, .search-palette";
 
 /**
  * Whether a modal dialog or the drawer is open. The dock is portaled beside them, so Base UI's

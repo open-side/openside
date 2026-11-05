@@ -30,3 +30,11 @@ describe("Markdown images", () => {
     }
   });
 });
+
+describe("Markdown tables", () => {
+  it("marks cells that are only a number so they align right, unless the author aligned the column", () => {
+    const { container } = render(<Markdown text={["| Plan | Price | Share | Note |", "| --- | --- | :-: | --- |", "| Team | $1,200 | 42% | 3 seats left |"].join("\n")} />);
+    const cells = [...container.querySelectorAll("td")];
+    expect(cells.map((cell) => cell.hasAttribute("data-numeric"))).toEqual([false, true, false, false]);
+  });
+});

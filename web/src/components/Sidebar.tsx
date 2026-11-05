@@ -1,13 +1,13 @@
 import { ChevronRight, History, LayoutGrid, PanelLeftClose, Settings2, SquarePen, X } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation, useMatch } from "react-router";
-import type { AgentSummary } from "../api/types";
+import type { AgentSummary, Session } from "../api/types";
 import { isUnread, people, type AgentsState } from "../hooks/useAgents";
 import { manageLinkState } from "../pages/manageRoutes";
 import { useShell } from "../shell";
 import { useSeen } from "../state/seen";
 import { BrandMark, cx, ICON_STROKE, IconButton } from "../ui";
-import { Avatar } from "./Avatar";
+import { SidebarAccount } from "./SidebarAccount";
 import { SidebarPinned } from "./SidebarPinned";
 import type { OwnedTab } from "../hooks/useAgentTabs";
 import { SidebarTabs } from "./SidebarTabs";
@@ -19,11 +19,13 @@ export interface SidebarProps {
   team: AgentsState;
   /** The agents' open tabs, polled once for the shell. */
   tabs: readonly OwnedTab[];
+  /** The shell's loaded conversation list, to attribute tabs from a teammate's other sessions. */
+  sessions?: readonly Session[];
   /** Present when rendered inside the phone drawer. */
   onClose?: () => void;
 }
 
-export function Sidebar({ team, tabs, onClose }: SidebarProps) {
+export function Sidebar({ team, tabs, sessions, onClose }: SidebarProps) {
   // Dialog routes render the shell with their background location, so this is the screen
   // underneath and links opened from here never stack dialogs.
   const location = useLocation();
@@ -97,8 +99,10 @@ export function Sidebar({ team, tabs, onClose }: SidebarProps) {
             </>
           )}
         </section>
-        <SidebarTabs tabs={tabs} agents={team.agents ?? []} />
+        <SidebarTabs tabs={tabs} agents={team.agents ?? []} sessions={sessions} />
       </div>
+
+      <SidebarAccount onClose={onClose} />
 
       <nav className="manage-nav" aria-label="Sections">
         <Link to="/history" className="sidebar-row sidebar-nav-item">
@@ -136,7 +140,7 @@ function PersonRow({ agent, current, unread }: { agent: AgentSummary; current: b
         aria-label={[agent.name, state].filter(Boolean).join(", ")}
         title={detail ? `${agent.name} · ${detail}` : agent.name}
       >
-        <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={24} />
+        {/* No per-chat avatar: names start where tab rows do, and only state marks trail. */}
         <span className="person-name">{agent.name}</span>
         {agent.needs_you ? (
           <span className="row-badge">Needs you</span>

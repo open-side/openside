@@ -11,6 +11,9 @@ export interface SessionListState {
   /** The last sync could not reach the daemon at all (as opposed to an error it returned). */
   offline: boolean;
   query: string;
+  /** The query `sessions` answers; it trails `query` while a new term's request is pending. */
+  answered: string | null;
+  /** Also drops the previous term's error, which says nothing about the new one. */
   setQuery: (query: string) => void;
   archived: boolean;
   setArchived: (archived: boolean) => void;
@@ -18,40 +21,53 @@ export interface SessionListState {
 }
 
 /**
- * A conversation list. The daemon filters and orders (pinned first), so typing is debounced;
- * while the page is visible the list re-syncs every few seconds so titles and run status from
- * other devices show up without a reload. `agent: "none"` keeps conversations from before the team.
+ * A conversation list. The daemon filters and orders (pinned first), so typing is debounced and
+ * a request for a term already typed past is aborted; while the page is visible the list
+ * re-syncs every few seconds so titles and run status from other devices show up without a
+ * reload. `agent: "none"` keeps conversations from before the team.
  */
 export function useSessionList(client: Client, agent?: string): SessionListState {
-  const [query, setQuery] = useState("");
+  const [query, setQueryState] = useState("");
   const [archived, setArchived] = useState(false);
   const [sessions, setSessions] = useState<Session[] | null>(null);
+  const [answered, setAnswered] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const generation = useRef(0);
+  const inflight = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
     const mine = ++generation.current;
+    inflight.current?.abort();
+    const controller = new AbortController();
+    inflight.current = controller;
     try {
-      const list = await client.listSessions({ q: query, archived, agent });
+      const list = await client.listSessions({ q: query, archived, agent }, controller.signal);
       if (mine !== generation.current) return;
       setSessions(list.sessions);
+      setAnswered(query);
       setError(null);
       setOffline(false);
     } catch (cause) {
+      // An aborted request always belongs to a superseded generation, so it lands here too.
       if (mine !== generation.current) return;
       setError(cause instanceof ApiError ? cause.message : "Request failed");
       setOffline(cause instanceof ApiError && cause.status === 0);
+    } finally {
+      if (inflight.current === controller) inflight.current = null;
     }
   }, [client, query, archived, agent]);
 
   useEffect(() => {
-    // Not a DOM ref: bumping the counter drops a response for the previous filter.
+    // Not DOM refs: bumping the counter drops a response for the previous filter, and the
+    // controller cancels it on the wire (also on unmount).
     const responses = generation;
+    const requests = inflight;
     const timer = window.setTimeout(() => void load(), 200);
     return () => {
       window.clearTimeout(timer);
       responses.current++;
+      requests.current?.abort();
     };
   }, [load]);
 
@@ -67,7 +83,12 @@ export function useSessionList(client: Client, agent?: string): SessionListState
     };
   }, [load]);
 
+  const setQuery = useCallback((next: string) => {
+    setQueryState(next);
+    setError(null);
+    setOffline(false);
+  }, []);
   const refresh = useCallback(() => void load(), [load]);
 
-  return { sessions, error, offline, query, setQuery, archived, setArchived, refresh };
+  return { sessions, error, offline, query, answered, setQuery, archived, setArchived, refresh };
 }

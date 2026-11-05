@@ -32,7 +32,7 @@ export function presetsFor(scheme: Scheme): readonly ThemePreset[] {
   return THEME_PRESETS.filter((preset) => preset.scheme === scheme);
 }
 
-const CANVAS = { light: "#ffffff", dark: "#000000" } as const;
+const CANVAS = { light: "#ffffff", dark: "#1f1f1f" } as const;
 const HEX = /^#[0-9a-f]{6}$/i;
 
 export function loadTheme(storage: Storage = localStorage): ThemePreference {
@@ -87,17 +87,67 @@ export function loadAccent(storage: Storage = localStorage): string {
   return stored && HEX.test(stored) ? stored.toLowerCase() : "";
 }
 
+/** WCAG relative luminance of a `#rrggbb` colour. */
+function luminance(hex: string): number {
+  const channel = (offset: number) => {
+    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+}
+
+/** WCAG contrast ratio between two `#rrggbb` colours (1–21). */
+export function contrastRatio(a: string, b: string): number {
+  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (light + 0.05) / (dark + 0.05);
+}
+
+/** `color-mix(in srgb, a <share>, b)` as a hex colour. */
+function mix(a: string, b: string, share: number): string {
+  const at = (hex: string, offset: number) => parseInt(hex.slice(offset, offset + 2), 16);
+  return `#${[1, 3, 5].map((offset) => Math.round(at(a, offset) * share + at(b, offset) * (1 - share)).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** The canvas, then the surface (94%) and raised (90%) colours tokens.css mixes from it and the text. */
+function derivedSurfaces(canvas: string, text: string): string[] {
+  return [canvas, mix(canvas, text, 0.94), mix(canvas, text, 0.9)];
+}
+
+/**
+ * Body text for a palette preset. Some presets ship a foreground under 4.5:1 (Solarized light);
+ * this moves it toward black or white until it reads at 4.5:1 on every surface tokens.css
+ * derives from it. A preset that already passes keeps its own colour.
+ */
+export function readableText(canvas: string, text: string): string {
+  const extreme = luminance(canvas) > 0.18 ? "#000000" : "#ffffff";
+  for (let share = 0; share < 100; share += 5) {
+    const candidate = mix(extreme, text, share / 100);
+    if (derivedSurfaces(canvas, candidate).every((surface) => contrastRatio(candidate, surface) >= 4.5)) return candidate;
+  }
+  return extreme;
+}
+
+/**
+ * Secondary text for a palette preset, given its (already readable) text. tokens.css would
+ * derive it as 38% canvas into the text, which loses AA on low-contrast presets; this walks the
+ * mix toward the text until it reads at 4.5:1 on every derived surface, and falls back to the
+ * text itself.
+ */
+export function readableMuted(canvas: string, text: string): string {
+  const surfaces = derivedSurfaces(canvas, text);
+  for (let share = 38; share > 0; share -= 2) {
+    const muted = mix(canvas, text, share / 100);
+    if (surfaces.every((surface) => contrastRatio(muted, surface) >= 4.5)) return muted;
+  }
+  return text.toLowerCase();
+}
+
 /**
  * Text on the accent must stay legible for any swatch: pick black or white by WCAG relative
  * luminance (yellow gets black text, blue gets white).
  */
 export function accentForeground(hex: string): "#000000" | "#ffffff" {
-  const channel = (offset: number) => {
-    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
-    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  };
-  const luminance = 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
-  return luminance > 0.4 ? "#000000" : "#ffffff";
+  return luminance(hex) > 0.4 ? "#000000" : "#ffffff";
 }
 
 /** A custom accent overrides every palette; `""` restores the palette's own accent. */
@@ -138,25 +188,29 @@ export function loadPalettes(storage: Storage = localStorage): Palettes {
  * repaint them before React mounts without a copy of the preset table.
  */
 export function applyPalettes(palettes: Palettes, root: HTMLElement = document.documentElement, storage: Storage = localStorage): void {
-  const stored: Partial<Record<Scheme, { id: string; background: string; foreground: string; accent: string }>> = {};
+  const stored: Partial<Record<Scheme, { id: string; background: string; foreground: string; accent: string; muted: string }>> = {};
   for (const scheme of ["light", "dark"] as const) {
     const preset = presetsFor(scheme).find((item) => item.id === palettes[scheme]);
     const flag = scheme === "light" ? "lightPalette" : "darkPalette";
-    const names = ["canvas", "text", "accent", "accent-fg"];
+    const names = ["canvas", "text", "muted", "accent", "accent-fg"];
     if (!preset) {
       delete root.dataset[flag];
       names.forEach((name) => root.style.removeProperty(`--${scheme}-${name}`));
       continue;
     }
+    const text = readableText(preset.background, preset.foreground);
+    const muted = readableMuted(preset.background, text);
     const values: Record<string, string> = {
       canvas: preset.background,
-      text: preset.foreground,
+      text,
+      muted,
       accent: preset.accent,
       "accent-fg": accentForeground(preset.accent),
     };
     names.forEach((name) => root.style.setProperty(`--${scheme}-${name}`, values[name] ?? ""));
     root.dataset[flag] = preset.id;
-    stored[scheme] = { id: preset.id, background: preset.background, foreground: preset.foreground, accent: preset.accent };
+    // The boot script paints `foreground` as --*-text, so it stores the clamped colour.
+    stored[scheme] = { id: preset.id, background: preset.background, foreground: text, accent: preset.accent, muted };
   }
   if (stored.light || stored.dark) storage.setItem(PALETTE_KEY, JSON.stringify(stored));
   else storage.removeItem(PALETTE_KEY);

@@ -44,7 +44,7 @@
   margin-top: 10px;
   padding: 4px 4px 4px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: color-mix(in srgb, var(--text) 3%, transparent);
 }
 .remote-url code {
@@ -104,7 +104,7 @@
   margin: 0;
   padding: 0 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
 }
 .remote-scopes legend {
@@ -168,15 +168,21 @@
   min-width: 0;
   max-width: 100%;
 }
-/* The QR code is always black on white; the white tile is what makes it scannable in dark mode. */
+/*
+ * The QR code is always black on white; the white tile is what makes it scannable in dark mode.
+ * These two are fixed on purpose (DESIGN.md › Tokens exemptions): the tile and the veil's text sit
+ * on white in every theme.
+ */
 .remote-qr {
+  --qr-tile: #fff;
+  --qr-veil-text: #3a3f4b;
   position: relative;
   width: min(288px, 100%);
   aspect-ratio: 1;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--qr-tile);
   line-height: 0;
 }
 .remote-qr .qr-code {
@@ -200,8 +206,8 @@
   display: grid;
   place-items: center;
   border-radius: var(--radius-md);
-  background: rgb(255 255 255 / 0.9);
-  color: #3a3f4b;
+  background: color-mix(in srgb, var(--qr-tile) 90%, transparent);
+  color: var(--qr-veil-text);
   font-size: 0.9375rem;
   font-weight: 650;
   line-height: 1.4;
@@ -319,7 +325,7 @@
   padding: 24px 16px;
   text-align: center;
   border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: color-mix(in srgb, var(--success) 7%, transparent);
 }
 .remote-result-title {
@@ -350,7 +356,7 @@
 .remote-local {
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
 }
 .remote-local-title {

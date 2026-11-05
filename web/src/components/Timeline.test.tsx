@@ -121,38 +121,48 @@ describe("Timeline attachments (PP-14)", () => {
 });
 
 describe("Timeline tool activity", () => {
-  it("groups consecutive tool calls into one disclosure with per-call status and details", async () => {
+  it("folds a run into one Worked line that opens onto grouped sentences and monospace detail cards", async () => {
     const user = userEvent.setup();
+    const at = (second: number) => `2026-01-01T00:00:${String(second).padStart(2, "0")}Z`;
     const view = replaySession(
       events([
         { kind: "turn.started" },
-        { kind: "tool.started", tool_call_id: "t1", name: "browser_navigate", args: { url: "https://example.com" } },
-        { kind: "tool.ended", tool_call_id: "t1", result: "ok", is_error: false },
-        { kind: "tool.started", tool_call_id: "t2", name: "browser_act", args: { click: "#buy" } },
-        { kind: "tool.ended", tool_call_id: "t2", result: "missing", is_error: true },
+        { kind: "tool.started", tool_call_id: "t1", name: "browser_navigate", args: { url: "https://example.com" }, ts: at(1) },
+        { kind: "tool.ended", tool_call_id: "t1", result: "ok", is_error: false, ts: at(3) },
+        { kind: "tool.started", tool_call_id: "t2", name: "browser_act", args: { click: "#buy" }, ts: at(3) },
+        { kind: "tool.ended", tool_call_id: "t2", result: "missing", is_error: true, ts: at(5) },
+        { kind: "tool.started", tool_call_id: "t3", name: "read", args: { path: "a.md" }, ts: at(6) },
+        { kind: "tool.ended", tool_call_id: "t3", result: "x", is_error: false, ts: at(7) },
+        { kind: "tool.started", tool_call_id: "t4", name: "read", args: { path: "b.md" }, ts: at(7) },
+        { kind: "tool.ended", tool_call_id: "t4", result: "y", is_error: false, ts: at(9) },
+        { kind: "tool.started", tool_call_id: "t5", name: "bash", args: { command: "ls" }, ts: at(9) },
+        { kind: "tool.ended", tool_call_id: "t5", result: "z", is_error: false, ts: at(13) },
         { kind: "assistant.final", text: "Done." },
       ]),
     );
     setup(view);
     const groups = document.querySelectorAll("details.activity");
     expect(groups).toHaveLength(1);
+    expect(groups[0]).not.toHaveAttribute("open");
     const summary = groups[0]!.querySelector("summary")!;
-    expect(summary).toHaveTextContent("Browsed example.com · 2 steps");
+    expect(summary).toHaveTextContent("Worked for 12s");
     expect(summary).toHaveTextContent("1 failed");
     await user.click(summary);
+    // One sentence per stretch of the same kind; a lone call is its own sentence.
+    expect([...groups[0]!.querySelectorAll(".activity-group-title")].map((title) => title.textContent)).toEqual(["Browsed example.com · 2 steps", "Read 2 files"]);
+    expect(groups[0]!.querySelectorAll(".activity-group")).toHaveLength(3);
     // Each call is a sentence about what the agent did; the page's steps hang under the page.
     const lines = [...groups[0]!.querySelectorAll(".tool-line")];
-    expect(lines.map((line) => line.textContent)).toEqual(["Opened example.comDone", "Interacted with the pageFailed"]);
+    // Success carries no label; only a failure says so.
+    expect(lines.map((line) => line.textContent)).toEqual(["Opened example.com", "Interacted with the pageFailed", "Read a.md", "Read b.md", "Ran a commandls"]);
     expect(groups[0]).not.toHaveTextContent(/browser_|Browser navigate/);
-    expect([...groups[0]!.querySelectorAll("h4")].every((heading) => heading.closest("details.tool-tech"))).toBe(true);
     const failed = groups[0]!.querySelector<HTMLElement>("li.tool-failed")!;
+    const card = failed.querySelector(".tool-card")!;
+    expect(card).not.toBeVisible();
     await user.click(failed.querySelector("summary")!);
-    // JSON stays behind a closed disclosure.
-    const tech = failed.querySelector("details.tool-tech")!;
-    expect(tech).not.toHaveAttribute("open");
-    expect(tech.querySelector("summary")).toHaveTextContent("Technical details");
-    expect(failed).toHaveTextContent('"click": "#buy"');
-    expect(failed).toHaveTextContent("Error");
+    expect(card).toBeVisible();
+    expect(card).toHaveTextContent('"click": "#buy"');
+    expect(card).toHaveTextContent("Error");
   });
 
   it("turns the trailing calls of a live run into a status line that opens onto them", async () => {

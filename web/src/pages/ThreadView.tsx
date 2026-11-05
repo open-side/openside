@@ -3,6 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { AppHeader } from "../components/AppHeader";
 import { FilesTray } from "../components/FilesTray";
+import { AgentTabsPanel } from "../components/AgentTabsPanel";
+import { useAgentTabsPanel } from "../components/agentTabsStore";
 import { BrowserPreview, browserAnchor } from "../components/BrowserPreview";
 import { Composer } from "../components/Composer";
 import { quoteText } from "../components/MessageMenu";
@@ -70,6 +72,7 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
   const pending = pendingTickets(view);
   const waiting = pending.length > 0;
   const running = view.status === "running";
+  const agentTabs = useAgentTabsPanel(id);
 
   const main = useRef<HTMLElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -212,7 +215,13 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
   const blank = view.lastSeq > 0 && view.items.length === 0 && view.queue.length === 0 && sending.length === 0;
 
   return (
-    <main className="session conversation" data-status={view.status} data-last-seq={view.lastSeq} ref={main}>
+    <main
+      className="session conversation"
+      data-status={view.status}
+      data-last-seq={view.lastSeq}
+      data-agent-tabs={agentTabs.shown && !view.incognito ? "open" : undefined}
+      ref={main}
+    >
       {header({ view, running, waiting })}
       <div
         className="conversation-scroll thin-scroll"
@@ -282,6 +291,7 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
           />
         )}
       </div>
+      <AgentTabsPanel sessionId={id} view={view} container={main} />
       {sheetCard ? <CardSheet card={sheetCard} sessionId={id} onClose={closeSheet} /> : null}
       <StopTaskDialog
         open={confirmStop && running}

@@ -128,6 +128,8 @@ describe("session view reducer", () => {
         result: { content: "abc" },
         isError: false,
         done: true,
+        startedAt: AT,
+        endedAt: AT,
       },
       { type: "card", id: "ticket:k1" },
       { type: "assistant", id: "a22", text: "blue it is", final: true, finalSeq: 22, at: AT },
@@ -192,6 +194,27 @@ describe("session view reducer", () => {
       ]),
     );
     expect(view.queue.map((m) => m.id)).toEqual(["s1", "c", "a", "b"]);
+  });
+
+  it("keeps one row per tool_call_id: a resumed call restarts in place, keeps its first start time and drops the old progress", () => {
+    const at = (second: number) => `2026-01-01T00:00:0${second}Z`;
+    const events = log([
+      { kind: "tool.started", tool_call_id: "c1", name: "read", args: { path: "a.txt" }, ts: at(1) },
+      { kind: "tool.updated", tool_call_id: "c1", update: { bytes: 3 }, ts: at(1) },
+      { kind: "tool.ended", tool_call_id: "c1", result: "denied", is_error: true, ts: at(2) },
+      { kind: "tool.started", tool_call_id: "c2", name: "bash", args: { command: "ls" }, ts: at(3) },
+      { kind: "tool.started", tool_call_id: "c1", name: "read", args: { path: "b.txt" }, ts: at(4) },
+    ]);
+    expect(replaySession(events.slice(0, 3)).items).toMatchObject([{ id: "c1", updates: [{ bytes: 3 }], done: true }]);
+    const resumed = replaySession(events);
+    expect(resumed.items).toEqual([
+      { type: "tool", id: "c1", name: "read", args: { path: "b.txt" }, updates: [], done: false, startedAt: at(1) },
+      { type: "tool", id: "c2", name: "bash", args: { command: "ls" }, updates: [], done: false, startedAt: at(3) },
+    ]);
+    const ended = reduceSession(resumed, { ...events[2]!, seq: 6, ts: at(6), result: "ok", is_error: false } as Event);
+    expect(ended.items.filter((item) => item.type === "tool" && item.id === "c1")).toEqual([
+      { type: "tool", id: "c1", name: "read", args: { path: "b.txt" }, updates: [], done: true, result: "ok", isError: false, startedAt: at(1), endedAt: at(6) },
+    ]);
   });
 });
 

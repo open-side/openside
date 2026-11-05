@@ -1,14 +1,14 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PHONE, useShortcuts } from "./shortcuts";
+import { keyLabel, PHONE, searchKeys, shortcutFor, shortcutTable, useShortcuts } from "./shortcuts";
 
 function Where() {
   return <output aria-label="path">{useLocation().pathname}</output>;
 }
 
-function Harness({ toggleSidebar, openDrawer, composer = true }: { toggleSidebar: () => void; openDrawer: () => void; composer?: boolean }) {
-  useShortcuts(toggleSidebar, openDrawer);
+function Harness({ toggleSidebar, openDrawer, openSearch, composer = true }: { toggleSidebar: () => void; openDrawer: () => void; openSearch: () => void; composer?: boolean }) {
+  useShortcuts({ toggleSidebar, openDrawer, openSearch });
   return (
     <>
       <Where />
@@ -27,12 +27,13 @@ function setup({ phone = false, composer = true } = {}) {
   vi.stubGlobal("matchMedia", (query: string) => ({ matches: phone && query === PHONE }) as MediaQueryList);
   const toggleSidebar = vi.fn();
   const openDrawer = vi.fn();
+  const openSearch = vi.fn();
   render(
     <MemoryRouter initialEntries={["/agents/mina"]}>
-      <Harness toggleSidebar={toggleSidebar} openDrawer={openDrawer} composer={composer} />
+      <Harness toggleSidebar={toggleSidebar} openDrawer={openDrawer} openSearch={openSearch} composer={composer} />
     </MemoryRouter>,
   );
-  return { toggleSidebar, openDrawer, path: () => screen.getByRole("status", { name: "path" }).textContent };
+  return { toggleSidebar, openDrawer, openSearch, path: () => screen.getByRole("status", { name: "path" }).textContent };
 }
 
 /** Dispatches on `target` and reports whether the page claimed the key. */
@@ -96,5 +97,71 @@ describe("keyboard shortcuts", () => {
     expect(press(document.body, { code: "KeyK", key: "k", ctrlKey: true })).toBe(false);
     expect(toggleSidebar).not.toHaveBeenCalled();
     expect(path()).toBe("/agents/mina");
+  });
+
+  it("Mod+Shift+A opens search with Meta or Ctrl, from a text field and the message box too", () => {
+    const { openSearch, path } = setup();
+    expect(press(document.body, { code: "KeyA", key: "A", metaKey: true, shiftKey: true })).toBe(true);
+    expect(press(screen.getByLabelText("Search"), { code: "KeyA", key: "A", ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(press(screen.getByRole("textbox", { name: "Message" }), { code: "KeyA", key: "A", ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(openSearch).toHaveBeenCalledTimes(3);
+    expect(path()).toBe("/agents/mina");
+  });
+
+  it("Ctrl+Shift+K opens search off Apple devices, in case another browser version or an extension claims Ctrl+Shift+A", () => {
+    const { openSearch } = setup();
+    expect(press(document.body, { code: "KeyK", key: "K", ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(press(screen.getByLabelText("Search"), { code: "KeyK", key: "K", ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(openSearch).toHaveBeenCalledTimes(2);
+    // Ctrl+K is the browser's own search box; Cmd+Shift+K is not ours either.
+    expect(press(document.body, { code: "KeyK", key: "k", ctrlKey: true })).toBe(false);
+    expect(press(document.body, { code: "KeyK", key: "K", metaKey: true, shiftKey: true })).toBe(false);
+    expect(press(document.body, { code: "KeyK", key: "K", ctrlKey: true, shiftKey: true, repeat: true })).toBe(false);
+    expect(press(document.body, { code: "KeyK", key: "Process", ctrlKey: true, shiftKey: true, keyCode: 229 })).toBe(false);
+    expect(openSearch).toHaveBeenCalledTimes(2);
+  });
+
+  it("on Apple devices search is ⇧⌘A only; Ctrl+Shift+K is left to the browser", () => {
+    const chord = (init: KeyboardEventInit) => shortcutFor(new KeyboardEvent("keydown", init), true);
+    expect(chord({ code: "KeyA", metaKey: true, shiftKey: true })).toBe("search");
+    expect(chord({ code: "KeyK", ctrlKey: true, shiftKey: true })).toBeNull();
+    expect(shortcutFor(new KeyboardEvent("keydown", { code: "KeyK", ctrlKey: true, shiftKey: true }), false)).toBe("search");
+  });
+
+  it("leaves Mod+A, held repeats, Alt and composing IME keys to the browser instead of opening search", () => {
+    const { openSearch } = setup();
+    expect(press(document.body, { code: "KeyA", key: "a", ctrlKey: true })).toBe(false);
+    expect(press(document.body, { code: "KeyA", key: "A", ctrlKey: true, shiftKey: true, repeat: true })).toBe(false);
+    expect(press(document.body, { code: "KeyA", key: "A", ctrlKey: true, shiftKey: true, altKey: true })).toBe(false);
+    expect(press(document.body, { code: "KeyA", key: "A", ctrlKey: true, shiftKey: true, isComposing: true })).toBe(false);
+    expect(press(document.body, { code: "KeyA", key: "Process", ctrlKey: true, shiftKey: true, keyCode: 229 })).toBe(false);
+    expect(press(document.body, { code: "KeyA", key: "A", shiftKey: true })).toBe(false);
+    expect(openSearch).not.toHaveBeenCalled();
+  });
+});
+
+describe("shortcut labels", () => {
+  it("writes chords with Apple glyphs on Apple devices and Ctrl elsewhere", () => {
+    expect(keyLabel(["Mod", "Shift", "A"], true)).toBe("⇧⌘A");
+    expect(keyLabel(["Mod", "Shift", "A"], false)).toBe("Ctrl+Shift+A");
+    expect(keyLabel(["Mod", "S"], true)).toBe("⌘S");
+    expect(keyLabel(["Shift", "Enter"], false)).toBe("Shift+Enter");
+  });
+
+  it("shows the search chord that works on each platform", () => {
+    expect(keyLabel(searchKeys(true), true)).toBe("⇧⌘A");
+    expect(keyLabel(searchKeys(false), false)).toBe("Ctrl+Shift+K");
+  });
+
+  it("lists only the keys openside binds", () => {
+    expect(shortcutTable(false).map(({ keys, action }) => `${keyLabel(keys, false)} ${action}`)).toEqual([
+      "Ctrl+Shift+E New task (Home)",
+      "Ctrl+E Focus the message box",
+      "Ctrl+S Show or hide the sidebar",
+      "Ctrl+Shift+K Search tabs, chats and conversations",
+      "Enter Send a message",
+      "Shift+Enter New line in a message",
+    ]);
+    expect(shortcutTable(true).map(({ keys }) => keyLabel(keys, true))).toEqual(["⇧⌘E", "⌘E", "⌘S", "⇧⌘A", "↩", "⇧↩"]);
   });
 });

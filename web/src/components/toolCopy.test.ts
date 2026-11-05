@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { TimelineItem } from "../state/session";
-import { collectToolFacts, describeTool, groupSummary, hasPhrase, safeFavicon, technicalView, type ToolItem } from "./toolCopy";
-import { visits } from "./ToolActivity";
+import { collectToolFacts, describeTool, formatDuration, groupSentence, hasPhrase, runSeconds, safeFavicon, technicalView, workedLabel, type ToolItem } from "./toolCopy";
+import { activityGroups, visits } from "./ToolActivity";
 
 /** Every tool the daemon registers for the agent (crates/opensided/src/{tools,tasks,subagents,skills}). */
 const DAEMON_TOOLS = [
@@ -108,15 +108,59 @@ describe("group labels", () => {
     const snap = call("browser_snapshot", { tab_id: "t" });
     const reads = [call("read", { path: "a.md" }), call("read", { path: "b.md" })];
     const facts = collectToolFacts([nav, snap, ...reads] as TimelineItem[]);
-    expect(groupSummary([nav, snap], facts)).toBe("Browsed acme.com · 2 steps");
-    expect(groupSummary(reads, facts)).toBe("Read 2 files");
-    expect(groupSummary([nav, snap, ...reads], facts)).toBe("Browsed acme.com and read 2 files");
-    expect(groupSummary([nav, ...reads, call("bash", { command: "ls" }), call("memory_search", { query: "x" })], facts)).toMatch(/ \+2 more$/);
+    expect(groupSentence([nav, snap], facts)).toBe("Browsed acme.com · 2 steps");
+    expect(groupSentence(reads, facts)).toBe("Read 2 files");
+    expect(groupSentence([call("bash", { command: "ls" }), call("bash", { command: "pwd" })], facts)).toBe("Ran 2 commands");
   });
 
   it("lets a running call name itself", () => {
     const running = call("browser_act", { tab_id: "t", target: "e1", action: "click" }, false);
-    expect(groupSummary([call("read", { path: "a.md" }), running], new Map())).toBe("Clicking on the page");
+    expect(groupSentence([call("browser_snapshot", { tab_id: "t" }), running], new Map())).toBe("Clicking on the page");
+  });
+
+  it("splits a run into one group per stretch of the same kind, page steps under their page", () => {
+    const run = [
+      call("browser_navigate", { tab_id: "t", url: "https://acme.com" }),
+      call("browser_snapshot", { tab_id: "t" }),
+      call("browser_act", { tab_id: "t", target: "e1", action: "click" }),
+      call("read", { path: "a.md" }),
+      call("read", { path: "b.md" }),
+      call("bash", { command: "ls" }),
+    ];
+    const groups = activityGroups(run);
+    expect(groups.map((group) => group.kind)).toEqual(["browse", "read", "shell"]);
+    expect(groups[0]!.visits).toHaveLength(1);
+    expect(groups[0]!.visits[0]!.steps).toHaveLength(2);
+  });
+});
+
+describe("worked duration", () => {
+  const timed = (startedAt: string | undefined, endedAt: string | undefined, done = true): ToolItem => ({
+    ...call("read", { path: "a.md" }, done),
+    ...(startedAt ? { startedAt } : {}),
+    ...(endedAt ? { endedAt } : {}),
+  });
+
+  it("spans the first start to the last end, from event times only", () => {
+    const run = [timed("2026-01-01T00:00:00Z", "2026-01-01T00:00:04Z"), timed("2026-01-01T00:00:05Z", "2026-01-01T00:00:12.4Z")];
+    expect(runSeconds(run)).toBe(12);
+    expect(workedLabel(run)).toBe("Worked for 12s");
+  });
+
+  it("never estimates: an untimed, unfinished or sub-second run just says Worked", () => {
+    expect(runSeconds([timed("2026-01-01T00:00:00Z", undefined)])).toBeNull();
+    expect(runSeconds([timed("2026-01-01T00:00:00Z", "2026-01-01T00:00:09Z", false)])).toBeNull();
+    expect(workedLabel([timed(undefined, undefined)])).toBe("Worked");
+    expect(workedLabel([timed("2026-01-01T00:00:00Z", "2026-01-01T00:00:00.300Z")])).toBe("Worked");
+    expect(workedLabel([timed("2026-01-01T00:00:00Z", "2026-01-01T00:00:00.600Z")])).toBe("Worked");
+    expect(workedLabel([timed("2026-01-01T00:00:00Z", "2026-01-01T00:00:01.900Z")])).toBe("Worked for 1s");
+  });
+
+  it("reads minutes and hours the short way", () => {
+    expect(formatDuration(45)).toBe("45s");
+    expect(formatDuration(125)).toBe("2m 5s");
+    expect(formatDuration(180)).toBe("3m");
+    expect(formatDuration(3720)).toBe("1h 2m");
   });
 });
 

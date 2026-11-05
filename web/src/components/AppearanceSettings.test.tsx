@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { accentForeground, applyAccent, applyPalettes, applyTheme, loadAccent, loadPalettes, loadTheme, presetsFor } from "../theme";
+import { accentForeground, applyAccent, applyPalettes, applyTheme, loadAccent, loadPalettes, loadTheme, presetsFor, readableMuted } from "../theme";
 import { chooseOption } from "../test/select";
 import { AppearanceSettings } from "./AppearanceSettings";
 
@@ -42,10 +42,13 @@ describe("AppearanceSettings", () => {
     await chooseOption(user, screen.getByRole("combobox", { name: "Dark theme" }), "Dracula");
     expect(root.dataset.darkPalette).toBe("dracula-dark");
     expect(root.style.getPropertyValue("--dark-canvas")).toBe("#282a36");
+    // Dracula's own foreground already reads at AA, so it is applied unchanged.
+    expect(root.style.getPropertyValue("--dark-text")).toBe("#f8f8f2");
     expect(root.style.getPropertyValue("--dark-accent-fg")).toBe(accentForeground("#ff79c6"));
+    expect(root.style.getPropertyValue("--dark-muted")).toBe(readableMuted("#282a36", "#f8f8f2"));
     expect(root.dataset.lightPalette).toBeUndefined();
     expect(JSON.parse(localStorage.getItem("openside.palette") ?? "{}")).toEqual({
-      dark: { id: "dracula-dark", background: "#282a36", foreground: "#f8f8f2", accent: "#ff79c6" },
+      dark: { id: "dracula-dark", background: "#282a36", foreground: "#f8f8f2", accent: "#ff79c6", muted: readableMuted("#282a36", "#f8f8f2") },
     });
     expect(loadPalettes()).toEqual({ light: "openside", dark: "dracula-dark" });
     // A light preset is never offered for the dark scheme: the built-in palette plus the dark presets.

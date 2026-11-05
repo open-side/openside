@@ -6,6 +6,7 @@ import type { Agent, AgentSummary } from "../api/types";
 import { AgentProfileSheet } from "../components/AgentProfileSheet";
 import { AppHeader } from "../components/AppHeader";
 import { Avatar } from "../components/Avatar";
+import { AgentTabsToggle } from "../components/AgentTabsPanel";
 import { BrowserButton } from "../components/BrowserButton";
 import { ModelButton } from "../components/ModelSheet";
 import { useTeamActions } from "../components/TeamActions";
@@ -89,6 +90,7 @@ export function AgentPage() {
             actions={
               <>
                 <BrowserButton sessionId={agent.home_session_id} view={view} />
+                <AgentTabsToggle sessionId={agent.home_session_id} view={view} />
                 {agent.status === "retired" ? null : <ModelButton agent={agent} />}
                 <PopoverMenu
                   label={`Options for ${agent.name}`}

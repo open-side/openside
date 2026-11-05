@@ -744,7 +744,7 @@
   border-radius: var(--radius-composer);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
-  color: var(--faint);
+  color: var(--muted);
   white-space: nowrap;
 }
 .onb-mini-composer > span:first-child {

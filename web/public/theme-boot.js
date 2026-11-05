@@ -19,6 +19,8 @@
       if (!p || typeof p.id !== "string" || !hex.test(p.background) || !hex.test(p.foreground) || !hex.test(p.accent)) return;
       root.style.setProperty("--" + scheme + "-canvas", p.background);
       root.style.setProperty("--" + scheme + "-text", p.foreground);
+      // theme.ts stores foreground and muted already clamped to AA; entries without muted fall back to tokens.css.
+      if (hex.test(p.muted)) root.style.setProperty("--" + scheme + "-muted", p.muted);
       root.style.setProperty("--" + scheme + "-accent", p.accent);
       root.style.setProperty("--" + scheme + "-accent-fg", foreground(p.accent));
       root.dataset[scheme + "Palette"] = p.id;
@@ -30,7 +32,7 @@
     }
     var canvasOf = function (scheme) {
       var p = palettes[scheme];
-      return p && hex.test(p.background) ? p.background : scheme === "dark" ? "#000000" : "#ffffff";
+      return p && hex.test(p.background) ? p.background : scheme === "dark" ? "#1f1f1f" : "#ffffff";
     };
     // Explicit theme: both metas show the chosen canvas. System: each one keeps its own scheme.
     var metas = document.querySelectorAll('meta[name="theme-color"]');

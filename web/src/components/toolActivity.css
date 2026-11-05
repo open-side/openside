@@ -1,9 +1,26 @@
 /*
- * Tool activity rows: steps chained down a thin line, each with a small icon node on the
- * canvas, as in aside-relay (MIT) Activity.tsx. Page visits nest their steps one level
- * deeper; JSON sits behind "Technical details".
+ * Tool activity rows: an opened run is a few groups, each one sentence over its calls chained
+ * down a thin line with small icon nodes on the canvas, as in aside-relay (MIT) Activity.tsx.
+ * Page visits nest their steps one level deeper; a call opens onto a monospace detail card.
  */
 
+.activity-groups {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 2px;
+  animation: status-in var(--normal) var(--ease);
+}
+.activity-group {
+  display: grid;
+  gap: 2px;
+}
+.activity-group-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.4;
+}
 .activity-actions,
 .tool-steps {
   position: relative;
@@ -13,10 +30,6 @@
   margin: 0;
   padding: 0;
   list-style: none;
-}
-.activity-actions {
-  margin: var(--space-1) 0 2px;
-  animation: status-in var(--normal) var(--ease);
 }
 /* The chain: a hairline through the centre of the icon nodes, from the first to the last. */
 .activity-actions::before,
@@ -34,14 +47,15 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 32px;
+  min-height: 28px;
   padding: 0 4px 0 0;
   border-radius: var(--radius-sm);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   list-style: none;
   cursor: pointer;
 }
-.tool-details > summary.tool-line:hover .tool-title {
+.tool-details > summary.tool-line:hover .tool-title,
+.tool-details[open] > summary.tool-line .tool-title {
   color: var(--text);
 }
 .tool-details > summary::-webkit-details-marker {
@@ -61,7 +75,7 @@
   height: 22px;
   border-radius: var(--radius-pill);
   background: var(--canvas);
-  color: var(--muted);
+  color: var(--faint);
 }
 .tool-favicon {
   display: block;
@@ -73,8 +87,8 @@
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--text);
-  font-weight: var(--weight-medium);
+  color: var(--muted);
+  font-weight: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -83,7 +97,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -99,13 +113,26 @@
 .tool-failed .tool-state {
   color: var(--danger);
 }
+/* Rows stay quiet: the chevron shows on hover, focus or once open, as on the live status line. */
 .tool-chevron {
   flex: none;
   color: var(--muted);
-  transition: transform var(--fast) var(--ease);
+  opacity: 0;
+  transition:
+    transform var(--fast) var(--ease),
+    opacity var(--fast) var(--ease);
+}
+.tool-details > summary.tool-line:is(:hover, :focus-visible) .tool-chevron,
+.tool-details[open] > summary .tool-chevron {
+  opacity: 0.7;
 }
 .tool-details[open] > summary .tool-chevron {
   transform: rotate(90deg);
+}
+@media (hover: none) {
+  .tool-chevron {
+    opacity: 0.7;
+  }
 }
 @media (pointer: coarse) {
   .tool-details > summary.tool-line {
@@ -119,9 +146,6 @@
 }
 .tool-steps {
   margin: 0 0 var(--space-1) 32px;
-}
-.tool-step .tool-details > summary.tool-line {
-  font-size: var(--text-sm);
 }
 
 /* A navigation in flight: a 2px bar slides along the bottom edge of its row. */
@@ -157,56 +181,50 @@
   }
 }
 
-.tool-body {
-  padding: 0 4px var(--space-2) 32px;
+/* A call's arguments and result: monospace on the surface, scrolling inside the card only. */
+.tool-card {
+  margin: 2px 4px var(--space-2) 32px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
-.tool-tech > summary {
-  width: fit-content;
-  min-height: 24px;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  list-style: none;
-  cursor: pointer;
-}
-.tool-tech > summary::-webkit-details-marker {
-  display: none;
-}
-.tool-tech > summary:hover {
-  color: var(--text);
-}
-.tool-tech h4 {
+.tool-card h4 {
   margin: var(--space-2) 0 var(--space-1);
   color: var(--muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
 }
-.tool-tech pre {
+.tool-card h4:first-child {
+  margin-top: 0;
+}
+.tool-card pre {
   max-height: 240px;
   margin: 0;
-  padding: 10px 12px;
   overflow: auto;
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  color: var(--text);
   font-family: var(--font-code);
   font-size: var(--text-sm);
   line-height: var(--leading-code);
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
 }
-.tool-tech pre + pre {
+.tool-card pre:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.tool-card pre + pre {
   margin-top: 4px;
 }
 
 /* Opening and closing a group or a step eases its height where the browser can animate it. */
 @supports selector(::details-content) {
   .activity,
-  .tool-details,
-  .tool-tech {
+  .tool-details {
     interpolate-size: allow-keywords;
   }
   .activity::details-content,
-  .tool-details::details-content,
-  .tool-tech::details-content {
+  .tool-details::details-content {
     height: 0;
     overflow: clip;
     transition:
@@ -214,14 +232,12 @@
       content-visibility var(--normal) allow-discrete;
   }
   .activity[open]::details-content,
-  .tool-details[open]::details-content,
-  .tool-tech[open]::details-content {
+  .tool-details[open]::details-content {
     height: auto;
   }
   @media (prefers-reduced-motion: reduce) {
     .activity::details-content,
-    .tool-details::details-content,
-    .tool-tech::details-content {
+    .tool-details::details-content {
       transition: none;
     }
   }

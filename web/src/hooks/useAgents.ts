@@ -72,7 +72,8 @@ export interface People {
   hidden: AgentSummary[];
 }
 
-const recency = (agent: AgentSummary) => {
+/** Time of the person's latest message, 0 when there is none. */
+export const recency = (agent: AgentSummary) => {
   const at = agent.last_message_at ? Date.parse(agent.last_message_at) : Number.NaN;
   return Number.isNaN(at) ? 0 : at;
 };

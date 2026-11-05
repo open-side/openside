@@ -39,7 +39,8 @@ describe("useAgentTabs", () => {
       json(200, { tabs: [tab({ tab_id: "a" }), tab({ tab_id: "b", opened_by: "user" }), tab({ tab_id: "c", owner_session_id: null })] }),
     );
     await flush();
-    expect(result.current.map((t) => t.tab_id)).toEqual(["a"]);
+    expect(result.current.tabs.map((t) => t.tab_id)).toEqual(["a"]);
+    expect(result.current.settled).toBe(true);
     expect(requests()).toBe(1);
     await wait(TABS_POLL_MS - 1);
     expect(requests()).toBe(1);
@@ -94,7 +95,7 @@ describe("useAgentTabs", () => {
   it("stops for good once the token is refused", async () => {
     const { result, requests } = setup(() => json(403, { code: "forbidden", message: "missing scope" }));
     await flush();
-    expect(result.current).toEqual([]);
+    expect(result.current).toEqual({ tabs: [], settled: false });
     await wait(TABS_MAX_BACKOFF_MS * 3);
     setVisibility("hidden");
     setVisibility("visible");
@@ -109,7 +110,7 @@ describe("useAgentTabs", () => {
     unmount();
     await act(async () => answer.resolve(json(200, { tabs: [tab({ tab_id: "late" })] })));
     await wait(TABS_MAX_BACKOFF_MS);
-    expect(result.current).toEqual([]);
+    expect(result.current).toEqual({ tabs: [], settled: false });
     expect(requests()).toBe(1);
   });
 });

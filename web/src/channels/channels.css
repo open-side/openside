@@ -35,7 +35,7 @@
   gap: 8px;
   min-width: 0;
   padding: 4px 4px 4px 12px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .channel-url code {
@@ -77,7 +77,7 @@
   margin: 0;
   padding: 18px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-group);
   background: var(--surface-raised);
   color: var(--muted);
   font-size: 0.875rem;

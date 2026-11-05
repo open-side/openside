@@ -1,5 +1,7 @@
 import "fake-indexeddb/auto";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render as renderPlain, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClientContext } from "../context";
@@ -7,6 +9,8 @@ import { outbox } from "../pwa/outbox";
 import { outgoing } from "../state/outgoing";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
 import { Composer } from "./Composer";
+
+const render = (ui: ReactElement) => renderPlain(ui, { wrapper: MemoryRouter });
 
 afterEach(async () => {
   for (const entry of outbox.snapshot()) await outbox.discard(entry.message_id);

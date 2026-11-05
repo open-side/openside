@@ -7,6 +7,8 @@ import { BlockScanner, type OpenCode } from "./markdownBlocks";
 import { imageChip, safeUrl } from "./markdownPolicy";
 
 const REMARK_PLUGINS = [remarkGfm];
+/** "1,234", "-3.5", "$12", "42%": a cell that is only a number, perhaps with a currency or percent sign. */
+const NUMERIC_CELL = /^[+\-−]?[$€£¥₩]?\d[\d,]*(?:\.\d+)?%?$/;
 
 interface HastNode {
   type: string;
@@ -97,6 +99,11 @@ const components: Components = {
         <table {...props} />
       </div>
     );
+  },
+  // A column the author did not align keeps numbers flush right so their digits line up.
+  td({ node, ...props }: ComponentProps<"td"> & { node?: unknown }) {
+    const numeric = !props.style?.textAlign && NUMERIC_CELL.test(textOf(node as HastNode | undefined).trim());
+    return <td {...props} {...(numeric ? { "data-numeric": "" } : {})} />;
   },
 };
 

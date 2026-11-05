@@ -50,6 +50,26 @@ fn surface_assertions(page: &str, user: &str, send: &str) -> String {
     )
 }
 
+/// The desktop rail (web/DESIGN.md): 280px of flat `--surface`, 36px rows without per-chat
+/// avatars, the selected row a solid `--active` pill, and the account/search row below the list.
+const SIDEBAR: &str = r#"(() => {
+  const failures=[];
+  const rail=document.querySelector('.shell-sidebar');
+  if (!rail) return ['missing .shell-sidebar'];
+  const token=(name, property) => { const probe=document.createElement('span'); probe.style[property]=`var(${name})`; rail.append(probe); const value=getComputedStyle(probe)[property]; probe.remove(); return value; };
+  const s=getComputedStyle(rail);
+  if (Math.round(rail.getBoundingClientRect().width) !== 280) failures.push(`rail is ${rail.getBoundingClientRect().width}px, not 280`);
+  if (s.backgroundColor !== token('--surface','backgroundColor') || s.backgroundImage !== 'none') failures.push(`rail background ${s.backgroundColor} ${s.backgroundImage} is not flat --surface`);
+  if (rail.querySelector('.person-row .avatar')) failures.push('a chat row still renders an avatar');
+  const rows=[...rail.querySelectorAll('.person-link')];
+  if (rows.length === 0) failures.push('no chat rows');
+  for (const row of rows) if (Math.round(row.getBoundingClientRect().height) !== 36) failures.push(`chat row is ${row.getBoundingClientRect().height}px high`);
+  const current=rail.querySelector('.person-link[aria-current=page]');
+  if (current && getComputedStyle(current).backgroundColor !== token('--active','backgroundColor')) failures.push(`selected row ${getComputedStyle(current).backgroundColor} is not --active`);
+  if (!rail.querySelector('.sidebar-utility .sidebar-search')) failures.push('no Search in the account row');
+  return failures;
+})()"#;
+
 #[tokio::test]
 async fn web_and_extension_share_flat_surfaces_and_transient_status_pills() {
     let mut fixture = Fixture::start().await;
@@ -164,6 +184,12 @@ async fn web_and_extension_share_flat_surfaces_and_transient_status_pills() {
             let actual = ui.cdp.eval(&web).await;
             if actual != json!([]) {
                 failures.push(format!("web {theme} {width}x{height}: {actual}"));
+            }
+            if width == 1440 {
+                let rail = ui.cdp.eval(SIDEBAR).await;
+                if rail != json!([]) {
+                    failures.push(format!("sidebar {theme}: {rail}"));
+                }
             }
             ui.cdp
                 .capture(&out.join(format!("web-{theme}-{width}x{height}.png")))

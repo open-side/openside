@@ -50,11 +50,11 @@
   font-size: var(--text-xs);
 }
 /*
- * A modal dialog or the navigation drawer is a transient layer over the app: it and its scrim sit
- * above the dock, which CardAttention also makes inert meanwhile, so the dimmed card still says a
- * request waits but nothing outside the modal takes a press or focus.
+ * A modal dialog, the search palette or the navigation drawer is a transient layer over the app:
+ * it and its scrim sit above the dock, which CardAttention also makes inert meanwhile, so the
+ * dimmed card still says a request waits but nothing outside the modal takes a press or focus.
  */
-:root:has(.ui-dialog, .ui-drawer) .card-dock {
+:root:has(.ui-dialog, .ui-drawer, .search-palette) .card-dock {
   z-index: 39;
 }
 .card-dock-meta a {

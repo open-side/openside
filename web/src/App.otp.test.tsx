@@ -150,6 +150,26 @@ describe("code requests never move the person", () => {
     expect(window.location.pathname).toBe(route);
   });
 
+  it("under the search palette, the dock waits inert; closing it returns focus to where the person was", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("openside.token", "tok");
+    window.history.pushState({}, "", "/history");
+    stubDaemon({ pending: [otpTicket("k2", "s2")] });
+    render(<App />);
+    const dock = await waitForDock("Code needed for accounts.example");
+    expect(dock).not.toHaveAttribute("inert");
+    const field = await screen.findByPlaceholderText("Search conversations");
+    field.focus();
+    await user.keyboard("{Control>}{Shift>}K{/Shift}{/Control}");
+    const palette = await screen.findByRole("combobox", { name: "Search tabs and chats" });
+    await vi.waitFor(() => expect(palette).toHaveFocus());
+    await vi.waitFor(() => expect(dock).toHaveAttribute("inert"));
+    await user.keyboard("{Escape}");
+    await vi.waitFor(() => expect(screen.queryByRole("combobox", { name: "Search tabs and chats" })).toBeNull());
+    await vi.waitFor(() => expect(dock).not.toHaveAttribute("inert"));
+    expect(field).toHaveFocus();
+  });
+
   it("a tapped code notification (?ticket=) opens the code sheet, and submitting returns to the conversation", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "tok");

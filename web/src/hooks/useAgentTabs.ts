@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { createContext, useEffect, useState } from "react";
 import { ApiError, type Client } from "../api/client";
 import type { BrowserTab } from "../api/types";
 
@@ -7,14 +7,27 @@ export const TABS_MAX_BACKOFF_MS = 60_000;
 
 export type OwnedTab = BrowserTab & { owner_session_id: string };
 
+/** The shell's `useAgentTabs` list, for screens under the layout (the conversation's tab panel). */
+export const AgentTabsContext = createContext<readonly OwnedTab[]>([]);
+/**
+ * Whether that list is the daemon's latest successful answer. It is empty, and this false, before
+ * the first answer and after a failed poll, so an empty list is only proof of no tabs when true.
+ */
+export const AgentTabsSettledContext = createContext(false);
+
+export interface AgentTabsPoll {
+  tabs: OwnedTab[];
+  settled: boolean;
+}
+
 /**
  * The agents' open tabs for the sidebar, polled by one owner for the whole shell (the desktop
  * column and the phone drawer both render it). One request at a time, the next one scheduled
  * only after the previous settles; failures back off up to a minute and a success resets it.
  * Nothing is asked while the page is hidden, and nothing ever again once the token is refused.
  */
-export function useAgentTabs(client: Client): OwnedTab[] {
-  const [tabs, setTabs] = useState<OwnedTab[]>([]);
+export function useAgentTabs(client: Client): AgentTabsPoll {
+  const [state, setState] = useState<AgentTabsPoll>({ tabs: [], settled: false });
   useEffect(() => {
     let stopped = false;
     let inFlight = false;
@@ -33,11 +46,11 @@ export function useAgentTabs(client: Client): OwnedTab[] {
         const list = await client.browserTabs();
         if (stopped) return;
         // The person's own tabs stay theirs; only tabs that belong to a conversation are listed.
-        setTabs(list.tabs.filter((tab): tab is OwnedTab => tab.opened_by !== "user" && !!tab.owner_session_id));
+        setState({ tabs: list.tabs.filter((tab): tab is OwnedTab => tab.opened_by !== "user" && !!tab.owner_session_id), settled: true });
         delay = TABS_POLL_MS;
       } catch (cause) {
         if (stopped) return;
-        setTabs([]);
+        setState({ tabs: [], settled: false });
         if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
           stopped = true;
           return;
@@ -62,5 +75,5 @@ export function useAgentTabs(client: Client): OwnedTab[] {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [client]);
-  return tabs;
+  return state;
 }

@@ -177,6 +177,14 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
         &format!("{EXPAND}?.getAttribute('aria-label') === 'Expand Blue'"),
     )
     .await;
+    // At this desktop width the Agent Tabs column shows the same tab beside the thread, titled
+    // from the ledger with its live frame, and the PiP stays away while the column is open.
+    wait(
+        &ui,
+        &tab,
+        "(() => { const c = document.querySelector('.conversation[data-agent-tabs=\"open\"] .agent-tabs-panel .agent-tab-card'); return c?.querySelector('.agent-tab-title')?.textContent === 'Blue' && !!c.querySelector('img[alt=\"Remote browser tab\"]')?.naturalWidth && !document.querySelector('.pip') })()",
+    )
+    .await;
     ui.evaluate(&tab, &format!("{EXPAND}.click(); true"))
         .await
         .unwrap();

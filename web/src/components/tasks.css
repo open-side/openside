@@ -150,7 +150,7 @@ button.task-browser-bubble:focus-visible {
   margin: 0;
   padding: 0 var(--space-3) var(--space-3);
   list-style: none;
-  color: var(--faint);
+  color: var(--muted);
   font-size: var(--text-sm);
   line-height: 1.4;
 }

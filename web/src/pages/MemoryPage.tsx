@@ -193,7 +193,13 @@ export function MemoryPage() {
           query ? (
             <p className="settings-text">No memories match “{query}”.</p>
           ) : (
-            <EmptyState icon={Brain} title="No memories yet" detail="Saved context the agent can recall in later conversations." />
+            kind === "history" ? (
+              <EmptyState icon={Brain} title="No visited pages" detail="Pages saved to memory from your browsing appear here." />
+            ) : kind === "note" ? (
+              <EmptyState icon={Brain} title="No notes yet" detail="Notes you or your agents save appear here." />
+            ) : (
+              <EmptyState icon={Brain} title="No memories yet" detail="Saved context the agent can recall in later conversations." />
+            )
           )
         ) : (
           <ul className="resource-list" aria-label="Memories">

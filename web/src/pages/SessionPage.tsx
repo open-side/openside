@@ -1,6 +1,7 @@
 import { Ellipsis } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router";
 import { AppHeader } from "../components/AppHeader";
+import { AgentTabsToggle } from "../components/AgentTabsPanel";
 import { BrowserButton } from "../components/BrowserButton";
 import { SessionMenu } from "../components/SessionMenu";
 import { displayTitle } from "../components/toolStatus";
@@ -35,6 +36,7 @@ export function SessionPage() {
           actions={
             <>
               <BrowserButton sessionId={id} view={view} />
+              <AgentTabsToggle sessionId={id} view={view} />
               <SessionMenu
                 session={{ id, title: view.title, pinned: view.pinned, archived: view.archived }}
                 label="Conversation options"

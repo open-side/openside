@@ -404,11 +404,6 @@ export function collectToolFacts(items: readonly TimelineItem[], states: Readonl
 
 // --- group labels ----------------------------------------------------------------------------
 
-function joinWords(parts: string[]): string {
-  if (parts.length <= 1) return parts[0] ?? "";
-  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
-}
-
 function plural(count: number, one: string, many: string): string {
   return count === 1 ? one : many.replace("{n}", String(count));
 }
@@ -424,15 +419,15 @@ export function hostsOf(tools: readonly ToolItem[], facts: ToolFactsMap): string
   return [...hosts];
 }
 
-/** The phrase a group of one kind contributes to the group's label, e.g. "read 2 files". */
-function kindSummary(kind: ToolKindId, tools: ToolItem[], facts: ToolFactsMap, sole: boolean): string {
+/** The sentence calls of one kind read as, e.g. "Read 2 files". */
+function kindSummary(kind: ToolKindId, tools: readonly ToolItem[], facts: ToolFactsMap): string {
   const count = tools.length;
   switch (kind) {
     case "browse": {
       const hosts = hostsOf(tools, facts);
       const where = hosts.length === 0 ? "the web" : hosts.length === 1 ? hosts[0]! : hosts.length === 2 ? `${hosts[0]} and ${hosts[1]}` : `${hosts.length} sites`;
       const steps = tools.filter((tool) => isPageStep(tool) || opensPage(tool)).length;
-      return `Browsed ${where}${sole && steps > 1 ? ` · ${steps} steps` : ""}`;
+      return `Browsed ${where}${steps > 1 ? ` · ${steps} steps` : ""}`;
     }
     case "search":
       return "Searched";
@@ -461,24 +456,46 @@ function kindSummary(kind: ToolKindId, tools: ToolItem[], facts: ToolFactsMap, s
 }
 
 /**
- * The label of a run of calls: the work, not the count ("Opened acme.com and read 2 files").
- * A call still running names itself instead, so the label never claims more than has happened.
+ * The sentence heading one group of an opened run: the work, not the count ("Browsed acme.com ·
+ * 2 steps"). A call still running names itself, so the sentence never claims more than has happened.
  */
-export function groupSummary(tools: readonly ToolItem[], facts: ToolFactsMap): string {
+export function groupSentence(tools: readonly ToolItem[], facts: ToolFactsMap): string {
   const running = tools.findLast((tool) => !tool.done);
   if (running) return describeTool(running, facts.get(running.id)).title;
-  const byKind = new Map<ToolKindId, ToolItem[]>();
+  const first = tools[0];
+  return first ? kindSummary(toolKind(first.name), tools, facts) : "Worked on it";
+}
+
+/**
+ * Whole seconds from the first call starting to the last one ending, from the daemon's event
+ * times. Null when any call is unfinished or lacks a time: a duration is never estimated.
+ */
+export function runSeconds(tools: readonly ToolItem[]): number | null {
+  let start = Infinity;
+  let end = -Infinity;
   for (const tool of tools) {
-    const kind = toolKind(tool.name);
-    byKind.set(kind, [...(byKind.get(kind) ?? []), tool]);
+    const started = tool.startedAt ? Date.parse(tool.startedAt) : NaN;
+    const ended = tool.endedAt ? Date.parse(tool.endedAt) : NaN;
+    if (!tool.done || Number.isNaN(started) || Number.isNaN(ended)) return null;
+    start = Math.min(start, started);
+    end = Math.max(end, ended);
   }
-  const kinds = [...byKind.entries()];
-  const shown = kinds.slice(0, 2).map(([kind, list], index) => {
-    const text = kindSummary(kind, list, facts, kinds.length === 1);
-    return index === 0 ? text : text.charAt(0).toLowerCase() + text.slice(1);
-  });
-  const more = kinds.length - shown.length;
-  return `${joinWords(shown)}${more > 0 ? ` +${more} more` : ""}` || "Worked on it";
+  // Floored, so 0.6s is "Worked" and 1.9s "Worked for 1s": never more time than actually passed.
+  return end >= start ? Math.floor((end - start) / 1000) : null;
+}
+
+/** 45 → "45s", 125 → "2m 5s", 3720 → "1h 2m". */
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return seconds % 60 ? `${minutes}m ${seconds % 60}s` : `${minutes}m`;
+  return minutes % 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${Math.floor(minutes / 60)}h`;
+}
+
+/** The folded run's one line: "Worked for 12s", or plain "Worked" when under a second or untimed. */
+export function workedLabel(tools: readonly ToolItem[]): string {
+  const seconds = runSeconds(tools);
+  return seconds ? `Worked for ${formatDuration(seconds)}` : "Worked";
 }
 
 // --- technical details -----------------------------------------------------------------------

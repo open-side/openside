@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { cx } from "./Button";
 
 /** Accent spinner; decorative unless a label is given. */
@@ -29,10 +29,29 @@ export interface SegmentedProps<T extends string> {
   kind?: "tab" | "radio";
 }
 
+const STEP: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+
+/**
+ * One choice out of a few, as a radio group or a tab list. Tab enters at the chosen segment only;
+ * arrows (wrapping), Home and End move the choice and the focus together, as both ARIA patterns ask.
+ */
 export function Segmented<T extends string>({ label, options, value, onChange, kind = "radio" }: SegmentedProps<T>) {
+  const chosen = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = STEP[event.key];
+    const next = step !== undefined ? (chosen + step + options.length) % options.length : event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : null;
+    const target = next === null ? undefined : options[next];
+    if (next === null || !target) return;
+    event.preventDefault();
+    onChange(target.value);
+    event.currentTarget.querySelectorAll<HTMLButtonElement>(".ui-segment")[next]?.focus();
+  };
   return (
-    <div className="ui-segmented" role={kind === "tab" ? "tablist" : "radiogroup"} aria-label={label}>
-      {options.map((option) => {
+    <div className="ui-segmented" role={kind === "tab" ? "tablist" : "radiogroup"} aria-label={label} onKeyDown={onKeyDown}>
+      {options.map((option, index) => {
         const selected = option.value === value;
         return (
           <button
@@ -41,6 +60,7 @@ export function Segmented<T extends string>({ label, options, value, onChange, k
             role={kind}
             aria-selected={kind === "tab" ? selected : undefined}
             aria-checked={kind === "radio" ? selected : undefined}
+            tabIndex={index === chosen ? 0 : -1}
             className={cx("ui-segment", selected && "ui-segment--selected")}
             onClick={() => onChange(option.value)}
           >

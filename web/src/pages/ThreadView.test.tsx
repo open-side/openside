@@ -27,7 +27,7 @@ it("closes Stop everything as soon as it is confirmed, before the daemon answers
   render(
     <MemoryRouter initialEntries={["/sessions/s1"]}>
       <ClientContext.Provider value={daemon.client}>
-        <ShellContext.Provider value={{ openDrawer: vi.fn(), refreshSessions: vi.fn(), sidebarCollapsed: false, toggleSidebar: vi.fn() }}>
+        <ShellContext.Provider value={{ openDrawer: vi.fn(), openSearch: vi.fn(), refreshSessions: vi.fn(), sidebarCollapsed: false, toggleSidebar: vi.fn() }}>
           <ToastProvider>
             <ThreadView sessionId="s1" header={() => null} />
           </ToastProvider>
