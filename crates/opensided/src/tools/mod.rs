@@ -51,6 +51,11 @@ pub(crate) struct ToolEnv {
     pub(crate) subagent: Option<String>,
     pub(crate) cancellation: tokio_util::sync::CancellationToken,
     pub(crate) browser_probe: Option<crate::browser_state::ProbeBinding>,
+    /// Session profile from [`crate::profiles::for_session`]; narrows tools at listing and call.
+    pub(crate) profile: openside_config::AgentProfile,
+    /// Set only by `POST /v1/sessions/{id}/repl`; the call may use the session's persistent
+    /// REPL context. Never derived from the call itself, which a model or sidecar supplies.
+    pub(crate) repl_context: bool,
 }
 
 impl ToolEnv {
@@ -71,6 +76,7 @@ impl ToolEnv {
             origins: Default::default(),
         };
         Self {
+            profile: crate::profiles::for_session(&shared, state),
             shared,
             session: state.id.clone(),
             agent_id: state.agent_id.clone(),
@@ -83,6 +89,7 @@ impl ToolEnv {
             subagent: None,
             cancellation: Default::default(),
             browser_probe: None,
+            repl_context: false,
         }
     }
     pub(crate) fn target(&self, capability: Capability) -> std::result::Result<&Path, ToolError> {
@@ -280,9 +287,7 @@ impl Registry {
         self.tools
             .values()
             .filter_map(|tool| {
-                if !tool.visible(ctx)
-                    || !crate::profiles::allows(crate::profiles::current(&ctx.shared), tool.name())
-                {
+                if !tool.visible(ctx) || !crate::profiles::allows(ctx.profile, tool.name()) {
                     return None;
                 }
                 let spec = tool.spec();
@@ -563,7 +568,7 @@ pub(crate) fn touches_browser(name: &str) -> bool {
 pub(crate) fn visible(tool: &dyn DaemonTool, ctx: &ToolEnv) -> bool {
     (ctx.mode != PolicyMode::ReadOnly || tool.spec().approval == ApprovalTier::Read)
         && tool.visible(ctx)
-        && crate::profiles::allows(crate::profiles::current(&ctx.shared), tool.name())
+        && crate::profiles::allows(ctx.profile, tool.name())
 }
 
 pub(crate) fn parse<T: DeserializeOwned>(args: &Value) -> std::result::Result<T, ToolError> {

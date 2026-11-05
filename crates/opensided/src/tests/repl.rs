@@ -635,6 +635,182 @@ async fn connections_repl_cookie_values_are_redacted_in_results_events_and_logs(
     server.abort();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persistent_repl_keeps_bindings_and_opened_tabs_across_api_calls() {
+    let root = tempfile::tempdir().unwrap();
+    let Some(config) = browser_config(root.path()) else {
+        return;
+    };
+    let (origin, server) = fixture().await;
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let session = create_session(&daemon, "persistent-repl", PolicyMode::Guard, None).await;
+    // Calls outside the `/repl` route keep one fresh context each, even with an API-like id.
+    assert!(matches!(
+        tool(&daemon, &session, "browser_repl", json!({"code": "1", "persistent": true}), "api-repl-spoofed").await,
+        ToolOutcome::Denied { reason, .. } if reason.contains("persistent")
+    ));
+    // A token without `browse` never reaches the route.
+    let read = daemon
+        .shared
+        .db
+        .pair(vec![openside_proto::CapabilityScope::Read])
+        .await
+        .unwrap()
+        .1;
+    let forbidden = api::router(daemon.shared.clone(), false)
+        .oneshot(request(
+            "POST",
+            &format!("/v1/sessions/{session}/repl"),
+            json!({"code": "1", "persistent": true}),
+            Some(&read),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    let router = api::router(daemon.shared.clone(), true);
+    let post = |body: Value| {
+        let router = router.clone();
+        let session = session.clone();
+        async move {
+            let response = router
+                .oneshot(request(
+                    "POST",
+                    &format!("/v1/sessions/{session}/repl"),
+                    body,
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await
+        }
+    };
+
+    let neutral = post(json!({"code": "const seed = 41; typeof page", "persistent": true})).await;
+    assert_eq!(neutral["status"], "done", "{neutral}");
+    assert_eq!(neutral["result"]["return_value"], "undefined", "{neutral}");
+    assert_eq!(neutral["result"]["tabs"], json!([]), "{neutral}");
+    assert!(neutral["result"].get("tab_id").is_none(), "{neutral}");
+
+    let opened =
+        post(json!({"code": format!("await openTab({origin:?}); seed + 1"), "persistent": true}))
+            .await;
+    assert_eq!(opened["result"]["return_value"], 42, "{opened}");
+    let tab = opened["result"]["tab_id"].as_str().unwrap().to_owned();
+    assert_eq!(opened["result"]["tabs"], json!([tab]));
+    assert_eq!(opened["result"]["url"], json!(format!("{origin}/")));
+
+    let again =
+        post(json!({"code": "[await page.title(), (await getTabs()).length]", "persistent": true}))
+            .await;
+    assert_eq!(
+        again["result"]["return_value"],
+        json!(["Shop", 1]),
+        "{again}"
+    );
+    // The fresh-context path is unchanged and does not see the bindings.
+    let fresh = post(json!({"code": "typeof seed", "tab_id": tab})).await;
+    assert_eq!(fresh["result"]["return_value"], "undefined", "{fresh}");
+
+    // An approved rerun of a snippet that declared bindings before its stop still runs.
+    let buy = "const label = await page.locator('#bought').textContent(); await page.getByRole('button', { name: 'Buy now' }).click(); [label, await page.locator('#bought').textContent()]";
+    let deferred = post(json!({"code": buy, "persistent": true})).await;
+    assert_eq!(deferred["status"], "deferred", "{deferred}");
+    let ticket = TicketId::new(deferred["ticket_id"].as_str().unwrap());
+    approve(&daemon, &ticket).await;
+    let bought = post(json!({"code": buy, "persistent": true, "approval_ticket": ticket})).await;
+    assert_eq!(bought["status"], "done", "{bought}");
+    assert_eq!(
+        bought["result"]["return_value"],
+        json!(["not bought", "bought"]),
+        "{bought}"
+    );
+
+    // A call that arrives while another runs starts from the tabs that call left.
+    let pause = |ms| tokio::time::sleep(std::time::Duration::from_millis(ms));
+    let (first, second) = tokio::join!(
+        post(
+            json!({"code": format!("await openTab({origin:?}); await page.waitForTimeout(800); 'first'"), "persistent": true})
+        ),
+        async {
+            pause(200).await;
+            post(json!({"code": "[(await getTabs()).length, await page.title()]", "persistent": true})).await
+        },
+    );
+    assert_eq!(first["result"]["return_value"], "first", "{first}");
+    assert_eq!(
+        second["result"]["return_value"],
+        json!([2, "Shop"]),
+        "{second}"
+    );
+
+    // A tab that receives a secret while a call runs is withheld and leaves the context.
+    let controller = &daemon.shared.registry.browser;
+    let browser = controller
+        .existing()
+        .await
+        .map_err(|error| error.0)
+        .unwrap();
+    let running = post(
+        json!({"code": "await page.waitForTimeout(1500); await page.title()", "tab_id": tab, "persistent": true}),
+    );
+    let mark = async {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        controller
+            .mark_secret(&daemon.shared, &browser, &tab)
+            .await
+            .unwrap();
+    };
+    let (withheld, ()) = tokio::join!(running, mark);
+    assert_eq!(withheld["status"], "denied", "{withheld}");
+    assert_eq!(withheld["reason"], "repl_unavailable_after_secret_fill");
+    let after =
+        post(json!({"code": "[typeof page, (await getTabs()).length]", "persistent": true})).await;
+    assert_eq!(
+        after["result"]["return_value"],
+        json!(["undefined", 1]),
+        "{after}"
+    );
+    assert!(!after["result"]["tabs"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(tab)));
+    let reattach = post(json!({"code": "1", "tab_id": tab, "persistent": true})).await;
+    assert_eq!(
+        reattach["reason"], "repl_unavailable_after_secret_fill",
+        "{reattach}"
+    );
+    drop(browser);
+
+    // Browser shutdown cancels the running snippet, refuses the call waiting behind it, and
+    // ends the session's context with its hold on the browser.
+    assert!(crate::tools::repl::has_context(&session));
+    let started = std::time::Instant::now();
+    let (running, queued, shut) = tokio::join!(
+        post(
+            json!({"code": "const last = await openTab(); await last.waitForTimeout(20000); 'finished'", "persistent": true})
+        ),
+        async {
+            pause(300).await;
+            post(json!({"code": "'ran'", "persistent": true})).await
+        },
+        async {
+            pause(800).await;
+            controller.shutdown(&daemon.shared).await.is_ok()
+        },
+    );
+    assert!(shut);
+    assert!(started.elapsed() < std::time::Duration::from_secs(15));
+    assert_ne!(running["result"]["return_value"], "finished", "{running}");
+    assert!(running["result"]["error"].is_string(), "{running}");
+    assert_eq!(queued["status"], "denied", "{queued}");
+    assert_ne!(queued["result"]["return_value"], "ran", "{queued}");
+    assert!(!crate::tools::repl::has_context(&session));
+    server.abort();
+}
+
 /// The `approvals` value of an `approval_required` stop whose reason mentions `expected`.
 fn approvals_of(outcome: &ToolOutcome, expected: &str) -> Value {
     let ToolOutcome::Denied {

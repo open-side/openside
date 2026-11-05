@@ -190,6 +190,17 @@ pub(crate) struct Stops {
 }
 
 impl Stops {
+    pub(crate) fn new() -> Self {
+        Self {
+            stop: Arc::new(Mutex::new(None)),
+            abort: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn aborted(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.abort)
+    }
+
     // Policy stops are uncatchable: the interrupt handler ends the script at its next check, and
     // every later CDP command is refused.
     pub(crate) fn halt(&self, stop: Stop) {
@@ -246,6 +257,8 @@ pub(crate) struct Driver {
 }
 
 impl Driver {
+    /// `stops` is shared by every tab of one execution, so a stop in one tab ends them all.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         browser: Arc<Browser>,
         owner: String,
@@ -254,8 +267,9 @@ impl Driver {
         limits: Limits,
         deadline: Instant,
         cancel: Arc<AtomicBool>,
+        stops: Stops,
     ) -> Self {
-        let abort = Arc::new(AtomicBool::new(false));
+        let abort = stops.aborted();
         let events = events::Events::new(&browser);
         Self {
             browser,
@@ -265,10 +279,7 @@ impl Driver {
             limits,
             deadline,
             cancel,
-            stops: Stops {
-                stop: Arc::new(Mutex::new(None)),
-                abort: Arc::clone(&abort),
-            },
+            stops,
             abort,
             console: RefCell::default(),
             url: RefCell::new(String::new()),

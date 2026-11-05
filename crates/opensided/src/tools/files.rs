@@ -113,7 +113,7 @@ impl DaemonTool for Read {
                 }
                 return Ok(Vec::new());
             }
-            if crate::profiles::current(&ctx.shared) == openside_config::AgentProfile::Ultrabrowse {
+            if ctx.profile == openside_config::AgentProfile::Ultrabrowse {
                 return Err(ToolError(
                     "This profile permits read only for Task output references".into(),
                 ));

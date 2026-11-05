@@ -1473,6 +1473,12 @@ impl Controller {
         }
     }
     pub(crate) async fn shutdown(&self, shared: &Shared) -> Result<()> {
+        // A persistent REPL snippet holds the gate for up to two minutes; stopping the
+        // contexts first cancels it instead of waiting it out.
+        let current = self.browser.lock().await.clone();
+        if let Some(browser) = current {
+            super::repl::close_contexts(&browser).await;
+        }
         let _gate = self.gate.lock().await;
         if self.stopped.swap(true, Ordering::AcqRel) {
             return Ok(());
@@ -1498,6 +1504,8 @@ impl Controller {
         let Some(browser) = self.browser.lock().await.take() else {
             return Ok(());
         };
+        // Persistent REPL contexts hold the browser on their own threads.
+        super::repl::close_contexts(&browser).await;
         let preserve = browser
             .tabs()
             .await

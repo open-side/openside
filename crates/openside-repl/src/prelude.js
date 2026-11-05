@@ -1,14 +1,10 @@
 // Playwright-compatible prelude. Runs inside QuickJS; every page operation is a call to the Rust
-// host (`__openside_op`), which talks CDP. The only code sent to the page is page script the
-// caller asked for (`evaluate`, `addInitScript`, `page.cdp`; ADR-022), built in its section below.
-(() => {
+// host (`op`), which talks CDP. The only code sent to the page is page script the caller asked
+// for (`evaluate`, `addInitScript`, `page.cdp`; ADR-022), built in its section below.
+// Evaluates to a factory: each call builds one tab's `page` with its own `expect` and state.
+((op, log, initialUrl) => {
   'use strict';
-  const op = globalThis.__openside_op;
-  const log = globalThis.__openside_log;
-  const state = { url: String(globalThis.__openside_url || '') };
-  delete globalThis.__openside_op;
-  delete globalThis.__openside_log;
-  delete globalThis.__openside_url;
+  const state = { url: String(initialUrl || '') };
 
   // A retry can fix a wait that ran out and a server that could not be reached; nothing else.
   const TRANSIENT = new Set(['TimeoutError', 'NetworkError']);
@@ -35,7 +31,7 @@
     addScriptTag: 'use page.evaluate or page.addInitScript', addStyleTag: 'use page.evaluate or page.addInitScript',
     exposeFunction: 'page code cannot call back into the REPL', exposeBinding: 'page code cannot call back into the REPL',
     route: 'no network interception',
-    unroute: 'no network interception', request: 'no raw network access', context: 'one tab per REPL call',
+    unroute: 'no network interception', request: 'no raw network access', context: 'use openTab(url) and getTabs() in openside repl',
     screenshot: 'use the browser_screenshot tool', pdf: 'not available', setContent: 'navigate with page.goto',
     dispatchEvent: 'use locator.evaluate',
     elementHandle: 'use locators, or locator.evaluateHandle for a page object',
@@ -989,9 +985,9 @@ ${source}
   for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
     consoleObject[level] = (...args) => log((level === 'log' || level === 'info' ? '' : `[${level}] `) + args.map(show).join(' '));
   }
-  globalThis.console = consoleObject;
-  globalThis.page = page;
-  globalThis.expect = expect;
+  function owns(subject) {
+    return subject === page || subject instanceof Locator;
+  }
 
   function describe(error) {
     if (error && typeof error === 'object' && 'message' in error) return `${error.name || 'Error'}: ${error.message}`;
@@ -1019,5 +1015,11 @@ ${source}
     await closeEvents();
     return reply;
   }
-  return { finish, describe };
-})()
+  // A persistent context reuses this instance in later calls; listeners and waiters last for
+  // one call, like the host side of events.
+  function begin(url) {
+    state.url = String(url || '');
+    Object.assign(events, { listeners: [], waiters: [], pump: null, closing: false, used: false });
+  }
+  return { page, expect, console: consoleObject, owns, finish, describe, toJson, closeEvents, begin };
+})

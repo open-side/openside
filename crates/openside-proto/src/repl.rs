@@ -9,16 +9,24 @@ use crate::TicketId;
 #[serde(deny_unknown_fields)]
 pub struct ReplRequest {
     /// JavaScript using `page`, `expect`, and `console`; top-level `await` is allowed and the
-    /// last expression statement is the return value. Each request gets a fresh context.
+    /// last expression statement is the return value. Each request gets a fresh context unless
+    /// `persistent` is set.
     pub code: String,
     /// Agent tab to drive; optional when the session owns exactly one tab or none (a blank
-    /// tab is opened).
+    /// tab is opened). With `persistent`, this owned tab is attached to the context and becomes
+    /// `page` for this call; without it the call keeps the context's current `page`, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
     /// Approved `confirm` ticket from an earlier `deferred` response; the identical `code` and
     /// `tab_id` are rerun from the start under that approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_ticket: Option<TicketId>,
+    /// Run in the session's persistent REPL context (`openside repl`): `page` starts unset,
+    /// `openTab(url)` and `getTabs()` manage the tabs attached to the context, top-level
+    /// bindings and attached tabs carry over to later persistent calls of the same session
+    /// until the context has been idle for 10 minutes, and each call may run for 120 seconds.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub persistent: bool,
 }
 
 /// Outcome category of a [`ReplRequest`].

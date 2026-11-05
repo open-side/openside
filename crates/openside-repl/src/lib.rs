@@ -1,8 +1,10 @@
 //! Sandboxed Playwright-syntax JavaScript REPL over an owned openside browser tab.
 //!
-//! Code runs in a fresh QuickJS context (rquickjs, ADR-021) on a dedicated thread. The only
-//! globals beyond the ECMAScript standard library are `page`, `expect`, and `console`; there is
-//! no module loader, `require`, process, filesystem, network, or Vault API. The Playwright
+//! [`run`] executes code in a fresh QuickJS context (rquickjs, ADR-021) on a dedicated thread;
+//! a [`Context`] keeps one QuickJS context across executions, with `page` unset until a tab is
+//! attached and `openTab(url)` / `getTabs()` for its tabs. The only globals beyond the
+//! ECMAScript standard library are `page`, `expect`, and `console` (plus those two in a
+//! [`Context`]); there is no module loader, `require`, process, filesystem, network, or Vault API. The Playwright
 //! prelude is JavaScript inside QuickJS whose operations are Rust host functions: locators are
 //! resolved from CDP DOM and accessibility trees in Rust, and actions are CDP Input/DOM/Page
 //! commands from [`openside_browser::PAGE_COMMANDS`]. Page script (`page.evaluate`, handles,
@@ -25,6 +27,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod context;
 mod dom;
 mod driver;
 mod keys;
@@ -47,6 +50,7 @@ use rquickjs::{
 use serde::Serialize;
 use serde_json::{json, Value};
 
+pub use context::{Context, Guards, Request, MAX_TABS};
 use driver::Driver;
 pub use driver::{InternalPrimitive, INTERNAL_PRIMITIVES, SETUP_SCREENING};
 
@@ -191,6 +195,12 @@ pub struct Output {
     /// Policy stop, if any; not part of the serialized model result.
     #[serde(skip)]
     pub stop: Option<Stop>,
+    /// [`Context`] runs: the tab of `page` when the snippet ended, if any.
+    #[serde(skip)]
+    pub page: Option<String>,
+    /// [`Context`] runs: every attached tab, in attachment order.
+    #[serde(skip)]
+    pub tabs: Vec<String>,
 }
 
 impl Output {
@@ -200,6 +210,8 @@ impl Output {
             console: Vec::new(),
             error: Some(message.into()),
             stop: None,
+            page: None,
+            tabs: Vec::new(),
         }
     }
 }
@@ -305,6 +317,7 @@ async fn execute(
         limits.clone(),
         deadline,
         Arc::clone(&cancel),
+        driver::Stops::new(),
     ));
     if driver.refresh_url().await.is_err() {
         return Output::failed("Error: tab is unavailable or not owned by this session");
@@ -376,6 +389,8 @@ async fn execute(
         console,
         error,
         stop,
+        page: None,
+        tabs: Vec::new(),
     }
 }
 
@@ -429,18 +444,22 @@ async fn evaluate(
             let log = Function::new(ctx.clone(), move |line: String| logger.log(line))
                 .map_err(|_| "Error: REPL host unavailable")?;
             let initial = driver.url.borrow().clone();
-            for (name, value) in [("__openside_op", op), ("__openside_log", log)] {
+            let factory: Function = ctx
+                .eval(PRELUDE)
+                .catch(&ctx)
+                .map_err(|error| format!("Error: REPL prelude failed: {error}"))?;
+            let prelude: Object = factory
+                .call((op, log, initial))
+                .catch(&ctx)
+                .map_err(|error| format!("Error: REPL prelude failed: {error}"))?;
+            for name in ["console", "page", "expect"] {
+                let value: rquickjs::Value = prelude
+                    .get(name)
+                    .map_err(|_| "Error: REPL prelude failed")?;
                 globals
                     .set(name, value)
                     .map_err(|_| "Error: REPL host unavailable")?;
             }
-            globals
-                .set("__openside_url", initial)
-                .map_err(|_| "Error: REPL host unavailable")?;
-            let prelude: Object = ctx
-                .eval(PRELUDE)
-                .catch(&ctx)
-                .map_err(|error| format!("Error: REPL prelude failed: {error}"))?;
             let finish: Function = prelude
                 .get("finish")
                 .map_err(|_| "Error: REPL prelude failed")?;
