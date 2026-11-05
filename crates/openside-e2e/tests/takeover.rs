@@ -343,6 +343,122 @@ async fn hs6_takeover_stream_drives_tab_while_agent_is_locked_out_and_same_call_
     harness.kill().await;
 }
 
+/// Mobile remote browser control: a paired phone drives an agent tab from the browser sheet
+/// (address bar navigation and a tap) without a ticket, the agent is locked out meanwhile, and
+/// its next call on the tab runs once the phone hands the tab back.
+#[tokio::test]
+async fn phone_controls_an_agent_tab_while_the_agent_is_locked_out_then_the_agent_resumes() {
+    let Some((mut harness, site)) = prepared(Vec::new()).await else {
+        return;
+    };
+    let start = format!("{}/device", site.origin);
+    harness.replace_script(
+        &json!({"responses":[tool("browser_open_tab", json!({"url":start}), "open"), text("opened")]}),
+    );
+    let session = create(&harness).await;
+    let mut stream = harness.events(&session, 0).await;
+    let tab = open_tab(&mut harness, &mut stream, &session, &start, Vec::new()).await;
+
+    let pair = |name: &str, kind: &str| json!({"name":name,"scopes":["read","steer"],"kind":kind});
+    let phone = harness
+        .request(
+            "POST",
+            "/v1/devices/pair",
+            Some(pair("phone", "person_device")),
+        )
+        .await;
+    let agent = harness
+        .request(
+            "POST",
+            "/v1/devices/pair",
+            Some(pair("agent", "agent_client")),
+        )
+        .await;
+    assert!(agent.body["token"].is_string(), "{}", agent.body);
+    let port = std::fs::read_to_string(harness.data_dir.join("opensided.port")).unwrap();
+    let connect = |token: &str| {
+        let mut request = format!(
+            "ws://127.0.0.1:{}/v1/sessions/{session}/browser/tabs/{tab}/control",
+            port.trim()
+        )
+        .into_client_request()
+        .unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        tokio_tungstenite::connect_async(request)
+    };
+    match connect(agent.body["token"].as_str().unwrap()).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status().as_u16(), 403)
+        }
+        other => panic!("an agent client must be refused: {:?}", other.map(|_| ())),
+    }
+    let (mut socket, _) = connect(phone.body["token"].as_str().unwrap())
+        .await
+        .expect("the phone takes control");
+
+    // The phone navigates from the address bar and taps the page.
+    let target = format!("{}/takeover", site.origin);
+    let send = json!({"type":"navigate","url":target}).to_string();
+    socket.send(Message::Text(send.into())).await.unwrap();
+    loop {
+        match message(&mut socket).await {
+            TakeoverServerMessage::Page { url, .. } if url.ends_with("/takeover") => break,
+            TakeoverServerMessage::InputError { code } => panic!("navigate refused: {code}"),
+            _ => {}
+        }
+    }
+    let repl = harness
+        .request(
+            "POST",
+            &format!("/v1/sessions/{session}/repl"),
+            Some(json!({"code":"await page.locator('#go').click()","tab_id":tab})),
+        )
+        .await;
+    assert_eq!(repl.body["status"], "denied", "{}", repl.body);
+    assert_eq!(repl.body["reason"], "takeover_active");
+    for event in ["down", "up"] {
+        let input = json!({"type":"mouse","event":event,"x":100,"y":100});
+        socket
+            .send(Message::Text(input.to_string().into()))
+            .await
+            .unwrap();
+    }
+    // A file URL never leaves the daemon's URL policy.
+    let file = json!({"type":"navigate","url":"file:///etc/passwd"}).to_string();
+    socket.send(Message::Text(file.into())).await.unwrap();
+    loop {
+        if let TakeoverServerMessage::InputError { code } = message(&mut socket).await {
+            assert_eq!(code, "invalid_url");
+            break;
+        }
+    }
+
+    // Handing back: the agent's next call on the tab runs and sees the phone's work.
+    socket.close(None).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let seen = loop {
+        let repl = harness
+            .request(
+                "POST",
+                &format!("/v1/sessions/{session}/repl"),
+                Some(json!({"code":"page.url() + ' ' + (await page.title())","tab_id":tab})),
+            )
+            .await;
+        if repl.body["status"] == "done" {
+            break repl.body["result"]["return_value"].clone();
+        }
+        assert_eq!(repl.body["reason"], "takeover_active", "{}", repl.body);
+        assert!(Instant::now() < deadline, "control was never released");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(seen, json!(format!("{target} Clicked by human")));
+    let audit = std::fs::read_to_string(harness.data_dir.join("audit.jsonl")).unwrap_or_default();
+    assert!(audit.contains("\"browser_control\""), "control is audited");
+    harness.kill().await;
+}
+
 #[tokio::test]
 async fn hs4_device_approval_condition_resumes_same_call_without_a_human() {
     let Some((mut harness, site)) = prepared(Vec::new()).await else {

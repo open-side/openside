@@ -553,6 +553,7 @@ async fn every_protocol_method_and_path_is_routed() {
             .path
             .replace("{mid}", "message")
             .replace("{thumbnail_id}", "thumbnail")
+            .replace("{tab_id}", "tab")
             .replace("{sid}", "child")
             .replace("{name}", "skill")
             .replace("{key}", "proposal")

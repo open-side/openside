@@ -7,6 +7,11 @@
 //! it publishes the new status: that closes input admission (waiting out input already
 //! admitted), stops the capture and voids the tab's captures and element references, so the
 //! agent regains the tab only after the person has provably lost it.
+//!
+//! `GET /v1/sessions/{id}/browser/tabs/{tab_id}/control` is the same stream without a ticket:
+//! a person takes one of the session's tabs from the browser sheet ([`control`]). Its lease
+//! locks the agent out of that tab exactly like a takeover until the person closes the stream,
+//! goes idle, is revoked or loses the tab, and it also accepts navigation and tab closing.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -24,6 +29,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use openside_browser::{Browser, BrowserError, Screencast, ScreencastFrame, VIEWPORT};
+use openside_core::MessageAuthorKind;
+use openside_policy::{Action, Capability, Effect};
 use openside_proto::{
     CapabilityScope, SessionId, TakeoverEndReason, TakeoverInput, TakeoverKeyEvent,
     TakeoverMouseButton, TakeoverMouseEvent, TakeoverServerMessage, Ticket, TicketId, TicketKind,
@@ -51,14 +58,28 @@ const MAX_TEXT: usize = 4096;
 const MAX_MESSAGE: usize = 32 * 1024;
 const MAX_KEY: usize = 32;
 const MAX_KEY_TEXT: usize = 16;
+/// Longest URL a control stream navigates to.
+const MAX_URL: usize = 8192;
+/// A person's navigation that has not loaded by then is stopped and reported as failed.
+const NAVIGATE_LIMIT: Duration = Duration::from_secs(20);
 
 static LOGIN_STARTS: LazyLock<parking_lot::Mutex<HashMap<(SessionId, String), Instant>>> =
     LazyLock::new(Default::default);
 
-/// The controller of one takeover ticket. Input dispatch and [`finish`] serialize on `admit`,
-/// so once `finish` returns no input of this lease runs again.
+/// What a controller's lease belongs to.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Owner {
+    /// A pending takeover ticket.
+    Ticket(TicketId),
+    /// A person's ticket-less control of one tab from the browser sheet.
+    Control(SessionId, String),
+}
+
+/// The controller of one takeover ticket or controlled tab. Input dispatch and [`finish`]
+/// serialize on `admit`, so once `finish` returns no input of this lease runs again.
 struct Lease {
-    expires_at: DateTime<Utc>,
+    /// The ticket's deadline; person control has none and ends on idle instead.
+    expires_at: Option<DateTime<Utc>>,
     admit: tokio::sync::Mutex<bool>,
     cast: Arc<Screencast>,
     end: watch::Sender<Option<TakeoverEndReason>>,
@@ -79,8 +100,8 @@ impl Lease {
     }
 }
 
-/// Tickets with a connected controller; one controller per ticket.
-static LEASES: LazyLock<parking_lot::Mutex<HashMap<TicketId, Arc<Lease>>>> =
+/// Connected controllers: one per takeover ticket and one per controlled tab.
+static LEASES: LazyLock<parking_lot::Mutex<HashMap<Owner, Arc<Lease>>>> =
     LazyLock::new(Default::default);
 
 /// Tabs whose takeover ticket is being opened, as `(session, tab)` → number of openers; each
@@ -89,7 +110,7 @@ static RESERVED: LazyLock<parking_lot::Mutex<HashMap<(SessionId, String), usize>
     LazyLock::new(Default::default);
 
 /// Releases a controller's lease when its stream ends or never starts.
-struct Held(TicketId, Arc<Lease>);
+struct Held(Owner, Arc<Lease>);
 impl Drop for Held {
     fn drop(&mut self) {
         let mut leases = LEASES.lock();
@@ -215,6 +236,18 @@ pub(crate) async fn blocked(
     if let Some(tab) = reserved {
         return Some(("takeover_active", hint(&tab, "being opened")));
     }
+    let controlled = LEASES.lock().keys().find_map(|owner| match owner {
+        Owner::Control(owner, tab) if owner == session && matches_tab(tab_id, tab) => {
+            Some(tab.clone())
+        }
+        _ => None,
+    });
+    if let Some(tab) = controlled {
+        return Some((
+            "takeover_active",
+            format!("A person is controlling tab {tab} from the browser sheet; nothing ran. Wait until they hand it back, then take a fresh browser_snapshot."),
+        ));
+    }
     let ticket = active(shared, session, tab_id).await?;
     Some((
         "takeover_active",
@@ -231,7 +264,10 @@ pub(crate) async fn finish(shared: &Shared, ticket: &Ticket, reason: TakeoverEnd
     if ticket.kind != TicketKind::Takeover {
         return;
     }
-    let lease = LEASES.lock().get(&ticket.id).cloned();
+    let lease = LEASES
+        .lock()
+        .get(&Owner::Ticket(ticket.id.clone()))
+        .cloned();
     if let Some(lease) = lease {
         lease.close(reason).await;
     }
@@ -387,8 +423,15 @@ async fn open(
             return Err(HttpError(StatusCode::UNAUTHORIZED, "unauthorized"));
         }
     }
-    if LEASES.lock().contains_key(&ticket.id) {
+    let owner = Owner::Ticket(ticket.id.clone());
+    if LEASES.lock().contains_key(&owner) {
         return Err(HttpError(StatusCode::CONFLICT, "takeover_in_use"));
+    }
+    if LEASES
+        .lock()
+        .contains_key(&Owner::Control(ticket.session_id.clone(), tab_id.clone()))
+    {
+        return Err(HttpError(StatusCode::CONFLICT, "control_in_use"));
     }
     let browser = s
         .registry
@@ -407,7 +450,7 @@ async fn open(
             Ok(Some(current)) if live(&current) => {}
             _ => return Err(HttpError(StatusCode::CONFLICT, "invalid_transition")),
         }
-        if LEASES.lock().contains_key(&ticket.id) {
+        if LEASES.lock().contains_key(&owner) {
             return Err(HttpError(StatusCode::CONFLICT, "takeover_in_use"));
         }
         crate::preview::yield_tab(&s, &ticket.session_id, &tab_id);
@@ -421,17 +464,17 @@ async fn open(
                 _ => HttpError(StatusCode::CONFLICT, "tab_unavailable"),
             })?;
         let lease = Arc::new(Lease {
-            expires_at: ticket.expires_at,
+            expires_at: Some(ticket.expires_at),
             admit: tokio::sync::Mutex::new(true),
             cast: Arc::new(cast),
             end: watch::channel(None).0,
         });
-        LEASES.lock().insert(ticket.id.clone(), Arc::clone(&lease));
-        Held(ticket.id.clone(), lease)
+        LEASES.lock().insert(owner.clone(), Arc::clone(&lease));
+        Held(owner.clone(), lease)
     };
     let session = Live {
         s,
-        ticket: ticket.id,
+        owner,
         session: ticket.session_id,
         tab: tab_id,
         device: caller.0,
@@ -448,9 +491,207 @@ async fn open(
         .into_response())
 }
 
+pub(crate) async fn control(
+    State(s): State<Shared>,
+    Extension(access): Extension<Access>,
+    Extension(caller): Extension<Caller>,
+    Extension(author): Extension<MessageAuthorKind>,
+    Path((id, tab)): Path<(String, String)>,
+    headers: HeaderMap,
+    upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> Response {
+    let request = ControlRequest {
+        access,
+        caller,
+        author,
+        session: SessionId::new(id),
+        tab,
+    };
+    match open_control(s, request, headers, upgrade).await {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    }
+}
+
+struct ControlRequest {
+    access: Access,
+    caller: Caller,
+    author: MessageAuthorKind,
+    session: SessionId,
+    tab: String,
+}
+
+/// Only the person may drive a tab without a ticket: their own paired device, or the local
+/// socket without the MCP or channel marker. An agent client must never take its own work
+/// out from under the policy and approvals that govern agent browsing.
+fn person_only(caller: &Caller, author: MessageAuthorKind) -> Result<(), HttpError> {
+    let device = caller.0.is_none() || caller.1 == openside_proto::DeviceKind::PersonDevice;
+    if device && author == MessageAuthorKind::Person {
+        Ok(())
+    } else {
+        Err(HttpError(StatusCode::FORBIDDEN, "person_device_required"))
+    }
+}
+
+async fn open_control(
+    s: Shared,
+    request: ControlRequest,
+    headers: HeaderMap,
+    upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> Result<Response, HttpError> {
+    let ControlRequest {
+        access,
+        caller,
+        author,
+        session,
+        tab,
+    } = request;
+    if !access.has(CapabilityScope::Steer) {
+        return Err(HttpError(StatusCode::FORBIDDEN, "forbidden"));
+    }
+    person_only(&caller, author)?;
+    let state =
+        s.db.state(&session)
+            .await
+            .map_err(|_| HttpError::not_found())?;
+    if state.deleted {
+        return Err(HttpError::not_found());
+    }
+    // Isolated spaces are private like incognito ones: their pages never reach another device.
+    if state.incognito || state.browser_space != openside_proto::BrowserSpace::Shared {
+        return Err(HttpError(StatusCode::CONFLICT, "private_session"));
+    }
+    if !same_origin(&headers) {
+        return Err(HttpError(StatusCode::FORBIDDEN, "origin_forbidden"));
+    }
+    let upgrade =
+        upgrade.map_err(|_| HttpError(StatusCode::UPGRADE_REQUIRED, "websocket_required"))?;
+    let revoked = s.remote.revoked.subscribe();
+    if let Some(device) = &caller.0 {
+        if s.remote.is_revoked(device)
+            || !matches!(s.db.device_exists(device.clone()).await, Ok(true))
+        {
+            return Err(HttpError(StatusCode::UNAUTHORIZED, "unauthorized"));
+        }
+    }
+    let owner = Owner::Control(session.clone(), tab.clone());
+    if LEASES.lock().contains_key(&owner) {
+        return Err(HttpError(StatusCode::CONFLICT, "control_in_use"));
+    }
+    let browser = s
+        .registry
+        .browser
+        .tab_browser(&session, &tab)
+        .await
+        .ok_or(HttpError(StatusCode::CONFLICT, "tab_unavailable"))?;
+    Controller::owned(&browser, &session, &tab)
+        .await
+        .map_err(|_| HttpError(StatusCode::CONFLICT, "tab_unavailable"))?;
+    // Agent browser tools hold this gate for their whole call and check `blocked` under it:
+    // the lease is registered only after the agent's operation in flight ends, and every later
+    // agent call on the tab sees it.
+    let held = {
+        let _gate = s.registry.browser.gate.lock().await;
+        if active(&s, &session, Some(&tab)).await.is_some()
+            || RESERVED
+                .lock()
+                .contains_key(&(session.clone(), tab.clone()))
+        {
+            return Err(HttpError(StatusCode::CONFLICT, "takeover_active"));
+        }
+        if LEASES.lock().contains_key(&owner) {
+            return Err(HttpError(StatusCode::CONFLICT, "control_in_use"));
+        }
+        crate::preview::yield_tab(&s, &session, &tab);
+        let cast = browser
+            .screencast(session.as_str(), &tab, JPEG_QUALITY)
+            .await
+            .map_err(|error| match error {
+                BrowserError::InvalidAction(_) => HttpError(StatusCode::CONFLICT, "control_in_use"),
+                _ => HttpError(StatusCode::CONFLICT, "tab_unavailable"),
+            })?;
+        let lease = Arc::new(Lease {
+            expires_at: None,
+            admit: tokio::sync::Mutex::new(true),
+            cast: Arc::new(cast),
+            end: watch::channel(None).0,
+        });
+        LEASES.lock().insert(owner.clone(), Arc::clone(&lease));
+        Held(owner.clone(), lease)
+    };
+    let live = Live {
+        s,
+        owner,
+        session,
+        tab,
+        device: caller.0,
+        browser,
+        held,
+    };
+    Ok(upgrade
+        .protocols(["openside.v1"])
+        .max_message_size(MAX_MESSAGE)
+        .max_frame_size(MAX_MESSAGE)
+        .on_upgrade(move |socket| live.run(socket, revoked))
+        .into_response())
+}
+
+/// Refuses a navigation target the agent could not navigate to either: anything but http(s)
+/// without credentials, or an origin the effective policy denies. Returns the origin and the
+/// policy's effect for it; an `ask` origin is the caller's to approve.
+pub(crate) async fn navigable(
+    s: &Shared,
+    session: &SessionId,
+    url: &str,
+) -> Result<(String, Effect), &'static str> {
+    if url.len() > MAX_URL {
+        return Err("invalid_url");
+    }
+    let origin = crate::tools::browser::url_origin(url).map_err(|_| "invalid_url")?;
+    let state = s.db.state(session).await.map_err(|_| "navigation_failed")?;
+    let policy =
+        crate::policy_api::effective(s, &crate::tools::ToolEnv::new(s.clone(), &state).policy);
+    match policy
+        .decide(&Action::new(Capability::Browse, &origin))
+        .effect
+    {
+        Effect::Deny => Err("policy_denied"),
+        effect => Ok((origin, effect)),
+    }
+}
+
+/// What one stream message asks for.
+enum Step {
+    Cdp(&'static str, Value),
+    Navigate(String),
+    History(i64),
+    Reload,
+    Close,
+}
+
+impl Step {
+    fn audit_name(&self) -> &'static str {
+        match self {
+            Self::Cdp(..) => "input",
+            Self::Navigate(_) => "navigate",
+            Self::History(delta) if *delta < 0 => "back",
+            Self::History(_) => "forward",
+            Self::Reload => "reload",
+            Self::Close => "close_tab",
+        }
+    }
+}
+
+/// What an accepted message changed.
+enum Applied {
+    Input,
+    Page,
+    Closed,
+}
+
 struct Live {
     s: Shared,
-    ticket: TicketId,
+    owner: Owner,
     session: SessionId,
     tab: String,
     device: Option<String>,
@@ -467,11 +708,18 @@ impl Live {
         }));
         let lease = Arc::clone(&self.held.1);
         let mut end = lease.end.subscribe();
-        let idle_after = idle_limit(&self.ticket);
+        let control = matches!(self.owner, Owner::Control(..));
+        let idle_after = idle_limit(&self.owner);
         let mut idle = Instant::now() + idle_after;
         let mut check = tokio::time::interval(CHECK);
         // The last delivered frame is acknowledged once FRAME_INTERVAL has passed.
         let mut unacked: Option<(ScreencastFrame, Instant)> = None;
+        let mut page = None;
+        let mut inputs = 0u64;
+        if control {
+            self.audit("control_started", json!({})).await;
+            self.refresh(&mut page, &out).await;
+        }
         let reason = loop {
             if Instant::now() >= idle {
                 break Some(TakeoverEndReason::Idle);
@@ -490,6 +738,9 @@ impl Live {
                 _ = check.tick() => {
                     if let Some(reason) = self.ended().await {
                         break Some(reason);
+                    }
+                    if control {
+                        self.refresh(&mut page, &out).await;
                     }
                 }
                 frame = lease.cast.next(), if unacked.is_none() => {
@@ -512,7 +763,15 @@ impl Live {
                 }
                 message = source.next() => match message {
                     Some(Ok(Message::Text(body))) => match self.input(&lease, body.as_str()).await {
-                        Ok(()) => idle = Instant::now() + idle_after,
+                        Ok(Applied::Input) => {
+                            idle = Instant::now() + idle_after;
+                            inputs += 1;
+                        }
+                        Ok(Applied::Page) => {
+                            idle = Instant::now() + idle_after;
+                            self.refresh(&mut page, &out).await;
+                        }
+                        Ok(Applied::Closed) => break Some(TakeoverEndReason::TabUnavailable),
                         Err(Refused::Ended) => {}
                         Err(Refused::Input(code)) => {
                             let _ = out.try_send(text(&TakeoverServerMessage::InputError { code: code.into() }));
@@ -529,6 +788,16 @@ impl Live {
         // Release the tab before talking to a peer that may never read again: input admission
         // closes, the capture stops and the ticket accepts a new controller.
         *lease.admit.lock().await = false;
+        if control {
+            // A takeover's `finish` voids what the agent knew about the tab; person control has
+            // no ticket, so its end does the same before the agent may use the tab again.
+            lease.cast.stop();
+            self.s.registry.browser.forget_captures(&self.tab).await;
+            self.browser.invalidate_references(&self.tab).await;
+            let ended = reason.map_or(json!("released"), |reason| json!(reason));
+            self.audit("control_ended", json!({"reason":ended,"inputs":inputs}))
+                .await;
+        }
         drop(self.held);
         crate::ws_stream::close(
             out,
@@ -554,17 +823,25 @@ impl Live {
     }
 
     async fn ended(&self) -> Option<TakeoverEndReason> {
-        let ticket = match crate::tickets::get(&self.s, &self.ticket).await {
-            Ok(Some(ticket)) => ticket,
-            _ => return Some(TakeoverEndReason::Rejected),
-        };
-        match ticket.status {
-            TicketStatus::Resolved => return Some(TakeoverEndReason::Done),
-            TicketStatus::Expired => return Some(TakeoverEndReason::Expired),
-            TicketStatus::Rejected | TicketStatus::NeedsDesktop => {
-                return Some(TakeoverEndReason::Rejected)
+        match &self.owner {
+            Owner::Ticket(id) => {
+                let ticket = match crate::tickets::get(&self.s, id).await {
+                    Ok(Some(ticket)) => ticket,
+                    _ => return Some(TakeoverEndReason::Rejected),
+                };
+                match ticket.status {
+                    TicketStatus::Resolved => return Some(TakeoverEndReason::Done),
+                    TicketStatus::Expired => return Some(TakeoverEndReason::Expired),
+                    TicketStatus::Rejected | TicketStatus::NeedsDesktop => {
+                        return Some(TakeoverEndReason::Rejected)
+                    }
+                    TicketStatus::Pending => {}
+                }
             }
-            TicketStatus::Pending => {}
+            Owner::Control(..) => match self.s.db.state(&self.session).await {
+                Ok(state) if !state.deleted => {}
+                _ => return Some(TakeoverEndReason::TabUnavailable),
+            },
         }
         if !self.browser.is_connected()
             || Controller::owned(&self.browser, &self.session, &self.tab)
@@ -576,15 +853,81 @@ impl Live {
         None
     }
 
-    /// Forward one input message to the ticket's tab, inside the lease's admission boundary
+    /// Send the tab's address, title and history position when they changed since `last`.
+    /// A full queue skips the update; the next check retries it.
+    async fn refresh(&self, last: &mut Option<TakeoverServerMessage>, out: &mpsc::Sender<Message>) {
+        let Ok(history) = self
+            .browser
+            .page_command(
+                self.session.as_str(),
+                &self.tab,
+                "Page.getNavigationHistory",
+                json!({}),
+            )
+            .await
+        else {
+            return;
+        };
+        let entries = history["entries"].as_array().map_or(&[][..], Vec::as_slice);
+        let Some(index) = history["currentIndex"]
+            .as_u64()
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|index| *index < entries.len())
+        else {
+            return;
+        };
+        let entry = &entries[index];
+        let message = json!({
+            "type": "page",
+            "url": page_address(entry["url"].as_str().unwrap_or_default()),
+            "title": entry["title"].as_str().unwrap_or_default().chars().take(200).collect::<String>(),
+            "can_go_back": index > 0,
+            "can_go_forward": index + 1 < entries.len(),
+        });
+        // Addresses and titles can echo filled secrets; they pass the redactor like results.
+        let Ok(value) = self.s.registry.redact(message) else {
+            return;
+        };
+        let Ok(message) = serde_json::from_value::<TakeoverServerMessage>(value) else {
+            return;
+        };
+        if last.as_ref() != Some(&message)
+            && out.capacity() > CONTROL_SLOTS
+            && out.try_send(text(&message)).is_ok()
+        {
+            *last = Some(message);
+        }
+    }
+
+    /// One audit record of person control: ids, origins and outcome codes, never typed values.
+    async fn audit(&self, decision: &str, fields: Value) {
+        let mut record = json!({"ts":Utc::now(),"session":self.session,"tool":"browser_control",
+            "decision":decision,"device":self.device.as_deref().unwrap_or("local"),"tab_id":self.tab});
+        if let (Some(record), Some(fields)) = (record.as_object_mut(), fields.as_object()) {
+            record.extend(fields.clone());
+        }
+        let _ = crate::tickets::audit_record(&self.s, record).await;
+    }
+
+    /// Forward one input message to the stream's tab, inside the lease's admission boundary
     /// and this device's revocation gate. Errors carry static codes only: typed text and keys
     /// never reach logs, events or responses.
-    async fn input(&self, lease: &Lease, body: &str) -> Result<(), Refused> {
+    async fn input(&self, lease: &Lease, body: &str) -> Result<Applied, Refused> {
         let input: TakeoverInput =
             serde_json::from_str(body).map_err(|_| Refused::Input("invalid_input"))?;
-        let (method, params) = command(input).map_err(Refused::Input)?;
+        let step = match (input, &self.owner) {
+            (TakeoverInput::Navigate { url }, Owner::Control(..)) => Step::Navigate(url),
+            (TakeoverInput::Back, Owner::Control(..)) => Step::History(-1),
+            (TakeoverInput::Forward, Owner::Control(..)) => Step::History(1),
+            (TakeoverInput::Reload, Owner::Control(..)) => Step::Reload,
+            (TakeoverInput::CloseTab, Owner::Control(..)) => Step::Close,
+            (input, _) => {
+                let (method, params) = command(input).map_err(Refused::Input)?;
+                Step::Cdp(method, params)
+            }
+        };
         let open = lease.admit.lock().await;
-        if !*open || lease.expires_at <= Utc::now() {
+        if !*open || lease.expires_at.is_some_and(|at| at <= Utc::now()) {
             return Err(Refused::Ended);
         }
         // Revocation marks the device, then takes this gate for writing before it deletes the
@@ -601,26 +944,163 @@ impl Live {
             None => None,
         };
         #[cfg(test)]
-        hooks::admitted(&self.ticket).await;
-        self.browser
-            .page_command(self.session.as_str(), &self.tab, method, params)
+        if let Owner::Ticket(ticket) = &self.owner {
+            hooks::admitted(ticket).await;
+        }
+        let step = match step {
+            Step::Cdp(method, params) => {
+                return self
+                    .browser
+                    .page_command(self.session.as_str(), &self.tab, method, params)
+                    .await
+                    .map(|_| Applied::Input)
+                    .map_err(|_| Refused::Input("input_failed"));
+            }
+            step => step,
+        };
+        let name = step.audit_name();
+        let origin = match &step {
+            Step::Navigate(url) => crate::tools::browser::url_origin(url).ok(),
+            _ => None,
+        };
+        let mut approved = false;
+        let result = self.navigate(step, &mut approved).await;
+        let outcome = result.as_ref().err().copied().unwrap_or("ok");
+        self.audit(
+            name,
+            json!({"origin":origin,"outcome":outcome,"person_approved":approved}),
+        )
+        .await;
+        result.map_err(Refused::Input)
+    }
+
+    /// Navigation and tab closing hold the browser gate, like the agent's own browser tools,
+    /// so they stay serialized with every other daemon navigation and fill. `approved` is set
+    /// when a typed address approved an `ask` origin for its own navigation.
+    async fn navigate(&self, step: Step, approved: &mut bool) -> Result<Applied, &'static str> {
+        let owner = self.session.as_str();
+        let _gate = self.s.registry.browser.gate.lock().await;
+        match step {
+            Step::Cdp(..) => return Err("invalid_input"),
+            Step::Navigate(url) => {
+                let (origin, effect) = navigable(&self.s, &self.session, &url).await?;
+                *approved = effect == Effect::Ask;
+                // Typing the address is the person's approval of that origin, for this
+                // navigation and its same-origin redirects only: the grant ends with the load.
+                let _grant = self
+                    .s
+                    .registry
+                    .browser
+                    .grant_navigation(&self.session, vec![origin]);
+                self.browser
+                    .navigate_cancellable(
+                        owner,
+                        &self.tab,
+                        &url,
+                        tokio::time::sleep(NAVIGATE_LIMIT),
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        BrowserError::ConnectionDenied
+                        | BrowserError::ConnectionGrantRequired { .. } => "connection_denied",
+                        _ => "navigation_failed",
+                    })?;
+            }
+            Step::History(delta) => {
+                let id = self.history_entry(delta).await?;
+                self.browser
+                    .page_command(
+                        owner,
+                        &self.tab,
+                        "Page.navigateToHistoryEntry",
+                        json!({"entryId":id}),
+                    )
+                    .await
+                    .map_err(|_| "navigation_failed")?;
+            }
+            Step::Reload => {
+                self.history_entry(0).await?;
+                self.browser
+                    .page_command(owner, &self.tab, "Page.reload", json!({}))
+                    .await
+                    .map_err(|_| "navigation_failed")?;
+            }
+            Step::Close => {
+                self.browser
+                    .close_agent_tab(owner, &self.tab)
+                    .await
+                    .map_err(|_| "input_failed")?;
+                let _ = self.s.registry.browser.persist(&self.s).await;
+                return Ok(Applied::Closed);
+            }
+        }
+        let _ = self.s.registry.browser.persist(&self.s).await;
+        Ok(Applied::Page)
+    }
+
+    /// The id of the history entry `delta` steps from the current one, when the person may load
+    /// it. Back, forward and reload send no address of their own, so an `ask` origin is refused
+    /// with `approval_required`: retyping the address is how the person approves it.
+    async fn history_entry(&self, delta: i64) -> Result<i64, &'static str> {
+        let history = self
+            .browser
+            .page_command(
+                self.session.as_str(),
+                &self.tab,
+                "Page.getNavigationHistory",
+                json!({}),
+            )
             .await
-            .map(|_| ())
-            .map_err(|_| Refused::Input("input_failed"))
+            .map_err(|_| "input_failed")?;
+        let entry = history["currentIndex"]
+            .as_i64()
+            .map(|index| index + delta)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| history["entries"].get(index))
+            .ok_or("no_history")?;
+        let url = entry["url"].as_str().unwrap_or_default();
+        // The blank start page has no origin to check; every other entry does.
+        if url != "about:blank" && navigable(&self.s, &self.session, url).await?.1 == Effect::Ask {
+            return Err("approval_required");
+        }
+        entry["id"].as_i64().ok_or("input_failed")
+    }
+}
+
+/// The address a control stream shows for a page. Page script and links may still move the tab
+/// to `data:`, `blob:` or `about:` documents, which are not filtered; for those only the scheme
+/// is reported, since the rest of such a URL is page content, not an address.
+fn page_address(url: &str) -> String {
+    if url == "about:blank" {
+        return url.to_owned();
+    }
+    match url::Url::parse(url) {
+        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => {
+            crate::browser::public_url(url)
+        }
+        Ok(parsed) => format!("{}:", parsed.scheme()),
+        Err(_) => String::new(),
     }
 }
 
 #[cfg(not(test))]
-fn idle_limit(_: &TicketId) -> Duration {
+fn idle_limit(_: &Owner) -> Duration {
     IDLE
 }
 
 #[cfg(test)]
-fn idle_limit(ticket: &TicketId) -> Duration {
-    hooks::IDLE.lock().get(ticket).copied().unwrap_or(IDLE)
+fn idle_limit(owner: &Owner) -> Duration {
+    match owner {
+        Owner::Ticket(ticket) => hooks::IDLE.lock().get(ticket).copied(),
+        Owner::Control(session, tab) => hooks::CONTROL_IDLE
+            .lock()
+            .get(&(session.clone(), tab.clone()))
+            .copied(),
+    }
+    .unwrap_or(IDLE)
 }
 
-/// Per-ticket test controls; keyed by ticket so parallel tests never see each other's.
+/// Per-ticket (and per controlled tab) test controls, so parallel tests never see each other's.
 #[cfg(test)]
 pub(crate) mod hooks {
     use super::*;
@@ -628,6 +1108,10 @@ pub(crate) mod hooks {
 
     pub(crate) static IDLE: LazyLock<parking_lot::Mutex<HashMap<TicketId, Duration>>> =
         LazyLock::new(Default::default);
+    /// Idle limits of person control, keyed by `(session, tab)`.
+    pub(crate) static CONTROL_IDLE: LazyLock<
+        parking_lot::Mutex<HashMap<(SessionId, String), Duration>>,
+    > = LazyLock::new(Default::default);
     /// `(reached, release)` for one paused input.
     type Pause = (Arc<Notify>, Arc<Notify>);
     /// The next admitted input of the ticket signals `reached` after its authorization checks
@@ -744,6 +1228,12 @@ fn command(input: TakeoverInput) -> Result<(&'static str, Value), &'static str> 
             }
             ("Input.insertText", json!({"text":text}))
         }
+        // Control streams handle these before reaching here; a takeover ticket does not.
+        TakeoverInput::Navigate { .. }
+        | TakeoverInput::Back
+        | TakeoverInput::Forward
+        | TakeoverInput::Reload
+        | TakeoverInput::CloseTab => return Err("invalid_input"),
     })
 }
 
@@ -841,5 +1331,59 @@ mod tests {
         assert!(!same_origin(&headers(Some("http://evil.example"))));
         assert!(!same_origin(&headers(Some("http://127.0.0.1:4001"))));
         assert!(!same_origin(&headers(Some("null"))));
+    }
+
+    #[test]
+    fn page_addresses_of_non_network_documents_name_only_their_scheme() {
+        assert_eq!(
+            page_address("https://user:pw@example.com/a?q=1#f"),
+            "https://example.com/a"
+        );
+        assert_eq!(page_address("about:blank"), "about:blank");
+        for (url, shown) in [
+            ("about:blank?leak#x", "about:"),
+            ("data:text/html,<b>secret</b>", "data:"),
+            ("javascript:alert(1)", "javascript:"),
+            ("blob:https://example.com/0d3c", "blob:"),
+            ("file:///etc/passwd", "file:"),
+            ("not a url", ""),
+        ] {
+            assert_eq!(page_address(url), shown, "{url}");
+        }
+    }
+
+    #[test]
+    fn only_a_person_may_take_control_and_takeover_refuses_control_commands() {
+        use openside_proto::DeviceKind;
+        let phone = Caller(Some("d1".into()), DeviceKind::PersonDevice);
+        let agent = Caller(Some("d2".into()), DeviceKind::AgentClient);
+        // The socket's caller kind is AgentClient; only its author marker tells a person apart.
+        let socket = Caller(None, DeviceKind::AgentClient);
+        assert!(person_only(&phone, MessageAuthorKind::Person).is_ok());
+        assert!(person_only(&socket, MessageAuthorKind::Person).is_ok());
+        for (caller, author) in [
+            (&agent, MessageAuthorKind::AgentClient),
+            (&agent, MessageAuthorKind::Person),
+            (&socket, MessageAuthorKind::AgentClient),
+            (&socket, MessageAuthorKind::Channel),
+            (&phone, MessageAuthorKind::AgentClient),
+        ] {
+            let refused = person_only(caller, author).unwrap_err();
+            assert_eq!(
+                (refused.0, refused.1),
+                (StatusCode::FORBIDDEN, "person_device_required")
+            );
+        }
+        for input in [
+            TakeoverInput::Navigate {
+                url: "https://example.com".into(),
+            },
+            TakeoverInput::Back,
+            TakeoverInput::Forward,
+            TakeoverInput::Reload,
+            TakeoverInput::CloseTab,
+        ] {
+            assert_eq!(command(input).unwrap_err(), "invalid_input");
+        }
     }
 }

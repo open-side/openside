@@ -584,6 +584,15 @@ pub const ROUTES: &[Route] = &[
         sse: false,
     },
     Route {
+        method: HttpMethod::Get,
+        path: "/v1/sessions/{id}/browser/tabs/{tab_id}/control",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 101,
+        sse: false,
+    },
+    Route {
         method: HttpMethod::Post,
         path: "/v1/devices/pair",
         request_schema: Some("PairDeviceRequest"),
@@ -2038,6 +2047,11 @@ pub fn openapi() -> Value {
             operation["responses"]["200"]["content"] =
                 json!({"image/jpeg": {"schema": {"type":"string","format":"binary"}}});
         }
+        if route.path.contains("{tab_id}") {
+            parameters.push(json!({"name": "tab_id", "in": "path", "required": true,
+                "description": "Agent tab of this session, from GET /v1/browser/tabs.",
+                "schema": {"type": "string"}}));
+        }
         if route.path.starts_with("/v1/settings/channels") {
             operation["description"] = json!("Manage independent labelled channel identities. Read lists are metadata only. Mutations require admin and a person device or the local socket. Credentials are encrypted in the Vault, never returned, synced or exposed to browser fill. Account changes affect only that account; failed credentials never select another identity.");
             for name in ["kind", "account_id"] {
@@ -2191,6 +2205,20 @@ pub fn openapi() -> Value {
             operation["responses"]["101"]["x-websocket-client-message"] = Value::Null;
             operation["responses"]["409"] = json!({"description":"Private session", "content":{"application/json":{"schema":reference("ApiError"),"example":{"code":"private_session","message":"private session"}}}});
             operation["responses"]["429"] = json!({"description":"Too many preview viewers", "content":{"application/json":{"schema":reference("ApiError")}}});
+        }
+        if route.path == "/v1/sessions/{id}/browser/tabs/{tab_id}/control" {
+            operation["description"] = json!("WebSocket upgrade that gives a person control of one of the session's agent tabs without a takeover ticket (the browser sheet). Requires steer, a person_device token or the local socket (agent_client tokens and MCP socket clients get 403 person_device_required), and an Origin matching the Host; the bearer subprotocol works as on the takeover stream. The daemon streams TakeoverServerMessage frames and `page` updates and accepts TakeoverInput, including navigate/back/forward/reload/close_tab. Navigation accepts only http(s) URLs without credentials and is refused with input_error policy_denied when the policy denies the origin, as for agent navigation. While the stream is open, agent browser tools on the tab are refused with takeover_active. One controller per tab (409 control_in_use); a pending takeover ticket on the tab returns 409 takeover_active; private sessions return 409 private_session. The control ends when the client closes the socket, after 300 s without accepted input (ended idle), on token revocation (ended revoked) or when the tab is gone (ended tab_unavailable); the agent then regains the tab with its earlier snapshots and references voided. Opening, navigation, tab closing and the end of control are written to the audit log; typed text is not.");
+            operation["responses"]["101"]["description"] = json!("Switching to WebSocket");
+            operation["responses"]["101"]["x-websocket-server-message"] =
+                reference("TakeoverServerMessage");
+            operation["responses"]["101"]["x-websocket-client-message"] =
+                reference("TakeoverInput");
+            operation["responses"]["403"] = json!({"description": "Not a person's device, or the Origin does not match",
+                "content": {"application/json": {"schema": reference("ApiError"),
+                "example": {"code": "person_device_required", "message": "person device required"}}}});
+            operation["responses"]["409"] = json!({"description": "Another controller, a pending takeover or a private session",
+                "content": {"application/json": {"schema": reference("ApiError"),
+                "example": {"code": "control_in_use", "message": "control in use"}}}});
         }
         if route.path == "/v1/sessions/{id}/queue/{mid}/move" {
             operation["description"] = json!("Reorder a pending message inside its own lane: steering messages are delivered before follow-ups and a follow-up becomes a steer only through promote. position is zero-based and clamped to the lane length; a message that was already delivered or dropped returns 409.");

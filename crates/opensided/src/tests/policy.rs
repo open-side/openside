@@ -44,7 +44,8 @@ async fn send(
 fn concrete(path: &str) -> String {
     let out = path
         .replace("{mid}", "message")
-        .replace("{sid}", "child")
+        .replace("{tab_id}", "tab")
+            .replace("{sid}", "child")
         .replace("{name}", "skill")
         .replace("{path}", "transcript.jsonl")
         .replace("{thumbnail_id}", "thumbnail")

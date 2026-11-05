@@ -1256,3 +1256,486 @@ async fn rejected_input_flood_cannot_hold_the_controller_past_its_idle_limit() {
     crate::takeover::hooks::IDLE.lock().remove(&ticket);
     f.daemon.shutdown().await;
 }
+
+/// Open the person control socket of the fixture's tab, or return the refusal.
+async fn connect_control(
+    f: &Fixture,
+    tab: &str,
+    token: &str,
+    origin: Option<&str>,
+) -> Result<Socket, (u16, Value)> {
+    let mut request = format!(
+        "ws://{}/v1/sessions/{}/browser/tabs/{tab}/control",
+        f.tcp, f.session
+    )
+    .into_client_request()
+    .unwrap();
+    request
+        .headers_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    if let Some(origin) = origin {
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+    }
+    match tokio_tungstenite::connect_async(request).await {
+        Ok((socket, _)) => Ok(socket),
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            let body = response
+                .body()
+                .as_ref()
+                .and_then(|body| serde_json::from_slice(body).ok())
+                .unwrap_or(Value::Null);
+            Err((response.status().as_u16(), body))
+        }
+        Err(error) => panic!("control socket: {error}"),
+    }
+}
+
+/// The next `page` message whose URL satisfies `wanted`.
+async fn page_update(socket: &mut Socket, wanted: impl Fn(&str) -> bool) -> (String, bool) {
+    loop {
+        if let TakeoverServerMessage::Page {
+            url, can_go_back, ..
+        } = message(socket).await
+        {
+            if wanted(&url) {
+                return (url, can_go_back);
+            }
+        }
+    }
+}
+
+async fn input_error(socket: &mut Socket) -> String {
+    loop {
+        if let TakeoverServerMessage::InputError { code } = message(socket).await {
+            return code;
+        }
+    }
+}
+
+/// Agent browser tools on the tab, refused or allowed together.
+async fn agent_snapshot(f: &Fixture, id: &str) -> ToolOutcome {
+    host(&f.daemon, &f.session)
+        .await
+        .call(call("browser_snapshot", json!({"tab_id":f.tab}), id))
+        .await
+}
+
+#[tokio::test]
+async fn person_control_refuses_non_persons_and_locks_the_agent_out_until_released() {
+    let Some(f) = fixture(1800).await else {
+        return;
+    };
+    let db = &f.daemon.shared.db;
+    let steer = db.pair(vec![CapabilityScope::Steer]).await.unwrap().1;
+    let other = db.pair(vec![CapabilityScope::Steer]).await.unwrap().1;
+    let read = db.pair(vec![CapabilityScope::Read]).await.unwrap().1;
+    let human_step = db.pair(vec![CapabilityScope::HumanStep]).await.unwrap().1;
+    let agent = db
+        .pair_as(
+            "agent".into(),
+            vec![CapabilityScope::Steer],
+            openside_proto::DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap()
+        .1;
+
+    // Scope, role and origin are checked before any upgrade.
+    for token in [&read, &human_step] {
+        assert_eq!(
+            connect_control(&f, &f.tab, token, None)
+                .await
+                .err()
+                .unwrap()
+                .0,
+            403
+        );
+    }
+    let agent_refusal = connect_control(&f, &f.tab, &agent, None)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        (agent_refusal.0, agent_refusal.1["code"].clone()),
+        (403, json!("person_device_required"))
+    );
+    let foreign = connect_control(&f, &f.tab, &steer, Some("http://evil.example")).await;
+    assert_eq!(foreign.err().unwrap().1["code"], "origin_forbidden");
+    let missing = connect_control(&f, "no-such-tab", &steer, None).await;
+    assert_eq!(missing.err().unwrap().1["code"], "tab_unavailable");
+
+    let mut socket = connect_control(&f, &f.tab, &steer, Some(&format!("http://{}", f.tcp)))
+        .await
+        .expect("a person's steer device takes control");
+    let (url, _) = page_update(&mut socket, |_| true).await;
+    assert_eq!(url.trim_end_matches('/'), f.origin);
+    // One controller per tab, from any device.
+    let second = connect_control(&f, &f.tab, &other, None).await;
+    assert_eq!(
+        second.err().unwrap(),
+        (
+            409,
+            json!({"code":"control_in_use","message":"control in use"})
+        )
+    );
+    assert!(refused(&agent_snapshot(&f, "locked").await));
+    for name in ["browser_navigate", "browser_close_tab"] {
+        let args = if name == "browser_navigate" {
+            json!({"tab_id":f.tab,"url":format!("{}/clean", f.origin)})
+        } else {
+            json!({"tab_id":f.tab})
+        };
+        let outcome = host(&f.daemon, &f.session)
+            .await
+            .call(call(name, args, name))
+            .await;
+        assert!(refused(&outcome), "{name}: {outcome:?}");
+    }
+
+    // Typed addresses are http(s) only, without credentials, and never an origin the policy
+    // denies. `about:blank` is refused too: it is no address a person needs to type.
+    for url in [
+        "file:///etc/passwd",
+        "chrome://settings",
+        "javascript:alert(1)",
+        "data:text/html,<p>typed</p>",
+        "about:blank",
+        "about:srcdoc",
+        "http://user:pw@localhost/",
+    ] {
+        send(&mut socket, json!({"type":"navigate","url":url})).await;
+        assert_eq!(input_error(&mut socket).await, "invalid_url", "{url}");
+    }
+    // A page may still move itself to a non-network document; only its scheme is reported.
+    page(&f, "location.href = 'about:blank?leak=page-canary'; true").await;
+    page_update(&mut socket, |url| url == "about:").await;
+    crate::policy_api::replace_locked(
+        &f.daemon.shared.policy,
+        serde_json::from_value(json!({"default_mode":"full","allow_origins":[],
+            "deny_origins":["http://denied.test"],"rules":[]}))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    send(
+        &mut socket,
+        json!({"type":"navigate","url":"http://denied.test/page"}),
+    )
+    .await;
+    assert_eq!(input_error(&mut socket).await, "policy_denied");
+
+    // An `ask` origin loads when the person types it: the typed address is the approval, for
+    // that navigation only. History and reload carry no address and are refused there.
+    crate::policy_api::replace_locked(
+        &f.daemon.shared.policy,
+        serde_json::from_value(
+            json!({"default_mode":"full","allow_origins":[],"deny_origins":[],
+            "rules":[{"effect":"ask","capability":"browse","pattern":f.origin}]}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    send(&mut socket, json!({"type":"navigate","url":f.origin})).await;
+    page_update(&mut socket, |url| url.trim_end_matches('/') == f.origin).await;
+    assert_eq!(page(&f, "document.title").await, "Takeover fixture");
+    send(&mut socket, json!({"type":"reload"})).await;
+    assert_eq!(input_error(&mut socket).await, "approval_required");
+    crate::policy_api::replace_locked(
+        &f.daemon.shared.policy,
+        serde_json::from_value(
+            json!({"default_mode":"full","allow_origins":[],"deny_origins":[],
+            "rules":[]}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    // Navigation, history and a tap all land in the tab.
+    let clean = format!("{}/clean", f.origin);
+    send(&mut socket, json!({"type":"navigate","url":clean})).await;
+    let (_, can_go_back) = page_update(&mut socket, |url| url.ends_with("/clean")).await;
+    assert!(can_go_back);
+    send(&mut socket, json!({"type":"back"})).await;
+    page_update(&mut socket, |url| !url.ends_with("/clean")).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while page(
+        &f,
+        "document.readyState === 'complete' && !!document.querySelector('#go')",
+    )
+    .await
+        != true
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "back did not load the start page"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    for event in ["down", "up"] {
+        send(
+            &mut socket,
+            json!({"type":"mouse","event":event,"x":100,"y":100}),
+        )
+        .await;
+    }
+    focus_name(&mut socket).await;
+    send(
+        &mut socket,
+        json!({"type":"text","text":"control-typed-canary"}),
+    )
+    .await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while page(&f, "out.textContent").await != "Human clicked" || typed(&f).await == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the person's input never landed"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Closing the socket hands the tab back; the agent's next call runs.
+    socket.close(None).await.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let outcome = agent_snapshot(&f, "resumed").await;
+        if !refused(&outcome) {
+            assert!(model(outcome).to_string().contains("Human clicked"));
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "control was never released"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let audit = std::fs::read_to_string(
+        openside_config::data_layout::DataPath::Audit.path(&f.daemon.shared.config.data_dir),
+    )
+    .unwrap();
+    let control: Vec<Value> = audit
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record["tool"] == "browser_control")
+        .collect();
+    let decisions: Vec<&str> = control
+        .iter()
+        .filter_map(|record| record["decision"].as_str())
+        .collect();
+    for decision in [
+        "control_started",
+        "navigate",
+        "back",
+        "reload",
+        "control_ended",
+    ] {
+        assert!(decisions.contains(&decision), "{decision}: {decisions:?}");
+    }
+    assert!(control
+        .iter()
+        .any(|record| record["decision"] == "navigate" && record["outcome"] == "policy_denied"));
+    assert!(control.iter().any(|record| record["decision"] == "navigate"
+        && record["outcome"] == "ok"
+        && record["person_approved"] == true));
+    assert!(!audit.contains("page-canary"));
+    assert!(!audit.contains("control-typed-canary"));
+    f.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn person_control_excludes_takeover_ends_on_idle_and_on_tab_close() {
+    let Some(f) = fixture(1800).await else {
+        return;
+    };
+    let steer = f
+        .daemon
+        .shared
+        .db
+        .pair(vec![CapabilityScope::Steer, CapabilityScope::HumanStep])
+        .await
+        .unwrap()
+        .1;
+    // A pending takeover owns the tab; person control waits for it.
+    let ticket = takeover(&f, "pending").await;
+    assert_eq!(
+        connect_control(&f, &f.tab, &steer, None)
+            .await
+            .err()
+            .unwrap()
+            .1["code"],
+        "takeover_active"
+    );
+    let rejected = api::router(f.daemon.shared.clone(), true)
+        .oneshot(request(
+            "POST",
+            &format!("/v1/tickets/{ticket}/reject"),
+            json!({}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::OK);
+
+    crate::takeover::hooks::CONTROL_IDLE
+        .lock()
+        .insert((f.session.clone(), f.tab.clone()), Duration::from_secs(1));
+    let mut socket = connect_control(&f, &f.tab, &steer, None).await.unwrap();
+    assert_eq!(ended(&mut socket).await, TakeoverEndReason::Idle);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while refused(&agent_snapshot(&f, "after-idle").await) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "idle control kept the tab"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    crate::takeover::hooks::CONTROL_IDLE
+        .lock()
+        .remove(&(f.session.clone(), f.tab.clone()));
+
+    let mut socket = connect_control(&f, &f.tab, &steer, None).await.unwrap();
+    send(&mut socket, json!({"type":"close_tab"})).await;
+    assert_eq!(ended(&mut socket).await, TakeoverEndReason::TabUnavailable);
+    assert!(!model(
+        host(&f.daemon, &f.session)
+            .await
+            .call(call("browser_tabs", json!({}), "tabs"))
+            .await
+    )
+    .to_string()
+    .contains(&f.tab));
+    f.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn person_control_refuses_isolated_and_incognito_sessions_before_the_upgrade() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open_runtime(resolved_config(root.path()), TestRuntime::default())
+        .await
+        .unwrap();
+    let unix = api::router(daemon.shared.clone(), true);
+    let mut codes = Vec::new();
+    let model = std::any::type_name::<TestRuntime>();
+    for body in [
+        json!({"model":model,"browser_space":"isolated"}),
+        json!({"model":model,"incognito":true}),
+        json!({"model":model}),
+    ] {
+        let response = unix
+            .clone()
+            .oneshot(request("POST", "/v1/sessions", body, None))
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "{}",
+            String::from_utf8_lossy(&bytes)
+        );
+        let id = serde_json::from_slice::<Value>(&bytes).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let response = unix
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("/v1/sessions/{id}/browser/tabs/tab-1/control"),
+                json!({}),
+                None,
+            ))
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let code = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null)["code"].clone();
+        codes.push((status, code));
+    }
+    assert_eq!(
+        codes,
+        [
+            (409, json!("private_session")),
+            (409, json!("private_session")),
+            // A shared session passes the privacy check and only lacks the upgrade.
+            (426, json!("websocket_required")),
+        ]
+    );
+    daemon.shutdown().await;
+}
+
+/// Typed private, link-local and loopback addresses get no treatment of their own: the session
+/// browse policy that judges the agent's browser_navigate judges them, and its modes allow
+/// browsing everywhere. Only origin lists and rules restrict them, for agent and person alike.
+#[tokio::test]
+async fn typed_private_and_loopback_addresses_follow_the_agents_browse_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open_runtime(resolved_config(root.path()), TestRuntime::default())
+        .await
+        .unwrap();
+    let shared = &daemon.shared;
+    let urls = [
+        "http://10.0.0.1/",
+        "http://192.168.1.1/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]:8080/",
+        "http://[fd00::1]/",
+        "http://localhost:3000/",
+    ];
+    let effects = |session: SessionId| async move {
+        let state = shared.db.state(&session).await.unwrap();
+        let policy = crate::policy_api::effective(
+            shared,
+            &crate::tools::ToolEnv::new(shared.clone(), &state).policy,
+        );
+        let mut effects = Vec::new();
+        for url in urls {
+            let origin = crate::tools::browser::url_origin(url)
+                .map_err(|error| error.0)
+                .unwrap();
+            let agent = policy
+                .decide(&openside_policy::Action::new(
+                    openside_policy::Capability::Browse,
+                    &origin,
+                ))
+                .effect;
+            let person = crate::takeover::navigable(shared, &session, url)
+                .await
+                .map(|(_, effect)| effect);
+            effects.push((url, agent, person));
+        }
+        effects
+    };
+    use openside_policy::Effect::{Allow, Deny};
+    for mode in [PolicyMode::Guard, PolicyMode::Full, PolicyMode::ReadOnly] {
+        let session = create_session(&daemon, &format!("private-{mode:?}"), mode, None).await;
+        for (url, agent, person) in effects(session).await {
+            assert_eq!((agent, person), (Allow, Ok(Allow)), "{mode:?} {url}");
+        }
+    }
+    crate::policy_api::replace_locked(
+        &shared.policy,
+        serde_json::from_value(json!({"default_mode":"guard","allow_origins":[],
+            "deny_origins":["http://10.0.0.1","http://169.254.169.254","http://[fd00::1]"],
+            "rules":[]}))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let session = create_session(&daemon, "listed", PolicyMode::Guard, None).await;
+    for (url, agent, person) in effects(session).await {
+        let listed = ["10.0.0.1", "169.254.169.254", "fd00::1"]
+            .iter()
+            .any(|host| url.contains(host));
+        if listed {
+            assert_eq!((agent, person), (Deny, Err("policy_denied")), "{url}");
+        } else {
+            assert_eq!((agent, person), (Allow, Ok(Allow)), "{url}");
+        }
+    }
+    daemon.shutdown().await;
+}

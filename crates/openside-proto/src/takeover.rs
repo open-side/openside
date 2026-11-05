@@ -1,4 +1,6 @@
-//! Remote takeover WebSocket messages (`GET /v1/tickets/{id}/takeover`, `docs/specs/human-step.md`).
+//! Remote control WebSocket messages: takeover tickets (`GET /v1/tickets/{id}/takeover`,
+//! `docs/specs/human-step.md`) and a person's ticket-less control of a tab from the browser
+//! sheet (`GET /v1/sessions/{id}/browser/tabs/{tab_id}/control`, `docs/specs/remote-ui.md`).
 //!
 //! Both directions carry JSON text messages. Coordinates are CSS pixels of the tab viewport
 //! (`width` x `height` of the latest frame, 1440x900): a client scales pointer positions from
@@ -28,8 +30,24 @@ pub enum TakeoverServerMessage {
     },
     /// The daemon refused one input message; the stream continues.
     InputError {
-        /// Stable code: `invalid_input` or `out_of_bounds` or `input_failed`.
+        /// Stable code: `invalid_input`, `out_of_bounds` or `input_failed`; on control streams
+        /// also `invalid_url`, `policy_denied`, `approval_required`, `connection_denied`,
+        /// `navigation_failed` or `no_history`.
         code: String,
+    },
+    /// The page the controlled tab shows now. Control streams only: sent when the stream
+    /// opens and whenever the address, title or history position changes.
+    Page {
+        /// Top-frame URL without embedded credentials, query or fragment. A page that moved
+        /// itself to a non-network document reports only its scheme (`data:`, `about:`, …);
+        /// `about:blank` is reported as is.
+        url: String,
+        /// Document title, at most 200 characters.
+        title: String,
+        /// Whether `back` has an entry to go to.
+        can_go_back: bool,
+        /// Whether `forward` has an entry to go to.
+        can_go_forward: bool,
     },
     /// The stream ended; the daemon closes the socket after this message.
     Ended {
@@ -92,8 +110,9 @@ pub enum TakeoverKeyEvent {
     Up,
 }
 
-/// Client-to-daemon takeover input, forwarded to the ticket's tab only. Typed text and key
-/// values are never logged or persisted.
+/// Client-to-daemon input, forwarded to the stream's tab only. Typed text and key values are
+/// never logged or persisted. `navigate`, `back`, `forward`, `reload` and `close_tab` are
+/// accepted on control streams only; a takeover stream answers them with `invalid_input`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TakeoverInput {
@@ -150,4 +169,24 @@ pub enum TakeoverInput {
         /// Text to insert.
         text: String,
     },
+    /// Load a typed address in the tab. Only http(s) URLs without embedded credentials are
+    /// accepted (`invalid_url` otherwise, `about:blank` included), and the session's browse
+    /// policy judges the origin as it does for the agent: `deny` is `policy_denied`, and an
+    /// `ask` origin loads because the typed address is the person's approval, for this
+    /// navigation and its same-origin redirects only. Redirects to other http(s) origins and
+    /// later link or script navigations follow the owner policy without that approval;
+    /// page-initiated moves to non-network documents are not filtered.
+    Navigate {
+        /// Absolute http(s) URL without embedded credentials.
+        url: String,
+    },
+    /// Go one entry back in the tab's history. An entry on an `ask` origin is refused with
+    /// `approval_required`, and one that is not http(s) or `about:blank` with `invalid_url`.
+    Back,
+    /// Go one entry forward in the tab's history, under the same rules as `Back`.
+    Forward,
+    /// Reload the current page, under the same rules as `Back`.
+    Reload,
+    /// Close the tab; the stream then ends with `tab_unavailable`.
+    CloseTab,
 }

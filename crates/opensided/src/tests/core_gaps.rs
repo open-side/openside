@@ -175,6 +175,11 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("GET", "/v1/sessions/{id}/browser/preview", Browse),
         (
             "GET",
+            "/v1/sessions/{id}/browser/tabs/{tab_id}/control",
+            Steer,
+        ),
+        (
+            "GET",
             "/v1/sessions/{id}/browser/thumbnails/{thumbnail_id}",
             Browse,
         ),

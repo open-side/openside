@@ -1,10 +1,12 @@
-import { ExternalLink, Globe, Hand } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ArrowLeft, ArrowRight, CornerDownLeft, ExternalLink, Globe, Hand, Maximize2, RotateCw, X } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { ApiError } from "../api/client";
-import type { BrowserTab } from "../api/types";
+import type { BrowserTab, MyDevice } from "../api/types";
 import { useClient } from "../context";
+import { useBrowserControl } from "../hooks/useBrowserControl";
+import { AGENT_VIEWPORT, MAX_TEXT_BYTES, useBrowserInput, utf8Chunks } from "../hooks/useBrowserInput";
 import { originOf, useFavicon } from "../hooks/useFavicon";
-import { Button, Dialog, ICON_STROKE } from "../ui";
+import { Button, Dialog, ICON_STROKE, IconButton } from "../ui";
 import { BrowserFrame } from "./BrowserFrame";
 import { ImageViewer } from "./ImageViewer";
 import "./browser.css";
@@ -66,9 +68,14 @@ export function useSessionTabs(sessionId: string): SessionTabs {
 }
 
 export interface BrowserSheetProps {
+  sessionId: string;
+  /** The agent is working: control starts only from Take control. */
+  running: boolean;
   tabs: SessionTabs;
   /** Tab the live stream shows, when known. */
   liveTabId: string | null;
+  /** Tab the opener asked for; null follows the agent's tab. */
+  selectedTabId?: string | null;
   /** Base64 JPEG of the latest frame, or null with `state` explaining why. */
   frame: string | null;
   state: string | null;
@@ -79,107 +86,323 @@ export interface BrowserSheetProps {
   onClose: () => void;
 }
 
-type TakeoverAccess = { kind: "checking" } | { kind: "allowed" } | { kind: "blocked"; reason: string };
+type Access = { kind: "checking" } | { kind: "allowed" } | { kind: "blocked"; reason: string };
 
 /**
- * Whether this device may take over the tab. The daemon requires a person's own device with
- * `human_step` (or `admin`); an agent client or a narrower pairing is told why instead of being
- * offered a button that would only fail. When the device cannot be looked up (an older daemon,
- * a network error) the button stays: the daemon still refuses, and the remote control says so.
+ * This device's record, or "unknown" when it cannot be looked up (an older daemon, a network
+ * error): controls then stay offered, the daemon still refuses, and the sheet says so.
  */
-function useTakeoverAccess(origin: string | null | undefined): TakeoverAccess {
+function useMyDevice(): MyDevice | "unknown" | null {
   const client = useClient();
-  const wanted = origin !== undefined;
-  const valid = !!origin && originOf(origin) !== null;
-  const [device, setDevice] = useState<TakeoverAccess>({ kind: "checking" });
+  const [device, setDevice] = useState<MyDevice | "unknown" | null>(null);
   useEffect(() => {
-    if (!wanted || !valid) return;
     let current = true;
     client.myDevice().then(
-      (me) => {
-        if (!current) return;
-        if (me.kind === "agent_client") setDevice({ kind: "blocked", reason: "Only a device you paired as yourself can take control of the browser." });
-        else if (Array.isArray(me.scopes) && !me.scopes.includes("human_step") && !me.scopes.includes("admin"))
-          setDevice({ kind: "blocked", reason: "This device wasn't given permission to take control of the browser." });
-        else setDevice({ kind: "allowed" });
-      },
-      () => current && setDevice({ kind: "allowed" }),
+      (me) => current && setDevice(me),
+      () => current && setDevice("unknown"),
     );
     return () => {
       current = false;
     };
-  }, [client, wanted, valid]);
-  if (wanted && !valid) return { kind: "blocked", reason: "This request doesn't say which page to take over." };
+  }, [client]);
   return device;
 }
 
-function TabRow({ tab, live }: { tab: BrowserTab; live: boolean }) {
+/**
+ * Whether this device may finish a takeover request (a person's device with `human_step`) or
+ * drive a tab itself (a person's device with `steer`); `admin` covers both. An agent client or a
+ * narrower pairing is told why instead of being offered a button that would only fail.
+ */
+function accessOf(device: MyDevice | "unknown" | null, scope: "human_step" | "steer"): Access {
+  if (device === null) return { kind: "checking" };
+  if (device === "unknown") return { kind: "allowed" };
+  if (device.kind === "agent_client") return { kind: "blocked", reason: "Only a device you paired as yourself can take control of the browser." };
+  if (Array.isArray(device.scopes) && !device.scopes.includes(scope) && !device.scopes.includes("admin"))
+    return { kind: "blocked", reason: "This device wasn't given permission to take control of the browser." };
+  return { kind: "allowed" };
+}
+
+const END_LABEL: Record<string, string> = {
+  idle: "Handed back to the agent after inactivity.",
+  revoked: "This device's access was revoked.",
+  tab_unavailable: "The tab was closed.",
+};
+
+const INPUT_ERROR: Record<string, string> = {
+  invalid_url: "Only http and https addresses can be opened here.",
+  policy_denied: "Your browsing policy blocks that site.",
+  approval_required: "That site needs approval. Type its address to open it.",
+  connection_denied: "That site isn't allowed in this conversation.",
+  navigation_failed: "The page didn't load.",
+  no_history: "There's no page to go to.",
+};
+
+/** An address as typed: a bare host gets `https://`; anything but http(s) is refused here. */
+function addressOf(text: string): string | null {
+  const value = text.trim();
+  if (!value) return null;
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`;
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+function TabRow({
+  tab,
+  live,
+  selected,
+  onSelect,
+  onCloseTab,
+}: {
+  tab: BrowserTab;
+  live: boolean;
+  selected: boolean;
+  onSelect: () => void;
+  onCloseTab: (() => void) | null;
+}) {
   const icon = useFavicon(originOf(tab.url));
+  const name = tab.title || tab.url;
   return (
-    <li aria-current={live || undefined}>
-      <span className="browser-sheet-favicon" aria-hidden="true">
-        {icon ? <img src={icon} alt="" width={16} height={16} /> : <Globe size={16} strokeWidth={ICON_STROKE} />}
-      </span>
-      <span className="browser-sheet-tab-text">
-        <strong>{tab.title || tab.url}</strong>
-        <small>{tab.url}</small>
-      </span>
-      {live ? (
-        <span className="browser-sheet-live">
-          <span className="live-dot" aria-hidden="true" />
-          Live
+    <li aria-current={selected || undefined}>
+      <button type="button" className="browser-sheet-tab" aria-pressed={selected} aria-label={`Show ${name}`} onClick={onSelect}>
+        <span className="browser-sheet-favicon" aria-hidden="true">
+          {icon ? <img src={icon} alt="" width={16} height={16} /> : <Globe size={16} strokeWidth={ICON_STROKE} />}
         </span>
+        <span className="browser-sheet-tab-text">
+          <strong>{name}</strong>
+          <small>{tab.url}</small>
+        </span>
+        {live ? (
+          <span className="browser-sheet-live">
+            <span className="live-dot" aria-hidden="true" />
+            Live
+          </span>
+        ) : null}
+      </button>
+      {onCloseTab ? (
+        <IconButton label={`Close ${name}`} onClick={onCloseTab}>
+          <X size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        </IconButton>
       ) : null}
     </li>
   );
 }
 
 /**
- * The browser sheet (aside-relay BrowserPanel): the tab the agent is on, titled with its page
- * title and site, its URL, its live read-only picture (tap to zoom), and the other tabs this
- * conversation opened. Only actions with a real path exist: opening the page in the user's own
- * browser and taking over a tab the agent asked the person to finish. There is no address bar
- * or back/forward: the daemon has no endpoint to drive the tab from here.
+ * The browser sheet (aside-relay BrowserPanel): a tab of this conversation, titled with its page
+ * title and site, its live picture (zoomable), and the other tabs it opened. A person's device
+ * with `steer` drives the tab here: an address bar, back, forward, reload, switching and closing
+ * tabs, and taps, scrolls and typing on the picture. Driving takes the tab from the agent until
+ * Hand back (or inactivity); while the agent runs, Take control comes first. A pending takeover
+ * request is finished in the full-screen remote control instead.
  */
-export function BrowserSheet({ tabs, liveTabId, frame, state, fallback, takeover, onClose }: BrowserSheetProps) {
+export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabId = null, frame, state, fallback, takeover, onClose }: BrowserSheetProps) {
   const [zoomed, setZoomed] = useState(false);
+  const [picked, setPicked] = useState<string | null>(selectedTabId);
+  // An opener naming another tab while the sheet is open (a tab card) switches to it.
+  const [opened, setOpened] = useState(selectedTabId);
+  if (selectedTabId !== opened) {
+    setOpened(selectedTabId);
+    if (selectedTabId) setPicked(selectedTabId);
+  }
+  const [address, setAddress] = useState<string | null>(null);
+  const [addressError, setAddressError] = useState<string | null>(null);
+  const [typed, setTyped] = useState("");
   const list = tabs.tabs ?? [];
-  const live = list.find((tab) => tab.tab_id === liveTabId) ?? null;
-  const title = live?.title || fallback.title || fallback.host || "Browser";
-  const host = (live ? hostOf(live.url) : null) ?? fallback.host;
-  const src = frame ? `data:image/jpeg;base64,${frame}` : null;
-  const access = useTakeoverAccess(takeover?.origin);
+  // A picked tab that closed falls back to the agent's.
+  const tabId = (picked && (tabs.tabs === null || list.some((tab) => tab.tab_id === picked)) ? picked : null) ?? liveTabId;
+  const shown = list.find((tab) => tab.tab_id === tabId) ?? null;
+  const device = useMyDevice();
+  const takeoverAccess: Access = takeover && (!takeover.origin || originOf(takeover.origin) === null) ? { kind: "blocked", reason: "This request doesn't say which page to take over." } : accessOf(device, "human_step");
+  const controlAccess = accessOf(device, "steer");
+  const control = useBrowserControl(sessionId, tabId);
+  // A takeover request owns its tab; the daemon refuses control of it until the request ends.
+  const controllable = !takeover && controlAccess.kind === "allowed" && !!tabId && !tabs.disconnected;
+  const interactive = controllable && (control.active || !running);
+  // The preview's last picture stands in until the control stream's first frame arrives.
+  const picture = control.frame?.data ?? (tabId === liveTabId ? frame : null);
+  const viewport = control.frame ? { width: control.frame.width, height: control.frame.height } : AGENT_VIEWPORT;
+  const input = useBrowserInput<HTMLDivElement>({ send: interactive && picture ? control.send : null, viewport });
+  // What to do once the sheet has switched to a tab: open control there, or close it.
+  const pending = useRef<{ tab: string; close: boolean } | null>(null);
+  const { start, send } = control;
+  useEffect(() => {
+    const next = pending.current;
+    if (!next || next.tab !== tabId) return;
+    pending.current = null;
+    if (next.close) send({ type: "close_tab" });
+    else start();
+  }, [tabId, start, send]);
+
+  const url = control.page?.url ?? shown?.url ?? null;
+  const title = control.page?.title || shown?.title || (tabId === liveTabId ? fallback.title || fallback.host : "") || "Browser";
+  const host = (url ? hostOf(url) : null) ?? fallback.host;
+  const src = picture ? `data:image/jpeg;base64,${picture}` : null;
+
+  function select(tab: string) {
+    setAddress(null);
+    setAddressError(null);
+    if (tab === tabId) return;
+    if (interactive && !running) pending.current = { tab, close: false };
+    setPicked(tab);
+  }
+
+  function closeTab(tab: string) {
+    if (tab === tabId) {
+      control.send({ type: "close_tab" });
+      return;
+    }
+    pending.current = { tab, close: true };
+    setPicked(tab);
+  }
+
+  function navigate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const target = addressOf(address ?? url ?? "");
+    if (!target) {
+      setAddressError(INPUT_ERROR.invalid_url ?? null);
+      return;
+    }
+    setAddressError(null);
+    setAddress(null);
+    control.send({ type: "navigate", url: target });
+  }
+
+  function sendText(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    for (const chunk of utf8Chunks(typed, MAX_TEXT_BYTES)) control.send({ type: "text", text: chunk });
+    setTyped("");
+  }
+
+  const note = tabs.disconnected
+    ? "The browser is disconnected."
+    : control.status === "connecting"
+      ? "Taking control…"
+      : control.status === "open"
+        ? "You're in control. The agent waits until you hand the tab back."
+        : control.status === "failed"
+          ? "Couldn't connect to take control. Another device may be using this tab, the agent may be waiting on a request for you, or this conversation browses privately."
+          : control.status === "ended"
+            ? (END_LABEL[control.ended ?? ""] ?? "Control ended. The agent can use the tab again.")
+            : controllable && running
+              ? "The agent is using this tab. Take control to use it yourself; the agent waits until you hand it back."
+              : interactive
+                ? "Tap the page or use the address bar. The agent waits while you browse."
+                : "Read-only live view. The agent keeps control.";
+  const refused = control.inputError ? (INPUT_ERROR[control.inputError] ?? "That didn't work.") : null;
+  const canGoBack = interactive && (control.page ? control.page.can_go_back : true);
+  const canGoForward = interactive && (control.page ? control.page.can_go_forward : true);
 
   return (
     <Dialog open size="wide" title={title} description={host && host !== title ? host : undefined} onClose={onClose} className="browser-sheet">
       <div className="browser-sheet-body">
-        {live ? (
-          <p className="browser-sheet-url" title={live.url}>
-            {live.url}
+        {controllable ? (
+          <form className="browser-sheet-toolbar" onSubmit={navigate} aria-label="Address bar">
+            <IconButton label="Back" disabled={!canGoBack} onClick={() => control.send({ type: "back" })}>
+              <ArrowLeft size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
+            <IconButton label="Forward" disabled={!canGoForward} onClick={() => control.send({ type: "forward" })}>
+              <ArrowRight size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
+            <IconButton label="Reload" disabled={!interactive} onClick={() => control.send({ type: "reload" })}>
+              <RotateCw size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
+            <input
+              className="browser-sheet-address"
+              type="text"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="go"
+              aria-label="Address"
+              placeholder="Search or type an address"
+              disabled={!interactive}
+              value={address ?? url ?? ""}
+              onChange={(event) => setAddress(event.target.value)}
+              onBlur={() => address === url && setAddress(null)}
+            />
+          </form>
+        ) : url ? (
+          <p className="browser-sheet-url" title={url}>
+            {url}
           </p>
         ) : null}
-        <button type="button" className="browser-sheet-screen" aria-label="Zoom browser preview" disabled={!src} onClick={() => setZoomed(true)}>
-          {frame ? (
-            <BrowserFrame data={frame} />
-          ) : (
-            <span className="pip-state" role="status">
-              {state}
-            </span>
-          )}
-        </button>
-        <div className="browser-sheet-meta">
-          <p className="browser-sheet-note" role="status" data-live={src && !tabs.disconnected ? "" : undefined}>
-            {tabs.disconnected ? "The browser is disconnected." : "Read-only live view. The agent keeps control."}
+        {addressError ?? refused ? (
+          <p className="browser-sheet-takeover-note" role="alert">
+            {addressError ?? refused}
           </p>
-          {takeover && access.kind === "allowed" ? (
+        ) : null}
+        <div className="browser-sheet-stage">
+          <div
+            {...input.props}
+            className="browser-sheet-screen"
+            data-interactive={(interactive && !!picture) || undefined}
+            tabIndex={interactive && picture ? 0 : -1}
+            aria-label={interactive ? "Remote browser screen; tap to interact, type to send keys" : "Browser preview"}
+            style={control.frame ? ({ "--frame-aspect": control.frame.width / control.frame.height } as CSSProperties) : undefined}
+          >
+            {picture ? (
+              <BrowserFrame data={picture} />
+            ) : (
+              <span className="pip-state" role="status">
+                {control.active ? "Waiting for a frame…" : control.withheld ? null : tabId === liveTabId ? state : "Take control to see this tab."}
+              </span>
+            )}
+          </div>
+          <IconButton label="Zoom browser preview" className="browser-sheet-zoom" disabled={!src} onClick={() => setZoomed(true)}>
+            <Maximize2 size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
+        </div>
+        {control.withheld ? <p className="browser-sheet-takeover-note">The screen is hidden because the page holds a secret value. Input still works.</p> : null}
+        {control.status === "open" ? (
+          <form className="browser-sheet-type" onSubmit={sendText} aria-label="Type into the page">
+            <input
+              type="text"
+              aria-label="Text to type"
+              placeholder="Type into the page"
+              autoCapitalize="off"
+              autoCorrect="off"
+              value={typed}
+              onChange={(event) => setTyped(event.target.value)}
+            />
+            <Button type="submit" className="browser-sheet-action" disabled={!typed}>
+              Type
+            </Button>
+            <IconButton
+              label="Press Enter"
+              onClick={() => {
+                control.send({ type: "key", event: "down", key: "Enter", code: "Enter", modifiers: 0 });
+                control.send({ type: "key", event: "up", key: "Enter", code: "Enter", modifiers: 0 });
+              }}
+            >
+              <CornerDownLeft size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
+          </form>
+        ) : null}
+        <div className="browser-sheet-meta">
+          <p className="browser-sheet-note" role="status" data-live={(src && !tabs.disconnected) || control.status === "open" ? "" : undefined}>
+            {note}
+          </p>
+          {takeover && takeoverAccess.kind === "allowed" ? (
             <Button variant="primary" className="browser-sheet-action" onClick={takeover.onStart}>
               <Hand size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
               Take control
             </Button>
           ) : null}
-          {takeover && access.kind === "blocked" ? <p className="browser-sheet-takeover-note">{access.reason}</p> : null}
-          {live && /^https?:\/\//i.test(live.url) ? (
-            <a className="ui-button ui-button--secondary browser-sheet-action browser-sheet-open" href={live.url} target="_blank" rel="noopener noreferrer external">
+          {takeover && takeoverAccess.kind === "blocked" ? <p className="browser-sheet-takeover-note">{takeoverAccess.reason}</p> : null}
+          {controllable && running && !control.active ? (
+            <Button variant="primary" className="browser-sheet-action" onClick={control.start}>
+              <Hand size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              Take control
+            </Button>
+          ) : null}
+          {control.active ? (
+            <Button variant="primary" className="browser-sheet-action" onClick={control.release}>
+              Hand back
+            </Button>
+          ) : null}
+          {!takeover && controlAccess.kind === "blocked" ? <p className="browser-sheet-takeover-note">{controlAccess.reason}</p> : null}
+          {url && /^https?:\/\//i.test(url) ? (
+            <a className="ui-button ui-button--secondary browser-sheet-action browser-sheet-open" href={url} target="_blank" rel="noopener noreferrer external">
               <ExternalLink size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
               Open in your browser
             </a>
@@ -192,14 +415,21 @@ export function BrowserSheet({ tabs, liveTabId, frame, state, fallback, takeover
             </h4>
             <ul>
               {list.map((tab) => (
-                <TabRow key={tab.tab_id} tab={tab} live={tab.tab_id === liveTabId} />
+                <TabRow
+                  key={tab.tab_id}
+                  tab={tab}
+                  live={tab.tab_id === liveTabId}
+                  selected={tab.tab_id === tabId}
+                  onSelect={() => select(tab.tab_id)}
+                  onCloseTab={interactive && (!running || tab.tab_id === tabId) ? () => closeTab(tab.tab_id) : null}
+                />
               ))}
             </ul>
           </section>
         ) : null}
       </div>
       {zoomed && src ? (
-        <ImageViewer label="Live browser preview" title={title} subtitle={live?.url} src={src} alt="Remote browser tab" onClose={() => setZoomed(false)} />
+        <ImageViewer label="Live browser preview" title={title} subtitle={url ?? undefined} src={src} alt="Remote browser tab" onClose={() => setZoomed(false)} />
       ) : null}
     </Dialog>
   );

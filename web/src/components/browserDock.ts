@@ -6,9 +6,11 @@ interface Dock {
   /** The person picked `pip` (Show browser, minimize, close) rather than it being the default. */
   chosen: boolean;
   sheet: boolean;
+  /** The tab the sheet opened on, when the opener named one; null follows the agent's tab. */
+  sheetTab: string | null;
 }
 
-const DEFAULT: Dock = { pip: "open", chosen: false, sheet: false };
+const DEFAULT: Dock = { pip: "open", chosen: false, sheet: false, sheetTab: null };
 const PIPS: readonly string[] = ["open", "minimized", "closed"];
 
 // The header button (`BrowserButton`) and the live card (`BrowserPreview`) are mounted apart, so
@@ -47,15 +49,15 @@ function read(sessionId: string): Dock {
   } catch {
     // Corrupt entry: start from the default dock.
   }
-  const dock = { pip, chosen, sheet: cached?.dock.sheet ?? DEFAULT.sheet };
+  const dock = { pip, chosen, sheet: cached?.dock.sheet ?? DEFAULT.sheet, sheetTab: cached?.dock.sheetTab ?? DEFAULT.sheetTab };
   parsed.set(sessionId, { raw, dock });
   return dock;
 }
 
-function write(sessionId: string, patch: Partial<Pick<Dock, "pip" | "sheet">>) {
+function write(sessionId: string, patch: Partial<Pick<Dock, "pip" | "sheet" | "sheetTab">>) {
   const current = read(sessionId);
   const next = { ...current, ...patch, chosen: current.chosen || patch.pip !== undefined };
-  if (next.pip === current.pip && next.chosen === current.chosen && next.sheet === current.sheet) return;
+  if (next.pip === current.pip && next.chosen === current.chosen && next.sheet === current.sheet && next.sheetTab === current.sheetTab) return;
   let raw = rawOf(sessionId);
   if (next.pip !== current.pip || next.chosen !== current.chosen) {
     try {
@@ -91,7 +93,9 @@ export interface BrowserDock {
   summoned: boolean;
   setPip(next: Pip): void;
   sheet: boolean;
-  setSheet(open: boolean): void;
+  sheetTab: string | null;
+  /** Opens the sheet (on `tabId` when given) or closes it. */
+  setSheet(open: boolean, tabId?: string): void;
 }
 
 /**
@@ -105,6 +109,6 @@ export function useBrowserDock(sessionId: string): BrowserDock {
     () => read(sessionId),
   );
   const setPip = useCallback((pip: Pip) => write(sessionId, { pip }), [sessionId]);
-  const setSheet = useCallback((sheet: boolean) => write(sessionId, { sheet }), [sessionId]);
-  return { pip: dock.pip, summoned: dock.chosen, setPip, sheet: dock.sheet, setSheet };
+  const setSheet = useCallback((sheet: boolean, tabId?: string) => write(sessionId, { sheet, sheetTab: sheet ? (tabId ?? null) : null }), [sessionId]);
+  return { pip: dock.pip, summoned: dock.chosen, setPip, sheet: dock.sheet, sheetTab: dock.sheetTab, setSheet };
 }

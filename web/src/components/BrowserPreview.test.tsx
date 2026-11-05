@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "../api/client";
@@ -13,13 +13,14 @@ import { BrowserPreview, browserAnchor } from "./BrowserPreview";
 class FakeSocket {
   static last: FakeSocket | null = null;
   closed = false;
+  readyState: number = WebSocket.OPEN;
   sent: string[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   constructor(readonly url: string, readonly protocols: string[]) { FakeSocket.last = this; }
   send(data: string) { this.sent.push(data); }
-  close() { this.closed = true; this.onclose?.(); }
+  close() { this.closed = true; this.readyState = WebSocket.CLOSED; this.onclose?.(); }
   receive(data: unknown) { this.onmessage?.({ data: JSON.stringify(data) }); }
 }
 const TABS = {
@@ -128,7 +129,7 @@ describe("BrowserPreview", () => {
 
     await user.click(within(card).getByRole("button", { name: "Expand Checkout · Shop" }));
     const sheet = screen.getByRole("dialog", { name: "Checkout · Shop" });
-    expect(within(sheet).getByText("https://shop.test/checkout", { selector: ".browser-sheet-url" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("textbox", { name: "Address" })).toHaveValue("https://shop.test/checkout");
     expect(screen.queryByRole("region", { name: "Live browser" })).toBeNull();
     expect(within(sheet).getByRole("link", { name: "Open in your browser" })).toHaveAttribute("href", "https://shop.test/checkout");
     const list = within(sheet).getByRole("region", { name: "Tabs in this conversation" });
@@ -386,6 +387,206 @@ describe("BrowserPreview", () => {
       const dialog = screen.getByRole("dialog");
       expect(within(dialog).getByText("This request doesn't say which page to take over.")).toBeInTheDocument();
       expect(within(dialog).queryByRole("button", { name: "Take control" })).toBeNull();
+    });
+  });
+
+  describe("controlling a tab from the sheet", () => {
+    async function openSheet(user: UserEvent) {
+      await user.click(screen.getByRole("button", { name: /^Expand / }));
+      return screen.getByRole("dialog");
+    }
+    /** The picture is drawn at half size: 720x450 CSS px from (10, 20). */
+    function layOut(sheet: HTMLElement) {
+      const screenArea = within(sheet).getByLabelText(/Remote browser screen/);
+      vi.spyOn(screenArea.querySelector("img")!, "getBoundingClientRect").mockReturnValue({
+        left: 10, top: 20, width: 720, height: 450, right: 730, bottom: 470, x: 10, y: 20, toJSON: () => ({}),
+      });
+      return screenArea;
+    }
+    const sent = (socket: FakeSocket) => socket.sent.map((data) => JSON.parse(data) as Record<string, unknown>);
+
+    it("drives an idle tab: a tap opens control, the address bar navigates, and Hand back releases it", async () => {
+      const user = userEvent.setup();
+      setup();
+      const preview = open();
+      const sheet = await openSheet(user);
+      const screenArea = layOut(sheet);
+      fireEvent.pointerDown(screenArea, { clientX: 60, clientY: 70, button: 0 });
+      fireEvent.pointerUp(screenArea, { clientX: 60, clientY: 70, button: 0 });
+      const control = FakeSocket.last!;
+      expect(control).not.toBe(preview);
+      expect(control.url).toBe("ws://localhost:3000/v1/sessions/s1/browser/tabs/tab1/control");
+      expect(control.protocols).toEqual(["openside.v1", "openside.bearer.device-token"]);
+      expect(control.sent).toEqual([]);
+      act(() => control.onopen?.());
+      // Queued until the socket opened, in the tab's 1440x900 viewport.
+      expect(sent(control)).toEqual([
+        { type: "mouse", event: "down", x: 100, y: 100, button: "left", modifiers: 0 },
+        { type: "mouse", event: "up", x: 100, y: 100, button: "left", modifiers: 0 },
+      ]);
+      act(() => {
+        control.receive({ type: "frame", data: "/9j/control", width: 1440, height: 900 });
+        control.receive({ type: "page", url: "https://shop.test/cart", title: "Cart", can_go_back: true, can_go_forward: false });
+      });
+      expect(within(sheet).getByAltText("Remote browser tab")).toHaveAttribute("src", "data:image/jpeg;base64,/9j/control");
+      expect(within(sheet).getByRole("textbox", { name: "Address" })).toHaveValue("https://shop.test/cart");
+      expect(within(sheet).getByText("You're in control. The agent waits until you hand the tab back.")).toBeInTheDocument();
+      expect(within(sheet).getByRole("button", { name: "Forward" })).toBeDisabled();
+
+      control.sent = [];
+      await user.click(within(sheet).getByRole("button", { name: "Back" }));
+      await user.click(within(sheet).getByRole("button", { name: "Reload" }));
+      const address = within(sheet).getByRole("textbox", { name: "Address" });
+      await user.clear(address);
+      await user.type(address, "example.com/path{Enter}");
+      await user.type(within(sheet).getByRole("textbox", { name: "Text to type" }), "héllo{Enter}");
+      await user.click(within(sheet).getByRole("button", { name: "Press Enter" }));
+      expect(sent(control)).toEqual([
+        { type: "back" },
+        { type: "reload" },
+        { type: "navigate", url: "https://example.com/path" },
+        { type: "text", text: "héllo" },
+        { type: "key", event: "down", key: "Enter", code: "Enter", modifiers: 0 },
+        { type: "key", event: "up", key: "Enter", code: "Enter", modifiers: 0 },
+      ]);
+      // Only http(s) leaves the sheet; the daemon's refusals are explained.
+      control.sent = [];
+      await user.clear(address);
+      await user.type(address, "file:///etc/passwd{Enter}");
+      expect(control.sent).toEqual([]);
+      expect(within(sheet).getByRole("alert")).toHaveTextContent("Only http and https addresses can be opened here.");
+      act(() => control.receive({ type: "input_error", code: "policy_denied" }));
+      await user.clear(address);
+      await user.type(address, "https://ok.test{Enter}");
+      act(() => control.receive({ type: "input_error", code: "policy_denied" }));
+      expect(within(sheet).getByRole("alert")).toHaveTextContent("Your browsing policy blocks that site.");
+
+      await user.click(within(sheet).getByRole("button", { name: "Hand back" }));
+      expect(control.closed).toBe(true);
+      expect(preview.closed).toBe(false);
+      expect(within(sheet).getByAltText("Remote browser tab")).toHaveAttribute("src", "data:image/jpeg;base64,/9j/first");
+    });
+
+    it("sends nothing once the daemon ended control or the socket is no longer open", async () => {
+      const user = userEvent.setup();
+      setup();
+      open();
+      const sheet = await openSheet(user);
+      const screenArea = layOut(sheet);
+      const tap = () => {
+        fireEvent.pointerDown(screenArea, { clientX: 60, clientY: 70, button: 0 });
+        fireEvent.pointerUp(screenArea, { clientX: 60, clientY: 70, button: 0 });
+      };
+      tap();
+      const control = FakeSocket.last!;
+      act(() => control.onopen?.());
+      control.sent = [];
+      control.readyState = WebSocket.CLOSING;
+      tap();
+      expect(control.sent).toEqual([]);
+      control.readyState = WebSocket.OPEN;
+      act(() => control.receive({ type: "ended", reason: "idle" }));
+      expect(control.closed).toBe(true);
+      expect(within(sheet).getByText("Handed back to the agent after inactivity.")).toBeInTheDocument();
+      // Input after the end asks for a new lease instead of writing to the finished one.
+      tap();
+      expect(control.sent).toEqual([]);
+      expect(FakeSocket.last).not.toBe(control);
+    });
+
+    it("asks for Take control first while the agent runs, and scrolls with a finger drag", async () => {
+      const user = userEvent.setup();
+      class TouchPointer extends MouseEvent {
+        readonly pointerType: string;
+        readonly isPrimary: boolean;
+        readonly pointerId: number;
+        constructor(type: string, init: PointerEventInit = {}) {
+          super(type, init);
+          this.pointerType = init.pointerType ?? "";
+          this.isPrimary = init.isPrimary ?? false;
+          this.pointerId = init.pointerId ?? 1;
+        }
+      }
+      vi.stubGlobal("PointerEvent", TouchPointer);
+      try {
+        setup(viewOf({ status: "running" }));
+        const preview = open();
+        const sheet = await openSheet(user);
+        expect(within(sheet).getByRole("textbox", { name: "Address" })).toBeDisabled();
+        expect(within(sheet).getByRole("button", { name: "Back" })).toBeDisabled();
+        const inert = within(sheet).getByLabelText("Browser preview");
+        fireEvent.pointerDown(inert, { clientX: 60, clientY: 70, button: 0 });
+        fireEvent.pointerUp(inert, { clientX: 60, clientY: 70, button: 0 });
+        expect(FakeSocket.last).toBe(preview);
+        expect(within(sheet).queryByRole("button", { name: /^Close / })).toBeNull();
+
+        await user.click(within(sheet).getByRole("button", { name: "Take control" }));
+        const control = FakeSocket.last!;
+        expect(control.url).toMatch(/\/browser\/tabs\/tab1\/control$/);
+        act(() => {
+          control.onopen?.();
+          control.receive({ type: "frame", data: "/9j/control", width: 1440, height: 900 });
+        });
+        const screenArea = layOut(sheet);
+        const touch = { pointerType: "touch", isPrimary: true, pointerId: 7 };
+        fireEvent.pointerDown(screenArea, { ...touch, clientX: 60, clientY: 200 });
+        fireEvent.pointerMove(screenArea, { ...touch, clientX: 60, clientY: 150 });
+        fireEvent.pointerUp(screenArea, { ...touch, clientX: 60, clientY: 150 });
+        fireEvent.pointerDown(screenArea, { ...touch, clientX: 60, clientY: 70 });
+        fireEvent.pointerUp(screenArea, { ...touch, clientX: 62, clientY: 71 });
+        expect(sent(control)).toEqual([
+          { type: "wheel", x: 100, y: 360, delta_x: 0, delta_y: 150 },
+          { type: "mouse", event: "down", x: 104, y: 102, button: "left", modifiers: 0 },
+          { type: "mouse", event: "up", x: 104, y: 102, button: "left", modifiers: 0 },
+        ]);
+        act(() => control.receive({ type: "ended", reason: "idle" }));
+        act(() => control.onclose?.());
+        expect(within(sheet).getByText("Handed back to the agent after inactivity.")).toBeInTheDocument();
+        expect(within(sheet).getByRole("button", { name: "Take control" })).toBeInTheDocument();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("switches and closes tabs through the control of the tab picked", async () => {
+      const user = userEvent.setup();
+      setup();
+      open();
+      const sheet = await openSheet(user);
+      const list = within(sheet).getByRole("region", { name: "Tabs in this conversation" });
+      await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
+      await user.click(within(list).getByRole("button", { name: "Show Setup guide" }));
+      const second = FakeSocket.last!;
+      expect(second.url).toMatch(/\/browser\/tabs\/tab2\/control$/);
+      expect(within(list).getByRole("button", { name: "Show Setup guide" })).toHaveAttribute("aria-pressed", "true");
+      expect(within(sheet).getByRole("heading", { name: "Setup guide" })).toBeInTheDocument();
+      act(() => second.onopen?.());
+      await user.click(within(list).getByRole("button", { name: "Close Setup guide" }));
+      expect(sent(second)).toEqual([{ type: "close_tab" }]);
+
+      // Closing another tab moves control there first.
+      await user.click(within(list).getByRole("button", { name: "Close Checkout · Shop" }));
+      expect(second.closed).toBe(true);
+      const first = FakeSocket.last!;
+      expect(first.url).toMatch(/\/browser\/tabs\/tab1\/control$/);
+      act(() => first.onopen?.());
+      expect(sent(first)).toEqual([{ type: "close_tab" }]);
+    });
+
+    it.each([
+      ["an agent client", { ...PERSON, kind: "agent_client" }, "Only a device you paired as yourself can take control of the browser."],
+      ["a device without steer", { ...PERSON, scopes: ["read", "human_step"] }, "This device wasn't given permission to take control of the browser."],
+    ])("keeps the sheet read-only for %s", async (_, device, reason) => {
+      const user = userEvent.setup();
+      myDevice = device;
+      setup();
+      const preview = open();
+      const sheet = await openSheet(user);
+      expect(await within(sheet).findByText(reason)).toBeInTheDocument();
+      expect(within(sheet).queryByRole("textbox", { name: "Address" })).toBeNull();
+      expect(within(sheet).getByText("https://shop.test/checkout", { selector: ".browser-sheet-url" })).toBeInTheDocument();
+      fireEvent.pointerDown(within(sheet).getByLabelText("Browser preview"), { clientX: 60, clientY: 70, button: 0 });
+      expect(FakeSocket.last).toBe(preview);
     });
   });
 

@@ -552,7 +552,7 @@
 .browser-sheet .ui-dialog-description {
   min-width: 0;
 }
-/* The page's address, read-only: the daemon cannot navigate the tab from here. */
+/* The page's address, read-only on a device that cannot drive the tab. */
 .browser-sheet-url {
   margin: 0;
   padding: 10px 12px;
@@ -570,11 +570,47 @@
   gap: 12px;
   min-width: 0;
 }
+/* Back, forward, reload and the address field: full 44px targets on every pointer. */
+.browser-sheet-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.browser-sheet-toolbar .ui-icon-button,
+.browser-sheet-type .ui-icon-button,
+.browser-sheet-tabs .ui-icon-button {
+  width: 44px;
+  height: 44px;
+}
+.browser-sheet-address {
+  flex: 1;
+  min-width: 0;
+  margin-inline-start: 4px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+}
+.browser-sheet-stage {
+  position: relative;
+  min-width: 0;
+}
+.browser-sheet-zoom.ui-icon-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+.browser-sheet-zoom.ui-icon-button:disabled {
+  display: none;
+}
 .browser-sheet-screen {
   display: grid;
   place-items: center;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: var(--frame-aspect, 16 / 10);
   min-height: 0;
   padding: 0;
   overflow: hidden;
@@ -583,10 +619,13 @@
   background: var(--surface);
   color: inherit;
   font: inherit;
-  cursor: zoom-in;
 }
-.browser-sheet-screen:disabled {
-  cursor: default;
+/* The finger drives the remote page: no sheet scrolling, zooming or text selection under it. */
+.browser-sheet-screen[data-interactive] {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .browser-sheet-screen:focus-visible {
   outline: 2px solid var(--primary);
@@ -598,6 +637,16 @@
   height: 100%;
   object-fit: contain;
   pointer-events: none;
+}
+.browser-sheet-type {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.browser-sheet-type input {
+  flex: 1;
+  min-width: 0;
 }
 .browser-sheet-meta {
   display: flex;
@@ -667,9 +716,35 @@
 .browser-sheet-tabs li {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 4px;
   min-height: 52px;
-  padding: 8px 12px;
+  padding: 4px 8px 4px 4px;
+}
+.browser-sheet-tab {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-row);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.browser-sheet-tab:hover {
+  background: var(--hover);
+}
+.browser-sheet-tab[aria-pressed="true"] {
+  background: var(--active);
+}
+.browser-sheet-tab:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 .browser-sheet-tabs li + li {
   border-top: 1px solid var(--border);

@@ -1,10 +1,11 @@
 import { Globe, Minimize2, X } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { ApiError } from "../api/client";
 import { whilePageShown } from "../api/pageLifecycle";
 import type { TakeoverInput, TakeoverServerMessage } from "../api/types";
 import { useClient } from "../context";
+import { useBrowserInput } from "../hooks/useBrowserInput";
 import { Button, ICON_STROKE, IconButton } from "../ui";
 import { BrowserFrame } from "./BrowserFrame";
 import { BrowserPip } from "./BrowserPip";
@@ -22,37 +23,6 @@ const END_LABEL: Record<string, string> = {
   tab_unavailable: "The browser tab is gone.",
 };
 
-/** CDP modifier mask: Alt=1, Ctrl=2, Meta=4, Shift=8. */
-function modifiers(event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number {
-  return (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
-}
-
-const BUTTONS = ["left", "middle", "right"] as const;
-/** Pointer moves without a pressed button are sampled; the daemon needs positions, not every pixel. */
-const MOVE_INTERVAL_MS = 50;
-/** The daemon's `text` input limit (takeover.rs `MAX_TEXT`). */
-const MAX_TEXT_BYTES = 4096;
-
-/** Splits text into pieces of at most `limit` UTF-8 bytes, never inside a code point. */
-function utf8Chunks(text: string, limit: number): string[] {
-  const chunks: string[] = [];
-  let current = "";
-  let bytes = 0;
-  for (const char of text) {
-    const point = char.codePointAt(0) ?? 0;
-    const size = point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
-    if (bytes + size > limit) {
-      chunks.push(current);
-      current = "";
-      bytes = 0;
-    }
-    current += char;
-    bytes += size;
-  }
-  if (current) chunks.push(current);
-  return chunks;
-}
-
 export interface TakeoverTarget {
   id: string;
   summary: string;
@@ -67,7 +37,6 @@ export interface TakeoverTarget {
 export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onClose: () => void }) {
   const client = useClient();
   const socket = useRef<WebSocket | null>(null);
-  const lastMove = useRef(0);
   const [frame, setFrame] = useState<Frame | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
   const [ended, setEnded] = useState<string | null>(null);
@@ -78,7 +47,6 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialog = useRef<HTMLDivElement>(null);
-  const screen = useRef<HTMLDivElement>(null);
   // The control that opened the view gets focus back when it closes or shrinks to the PiP.
   const opener = useRef(document.activeElement);
 
@@ -144,54 +112,7 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
     if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(input));
   }
 
-  function point(event: { clientX: number; clientY: number; currentTarget: Element }) {
-    if (!frame) return null;
-    // The frame is letterboxed inside the screen; map against the picture itself.
-    const picture = event.currentTarget.querySelector("img") ?? event.currentTarget;
-    const rect = picture.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-    const x = ((event.clientX - rect.left) / rect.width) * frame.width;
-    const y = ((event.clientY - rect.top) / rect.height) * frame.height;
-    return {
-      x: Math.min(frame.width - 1, Math.max(0, Math.round(x))),
-      y: Math.min(frame.height - 1, Math.max(0, Math.round(y))),
-    };
-  }
-
-  function pointer(phase: "down" | "up" | "move", event: PointerEvent<HTMLElement>) {
-    const at = point(event);
-    if (!at) return;
-    if (phase === "move") {
-      const now = performance.now();
-      if (!event.buttons && now - lastMove.current < MOVE_INTERVAL_MS) return;
-      lastMove.current = now;
-    } else {
-      event.preventDefault();
-      event.currentTarget.focus();
-    }
-    send({
-      type: "mouse",
-      event: phase,
-      ...at,
-      button: phase === "move" ? (event.buttons ? "left" : "none") : (BUTTONS[event.button] ?? "left"),
-      modifiers: modifiers(event),
-    });
-  }
-
-  function wheel(event: WheelEvent<HTMLElement>) {
-    const at = point(event);
-    if (at) send({ type: "wheel", ...at, delta_x: event.deltaX, delta_y: event.deltaY });
-  }
-
-  function key(phase: "down" | "up", event: KeyboardEvent<HTMLElement>) {
-    event.preventDefault();
-    const printable = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
-    if (printable) {
-      if (phase === "down") send({ type: "text", text: event.key });
-      return;
-    }
-    send({ type: "key", event: phase, key: event.key, code: event.code, modifiers: modifiers(event) });
-  }
+  const input = useBrowserInput<HTMLDivElement>({ send, viewport: frame });
 
   async function finish(action: () => Promise<unknown>) {
     setBusy(true);
@@ -238,7 +159,7 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
   // The remote screen forwards every key, Tab and Escape included, to the page; elsewhere in the
   // view Escape shrinks it to the PiP and Tab stays inside, as in a modal dialog.
   function dialogKey(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.target === screen.current || !dialog.current) return;
+    if (event.target === input.surface || !dialog.current) return;
     if (event.key === "Escape") {
       event.preventDefault();
       setPip(true);
@@ -295,24 +216,13 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
           </p>
         ) : null}
         <div
-          ref={screen}
+          {...input.props}
           className="takeover-screen"
           tabIndex={0}
           aria-label="Remote browser screen; click to interact, type to send keys"
           data-frame-width={frame?.width}
           data-frame-height={frame?.height}
           style={frame ? ({ "--frame-aspect": frame.width / frame.height } as CSSProperties) : undefined}
-          onPointerDown={(e) => pointer("down", e)}
-          onPointerUp={(e) => pointer("up", e)}
-          onPointerMove={(e) => pointer("move", e)}
-          onWheel={wheel}
-          onKeyDown={(e) => key("down", e)}
-          onKeyUp={(e) => key("up", e)}
-          onPaste={(e) => {
-            const text = e.clipboardData.getData("text");
-            for (const chunk of utf8Chunks(text, MAX_TEXT_BYTES)) send({ type: "text", text: chunk });
-          }}
-          onContextMenu={(e) => e.preventDefault()}
         >
           {image}
         </div>

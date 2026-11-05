@@ -140,6 +140,8 @@ export const MESSAGES: Record<string, string> = {
   attachments_too_large: "The attachments are too large. Remove some and try again.",
   unsupported_attachment: "That file type cannot be attached.",
   takeover_in_use: "Another device is already controlling this step.",
+  control_in_use: "Another device is already controlling this tab.",
+  takeover_active: "The agent asked you to finish a step on this tab. Take control from that request instead.",
   tab_unavailable: "The browser tab for this step is gone.",
   local_socket_required:
     "Only the computer running openside can make this change (local socket); paired devices cannot.",
@@ -419,6 +421,11 @@ export interface Client {
    */
   takeover(ticketId: string): WebSocket;
   browserPreview(sessionId: string): WebSocket;
+  /**
+   * The person's own control of one agent tab, over the takeover protocol plus address bar
+   * commands; the agent is locked out of the tab until the socket closes.
+   */
+  browserControl(sessionId: string, tabId: string): WebSocket;
   browserThumbnail(sessionId: string, thumbnailId: string, signal?: AbortSignal): Promise<Blob>;
   /** Agent-owned, non-private tabs with sanitized URLs; 503 `browser_disconnected` when the controller is gone. */
   browserTabs(): Promise<BrowserTabList>;
@@ -702,6 +709,7 @@ export function createClient(options: ClientOptions): Client {
     resolve,
     takeover: (ticketId: string) => openWebSocket(`/v1/tickets/${enc(ticketId)}/takeover`),
     browserPreview: (sessionId: string) => openWebSocket(`/v1/sessions/${enc(sessionId)}/browser/preview`),
+    browserControl: (sessionId: string, tabId: string) => openWebSocket(`/v1/sessions/${enc(sessionId)}/browser/tabs/${enc(tabId)}/control`),
     browserThumbnail: async (sessionId: string, thumbnailId: string, signal?: AbortSignal) => {
       const response = await send(`/v1/sessions/${enc(sessionId)}/browser/thumbnails/${enc(thumbnailId)}`, {
         headers: headers({ Accept: "image/jpeg" }), signal,

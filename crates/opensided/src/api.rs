@@ -380,6 +380,10 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             get(crate::preview::stream),
         )
         .route(
+            "/v1/sessions/{id}/browser/tabs/{tab_id}/control",
+            get(crate::takeover::control),
+        )
+        .route(
             "/v1/sessions/{id}/browser/thumbnails/{thumbnail_id}",
             get(crate::preview::thumbnail),
         )
@@ -668,6 +672,7 @@ pub(crate) const LOCAL_AWARE: &[(&str, &str)] = &[
 pub(crate) const WEBSOCKET_ROUTES: &[&str] = &[
     "/v1/tickets/{id}/takeover",
     "/v1/sessions/{id}/browser/preview",
+    "/v1/sessions/{id}/browser/tabs/{tab_id}/control",
 ];
 
 /// The subprotocol bearer of a genuine RFC 6455 handshake (GET, `Connection: upgrade`,

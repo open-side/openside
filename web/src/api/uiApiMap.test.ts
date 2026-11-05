@@ -93,6 +93,7 @@ const SAMPLES: Record<CallName, (client: Client, record: (method: string, url: s
   faviconBlob: (c) => c.faviconBlob("https://shop.example"),
   takeover: (c) => c.takeover("t1"),
   browserPreview: (c) => c.browserPreview("s1"),
+  browserControl: (c) => c.browserControl("s1", "tab1"),
   browserThumbnail: (c) => c.browserThumbnail("s1", "thumb1"),
   browserTabs: (c) => c.browserTabs(),
   listTickets: (c) => c.listTickets("pending"),

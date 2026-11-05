@@ -1,6 +1,7 @@
 import { Check, Globe, Maximize2, Minimize2, Square, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useSearchParams } from "react-router";
+import { AGENT_VIEWPORT as VIEWPORT } from "../hooks/useBrowserInput";
 import { previewNotice, useBrowserPreview } from "../hooks/useBrowserPreview";
 import { pendingTickets, type BrowserStateView, type SessionView, type TimelineItem } from "../state/session";
 import { ICON_STROKE } from "../ui";
@@ -14,8 +15,6 @@ import { opensPage, safeFavicon } from "./toolCopy";
 import { lastHost, statusPhrase } from "./toolStatus";
 import "./browser.css";
 
-/** The agent tab's fixed viewport (openside-browser `pointer::VIEWPORT`); click coordinates are CSS pixels in it. */
-const VIEWPORT = { width: 1440, height: 900 };
 /**
  * A run shorter than this is not announced as done: replaying a conversation's history on
  * load flips the status through running and back within milliseconds.
@@ -216,8 +215,11 @@ function Live({
   if (dock.sheet) {
     return (
       <BrowserSheet
+        sessionId={sessionId}
+        running={running}
         tabs={tabs}
         liveTabId={liveTabId}
+        selectedTabId={dock.sheetTab}
         frame={frame?.data ?? null}
         state={state}
         fallback={{ title: pageTitle, host: pageHost ?? "" }}

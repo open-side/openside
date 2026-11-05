@@ -179,6 +179,13 @@ Apple/Google 의 "기기에서 허용" 은 openside 가 할 일이 없다. 사�
 - `takeover.*` 이벤트는 없다. 연결 상태는 클라이언트가 소켓으로 안다.
 - CAPTCHA 해결 서비스 연동, 자동 풀이는 **하지 않는다**(우회 금지 정책). passkey/보안키는 사람 기기에서만 가능하므로 `device_approval` 로 처리한다.
 
+### 브라우저 시트 직접 조작 — 티켓 없는 제어
+- 스트림: `GET /v1/sessions/{id}/browser/tabs/{tab_id}/control`을 티켓 없이 WebSocket으로 업그레이드한다. 호출자는 `steer`를 가진 `person_device` 토큰이거나 로컬 소켓이어야 하며, `agent_client`와 MCP·채널 소켓 클라이언트는 403 `person_device_required`, `steer`가 없으면 403 `forbidden`으로 거부한다. 메시지는 `TakeoverServerMessage`/`TakeoverInput`을 재사용하고 `page`와 `navigate`, `back`, `forward`, `reload`, `close_tab`을 더한다(takeover 티켓 스트림에서는 이 입력들이 `invalid_input`).
+- 리스와 배타성: takeover 티켓과 동일한 탭 단위 리스를 쓴다. 리스를 쥐고 있는 동안 해당 탭에 대한 에이전트의 `browser_*`/`vault_*` 호출과 REPL은 takeover 때와 똑같이 `takeover_active`로 거부한다. 탭당 컨트롤러는 하나뿐이다. 두 번째 제어 소켓이나 제어 중 열리는 takeover 스트림은 409 `control_in_use`로 거부하고, 탭에 예약되었거나 대기 중인 takeover 티켓이 있으면 제어 연결을 409 `takeover_active`로 거부한다.
+- 종료: 소켓이 닫히거나(Hand back), 받아들여진 입력 없이 300초가 지날 때(`idle`, takeover와 같은 한도), 기기가 폐기될 때(`revoked`, 폐기 뒤에는 대기 중이던 입력도 실행되지 않음), 탭이 닫히거나 세션을 벗어날 때(`tab_unavailable`) 종료된다. 종료 시 스크린캐스트를 멈추고 캡처와 요소 참조를 모두 폐기하므로, 에이전트의 다음 호출은 새 스냅샷부터 시작한다.
+- 이동 규칙: 직접 입력한 주소는 http(s)만 허용하며 그 외에는 `invalid_url`이다. 세션 탐색 정책이 판정하여 `deny`는 `policy_denied`를 반환하고, `ask`는 사람이 주소를 직접 입력한 행위를 해당 이동과 동일 오리진 리다이렉트에 대한 승인으로 보아 로드한다. 히스토리 이동과 새로고침으로 `ask`에 진입하면 `approval_required`를 반환한다. 그 밖의 리다이렉트와 페이지가 시작한 이동은 소유자 정책을 따르며, 페이지가 시작한 비네트워크 문서 이동은 필터링하지 않고 `page`에 스킴만 보고한다. incognito 세션과 격리(`browser_space: "isolated"`) 세션은 409 `private_session`으로 거부한다.
+- 감사 필드: 각 레코드는 `ts`, `session`, `tool: "browser_control"`, `decision`, `device`(또는 `local`), `tab_id`를 가진다. `decision`은 `control_started`, `navigate`/`back`/`forward`/`reload`/`close_tab`(`origin`은 직접 입력한 `navigate`에만 기록하며, `ok` 또는 입력 오류 코드를 담는 `outcome`과 `person_approved` 포함), `control_ended`(`released` 또는 종료 사유를 담는 `reason`과 `inputs` 포함) 중 하나다. 입력한 텍스트, 포인터 입력, 페이지 주소는 절대 기록하지 않는다.
+
 ### 읽기 전용 세션 브라우저 미리보기 (WS-5)
 
 - `GET /v1/sessions/{id}/browser/preview`는 사람 개입 티켓 없이 WebSocket으로 연결을 업그레이드한다. 텍스트 이벤트와 달리 JPEG 픽셀은 마스킹할 수 없으므로 `read`가 아닌 `browse` 권한(`steer`는 `browse`를 포함)이 필요하다. 앞서 설명한 동일 출처 규정과 브라우저 bearer 서브프로토콜 규칙이 동일하게 적용되며, 응답에는 `openside.v1`만 반환된다.
