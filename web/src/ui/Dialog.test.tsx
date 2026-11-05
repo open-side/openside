@@ -21,7 +21,7 @@ class TestPointerEvent extends MouseEvent {
 const original = globalThis.PointerEvent;
 beforeEach(() => {
   globalThis.PointerEvent = TestPointerEvent as unknown as typeof PointerEvent;
-  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("700px"), media: query }));
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("820px"), media: query }));
   Element.prototype.setPointerCapture = vi.fn();
 });
 afterEach(() => {

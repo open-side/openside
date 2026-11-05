@@ -10,6 +10,7 @@ import { AssistantStep } from "./AssistantStep";
 import { dismissGuide } from "./dismissed";
 import { ImportStep } from "./ImportStep";
 import { ModelsStep } from "./ModelsStep";
+import { OnboardingPreview } from "./OnboardingPreview";
 import "./onboarding.css";
 import { PairStep } from "./PairStep";
 import { EMPTY_SUMMARY, type StepProps, type Summary } from "./summary";
@@ -113,49 +114,52 @@ export function OnboardingPage() {
 
   return (
     <main className="onb" aria-labelledby="onb-title">
-      <div className="onb-card panel">
-        <header className="onb-header">
-          <span className="onb-brand">
-            <BrandMark size={22} />
-            openside
-          </span>
-          {last ? null : (
-            <Button variant="ghost" size="compact" disabled={leaving} onClick={() => void leave("skipped")}>
-              Skip setup
-            </Button>
-          )}
-        </header>
-        <ol className="onb-progress" aria-label={`Step ${index + 1} of ${STEPS.length}: ${step.label}`}>
-          {STEPS.map((item, position) => (
-            <li key={item.id} data-state={position < index ? "past" : position === index ? "current" : "future"} aria-current={position === index ? "step" : undefined}>
-              <span className="sr-only">{item.label}</span>
-            </li>
-          ))}
-        </ol>
-        <section className="onb-body" key={step.id}>
-          <h1 id="onb-title" tabIndex={-1} ref={heading}>
-            {step.title}
-          </h1>
-          <p className="onb-lead">{step.lead}</p>
-          {Body?.({ update })}
-          {last ? <Recap summary={summary} /> : null}
-        </section>
-        <footer className={cx("onb-footer", first && "onb-footer--solo")}>
-          {first ? null : (
-            <Button variant="ghost" disabled={leaving} onClick={() => show(STEPS[index - 1]!.id)}>
-              Back
-            </Button>
-          )}
-          {last ? (
-            <Button variant="primary" disabled={leaving} onClick={() => void leave("completed")}>
-              Open openside
-            </Button>
-          ) : (
-            <Button variant={complete ? "primary" : first ? "ghost" : "secondary"} disabled={leaving} onClick={() => show(next!.id)}>
-              {complete ? "Continue" : first ? "Skip for now" : "Skip this step"}
-            </Button>
-          )}
-        </footer>
+      <div className="onb-split">
+        <div className="onb-card">
+          <header className="onb-header">
+            <span className="onb-brand">
+              <BrandMark size={24} />
+              openside
+            </span>
+            {last ? null : (
+              <Button variant="ghost" size="compact" disabled={leaving} onClick={() => void leave("skipped")}>
+                Skip setup
+              </Button>
+            )}
+          </header>
+          <ol className="onb-progress" aria-label={`Step ${index + 1} of ${STEPS.length}: ${step.label}`}>
+            {STEPS.map((item, position) => (
+              <li key={item.id} data-state={position < index ? "past" : position === index ? "current" : "future"} aria-current={position === index ? "step" : undefined}>
+                <span className="sr-only">{item.label}</span>
+              </li>
+            ))}
+          </ol>
+          <section className="onb-body thin-scroll" key={step.id}>
+            <h1 id="onb-title" tabIndex={-1} ref={heading}>
+              {step.title}
+            </h1>
+            <p className="onb-lead">{step.lead}</p>
+            {Body?.({ update })}
+            {last ? <Recap summary={summary} /> : null}
+          </section>
+          <footer className={cx("onb-footer", first && "onb-footer--solo")}>
+            {first ? null : (
+              <Button variant="ghost" disabled={leaving} onClick={() => show(STEPS[index - 1]!.id)}>
+                Back
+              </Button>
+            )}
+            {last ? (
+              <Button className="onb-next" variant="primary" disabled={leaving} onClick={() => void leave("completed")}>
+                Open openside
+              </Button>
+            ) : (
+              <Button className="onb-next" variant={complete ? "primary" : "ghost"} disabled={leaving} onClick={() => show(next!.id)}>
+                {complete ? "Continue" : first ? "Skip for now" : "Skip this step"}
+              </Button>
+            )}
+          </footer>
+        </div>
+        <OnboardingPreview />
       </div>
     </main>
   );

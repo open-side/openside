@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { ApiError, createClient } from "../api/client";
 import { CliHint } from "../pages/CliHint";
 import "../pages/pages.css";
+import "../pages/signin.css";
 import { BrandMark, Button } from "../ui";
 
 /** Accepts a pasted device token after the daemon confirms it with `GET /v1/health`. */

@@ -93,7 +93,7 @@ describe("DevicesPage", () => {
     expect(await screen.findByLabelText("Agent link")).toHaveValue("http://127.0.0.1:47820/pair#AGENT123");
     expect(fake.calls.find((call) => call.path === "/v1/pairing")?.body).toEqual({ name: "CI box", scopes: ["read", "steer", "browse", "approve"], kind: "agent_client", via: null });
     expect(screen.getByRole("status")).toHaveTextContent("expires in");
-    expect(screen.getByText("openside connect").closest("p")).toHaveTextContent("On the agent’s computer");
+    expect(screen.getByText("openside login").closest("p")).toHaveTextContent("On the agent’s computer");
   });
 
   it("says issuing a link needs the computer itself when the daemon asks for local access", async () => {

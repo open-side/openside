@@ -36,7 +36,7 @@
     margin: 0 -8px 0 0;
   }
   .resource-card-header:has(.resource-card-icon) > .resource-card-trailing:has(.row-actions, > .ui-button) {
-    padding-left: 48px;
+    padding-left: 36px;
   }
 }
 
@@ -57,7 +57,7 @@
   gap: 2px 12px;
   min-height: 44px;
   padding: 6px 4px;
-  border-bottom: 1px solid var(--glass-inset-border);
+  border-bottom: 1px solid var(--border);
 }
 .model-rows li:last-child {
   border-bottom: 0;
@@ -91,14 +91,21 @@
 
 /* Default model */
 
+/* Fast, reasoning and fallback rows: one flat group split by hairlines. */
 .default-model {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+.default-model > * {
+  min-height: 44px;
+  padding: 10px 0;
+}
+.default-model > * + * {
+  border-top: 1px solid var(--border);
 }
 .default-model-row {
   display: flex;
@@ -108,7 +115,7 @@
   gap: 8px 12px;
 }
 .default-model-row > label {
-  font-size: 0.9375rem;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 .model-role {
@@ -123,7 +130,7 @@
   min-width: 0;
 }
 .model-role-copy label {
-  font-size: 0.9375rem;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 .model-role-copy p {
@@ -168,8 +175,8 @@
   min-height: 32px;
   padding: 0 4px 0 12px;
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  font-size: 0.8125rem;
+  background: var(--bubble);
+  font-size: var(--text-sm);
 }
 .fallback-chip span {
   min-width: 0;
@@ -184,7 +191,7 @@
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--warn) 8%, transparent);
   font-size: 0.875rem;
   line-height: 1.5;
@@ -198,8 +205,8 @@
   margin: 0;
 }
 .models-callout--info {
-  border-color: var(--glass-inset-border);
-  background: var(--glass-inset-bg);
+  border-color: var(--border);
+  background: var(--surface-raised);
 }
 .models-callout--info svg {
   color: var(--muted);
@@ -207,6 +214,40 @@
 
 .source-meta {
   color: var(--muted);
+}
+
+/* Model sheet (quick per-person choice) */
+
+.model-sheet-option .model-option-copy {
+  flex: 1;
+}
+.model-sheet-meta {
+  flex: none;
+  margin-left: 12px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.model-sheet-option > svg {
+  flex: none;
+  margin-left: 8px;
+}
+.model-sheet .model-group > .section-heading {
+  margin: 0;
+}
+.model-sheet-manage {
+  justify-self: start;
+  color: var(--primary);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+.model-sheet-manage:hover {
+  text-decoration: underline;
+}
+/* The chip's chevron trails its label. */
+.ui-chip > .model-chip-chevron {
+  order: 1;
 }
 
 /* Model picker: provider groups */
@@ -296,7 +337,7 @@
   display: grid;
   gap: 8px;
   padding: 12px 4px;
-  border-top: 1px solid var(--glass-inset-border);
+  border-top: 1px solid var(--border);
 }
 .rotation-title {
   margin: 0;

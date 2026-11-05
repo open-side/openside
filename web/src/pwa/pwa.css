@@ -1,5 +1,5 @@
 /* Native-feel layer: pull-to-refresh, the install banner, the queued-message notice and the
-   desktop window-controls-overlay title bar. Tokens come from styles.css; nothing here defines a colour. */
+   desktop window-controls-overlay title bar. Colours come from tokens.css; nothing here defines one. */
 
 /* The shell scrolls inside its own panes; a document-level overscroll would refresh the page
    (and, in a standalone app, drop the draft) when a pane is dragged past its end. */
@@ -8,52 +8,53 @@ body {
   overscroll-behavior: none;
 }
 
+/* A flat notice row under the header: it sits over the thread, so the hairline keeps its edge. */
 .install-banner {
   position: absolute;
-  top: calc(env(safe-area-inset-top) + var(--header-height) + 4px);
+  top: calc(env(safe-area-inset-top) + var(--header-height) + var(--space-2));
   left: 50%;
   z-index: 7;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   width: max-content;
   max-width: calc(100% - 24px);
-  padding: 8px 8px 8px 14px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass);
-  box-shadow: var(--shadow-glass);
+  min-height: 44px;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   color: var(--text);
-  font-size: 0.8125rem;
-  font-weight: 550;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   line-height: 1.35;
   translate: -50% 0;
-  -webkit-backdrop-filter: var(--float-blur);
-  backdrop-filter: var(--float-blur);
 }
 .install-banner > svg {
   flex: none;
+  color: var(--muted);
 }
 .install-text {
   min-width: 0;
 }
 
-/* Sits in the composer dock, above the field, in the same glass as the error line. */
+/* Sits in the composer dock, above the field, as a flat row like the error line. */
 .outbox-notice {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
+  min-height: 40px;
   margin: 0;
-  padding: 6px 6px 6px 14px;
-  border-radius: var(--radius-lg);
-  background: var(--glass);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   color: var(--text);
-  font-size: 0.875rem;
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
+  font-size: var(--text-md);
 }
 .outbox-notice[data-failed] {
-  background: color-mix(in srgb, var(--danger) 10%, var(--glass));
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+  background: var(--danger-surface);
   color: var(--danger);
 }
 .outbox-notice-text {
@@ -80,11 +81,11 @@ body {
   .app-header > * {
     app-region: no-drag;
   }
-  .shell-sidebar .sidebar-top {
+  .shell-sidebar .sidebar-head {
     padding-left: max(24px, calc(env(titlebar-area-x, 0px) + 12px));
     app-region: drag;
   }
-  .shell-sidebar .sidebar-top > * {
+  .shell-sidebar .sidebar-head > * {
     app-region: no-drag;
   }
 }

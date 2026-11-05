@@ -5,6 +5,7 @@ import { saveScopes } from "../auth";
 import { useClient } from "../context";
 import { Button, ICON_STROKE, Spinner } from "../ui";
 import "./pages.css";
+import "./signin.css";
 
 const POLL_MS = 3_000;
 

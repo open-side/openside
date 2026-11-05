@@ -91,7 +91,7 @@ describe("/pair deep link", () => {
     expect(exchanges).toEqual([{ method: "POST", path: "/v1/pairing/exchange", auth: null, body: { code: "code-123" } }]);
     expect(localStorage.getItem("openside.token")).toBe("tok-7");
     expect(localStorage.getItem("openside.device")).toBe("d7");
-    expect(window.location.pathname + window.location.hash).toBe("/agents/chief");
+    expect(window.location.pathname + window.location.hash).toBe("/");
     expect(requests.find((r) => r.path === "/v1/agents")?.auth).toBe("Bearer tok-7");
   });
 
@@ -136,10 +136,10 @@ describe("management screens (PP-15: no feature flags)", () => {
       await user.click(within(dialog).getByRole("button", { name: "Back to workspace" }));
     }
     await user.click(within(await screen.findByRole("dialog", { name: "Workspace" })).getByRole("button", { name: "Close" }));
-    await vi.waitFor(() => expect(window.location.pathname).toBe("/agents/chief"));
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/"));
   });
 
-  it("deep links open their dialog over the assistant's thread, and Close returns to it", async () => {
+  it("deep links open their dialog over Home, and Close returns to it", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "admin-token");
     stubDaemon((method, path) => (method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined));
@@ -148,7 +148,7 @@ describe("management screens (PP-15: no feature flags)", () => {
     const vault = await screen.findByRole("dialog", { name: "Vault" });
     expect(await within(vault).findByLabelText("Use policy for bank")).toBeEnabled();
     await user.click(within(vault).getByRole("button", { name: "Close" }));
-    await vi.waitFor(() => expect(window.location.pathname).toBe("/agents/chief"));
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/"));
     await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
     await user.click(within(screen.getByRole("navigation", { name: "Sections" })).getByRole("link", { name: "Settings" }));
@@ -164,8 +164,10 @@ describe("phone team drawer", () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "phone-token");
     stubDaemon((method, path) => (method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined));
+    window.history.pushState({}, "", "/agents/chief");
     render(<App />);
-    await user.click(await screen.findByRole("button", { name: "Open menu" }));
+    await screen.findByRole("textbox", { name: "Message" });
+    await user.click(screen.getByRole("button", { name: "Open menu" }));
     const drawer = await screen.findByRole("dialog", { name: "Team menu" });
     expect(window.location.pathname).toBe("/agents/chief");
     await user.click(within(within(drawer).getByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ }));
@@ -194,14 +196,15 @@ describe("opening `/`", () => {
     vi.restoreAllMocks();
   });
 
-  it("goes to the assistant once the guide is done", async () => {
+  it("shows Home once the guide is done", async () => {
     localStorage.setItem("openside.token", "admin-token");
     stubDaemon((method, path) => {
       if (method === "GET" && path === "/v1/onboarding") return json(200, { state: "completed" });
       return method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined;
     });
     render(<App />);
-    await vi.waitFor(() => expect(window.location.pathname).toBe("/agents/chief"));
+    expect(await screen.findByRole("heading", { name: "What should we do?" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/");
   });
 });
 

@@ -13,11 +13,14 @@ function open(scope: StopScope) {
 describe("StopTaskDialog", () => {
   it("the composer Stop says it ends the agent and every running task", async () => {
     const user = userEvent.setup();
-    const { onConfirm } = open({ kind: "all", tasks: 3 });
+    const { onConfirm, onClose } = open({ kind: "all", tasks: 3 });
     const dialog = screen.getByRole("dialog", { name: "Stop everything?" });
     expect(dialog).toHaveTextContent("Stops the agent and its 3 running tasks where they are.");
     await user.click(screen.getByRole("button", { name: "Stop everything" }));
     expect(onConfirm).toHaveBeenCalledOnce();
+    // Callers close on onClose; the request is sent after, so the sheet never waits on the daemon.
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(onConfirm.mock.invocationCallOrder[0]!);
   });
 
   it("stays truthful with no tasks and with one", () => {

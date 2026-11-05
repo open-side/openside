@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClientContext } from "../context";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
 import { Composer, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_TEXT_BYTES, mentionedSkills } from "./Composer";
@@ -315,5 +315,122 @@ describe("Composer Enter key", () => {
     expect(daemon.calls.find(sent)).toBeUndefined();
     enter(input, { keyCode: 13, ctrlKey: true });
     await waitFor(() => expect(daemon.calls.find(sent)).toMatchObject({ body: { text: "hello" } }));
+  });
+});
+
+describe("Composer home variant", () => {
+  function renderHome(respond: (call: Call) => Response, onSent: () => void) {
+    const daemon = fakeClient(respond);
+    render(
+      <ClientContext.Provider value={daemon.client}>
+        <Composer sessionId="chief-home" variant="home" running waiting onStop={() => undefined} addressee="Chief" onSent={onSent} tools={<button type="button">Tool</button>} />
+      </ClientContext.Provider>,
+    );
+    return daemon;
+  }
+
+  it("asks for a task with focus, two lines, and nothing to stop, queue or switch", () => {
+    renderHome(() => json(202, { id: "m", status: "queued" }), () => undefined);
+    const field = screen.getByRole("textbox", { name: "Message" });
+    expect(field).toHaveAttribute("placeholder", "Ask AI a task, @ for context");
+    expect(field).toHaveAttribute("rows", "2");
+    expect(field).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Tool" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+  });
+
+  it("reports the task as sent only once the daemon accepted it", async () => {
+    const user = userEvent.setup();
+    let sentCount = 0;
+    const { calls } = renderHome(() => json(202, { id: "m", status: "queued" }), () => sentCount++);
+    const field = screen.getByRole("textbox", { name: "Message" });
+    await user.type(field, "Find a flight to Lisbon");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(sentCount).toBe(1));
+    expect(calls.find(sent)).toMatchObject({ path: "/v1/sessions/chief-home/messages", body: { text: "Find a flight to Lisbon" } });
+    expect(field).toHaveValue("");
+  });
+
+  it("keeps the words and says why when the daemon refuses the task", async () => {
+    const user = userEvent.setup();
+    let sentCount = 0;
+    renderHome((call) => (sent(call) ? json(409, { code: "busy", message: "The assistant is restarting" }) : json(200, {})), () => sentCount++);
+    const field = screen.getByRole("textbox", { name: "Message" });
+    await user.type(field, "Find a flight to Lisbon");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The assistant is restarting");
+    expect(field).toHaveValue("Find a flight to Lisbon");
+    expect(sentCount).toBe(0);
+  });
+});
+
+describe("Composer quote", () => {
+  it("puts a quoted message above what is already typed", async () => {
+    const user = userEvent.setup();
+    const daemon = fakeClient(() => json(202, { id: "m", status: "queued" }));
+    let applied = 0;
+    const ui = (quote: { id: string; text: string } | null) => (
+      <ClientContext.Provider value={daemon.client}>
+        <Composer sessionId="s1" quote={quote} onQuoteApplied={() => applied++} />
+      </ClientContext.Provider>
+    );
+    const { rerender } = render(ui(null));
+    const field = screen.getByRole("textbox", { name: "Message" });
+    await user.type(field, "Why?");
+    rerender(ui({ id: "q1", text: "> It rained.\n\n" }));
+    expect(field).toHaveValue("> It rained.\n\nWhy?");
+    expect(applied).toBe(1);
+    await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+    expect(field).toHaveFocus();
+  });
+});
+
+describe("Composer height", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(document, "fonts");
+  });
+
+  /** jsdom has no layout: the field reports the width and wrapped height a browser would. */
+  function field(metrics: { width: number; height: number }) {
+    const input = screen.getByRole("textbox", { name: "Message" });
+    Object.defineProperty(input, "clientWidth", { configurable: true, get: () => metrics.width });
+    Object.defineProperty(input, "scrollHeight", { configurable: true, get: () => metrics.height });
+    return input;
+  }
+
+  it("refits typed text that wraps once the field narrows or a web font arrives", () => {
+    const observed: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          observed.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const fonts = new EventTarget();
+    Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+    setup();
+    const metrics = { width: 300, height: 44 };
+    const input = field(metrics);
+    fireEvent.change(input, { target: { value: "Summarize the release notes" } });
+    expect(input.style.height).toBe("44px");
+
+    // Send appears beside the field and squeezes it: the line wraps to two.
+    metrics.width = 220;
+    metrics.height = 68;
+    act(() => observed.forEach((callback) => callback()));
+    expect(input.style.height).toBe("68px");
+
+    // The web font replaces the narrower fallback at the same width: three lines now.
+    metrics.height = 92;
+    act(() => {
+      fonts.dispatchEvent(new Event("loadingdone"));
+    });
+    expect(input.style.height).toBe("92px");
   });
 });

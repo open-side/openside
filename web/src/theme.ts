@@ -133,7 +133,7 @@ export function loadPalettes(storage: Storage = localStorage): Palettes {
 }
 
 /**
- * Writes each scheme's preset colours as --light-* / --dark-* custom properties (styles.css
+ * Writes each scheme's preset colours as --light-* / --dark-* custom properties (tokens.css
  * derives the other surfaces from them) and stores the resolved colours, so theme-boot.js can
  * repaint them before React mounts without a copy of the preset table.
  */

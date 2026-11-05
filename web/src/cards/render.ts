@@ -1,6 +1,6 @@
 // The one card renderer. A card is data (see `Card` in api/types); this turns it into DOM for the
 // web app and the extension side panel alike. It is a state machine over three shapes:
-//   ask     a compact bubble that expands to a glass card while a person is being asked;
+//   ask     a compact bubble that expands to a full card while a person is being asked;
 //           after the answer it leaves a receipt bubble that never shows entered values.
 //   row     activity and hand-off cards: a bubble with a status mark, expandable for detail.
 //   result  read-only results (lists, tables, orders): a framed card, open from the start.

@@ -12,7 +12,7 @@
 //! - `OPENSIDE_SCREENS_DIR`: output directory (default `/tmp/openside-qa/redesign/core`).
 //! - `OPENSIDE_SCREENS_ROUTES`: extra comma-separated app paths to capture, such as
 //!   `/skills,/settings`; each is saved as `route-<path>`.
-//! - `OPENSIDE_SCREENS_ONLY`: comma-separated screen names to limit a run to: assistant,
+//! - `OPENSIDE_SCREENS_ONLY`: comma-separated screen names to limit a run to: home, assistant,
 //!   profile, conversation, long-thread-top, tool-activity, code-response, ticket, agents,
 //!   visuals, files, short-thread, streaming, stop-confirm, working, failed, ask-options, ask-text, secret, otp,
 //!   takeover, device, queue-menu, queue-edit, session-menu, drawer (phone only), archived,
@@ -54,13 +54,13 @@ const SUMMARY: &str = r#"## What this project does
 **openside** runs a local agent daemon and serves this web app from it. The pieces that matter:
 
 - `opensided` owns sessions, the event log and the approval queue.
-- The Python sidecar runs the model loop and calls tools.
+- The TypeScript (Bun) sidecar runs the model loop and calls tools.
 - The web app reads everything over `/v1` and the live event stream.
 
 | Layer | Language | Entry point |
 | --- | --- | --- |
 | Daemon | Rust | `crates/opensided` |
-| Sidecar | Python | `agent/openside_agent` |
+| Sidecar | TypeScript (Bun) | `agent/src` |
 | Web | TypeScript | `web/src/main.tsx` |
 
 A session starts like this:
@@ -399,7 +399,7 @@ async fn submit_with(
             Some(json!({"message_id":id,"text":text,"mode":mode,"attachments":attachments})),
         )
         .await;
-    assert_eq!(response.status, 202, "{}", response.body);
+    assert_eq!(response.status, 202, "{id}: {}", response.body);
 }
 
 async fn create(harness: &Harness, title: &str) -> String {
@@ -664,24 +664,31 @@ async fn seed_team(harness: &Harness) -> (String, String) {
 
     let chief = harness.request("GET", "/v1/agents/chief", None).await;
     let home = chief.body["home_session_id"].as_str().unwrap().to_owned();
+    // The chief is a front agent and has no `present`: a Task it starts shares the result cards.
     // A suggestion defers the run and the next response is consumed whenever the thread resumes,
-    // so one script covers the thread: result cards, then a suggestion.
+    // so one script covers the thread: the Task, then a suggestion. The pending suggestion holds
+    // the thread's queue, so the Task's report waits behind it.
     harness.replace_script(&json!({"responses":[
-        tool("present", result_card("table", "Wireless earbuds under $100", &[
-            ("Everyday Buds", 79, "24 h with case"),
-            ("Studio Pods", 95, "30 h with case"),
-            ("Run Lite", 49, "18 h with case"),
-            ("Quiet Pro", 99, "28 h with case"),
-        ]), "present-table"),
-        tool("present", result_card("product_list", "Best value picks", &[
-            ("Everyday Buds", 79, "Noise cancellation"),
-            ("Run Lite", 49, "Sweat resistant"),
-            ("Quiet Pro", 99, "Spatial audio"),
-            ("Studio Pods", 95, "Wireless charging"),
-        ]), "present-products"),
+        tool("create_task", json!({"goal":"Compare wireless earbuds under $100"}), "earbuds-task"),
         tool("team_propose_hire", proposal("Iris", "Inbox triage", "Sort the inbox and flag what needs you", "inbox-triage"), "propose-inbox"),
         send("Iris is ready to start."),
-    ]}));
+    ], "subagents": {
+        "earbuds-task": [
+            tool("present", result_card("table", "Wireless earbuds under $100", &[
+                ("Everyday Buds", 79, "24 h with case"),
+                ("Studio Pods", 95, "30 h with case"),
+                ("Run Lite", 49, "18 h with case"),
+                ("Quiet Pro", 99, "28 h with case"),
+            ]), "present-table"),
+            tool("present", result_card("product_list", "Best value picks", &[
+                ("Everyday Buds", 79, "Noise cancellation"),
+                ("Run Lite", 49, "Sweat resistant"),
+                ("Quiet Pro", 99, "Spatial audio"),
+                ("Studio Pods", 95, "Wireless charging"),
+            ]), "present-products"),
+            text("Two earbuds lists are ready."),
+        ],
+    }}));
     let pending = |kind: &'static str, key: Option<&'static str>| {
         let home = home.clone();
         async move {
@@ -725,6 +732,7 @@ async fn seed_team(harness: &Harness) -> (String, String) {
             }
         }
     };
+    let mut stream = harness.events(&home, 0).await;
     submit(
         harness,
         &home,
@@ -732,6 +740,11 @@ async fn seed_team(harness: &Harness) -> (String, String) {
         "Compare wireless earbuds under $100.",
         "now",
     )
+    .await;
+    // Later seeds replace the script; the Task must have shared both cards by then.
+    until(&mut stream, "the earbuds Task", |event| {
+        matches!(&event.kind, EventKind::SubagentEnded { .. })
+    })
     .await;
     let suggestion = pending("hire", Some("inbox-triage")).await;
     (suggestion, admin)
@@ -764,6 +777,12 @@ async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<
     harness.kill_sidecar();
     until(&mut stream, "the interruption", |event| {
         matches!(&event.kind, EventKind::RuntimeError { .. })
+    })
+    .await;
+    // A fresh agent takes the interruption report; once it has, the live-state seeding below
+    // can tell that agent apart from the ones it restarts.
+    until(&mut stream, "the interruption report", |event| {
+        matches!(&event.kind, EventKind::MessageInjected { message_id } if message_id.as_str().starts_with("interrupted-report-"))
     })
     .await;
 
@@ -953,6 +972,9 @@ async fn live_states(harness: &mut Harness, site: &str) -> (String, String) {
         text("The sign-in page is open."),
     ];
     harness.replace_script(&json!({ "responses": responses }));
+    // The interrupted conversation's agent is back for its interruption report, so only this
+    // conversation's agent is restarted between steps.
+    let others = agent_pids(harness);
     let otp = create_in(harness, "Sign in to the vendor portal", "full").await;
     let mut stream = harness.events(&otp, 0).await;
     submit(
@@ -973,7 +995,7 @@ async fn live_states(harness: &mut Harness, site: &str) -> (String, String) {
         text("It wants the code from the sign-in email."),
     ]);
     harness.replace_script(&json!({ "responses": responses }));
-    harness.kill_sidecar();
+    restart_agent(harness, &others);
     stream.settled().await;
     submit(harness, &otp, "o2", "Go ahead.", "now").await;
     let events = until_final(&mut stream, "It wants the code from the sign-in email.").await;
@@ -983,13 +1005,13 @@ async fn live_states(harness: &mut Harness, site: &str) -> (String, String) {
         text("Signed in."),
     ]);
     harness.replace_script(&json!({ "responses": responses }));
-    harness.kill_sidecar();
+    restart_agent(harness, &others);
     stream.settled().await;
     submit(harness, &otp, "o3", "The email just arrived.", "now").await;
     pending_ticket(harness, &otp, "secret_input").await;
 
-    // A secret goes into a field of a real tab too. Other conversations' agents are live now,
-    // so only this conversation's agent is restarted between steps.
+    // A secret goes into a field of a real tab too; again only this conversation's agent is
+    // restarted between steps.
     let others = agent_pids(harness);
     let mut responses = vec![
         tool(
@@ -1221,8 +1243,17 @@ async fn web_screens_capture() {
             let file = |screen: &str| out.join(format!("{theme}-{}-{screen}.png", viewport.name));
             let phone = viewport.mobile;
 
-            if wanted("assistant") || wanted("profile") {
+            if wanted("home") {
                 ui.goto("/").await;
+                ui.wait(
+                    "home",
+                    "!!document.querySelector('main.home .composer textarea')",
+                )
+                .await;
+                ui.snap(&file("home")).await;
+            }
+            if wanted("assistant") || wanted("profile") {
+                ui.goto("/agents/chief").await;
                 ui.wait(
                     "assistant thread",
                     "!!document.querySelector('.person-heading')",
@@ -1261,7 +1292,7 @@ async fn web_screens_capture() {
                 if !wanted(name) {
                     continue;
                 }
-                ui.goto("/").await;
+                ui.goto("/agents/chief").await;
                 ui.wait("composer", "!!document.querySelector('.composer textarea')")
                     .await;
                 ui.eval(&format!(
@@ -1321,7 +1352,9 @@ async fn web_screens_capture() {
             // One conversation per state, captured at its latest turn.
             for (screen, session, ready) in [
                 ("short-thread", &seeded.short, "document.querySelectorAll('.bubble.assistant[data-final=\"true\"]').length === 1"),
-                ("streaming", &seeded.streaming, "document.body.innerText.includes('Seven crates') && !!document.querySelector('.subagent')"),
+                // Narration before a tool call stays hidden and a `delegate` child lives in the
+                // Agents tray, so the running state is the live status line plus the agents pill.
+                ("streaming", &seeded.streaming, "!!document.querySelector('.live-status') && !!document.querySelector('.agents-pill')"),
                 ("working", &seeded.working, "!!document.querySelector('.status-line')"),
                 ("failed", &seeded.failed, "!!document.querySelector('.runtime-error')"),
                 ("ask-options", &seeded.ask_options, "!!document.querySelector('.oc-card[data-ticket][data-status=pending]')"),
@@ -1392,7 +1425,7 @@ async fn web_screens_capture() {
                 ui.snap(&file("drawer")).await;
             }
             if wanted("people") {
-                ui.goto("/").await;
+                ui.goto("/agents/chief").await;
                 ui.wait(
                     "people sidebar",
                     "!!document.querySelector('.person-heading') && document.querySelectorAll('.person-row').length >= 4",
@@ -1413,7 +1446,7 @@ async fn web_screens_capture() {
             .iter()
             .any(|screen| wanted(screen))
             {
-                ui.goto("/").await;
+                ui.goto("/agents/chief").await;
                 ui.wait(
                     "assistant thread with cards",
                     "!!document.querySelector('.oc-card[data-kind=hire][data-status=pending]') \
@@ -1477,7 +1510,52 @@ async fn web_screens_capture() {
                 .await;
                 ui.snap(&file("history")).await;
             }
-            // Workspace sections open as dialogs over the assistant's thread.
+            // History holds the archived filter and the conversation search, results and none.
+            for (screen, query, ready) in [
+                (
+                    "archived",
+                    None,
+                    "document.body.innerText.includes('Old onboarding notes')",
+                ),
+                (
+                    "search",
+                    Some("release"),
+                    "!!document.querySelector('.history-list a')",
+                ),
+                (
+                    "search-empty",
+                    Some("quarterly tax filing"),
+                    "document.body.innerText.includes('No conversations match')",
+                ),
+            ] {
+                if !wanted(screen) {
+                    continue;
+                }
+                ui.goto("/history").await;
+                ui.wait(
+                    "history search",
+                    "!!document.querySelector('.history-search input')",
+                )
+                .await;
+                match query {
+                    None => {
+                        ui.eval("__qs.text(document.querySelector('.history-views'), 'Archived').click(); true")
+                            .await;
+                    }
+                    Some(query) => {
+                        ui.eval(&format!(
+                            "(() => {{ const el = document.querySelector('.history-search input'); \
+                               Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, {}); \
+                               el.dispatchEvent(new Event('input', {{ bubbles: true }})); return true }})()",
+                            json!(query)
+                        ))
+                        .await;
+                    }
+                }
+                ui.wait(screen, ready).await;
+                ui.snap(&file(screen)).await;
+            }
+            // Workspace sections deep-linked without a screen behind them open as dialogs over Home.
             for (screen, route, title) in [
                 ("team", "/team", "Team"),
                 ("connections", "/connections", "Connections"),

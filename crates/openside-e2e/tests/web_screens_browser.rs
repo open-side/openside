@@ -985,24 +985,29 @@ async fn web_screens_browser_capture() {
                 }
                 ui.wait("settings and dock", "Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === 'Settings') && !!document.querySelector('.card-dock .oc-card')").await;
                 ui.snap(&file("otp-dock-settings")).await;
-                // A press inside the dock is outside the modal Settings sheet; it must not close it.
-                // Opening the collapsed card must preserve the surrounding Settings dialog.
-                let kept = ui
+                // A modal owns the page: the dock waits beneath its scrim, inert, until Settings closes.
+                let state = ui
                     .eval(
-                        "(async () => { const t = document.querySelector('.card-dock .oc-pill'); \
-                         const el = t || document.querySelector('.card-dock input'); \
-                         const at = el.getBoundingClientRect(); \
-                         const init = { bubbles: true, cancelable: true, button: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: at.left + 4, clientY: at.top + 4 }; \
-                         el.dispatchEvent(new PointerEvent('pointerdown', init)); el.dispatchEvent(new MouseEvent('mousedown', init)); \
-                         el.dispatchEvent(new PointerEvent('pointerup', init)); el.dispatchEvent(new MouseEvent('mouseup', init)); el.click(); \
-                         await new Promise((r) => setTimeout(r, 400)); \
-                         return Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === 'Settings') })()",
+                        "({ inert: document.querySelector('.card-dock').inert, \
+                           settings: Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === 'Settings') })",
                     )
                     .await;
-                eprintln!(
-                    "{theme}-{}: Settings still open after a press in the dock: {kept}",
+                assert_eq!(
+                    state,
+                    json!({ "inert": true, "settings": true }),
+                    "{theme}-{}: the dock must be inert under Settings",
                     viewport.name
                 );
+                // Once Settings closes the dock answers at once.
+                ui.click(".ui-dialog", "Close").await;
+                ui.wait("dock usable after Settings", "!document.querySelector('.ui-dialog') && !document.querySelector('.card-dock').inert").await;
+                ui.eval("document.querySelector('.card-dock .oc-pill').click(); true")
+                    .await;
+                ui.wait(
+                    "dock open after Settings",
+                    "!!document.querySelector('.card-dock .oc-card[data-open=true]')",
+                )
+                .await;
                 if phone {
                     ui.snap(&file("otp-dock-settings-open")).await;
                 }

@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "../api/client";
-import type { Ticket } from "../api/types";
+import type { BrowserState, Ticket } from "../api/types";
 import { ClientContext } from "../context";
-import { emptySessionView, type SessionView, type TimelineItem } from "../state/session";
+import { emptySessionView, type BrowserStateView, type SessionView, type TimelineItem } from "../state/session";
 import { json } from "../test/fakeDaemon";
+import { BrowserButton } from "./BrowserButton";
 import { BrowserPreview, browserAnchor } from "./BrowserPreview";
 
 class FakeSocket {
@@ -29,6 +31,8 @@ const TABS = {
 };
 let tabsResponse: () => Response = () => json(200, TABS);
 let tabRequests: string[] = [];
+const PERSON = { device_id: "d1", name: "Phone", kind: "person_device", scopes: ["read", "steer", "approve", "human_step"] };
+let myDevice: object = PERSON;
 
 const OPENED: TimelineItem = { type: "tool", id: "t1", name: "browser_open_tab", args: { url: "https://shop.test/checkout" }, updates: [], result: { tab_id: "tab1" }, done: true };
 const FRAME = { type: "frame", data: "/9j/first", width: 720, height: 450, tab_id: "tab1" };
@@ -45,15 +49,20 @@ function setup(initial: SessionView = viewOf()) {
   const client = createClient({
     token: () => "device-token",
     fetch: (async (input: RequestInfo | URL) => {
-      tabRequests.push(new URL(String(input), "http://x").pathname);
+      const path = new URL(String(input), "http://x").pathname;
+      if (path === "/v1/devices/me") return json(200, myDevice);
+      tabRequests.push(path);
       return tabsResponse();
     }) as typeof fetch,
     webSocket: (url, protocols) => new FakeSocket(url, protocols) as unknown as WebSocket,
   });
   const ui = (view: SessionView) => (
-    <ClientContext.Provider value={client}>
-      <BrowserPreview sessionId="s1" view={view} onShowPending={onShowPending} onCancel={onCancel} />
-    </ClientContext.Provider>
+    <MemoryRouter>
+      <ClientContext.Provider value={client}>
+        <BrowserButton sessionId="s1" view={view} />
+        <BrowserPreview sessionId="s1" view={view} onShowPending={onShowPending} onCancel={onCancel} />
+      </ClientContext.Provider>
+    </MemoryRouter>
   );
   const result = render(ui(initial));
   return { ...result, onShowPending, onCancel, update: (view: SessionView) => result.rerender(ui(view)) };
@@ -65,9 +74,29 @@ function open() {
   return socket;
 }
 
+function taskState(patch: Partial<BrowserState> = {}): Record<string, BrowserStateView> {
+  return {
+    tab9: {
+      tab_id: "tab9",
+      task_id: "task1",
+      title: "Flights",
+      url: "https://air.test/",
+      host: "air.test",
+      page_kind: "other",
+      phase: "reading",
+      facts: {},
+      seq: 3,
+      trail: [],
+      ...patch,
+    } as BrowserStateView,
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  sessionStorage.clear();
+  myDevice = PERSON;
 });
 
 describe("BrowserPreview", () => {
@@ -82,14 +111,17 @@ describe("BrowserPreview", () => {
     expect(socket.protocols).toEqual(["openside.v1", "openside.bearer.device-token"]);
     const card = screen.getByRole("region", { name: "Live browser" });
     expect(within(card).getByAltText("Remote browser tab")).toHaveAttribute("src", "data:image/jpeg;base64,/9j/first");
-    // Idle, the pill names the live tab from the tab ledger, matched by the streamed tab id.
-    await waitFor(() => expect(within(card).getByRole("status")).toHaveTextContent("Checkout · Shop"));
+    // Idle, the footer names the live tab from the tab ledger, matched by the streamed tab id,
+    // and the status adds the site.
+    await waitFor(() => expect(card.querySelector(".browser-card-site")).toHaveTextContent("Checkout · Shop"));
+    expect(within(card).getByRole("status")).toHaveTextContent("shop.test");
     expect(tabRequests[0]).toBe("/v1/browser/tabs");
 
     await user.click(within(card).getByRole("button", { name: "Minimize" }));
     expect(card).toHaveAttribute("data-minimized");
     expect(within(card).getByRole("button", { name: "Restore" })).toHaveAttribute("aria-expanded", "false");
-    // The slim pill keeps a live thumbnail.
+    // The slim pill keeps a live thumbnail and names the page.
+    expect(within(card).getByRole("status")).toHaveTextContent("Checkout · Shop");
     expect(within(card).getByAltText("Remote browser tab")).toBeInTheDocument();
     await user.click(within(card).getByRole("button", { name: "Restore" }));
     expect(card).not.toHaveAttribute("data-minimized");
@@ -122,9 +154,10 @@ describe("BrowserPreview", () => {
     expect(screen.getByRole("region", { name: "Live browser" })).toBeInTheDocument();
     expect(socket.closed).toBe(false);
 
-    // Closing the idle card hides it until the agent touches the browser again.
+    // Closing the idle card hides it, and the floating preview with it, until asked for again.
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("region", { name: "Live browser" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Live browser" })).toBeNull();
     expect(socket.closed).toBe(true);
     update(viewOf({ items: [OPENED, { ...OPENED, id: "t2", name: "browser_snapshot", args: { tab_id: "tab1" } }] }));
     expect(screen.getByRole("region", { name: "Live browser" })).toBeInTheDocument();
@@ -185,7 +218,7 @@ describe("BrowserPreview", () => {
       open();
       // Without the ledger the card falls back to the host the agent opened.
       await user.click(screen.getByRole("button", { name: "Expand shop.test" }));
-      const sheet = screen.getByRole("dialog", { name: "Browser" });
+      const sheet = screen.getByRole("dialog", { name: "shop.test" });
       await waitFor(() => expect(within(sheet).getByText("The browser is disconnected.")).toBeInTheDocument());
       expect(within(sheet).queryByRole("link")).toBeNull();
       expect(within(sheet).getByAltText("Remote browser tab")).toBeInTheDocument();
@@ -228,6 +261,140 @@ describe("BrowserPreview", () => {
     act(() => socket.onclose?.());
     expect(screen.queryByAltText("Remote browser tab")).toBeNull();
     expect(screen.getByText(/browse or steer device token/)).toBeInTheDocument();
+  });
+
+  it("keeps a Task-only session's PiP until Show browser, then minimises it to a pill and remembers the choice", async () => {
+    const user = userEvent.setup();
+    const { unmount } = setup(viewOf({ items: [], browserStates: taskState() }));
+    // No inline card without the agent's own browser calls, and the Task unit already shows its
+    // tab: nothing floats over the thread and no stream opens until the person asks.
+    expect(screen.queryByRole("region", { name: "Live browser" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Live browser" })).toBeNull();
+    expect(FakeSocket.last).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Show browser" }));
+    open();
+    const pip = screen.getByRole("complementary", { name: "Live browser" });
+    expect(within(pip).getByAltText("Remote browser tab")).toBeInTheDocument();
+
+    await user.click(within(pip).getByRole("button", { name: "Minimize" }));
+    expect(pip).toHaveAttribute("data-minimized");
+    expect(pip.querySelector(".pip-thumb img")).toHaveAttribute("src", "data:image/jpeg;base64,/9j/first");
+    expect(JSON.parse(sessionStorage.getItem("openside.browserDock.s1")!)).toMatchObject({ pip: "minimized" });
+    unmount();
+
+    // A reload of the same conversation comes back minimised; tapping the pill restores it.
+    setup(viewOf({ items: [], browserStates: taskState() }));
+    open();
+    const again = screen.getByRole("complementary", { name: "Live browser" });
+    expect(again).toHaveAttribute("data-minimized");
+    await user.click(within(again).getByRole("button", { name: "Restore live browser" }));
+    expect(again).not.toHaveAttribute("data-minimized");
+
+    await user.click(within(again).getByRole("button", { name: "Expand" }));
+    expect(await screen.findByRole("dialog", { name: "Checkout · Shop" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Live browser" })).toBeNull();
+  });
+
+  it("stays closed after Close until Show browser in the header summons it", async () => {
+    const user = userEvent.setup();
+    const { update } = setup(viewOf({ items: [], browserStates: taskState() }));
+    await user.click(screen.getByRole("button", { name: "Show browser" }));
+    let socket = open();
+    await user.click(within(screen.getByRole("complementary", { name: "Live browser" })).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("complementary", { name: "Live browser" })).toBeNull();
+    expect(socket.closed).toBe(true);
+    // Later browser states do not bring it back by themselves.
+    update(viewOf({ items: [], browserStates: taskState({ phase: "acting" }) }));
+    expect(screen.queryByRole("complementary", { name: "Live browser" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Show browser" }));
+    socket = open();
+    expect(screen.getByRole("complementary", { name: "Live browser" })).toBeInTheDocument();
+    expect(socket.closed).toBe(false);
+  });
+
+  it("stands in for a scrolled-away card, but not over a request waiting for the person unless asked", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(private readonly callback: IntersectionObserverCallback) {}
+        observe() {
+          this.callback([{ isIntersecting: false } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      const { update } = setup(viewOf({ status: "running", browserStates: taskState() }));
+      open();
+      expect(screen.getByRole("complementary", { name: "Live browser" })).toBeInTheDocument();
+      const confirm = { k3: { id: "k3", status: "pending", kind: "confirm", summary: "Approve the order" } as Ticket };
+      update(viewOf({ status: "running", browserStates: taskState(), tickets: confirm }));
+      expect(screen.queryByRole("complementary", { name: "Live browser" })).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Show browser" }));
+      expect(screen.getByRole("complementary", { name: "Live browser" })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("opens the sheet from Show browser on a phone", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(max-width: 820px)" }) as MediaQueryList);
+    try {
+      setup(viewOf({ items: [], browserStates: taskState() }));
+      await user.click(screen.getByRole("button", { name: "Show browser" }));
+      open();
+      expect(await screen.findByRole("dialog", { name: "Checkout · Shop" })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  describe("taking over from the sheet", () => {
+    const takeover = (target: Ticket["target"]) => ({ k2: { id: "k2", status: "pending", kind: "takeover", summary: "Solve the puzzle", target } as Ticket });
+
+    it("offers a person's device the pending takeover", async () => {
+      const user = userEvent.setup();
+      setup(viewOf({ tickets: takeover({ origin: "https://shop.test" } as Ticket["target"]) }));
+      open();
+      await user.click(screen.getByRole("button", { name: /^Expand / }));
+      await user.click(await within(screen.getByRole("dialog")).findByRole("button", { name: "Take control" }));
+      expect(screen.getByRole("dialog", { name: "Remote control" })).toHaveTextContent("Solve the puzzle");
+    });
+
+    it.each([
+      ["an agent client", { ...PERSON, kind: "agent_client" }, "Only a device you paired as yourself can take control of the browser."],
+      ["a device without human_step", { ...PERSON, scopes: ["read", "steer"] }, "This device wasn't given permission to take control of the browser."],
+    ])("tells %s why it cannot take control", async (_, device, reason) => {
+      const user = userEvent.setup();
+      myDevice = device;
+      setup(viewOf({ tickets: takeover({ origin: "https://shop.test" } as Ticket["target"]) }));
+      open();
+      await user.click(screen.getByRole("button", { name: /^Expand / }));
+      const dialog = screen.getByRole("dialog");
+      expect(await within(dialog).findByText(reason)).toBeInTheDocument();
+      expect(within(dialog).queryByRole("button", { name: "Take control" })).toBeNull();
+    });
+
+    it("explains a request without a page to take over", async () => {
+      const user = userEvent.setup();
+      setup(viewOf({ tickets: takeover(undefined) }));
+      open();
+      await user.click(screen.getByRole("button", { name: /^Expand / }));
+      const dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByText("This request doesn't say which page to take over.")).toBeInTheDocument();
+      expect(within(dialog).queryByRole("button", { name: "Take control" })).toBeNull();
+    });
+  });
+
+  it("hides the header button for sessions without a browser state and for private ones", () => {
+    const first = setup(viewOf());
+    expect(screen.queryByRole("button", { name: "Show browser" })).toBeNull();
+    first.unmount();
+    setup(viewOf({ incognito: true, browserStates: taskState() }));
+    expect(screen.queryByRole("button", { name: "Show browser" })).toBeNull();
   });
 });
 

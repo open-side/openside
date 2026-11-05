@@ -1,7 +1,7 @@
 import { Globe, Table2, TextSearch, UserRoundCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useClient } from "../context";
-import { ICON_STROKE } from "../ui";
+import { Chip, ICON_STROKE } from "../ui";
 
 /** `https://*.shop.example:8443` → `shop.example`; the host a person would type. */
 export function siteHost(origin: string): string | null {
@@ -55,10 +55,9 @@ export function Starters({ onPick }: { onPick: (text: string) => void }) {
       <ul className="starter-list" aria-label="Ways to start">
         {starters.map(({ icon: Icon, title, text }) => (
           <li key={title}>
-            <button type="button" className="starter" onClick={() => onPick(text)}>
-              <Icon size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              <span>{title}</span>
-            </button>
+            <Chip icon={<Icon size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />} onClick={() => onPick(text)}>
+              {title}
+            </Chip>
           </li>
         ))}
       </ul>
@@ -66,10 +65,9 @@ export function Starters({ onPick }: { onPick: (text: string) => void }) {
         <div className="starter-sites" role="group" aria-label="Your saved sites">
           <span className="starter-sites-label">Your saved sites</span>
           {sites.map((host) => (
-            <button key={host} type="button" className="chip-button" onClick={() => onPick(`Sign in to ${host} and tell me what’s new.`)}>
-              <Globe size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            <Chip key={host} icon={<Globe size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />} onClick={() => onPick(`Sign in to ${host} and tell me what’s new.`)}>
               {host}
-            </button>
+            </Chip>
           ))}
         </div>
       ) : null}

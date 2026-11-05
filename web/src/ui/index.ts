@@ -5,7 +5,7 @@ export { Dialog, DialogActions, Drawer, type DialogProps, type DrawerProps } fro
 export { PopoverMenu, MenuItem, MenuSeparator, type PopoverMenuProps, type MenuItemProps } from "./Menu";
 export { Select, type SelectGroup, type SelectOption, type SelectProps } from "./Select";
 export { ToastProvider, useToast, type Toaster, type ToastTone } from "./Toast";
-export { Spinner, Segmented, Switch, type SegmentOption, type SegmentedProps, type SwitchProps } from "./misc";
+export { Spinner, Segmented, Switch, Chip, type SegmentOption, type SegmentedProps, type SwitchProps, type ChipProps } from "./misc";
 export { QrCode } from "./QrCode";
 export { copyText } from "./clipboard";
 export { BrandMark } from "./BrandMark";

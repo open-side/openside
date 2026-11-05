@@ -1,5 +1,6 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Action } from "../api/types";
 import { fixture } from "../cards/testing";
@@ -93,24 +94,63 @@ describe("ConversationCard", () => {
 });
 
 describe("CardSheet", () => {
-  it("hosts the same card always open, closes on Back, on Escape and once the request is answered", async () => {
+  it("hosts the same card always open, closes on Close, on Escape and once the request is answered", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    const { container } = mount(<CardSheet card={fixture("ticket:otp1")} sessionId="s1" onClose={onClose} />);
-    expect(screen.getByRole("dialog", { name: "Verification code" })).toBeInTheDocument();
-    expect(container.querySelector(".oc-card")).toHaveAttribute("data-open", "true");
-    expect(container.querySelector("button.oc-close")).toBeNull();
-    expect(screen.getByLabelText("Code")).toHaveFocus();
+    mount(<CardSheet card={fixture("ticket:otp1")} sessionId="s1" onClose={onClose} />);
+    const sheet = screen.getByRole("dialog", { name: "Verification code" });
+    expect(sheet).toHaveClass("card-sheet");
+    expect(sheet.querySelector(".oc-card")).toHaveAttribute("data-open", "true");
+    expect(sheet.querySelector("button.oc-close")).toBeNull();
+    await waitFor(() => expect(within(sheet).getByLabelText("Code")).toHaveFocus());
 
-    await user.click(screen.getByRole("button", { name: "Back to conversation" }));
+    await user.click(within(sheet).getByRole("button", { name: "Close" }));
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(2);
 
     onClose.mockClear();
-    await user.type(screen.getByLabelText("Code"), "123456");
+    await user.type(within(sheet).getByLabelText("Code"), "123456");
     await act(async () => {
-      await user.click(screen.getByRole("button", { name: "Submit code" }));
+      await user.click(within(sheet).getByRole("button", { name: "Submit code" }));
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("is modal: focus enters, Tab stays inside, the page behind is unreachable, and focus returns on close", async () => {
+    const user = userEvent.setup();
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open sheet
+          </button>
+          <button type="button">Behind</button>
+          {open ? <CardSheet card={fixture("ticket:otp1")} sessionId="s1" onClose={() => setOpen(false)} /> : null}
+        </>
+      );
+    }
+    mount(<Host />);
+    const opener = screen.getByRole("button", { name: "Open sheet" });
+    await user.click(opener);
+    const sheet = await screen.findByRole("dialog", { name: "Verification code" });
+    await waitFor(() => expect(within(sheet).getByLabelText("Code")).toHaveFocus());
+
+    const behind = screen.getByText("Behind");
+    expect(behind.closest("[aria-hidden=true], [inert]")).not.toBeNull();
+    // Base UI's focus guards hand focus back on the next tick, so each step waits for it to settle inside.
+    for (let step = 0; step < 8; step += 1) {
+      await user.tab();
+      await waitFor(() => expect(sheet.contains(document.activeElement)).toBe(true));
+    }
+    for (let step = 0; step < 8; step += 1) {
+      await user.tab({ shift: true });
+      await waitFor(() => expect(sheet.contains(document.activeElement)).toBe(true));
+    }
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(behind.closest("[aria-hidden=true], [inert]")).toBeNull();
   });
 });

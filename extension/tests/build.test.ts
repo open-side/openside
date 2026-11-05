@@ -37,7 +37,14 @@ describe("production extension artifact", () => {
       // The panel draws cards with the web app's renderer and stylesheet, never a copy or a remote one.
       const panelPage = await readFile(join(directory, "panel.html"), "utf8");
       expect(panelPage).toContain('href="cards.css"');
-      for (const page of ["panel.html", "options.html", "style.css", "cards.css"]) expect(await readFile(join(directory, page), "utf8")).not.toMatch(/(?:src|href)=["']https?:|url\(\s*["']?https?:/);
+      // Tokens come from the web app's only token source, and every page loads them before its own styles.
+      expect(await readFile(join(directory, "tokens.css"), "utf8")).toBe(await readFile(join(process.cwd(), "../web/src/tokens.css"), "utf8"));
+      for (const page of ["panel.html", "options.html", "import-permissions.html", "import-connect.html"]) {
+        const html = await readFile(join(directory, page), "utf8");
+        expect(html.indexOf('href="tokens.css"')).toBeGreaterThan(-1);
+        expect(html.indexOf('href="tokens.css"')).toBeLessThan(html.indexOf('href="style.css"'));
+      }
+      for (const page of ["panel.html", "options.html", "style.css", "cards.css", "tokens.css"]) expect(await readFile(join(directory, page), "utf8")).not.toMatch(/(?:src|href)=["']https?:|url\(\s*["']?https?:/);
       expect(await readFile(join(directory, "cards.css"), "utf8")).toContain(".oc-card");
       const options = await readFile(join(directory, "options.html"), "utf8");
       expect(options).toContain("openside token create --person --scope read --scope steer --scope approve");

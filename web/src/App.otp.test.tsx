@@ -60,6 +60,11 @@ function choiceTicket(id: string, session: string): Ticket {
   };
 }
 
+/** The dock under an open modal is aria-hidden by Base UI, so it is found by its label regardless. */
+async function waitForDock(name: string): Promise<HTMLElement> {
+  return screen.findByRole("complementary", { name, hidden: true });
+}
+
 /** The collapsed bubble's label, which is also its accessible name. */
 const summary = (fixtureId: string) => new RegExp(fixture(fixtureId).collapsed_summary);
 
@@ -120,23 +125,29 @@ describe("code requests never move the person", () => {
     expect(window.history.length).toBe(before);
   });
 
-  it("over Settings, another conversation's code request floats in a dock and the route stays", async () => {
+  it("under Settings, another conversation's code request waits inert in the dock and answers in place once Settings closes", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "tok");
     window.history.pushState({}, "", "/settings");
     const resolves = stubDaemon({ pending: [otpTicket("k2", "s2")] });
     render(<App />);
-    const dock = await screen.findByRole("complementary", { name: "Code needed for accounts.example" });
+    const dock = await waitForDock("Code needed for accounts.example");
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
-    expect(within(dock).getByRole("link", { name: /^Go to / })).toHaveAttribute("href", "/sessions/s2");
+    // A modal owns the page: the dock stays visible beneath it but takes no press or focus.
+    expect(dock).toHaveAttribute("inert");
+    expect(within(dock).getByRole("link", { name: /^Go to /, hidden: true })).toHaveAttribute("href", "/sessions/s2");
+    await user.keyboard("{Escape}");
+    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull());
+    await vi.waitFor(() => expect(dock).not.toHaveAttribute("inert"));
+    const route = window.location.pathname;
     // The dock rests as the card's collapsed bubble; opening it puts the cursor in the code field.
     expect(within(dock).queryByLabelText("Code")).toBeNull();
-    await user.click(await within(dock).findByRole("button", { name: summary("ticket:otp1") }));
+    await user.click(within(dock).getByRole("button", { name: summary("ticket:otp1") }));
     expect(within(dock).getByLabelText("Code")).toHaveFocus();
     await user.type(within(dock).getByLabelText("Code"), "123456{Enter}");
     await vi.waitFor(() => expect(resolves).toEqual([{ path: "/v1/tickets/k2/resolve", body: { value: "123456" } }]));
     await vi.waitFor(() => expect(screen.queryByRole("complementary", { name: "Code needed for accounts.example" })).toBeNull());
-    expect(window.location.pathname).toBe("/settings");
+    expect(window.location.pathname).toBe(route);
   });
 
   it("a tapped code notification (?ticket=) opens the code sheet, and submitting returns to the conversation", async () => {
@@ -217,19 +228,24 @@ describe("code requests never move the person", () => {
     expect(screen.queryByText(/more waiting/)).toBeNull();
   });
 
-  it("over Settings, another conversation's choice floats in the dock and the route stays", async () => {
+  it("under Settings, another conversation's choice waits inert in the dock and answers in place once Settings closes", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "tok");
     window.history.pushState({}, "", "/settings");
     const resolves = stubDaemon({ pending: [choiceTicket("k4", "s2")] });
     render(<App />);
-    const dock = await screen.findByRole("complementary", { name: "Choice needed for accounts.example" });
+    const dock = await waitForDock("Choice needed for accounts.example");
+    expect(dock).toHaveAttribute("inert");
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull());
+    await vi.waitFor(() => expect(dock).not.toHaveAttribute("inert"));
+    const route = window.location.pathname;
     await user.click(await within(dock).findByRole("button", { name: summary("ticket:choice1") }));
     expect(within(dock).getAllByRole("radio")).toHaveLength(2);
     await user.click(within(dock).getByLabelText(/Work account/));
     await user.click(within(dock).getByRole("button", { name: "Continue" }));
     await vi.waitFor(() => expect(resolves).toEqual([{ path: "/v1/tickets/k4/resolve", body: { value: { option: "page-account-2" } } }]));
-    expect(window.location.pathname).toBe("/settings");
+    expect(window.location.pathname).toBe(route);
   });
 
   it("a tapped login notification (?ticket=) opens the login sheet", async () => {

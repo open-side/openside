@@ -68,7 +68,7 @@ export function AccessRequestDock() {
   return (
     <section className="access-dock" aria-label="Access requests">
       {requests.slice(0, 3).map((request) => (
-        <article key={request.id} className="access-card glass-float">
+        <article key={request.id} className="access-card surface-overlay">
           <span className="access-card-icon" aria-hidden="true">
             <ShieldCheck size={18} strokeWidth={ICON_STROKE} />
           </span>

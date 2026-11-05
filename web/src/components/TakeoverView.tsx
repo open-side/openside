@@ -74,6 +74,7 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
   const [withheld, setWithheld] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [pip, setPip] = useState(false);
+  const [pipMinimized, setPipMinimized] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialog = useRef<HTMLDivElement>(null);
@@ -223,6 +224,9 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
         title={ticket.summary}
         status={status}
         live={!!image && status === "open" && !withheld}
+        minimized={pipMinimized}
+        onMinimizedChange={setPipMinimized}
+        thumb={image ?? <Globe size={16} strokeWidth={ICON_STROKE} />}
         onExpand={() => setPip(false)}
         onClose={onClose}
       >

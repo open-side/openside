@@ -18,6 +18,8 @@ export function useEdgeSwipe(onOpen: () => void): void {
       if (!window.matchMedia?.(PHONE_QUERY).matches) return;
       // A dialog, sheet or the drawer itself owns touches while it is open.
       if (document.querySelector('[role="dialog"]')) return;
+      // Dragging the floating browser preview to the left edge is not a drawer swipe.
+      if (event.target instanceof Element && event.target.closest(".pip")) return;
       start = { x: touch.clientX, y: touch.clientY };
     };
     const track = (event: TouchEvent) => {

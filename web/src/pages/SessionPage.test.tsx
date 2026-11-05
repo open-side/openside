@@ -25,7 +25,7 @@ it("returns a deleted ordinary conversation to History without changing its titl
     <MemoryRouter initialEntries={["/sessions/s1"]}>
       <ClientContext.Provider value={daemon.client}>
         <AgentsContext.Provider value={{ agents: [], error: null, offline: false, refresh: vi.fn() }}>
-          <ShellContext.Provider value={{ openDrawer: vi.fn(), refreshSessions }}>
+          <ShellContext.Provider value={{ openDrawer: vi.fn(), refreshSessions, sidebarCollapsed: false, toggleSidebar: vi.fn() }}>
             <ToastProvider>
               <Routes>
                 <Route path="/sessions/:id" element={<SessionPage />} />

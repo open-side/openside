@@ -129,14 +129,15 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     ui.navigate(OWNER, &tab, &format!("{origin}/sessions/{session}"))
         .await
         .unwrap();
-    // The live browser card docks by itself once the conversation has used the browser.
+    // The live browser card docks by itself once the conversation has used the browser. The
+    // frame is matched by its alt text: the card's footer also carries the site's favicon.
     wait(
         &ui,
         &tab,
-        "!!document.querySelector('.browser-card img')?.naturalWidth",
+        "!!document.querySelector('.browser-card img[alt=\"Remote browser tab\"]')?.naturalWidth",
     )
     .await;
-    const PIXEL: &str = "(()=>{const i=document.querySelector('.browser-card img');if(!i?.naturalWidth)return null;const c=document.createElement('canvas');c.width=i.naturalWidth;c.height=i.naturalHeight;const x=c.getContext('2d');x.drawImage(i,0,0);return Array.from(x.getImageData(500,300,1,1).data).slice(0,3)})()";
+    const PIXEL: &str = "(()=>{const i=document.querySelector('.browser-card img[alt=\"Remote browser tab\"]');if(!i?.naturalWidth)return null;const c=document.createElement('canvas');c.width=i.naturalWidth;c.height=i.naturalHeight;const x=c.getContext('2d');x.drawImage(i,0,0);return Array.from(x.getImageData(500,300,1,1).data).slice(0,3)})()";
     let red = ui.evaluate(&tab, PIXEL).await.unwrap();
     assert!(
         red[0].as_u64().unwrap() > 180 && red[2].as_u64().unwrap() < 30,
@@ -144,18 +145,18 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     );
     ui.evaluate(
         &tab,
-        "window.__previewBefore=document.querySelector('.browser-card img').src; true",
+        "window.__previewBefore=document.querySelector('.browser-card img[alt=\"Remote browser tab\"]').src; true",
     )
     .await
     .unwrap();
     submit(&harness, &session, "navigate blue").await;
-    wait(&ui,&tab,"document.querySelector('.browser-card img')?.src!==window.__previewBefore && document.querySelector('.browser-card img')?.complete && !!document.querySelector('.browser-card img')?.naturalWidth").await;
+    wait(&ui,&tab,"(() => { const i = document.querySelector('.browser-card img[alt=\"Remote browser tab\"]'); return i?.src!==window.__previewBefore && !!i?.complete && !!i?.naturalWidth })()").await;
     let blue = ui.evaluate(&tab, PIXEL).await.unwrap();
     assert!(
         blue[2].as_u64().unwrap() > 180 && blue[0].as_u64().unwrap() < 30,
         "{blue}"
     );
-    let size: Value = ui.evaluate(&tab,"[document.querySelector('.browser-card img').naturalWidth,document.querySelector('.browser-card img').naturalHeight]").await.unwrap();
+    let size: Value = ui.evaluate(&tab,"(() => { const i = document.querySelector('.browser-card img[alt=\"Remote browser tab\"]'); return [i.naturalWidth, i.naturalHeight] })()").await.unwrap();
     assert_eq!(size, json!([720, 450]));
     // The card is named after the live tab from the tab ledger. `ledger` fetches
     // GET /v1/browser/tabs with this device's token and returns the title of the entry for the
@@ -213,7 +214,7 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     wait(
         &ui,
         &tab,
-        "!!document.querySelector('.browser-card img')?.naturalWidth",
+        "!!document.querySelector('.browser-card img[alt=\"Remote browser tab\"]')?.naturalWidth",
     )
     .await;
     // Minimize unless the finished run already folded the card.
@@ -226,7 +227,7 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     wait(
         &ui,
         &tab,
-        "!!document.querySelector('.browser-card[data-minimized] .browser-card-thumb img')",
+        "!!document.querySelector('.browser-card[data-minimized] .browser-card-thumb img[alt=\"Remote browser tab\"]')",
     )
     .await;
     // Idle, × hides the card rather than cancelling anything.
@@ -236,7 +237,13 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     )
     .await
     .unwrap();
-    wait(&ui, &tab, "!document.querySelector('.browser-card')").await;
+    // Closing the card closes the browser: no floating preview takes its place.
+    wait(
+        &ui,
+        &tab,
+        "!document.querySelector('.browser-card') && !document.querySelector('.pip')",
+    )
+    .await;
     ui.shutdown().await.unwrap();
     harness.kill().await;
 }

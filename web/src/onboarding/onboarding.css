@@ -1,4 +1,7 @@
-/* First-run guide (/welcome). A strong-glass card on the gradient, like sign-in and the in-chat cards. */
+/*
+ * First-run guide (/welcome). Desktop: a split modal on the canvas, the step on the left and a
+ * miniature of the app on the right (OnboardingPreview). Below 1024px the step column is the page.
+ */
 
 .shell[data-focus] {
   grid-template-columns: minmax(0, 1fr);
@@ -9,41 +12,53 @@
 
 .onb {
   display: grid;
+  flex: 1;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  min-height: 0;
   place-items: center;
-  padding: max(env(safe-area-inset-top), 16px) 16px max(env(safe-area-inset-bottom), 16px);
+  padding: max(env(safe-area-inset-top), 24px) 24px max(env(safe-area-inset-bottom), 24px);
+  background: var(--canvas);
   overflow-y: auto;
 }
-.onb-card.panel {
-  /* Inset rows (pages.css) read these; the card is dark in both themes. */
-  --glass-inset-bg: rgb(255 255 255 / 0.06);
-  --glass-inset-border: rgb(255 255 255 / 0.1);
+.onb-split {
+  display: grid;
+  grid-template-columns: 440px minmax(0, 1fr);
+  width: min(1040px, 100%);
+  height: min(640px, calc(var(--app-height, 100dvh) - 48px));
+  min-height: 480px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-bubble);
+  background: var(--canvas);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+}
+.onb-card {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  width: min(560px, 100%);
+  gap: var(--space-5);
   min-width: 0;
-  padding: 24px 24px 20px;
-  box-shadow: var(--shadow-popup);
+  min-height: 0;
+  padding: 40px;
 }
 .onb-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
   min-height: 36px;
 }
 .onb-brand {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  font-size: 1.1875rem;
-  font-weight: 650;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-title);
   letter-spacing: -0.4px;
 }
 .onb-header .ui-button--ghost {
-  margin-right: -8px;
+  margin-right: -14px;
   color: var(--muted);
 }
 
@@ -59,21 +74,27 @@
 .onb-progress li {
   height: 4px;
   border-radius: var(--radius-pill);
-  background: rgb(255 255 255 / 0.14);
+  background: var(--border);
   transition: background-color var(--normal) var(--ease);
 }
 .onb-progress li[data-state="past"] {
-  background: rgb(255 255 255 / 0.5);
+  background: color-mix(in srgb, var(--text) 35%, var(--canvas));
 }
 .onb-progress li[data-state="current"] {
-  background: var(--glass-strong-fg);
+  background: var(--text);
 }
 
+/* The step scrolls inside the card so the footer actions stay in reach. */
 .onb-body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
   min-height: 0;
+  /* Room for focus rings, which the scroller would otherwise clip. */
+  margin: -4px;
+  padding: 4px;
+  overflow-y: auto;
   animation: onb-in var(--normal) var(--ease);
 }
 @keyframes onb-in {
@@ -84,30 +105,35 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .onb-body {
-    animation: none;
+    animation: onb-fade var(--fast) linear;
+  }
+  @keyframes onb-fade {
+    from {
+      opacity: 0;
+    }
   }
 }
 .onb-body h1 {
   margin: 0;
-  font-size: 1.5rem;
-  font-weight: 650;
-  letter-spacing: -0.5px;
-  line-height: 1.25;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.03em;
+  line-height: var(--leading-tight);
   outline: none;
 }
 .onb-lead {
-  margin: -8px 0 0;
+  margin: -4px 0 0;
   color: var(--muted);
   font-size: 0.9375rem;
   line-height: 1.55;
 }
 .onb code {
   padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: rgb(255 255 255 / 0.1);
+  border-radius: var(--radius-xs);
+  background: var(--bubble);
   color: var(--text);
   font-family: var(--font-code);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
 .onb code.onb-path {
@@ -116,7 +142,7 @@
 .onb-note {
   margin: 0;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   line-height: 1.55;
 }
 .onb-note svg {
@@ -126,17 +152,17 @@
 }
 .onb .empty-state,
 .onb .load-error {
-  border-color: var(--glass-inset-border);
-  background: var(--glass-inset-bg);
+  border-color: var(--border);
+  background: var(--surface);
 }
 .onb .empty-state code {
-  background: rgb(255 255 255 / 0.1);
+  background: var(--bubble);
 }
 
 .onb-overview,
 .onb-recap {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -144,11 +170,11 @@
 .onb-overview li {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   padding: 10px 14px 10px 10px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   font-size: 0.9375rem;
 }
 .onb-overview-icon {
@@ -157,37 +183,37 @@
   place-items: center;
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-md);
-  background: rgb(255 255 255 / 0.1);
+  border-radius: var(--radius-sm);
+  background: var(--bubble);
 }
 
 .onb-choices {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .onb-choice {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   min-height: 56px;
   padding: 10px 14px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   cursor: pointer;
   transition:
     border-color var(--fast) var(--ease),
     background-color var(--fast) var(--ease);
 }
 .onb-choice:hover {
-  background: rgb(255 255 255 / 0.1);
+  background: var(--hover);
 }
 .onb-choice[data-checked] {
-  border-color: rgb(255 255 255 / 0.5);
-  background: rgb(255 255 255 / 0.1);
+  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+  background: var(--surface-raised);
 }
 .onb-choice:has(:focus-visible) {
-  outline: 2px solid var(--link);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 .onb-choice > .onb-choice-copy {
@@ -199,7 +225,7 @@
 .onb-choice-copy > span {
   margin: 0;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .onb-fieldset {
   display: grid;
@@ -213,8 +239,8 @@
   margin-bottom: 4px;
   padding: 0;
   color: var(--muted);
-  font-size: 0.8125rem;
-  font-weight: 550;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .onb-check {
   display: flex;
@@ -236,7 +262,7 @@
 .onb-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .onb-problem {
   display: flex;
@@ -246,20 +272,20 @@
 }
 .onb-result {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
   padding: 12px 14px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 .onb-result-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 .onb-result-title svg {
   color: var(--success);
@@ -270,7 +296,7 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 .onb-counts li {
   display: flex;
@@ -288,7 +314,7 @@
   gap: 10px;
   margin: 0;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .onb-steps {
@@ -301,34 +327,34 @@
 }
 .onb-steps li::marker {
   color: var(--muted);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .onb-command {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
   margin-top: 6px;
   padding: 4px 4px 4px 14px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
-  background: rgb(8 11 24 / 0.32);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 .onb-command code {
   padding: 0;
   background: none;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 
 .onb-recap li {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   padding: 10px 14px 10px 12px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   font-size: 0.9375rem;
 }
 .onb-recap li > span:last-child {
@@ -340,7 +366,7 @@
 .onb-recap li > span:last-child > span {
   margin: 0;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .onb-recap-mark {
   display: grid;
@@ -349,47 +375,41 @@
   width: 24px;
   height: 24px;
   border-radius: var(--radius-pill);
-  background: rgb(255 255 255 / 0.1);
+  background: var(--bubble);
   color: var(--muted);
 }
 .onb-recap li[data-done] .onb-recap-mark {
-  background: color-mix(in srgb, var(--success) 22%, transparent);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
   color: var(--success);
 }
 
+/* The way forward is one full-width pill; Back and the skips are quiet text buttons below it. */
 .onb-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding-top: 4px;
+  gap: var(--space-2);
 }
 .onb-footer--solo {
   justify-content: flex-end;
 }
-.onb-footer .ui-button--primary {
-  min-width: 9rem;
+.onb-footer .ui-button--ghost {
+  color: var(--muted);
+}
+.onb-footer > .ui-button--ghost:first-child {
+  margin-left: -18px;
+}
+.onb-footer > .ui-button--ghost:last-child {
+  margin-right: -18px;
+}
+.onb-footer .onb-next.ui-button--primary {
+  flex: 1 1 100%;
+  order: -1;
+  min-height: 48px;
+  font-size: 0.9375rem;
 }
 
-@media (max-width: 520px) {
-  .onb {
-    align-items: start;
-    padding-block: max(env(safe-area-inset-top), 12px);
-  }
-  .onb-card.panel {
-    gap: 16px;
-    padding: 20px 18px 16px;
-  }
-  .onb-body h1 {
-    font-size: 1.3125rem;
-  }
-  .onb-footer .ui-button--primary {
-    flex: 1;
-  }
-  .onb-footer--solo .ui-button--primary {
-    min-width: 0;
-  }
-}
 .onb a.ui-button {
   text-decoration: none;
 }
@@ -397,7 +417,7 @@
 /* Step 1: the browsers found on this computer, all selected. */
 .onb-note a,
 .onb-lead a {
-  color: var(--glass-strong-fg);
+  color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -405,11 +425,11 @@
   color: var(--muted);
 }
 .onb .cli-hint code {
-  background: rgb(255 255 255 / 0.1);
+  background: var(--bubble);
 }
 .onb-profiles {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -417,25 +437,25 @@
 .onb-profile {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   min-height: 64px;
   padding: 10px 14px 10px 12px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   cursor: pointer;
   transition:
     border-color var(--fast) var(--ease),
     background-color var(--fast) var(--ease);
 }
 .onb-profile:hover {
-  background: rgb(255 255 255 / 0.1);
+  background: var(--hover);
 }
 .onb-profile[data-checked] {
-  border-color: rgb(255 255 255 / 0.5);
+  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
 }
 .onb-profile:has(:focus-visible) {
-  outline: 2px solid var(--link);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 .onb-profile > input,
@@ -444,19 +464,19 @@
   width: 18px;
   height: 18px;
   margin: 0;
-  accent-color: var(--glass-strong-fg);
+  accent-color: var(--primary);
 }
+/* The tile colour is the browser's own (ImportStep sets it), so its letter is always white. */
 .onb-profile > .onb-brand-tile {
   display: grid;
   flex: 0 0 auto;
   place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: #fff;
   font-size: 1.0625rem;
-  font-weight: 650;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+  font-weight: var(--weight-title);
 }
 .onb-profile > .onb-profile-copy {
   display: flex;
@@ -465,12 +485,12 @@
   min-width: 0;
 }
 .onb-profile-copy > strong {
-  color: var(--glass-strong-fg);
-  font-weight: 600;
+  color: var(--text);
+  font-weight: var(--weight-semibold);
 }
 .onb-profile-copy > span {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
 .onb-profile-copy > .onb-profile-counts {
@@ -481,13 +501,13 @@
   color: var(--muted);
 }
 .onb-profile-copy > .onb-profile-warning {
-  color: var(--warning, var(--muted));
+  color: var(--warn);
 }
 
 .onb-kinds {
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 .onb-kinds > summary {
   display: flex;
@@ -495,14 +515,14 @@
   min-height: 44px;
   padding: 0 14px;
   color: var(--muted);
-  font-size: 0.875rem;
-  font-weight: 550;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   cursor: pointer;
 }
 .onb-kinds > summary:focus-visible {
-  outline: 2px solid var(--link);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
 }
 .onb-kinds-grid {
   display: grid;
@@ -513,21 +533,21 @@
 .onb-kinds-count {
   margin-left: auto;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 
 .onb-meter {
   height: 6px;
   border-radius: var(--radius-pill);
-  background: rgb(255 255 255 / 0.14);
+  background: var(--hover);
   overflow: hidden;
 }
 .onb-meter > span {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--glass-strong-fg);
+  background: var(--primary);
   transition: width var(--normal) var(--ease);
 }
 .onb-notes {
@@ -536,7 +556,7 @@
   margin: 4px 0 0;
   padding: 0 0 0 18px;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -544,49 +564,42 @@
   display: grid;
   gap: 10px;
   padding: 12px 14px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 .onb-vault-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
   font-size: 0.9375rem;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .onb-field {
   display: grid;
   gap: 4px;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 .onb-field input {
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--glass-inset-border);
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-md);
-  background: rgb(8 11 24 / 0.32);
+  background: var(--canvas);
   color: var(--text);
   font: inherit;
+  font-size: var(--text-base);
 }
 .onb-field input:focus-visible {
-  outline: 2px solid var(--link);
+  outline: 2px solid var(--primary);
   outline-offset: 1px;
 }
 
-@media (max-width: 520px) {
-  .onb-kinds-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .onb-actions .ui-button--primary {
-    flex: 1 1 100%;
-  }
-}
 .onb-csv {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   justify-items: start;
 }
 .onb-restore {
@@ -598,10 +611,10 @@
   gap: 2px;
   margin: 0;
   padding: 0 0 0 18px;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 .onb-restore a {
-  color: var(--glass-strong-fg);
+  color: var(--primary);
   overflow-wrap: anywhere;
 }
 .onb-listing > ul {
@@ -609,9 +622,217 @@
   gap: 2px;
   margin: 0;
   padding: 0 14px 10px 32px;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 .onb-listing a {
-  color: var(--glass-strong-fg);
+  color: var(--primary);
+}
+
+/*
+ * The preview pane: a miniature of the app (sidebar + home) bleeding off the pane's edges.
+ * It is decoration only. Its right edge stays inside the split's padding: clipped boxes still
+ * count as overflow for the layout checks (web_overflow.rs).
+ */
+.onb-preview {
+  position: relative;
+  margin: var(--space-3) var(--space-3) var(--space-3) 0;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+.onb-mini {
+  position: absolute;
+  top: 56px;
+  right: -24px;
+  left: 56px;
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  height: 600px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--canvas);
+  box-shadow: var(--shadow-overlay);
+  color: var(--text);
+  font-size: var(--text-xs);
+  overflow: hidden;
+}
+.onb-mini-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+.onb-mini-brand,
+.onb-mini-new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 8px;
+}
+.onb-mini-brand {
+  margin-bottom: 6px;
+  font-weight: var(--weight-title);
+}
+.onb-mini-new {
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+  font-weight: var(--weight-medium);
+}
+.onb-mini-heading {
+  width: 36%;
+  height: 5px;
+  margin: 14px 8px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+}
+.onb-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 8px;
+}
+.onb-mini-row::before,
+.onb-mini-row::after {
+  content: "";
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+}
+.onb-mini-row::before {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+.onb-mini-row::after {
+  width: 62%;
+  height: 6px;
+}
+.onb-mini-row:nth-last-child(2)::after {
+  width: 44%;
+}
+.onb-mini-row:last-child::after {
+  width: 54%;
+}
+.onb-mini-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 120px 40px 0;
+}
+.onb-mini-title {
+  width: 180px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+}
+.onb-mini-composer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: min(100%, 400px);
+  min-height: 44px;
+  padding: 0 7px 0 16px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-composer);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--faint);
+  white-space: nowrap;
+}
+.onb-mini-composer > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.onb-mini-send {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-pill);
+  background: var(--send-bg);
+  color: var(--send-fg);
+}
+.onb-mini-tasks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: min(100%, 400px);
+  margin-top: var(--space-2);
+}
+.onb-mini-task {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 84px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.onb-mini-task > span {
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+}
+.onb-mini-task > span:first-child {
+  width: 34%;
+  height: 5px;
+  margin-bottom: 3px;
+  background: var(--border);
+}
+.onb-mini-task > span:nth-child(2) {
+  width: 88%;
+}
+.onb-mini-task > span:last-child {
+  width: 58%;
+}
+
+/* Below desktop the preview would squeeze the step; the step column becomes the page. */
+@media (max-width: 1023px) {
+  .onb {
+    place-items: stretch;
+    padding: 0;
+  }
+  .onb-split {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .onb-preview {
+    display: none;
+  }
+  .onb-card {
+    justify-self: center;
+    width: min(560px, 100%);
+    padding: max(env(safe-area-inset-top), 32px) 24px max(env(safe-area-inset-bottom), 20px);
+  }
+}
+@media (max-width: 520px) {
+  .onb-card {
+    gap: var(--space-4);
+    padding: max(env(safe-area-inset-top), 16px) 20px max(env(safe-area-inset-bottom), 16px);
+  }
+  .onb-body h1 {
+    font-size: 1.625rem;
+  }
+  .onb-kinds-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .onb-actions .ui-button--primary {
+    flex: 1 1 100%;
+  }
 }

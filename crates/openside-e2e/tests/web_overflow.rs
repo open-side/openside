@@ -134,7 +134,7 @@ async fn every_route_and_surface_fits_all_supported_widths() {
         .await;
         ui.goto(
             "/",
-            "!!document.querySelector('.empty-chat') && !!document.querySelector('.composer')",
+            "!!document.querySelector('.home-title') && !!document.querySelector('.composer')",
         )
         .await;
         check(

@@ -3,7 +3,7 @@
 ## Data path
 
 1. `crates/opensided/src/tools/browser.rs` captures PNG bytes and returns model image parts.
-   `agent/src/openside_agent/tools/__init__.py` wraps these in `ToolReturn` content for vision;
+   `agent/src/runtime/tools.ts` returns them as `ImageContent` next to the text result for vision;
    the sidecar's bounded continuation is stored as opaque `agent_state` in
    `crates/openside-sessions/src/store.rs`, not as public message attachments.
 2. Only explicit screenshot deliveries call `save_tool_output` in
@@ -93,7 +93,7 @@ and cross-session reads fail explicitly. The authenticated session and live Task
 not a model-supplied session or filesystem path, authorize retrieval. Tasks receive the
 existing daemon `read` schema even when their requested subset omits it, but that implicit
 grant covers output refs only. The Ultrabrowse profile likewise exposes only output-ref
-reads, not arbitrary file access. No Python-local tool or Harness retrieval tool is added.
+reads, not arbitrary file access. No sidecar-local tool or runtime retrieval tool is added.
 
 Files are created 0600 in a 0700 directory using descriptor-relative no-follow I/O.
 Total stored output is limited to 64 MiB per session; quota exhaustion and storage failures
@@ -114,7 +114,7 @@ material, not arbitrary secrets embedded in readable content.
 Acceptance lives in `opensided::tests::tool_output` (limits, UTF-8 ranges, secret redaction,
 session isolation, quota, private permissions, restart, compaction and deletion) and
 `crates/openside-e2e/tests/tool_output.rs`. The latter drives a real isolated daemon and
-Python sidecar with a scripted Task: shell output → private ref → ranged read → checked
+Bun sidecar with a scripted Task: shell output → private ref → ranged read → checked
 range → compact chief report, and asserts the durable chief thread contains no body.
 
 ## Card media and site icons

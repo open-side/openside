@@ -20,14 +20,12 @@ function ToolRow({ item, facts, step = false }: { item: ToolItem; facts: ToolFac
       <details className="tool-details">
         <summary className="tool-line">
           <span className="tool-icon" aria-hidden="true">
-            {state === "running" ? (
-              <Spinner size={14} />
-            ) : state === "failed" ? (
-              <CircleAlert size={16} strokeWidth={ICON_STROKE} />
+            {state === "failed" ? (
+              <CircleAlert size={14} strokeWidth={ICON_STROKE} />
             ) : known?.favicon && opensPage(item) ? (
-              <img className="tool-favicon" src={known.favicon} alt="" width={16} height={16} />
+              <img className="tool-favicon" src={known.favicon} alt="" width={14} height={14} />
             ) : (
-              <Icon size={16} strokeWidth={ICON_STROKE} />
+              <Icon size={14} strokeWidth={ICON_STROKE} />
             )}
           </span>
           <span className="tool-title">{title}</span>
@@ -36,7 +34,7 @@ function ToolRow({ item, facts, step = false }: { item: ToolItem; facts: ToolFac
               {detail}
             </span>
           ) : null}
-          {state === "failed" ? <span className="tool-state">Failed</span> : null}
+          <span className="tool-state">{state === "running" ? <Spinner size={13} /> : state === "failed" ? "Failed" : "Done"}</span>
           <ChevronRight className="tool-chevron" size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
           {navigating ? <span className="tool-progress" aria-hidden="true" /> : null}
         </summary>

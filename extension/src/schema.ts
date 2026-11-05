@@ -4263,7 +4263,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** @description Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). */
+        /** @description Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). Paired devices get 403 local_socket_required for a mode looser than the daemon default or any workspace; agent_client devices also get it for speed "fast", effort "xhigh"/"max" or profile "ultrabrowse". */
         post: {
             parameters: {
                 query?: never;
@@ -9091,12 +9091,18 @@ export interface components {
              *     afterwards. Incognito sessions already have their own browser and refuse `isolated`.
              */
             browser_space?: components["schemas"]["BrowserSpace"];
+            /** @description Thinking effort, immutable afterwards; omission keeps the model's default. */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
             /** @description Create a private session; immutable afterwards. Browsing history is not indexed. */
             incognito?: boolean;
             /** @description Permission override, or settings default when omitted. */
             mode?: components["schemas"]["PolicyMode"] | null;
             /** @description Model override, or settings default when omitted. */
             model?: string | null;
+            /** @description Agent profile, immutable afterwards; omission means the daemon-wide profile. */
+            profile?: components["schemas"]["SessionProfile"] | null;
+            /** @description Service speed, immutable afterwards; omission means `default`. */
+            speed?: components["schemas"]["SessionSpeed"] | null;
             /** @description Conversation title, or a daemon-generated title when omitted. */
             title?: string | null;
             /** @description Absolute workspace path, canonicalized by the daemon before session creation. */
@@ -9542,6 +9548,8 @@ export interface components {
             agent_id: string | null;
             /** @description Browser space; historical events are shared. */
             browser_space?: components["schemas"]["BrowserSpace"];
+            /** @description Thinking effort; historical events keep the model's default. */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
             /** @description Private session; historical events are not private. */
             incognito?: boolean;
             /** @constant */
@@ -9553,6 +9561,10 @@ export interface components {
             mode: components["schemas"]["PolicyMode"];
             /** @description Provider-qualified model. */
             model: string;
+            /** @description Agent profile; historical events use the daemon-wide profile. */
+            profile?: components["schemas"]["SessionProfile"] | null;
+            /** @description Service speed; historical events use the default tier. */
+            speed?: components["schemas"]["SessionSpeed"] | null;
             /** @description Initial conversation title. */
             title: string;
             /**
@@ -9985,6 +9997,8 @@ export interface components {
             agent_id: string | null;
             /** @description Browser space; historical events are shared. */
             browser_space?: components["schemas"]["BrowserSpace"];
+            /** @description Thinking effort; historical events keep the model's default. */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
             /** @description Private session; historical events are not private. */
             incognito?: boolean;
             /** @constant */
@@ -9996,6 +10010,10 @@ export interface components {
             mode: components["schemas"]["PolicyMode"];
             /** @description Provider-qualified model. */
             model: string;
+            /** @description Agent profile; historical events use the daemon-wide profile. */
+            profile?: components["schemas"]["SessionProfile"] | null;
+            /** @description Service speed; historical events use the default tier. */
+            speed?: components["schemas"]["SessionSpeed"] | null;
             /** @description Initial conversation title. */
             title: string;
             /**
@@ -11871,12 +11889,21 @@ export interface components {
             approval_ticket?: components["schemas"]["TicketId"] | null;
             /**
              * @description JavaScript using `page`, `expect`, and `console`; top-level `await` is allowed and the
-             *     last expression statement is the return value. Each request gets a fresh context.
+             *     last expression statement is the return value. Each request gets a fresh context unless
+             *     `persistent` is set.
              */
             code: string;
             /**
+             * @description Run in the session's persistent REPL context (`openside repl`): `page` starts unset,
+             *     `openTab(url)` and `getTabs()` manage the tabs attached to the context, top-level
+             *     bindings and attached tabs carry over to later persistent calls of the same session
+             *     until the context has been idle for 10 minutes, and each call may run for 120 seconds.
+             */
+            persistent?: boolean;
+            /**
              * @description Agent tab to drive; optional when the session owns exactly one tab or none (a blank
-             *     tab is opened).
+             *     tab is opened). With `persistent`, this owned tab is attached to the context and becomes
+             *     `page` for this call; without it the call keeps the context's current `page`, if any.
              */
             tab_id?: string | null;
         };
@@ -12166,6 +12193,8 @@ export interface components {
              * @default shared
              */
             browser_space: components["schemas"]["BrowserSpace"];
+            /** @description Thinking effort fixed at creation; absent keeps the model's default. */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
             /** @description Stable session identifier. */
             id: components["schemas"]["SessionId"];
             /**
@@ -12187,8 +12216,12 @@ export interface components {
              * @default false
              */
             pinned: boolean;
+            /** @description Agent profile fixed at creation; absent means the daemon-wide profile. */
+            profile?: components["schemas"]["SessionProfile"] | null;
             /** @description Steering first, then follow-up messages. */
             queue: components["schemas"]["Message"][];
+            /** @description Service speed fixed at creation; absent means `default`. */
+            speed?: components["schemas"]["SessionSpeed"] | null;
             /** @description Rebuilt from turn and session events. */
             status: components["schemas"]["SessionStatus"];
             /** @description User-visible conversation title. */
@@ -12222,6 +12255,10 @@ export interface components {
             /** @description Sessions sorted by identifier for stable results. */
             sessions: components["schemas"]["Session"][];
         };
+        /** @description Per-session tool and system-prompt profile, fixed at creation; omission means `default`. */
+        SessionProfile: "default" | "ultrabrowse";
+        /** @description Per-session model service speed, fixed at creation; omission means `default`. */
+        SessionSpeed: "default" | "fast";
         /**
          * SessionStatus
          * @description Durable session lifecycle.
@@ -12851,6 +12888,8 @@ export interface components {
         };
         /** @description Canonical TeamCardCommand wire contract; presentation never grants authority. */
         TeamCardCommand: "undo_hire" | "retire";
+        /** @description Per-session thinking effort, fixed at creation; omission keeps the model's default. */
+        ThinkingEffort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
         /** @description Durable human-intervention ticket correlated with the same deferred tool call. */
         Ticket: {
             /**

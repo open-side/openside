@@ -1,6 +1,7 @@
 import { CircleAlert, FileText, RotateCw, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import type { Attachment, Visual } from "../api/types";
+import { latestTaskState } from "../hooks/useTaskThumbnail";
 import { pendingTickets, type SessionView } from "../state/session";
 import { newMessageId, useClient } from "../context";
 import { outgoing, type OutgoingMessage } from "../state/outgoing";
@@ -11,6 +12,7 @@ import { RuntimeErrorRow, retrySource } from "./RuntimeError";
 import { askerOf } from "../cards/attention";
 import { ConversationCard } from "./ConversationCard";
 import { MessageDocuments } from "./MessageDocument";
+import { MessageActions, MessageMenu } from "./MessageMenu";
 import { TaskUnit } from "./TaskUnit";
 import { Activity, StatusLine } from "./ToolActivity";
 import { collectToolFacts, type ToolItem } from "./toolCopy";
@@ -86,10 +88,16 @@ function UserBubble({
 }
 
 /** A message this device sent that the daemon has not (yet) echoed into the conversation. */
-function OutgoingBubble({ sessionId, message, latest }: { sessionId: string; message: OutgoingMessage; latest: boolean }) {
+function OutgoingBubble({ sessionId, message, latest, onQuote }: { sessionId: string; message: OutgoingMessage; latest: boolean; onQuote?: ((text: string) => void) | undefined }) {
   const failed = message.state === "failed";
   return (
-    <li className="bubble user" data-message={message.message_id} data-receipt={failed ? "failed" : message.state === "sending" ? "sending" : "sent"}>
+    <MessageMenu
+      className="bubble user"
+      data-message={message.message_id}
+      data-receipt={failed ? "failed" : message.state === "sending" ? "sending" : "sent"}
+      text={message.text}
+      onQuote={onQuote}
+    >
       <UserBubble
         sessionId={sessionId}
         text={message.text}
@@ -105,7 +113,7 @@ function OutgoingBubble({ sessionId, message, latest }: { sessionId: string; mes
           ) : undefined
         }
       />
-    </li>
+    </MessageMenu>
   );
 }
 
@@ -174,6 +182,8 @@ function TypingIndicator() {
 interface Reply {
   key: string;
   parts: ReactNode[];
+  /** The reply's words, Markdown included, for Copy and Quote. */
+  texts: string[];
   final: boolean;
   frames: Visual[];
 }
@@ -187,6 +197,7 @@ export function Timeline({
   inertCardId,
   front = false,
   onShowPending = () => undefined,
+  onQuote,
 }: {
   view: SessionView;
   sessionId: string;
@@ -204,6 +215,8 @@ export function Timeline({
   front?: boolean;
   /** Brings the card waiting on the person into view. */
   onShowPending?: () => void;
+  /** Puts a quoted message into the composer; absent where nothing can be written. */
+  onQuote?: ((text: string) => void) | undefined;
 }) {
   const facts = useMemo(() => collectToolFacts(view.items, view.browserStates), [view.items, view.browserStates]);
   const rows: ReactNode[] = [];
@@ -254,10 +267,12 @@ export function Timeline({
     if (!reply) return;
     turn.reply = null;
     if (reply.parts.length) {
+      const text = reply.texts.join("\n\n");
       rows.push(
-        <li key={reply.key} className={`bubble assistant${reply.final ? "" : " streaming"}`} data-final={reply.final}>
+        <MessageMenu key={reply.key} className={`bubble assistant${reply.final ? "" : " streaming"}`} data-final={reply.final} text={text} onQuote={onQuote}>
           {reply.parts}
-        </li>,
+          {reply.final && text ? <MessageActions text={text} /> : null}
+        </MessageMenu>,
       );
     }
     if (reply.frames.length) {
@@ -343,9 +358,7 @@ export function Timeline({
         if (!front && !BOOKKEEPING[item.name]) tools.push(item);
         continue;
       }
-      const tab = Object.values(view.browserStates)
-        .filter((state) => state.task_id === task.id)
-        .reduce<(typeof view.browserStates)[string] | undefined>((latest, state) => (!latest || state.seq > latest.seq ? state : latest), undefined);
+      const tab = latestTaskState(view, task.id);
       const unit = (
         <li key={`task-${task.id}`} className="task-row">
           <TaskUnit sessionId={sessionId} task={task} state={tab} newest={task.id === newestActive} onShowPending={onShowPending} />
@@ -379,7 +392,14 @@ export function Timeline({
         // The agent's own error row below carries the retry for a run that died; one is enough.
         const errorFollows = view.items.slice(view.items.indexOf(item) + 1).some((it) => it.type === "error");
         rows.push(
-          <li key={`u-${item.id}`} className="bubble user" data-message={item.id} {...(failed && newest ? { "data-receipt": "failed" } : {})}>
+          <MessageMenu
+            key={`u-${item.id}`}
+            className="bubble user"
+            data-message={item.id}
+            {...(failed && newest ? { "data-receipt": "failed" } : {})}
+            text={item.text}
+            onQuote={onQuote}
+          >
             <UserBubble
               sessionId={sessionId}
               text={item.text}
@@ -397,7 +417,7 @@ export function Timeline({
                   }
                 : {})}
             />
-          </li>,
+          </MessageMenu>,
         );
         if (cardRow && browserCard?.anchorItemId === item.id) rows.push(cardRow);
         break;
@@ -408,9 +428,12 @@ export function Timeline({
         const frames = item.finalSeq !== undefined ? (visuals[item.finalSeq] ?? []) : [];
         const text = frames.length ? item.text.replace(VISUAL_BLOCK, "").trim() : item.text;
         if (!turn.reply) stamp(item.id, item.at);
-        const current = (turn.reply ??= { key: item.id, parts: [], final: item.final, frames: [] });
+        const current = (turn.reply ??= { key: item.id, parts: [], texts: [], final: item.final, frames: [] });
         if (item.documents) current.parts.push(<MessageDocuments key={`${item.id}-documents`} sessionId={sessionId} documents={item.documents} />);
-        if (text.trim()) current.parts.push(<Markdown key={item.id} text={text} />);
+        if (text.trim()) {
+          current.parts.push(<Markdown key={item.id} text={text} />);
+          current.texts.push(text.trim());
+        }
         current.final = item.final;
         current.frames.push(...frames);
         const units = deferred.get(item.id);
@@ -454,18 +477,18 @@ export function Timeline({
 
   if (delivering) {
     rows.push(
-      <li key={`d-${delivering.id}`} className="bubble user" data-message={delivering.id}>
+      <MessageMenu key={`d-${delivering.id}`} className="bubble user" data-message={delivering.id} text={delivering.text} onQuote={onQuote}>
         <UserBubble
           sessionId={sessionId}
           text={delivering.text}
           {...(delivering.attachments ? { attachments: delivering.attachments } : {})}
           {...(lastUnechoed ? {} : { receipt: "sent" as const })}
         />
-      </li>,
+      </MessageMenu>,
     );
   }
   for (const message of unechoed) {
-    rows.push(<OutgoingBubble key={`o-${message.message_id}`} sessionId={sessionId} message={message} latest={message === lastUnechoed} />);
+    rows.push(<OutgoingBubble key={`o-${message.message_id}`} sessionId={sessionId} message={message} latest={message === lastUnechoed} onQuote={onQuote} />);
   }
 
   return (

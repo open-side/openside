@@ -5,6 +5,7 @@ import { AppHeader } from "../components/AppHeader";
 import { FilesTray } from "../components/FilesTray";
 import { BrowserPreview, browserAnchor } from "../components/BrowserPreview";
 import { Composer } from "../components/Composer";
+import { quoteText } from "../components/MessageMenu";
 import { CardSheet } from "../components/CardSheet";
 import { CardHostContext, type CardHost } from "../components/ConversationCard";
 import { QueueList } from "../components/QueueList";
@@ -57,6 +58,8 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
   const files = useSessionFiles(client, id, view);
   const sending = useOutgoing(id);
   const [starter, setStarter] = useState<ShareDraft | null>(null);
+  const [quote, setQuote] = useState<{ id: string; text: string } | null>(null);
+  const onQuote = readOnly ? undefined : (text: string) => setQuote({ id: `quote-${Date.now()}`, text: quoteText(text) });
   // Once the event log has the message, the log (not this device's copy) shows its delivery state.
   useEffect(() => {
     outgoing.prune(id, new Set([...view.queue.map((message) => message.id), ...view.items.flatMap((item) => (item.type === "user" ? [item.id] : []))]));
@@ -162,10 +165,9 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
     return () => observer.disconnect();
   }, [pin, error]);
 
-  // The transcript keeps its last turn clear of the floating composer, whatever its height.
-  // Set on the document too: the browser preview and code dock are portaled to the body.
+  // The composer's height places the jump-to-latest control above it. Set on the document too:
+  // the browser preview is portaled to the body and keeps clear of the composer.
   useEffect(() => {
-    // The anchor is `display: contents`; its only child is the absolutely placed composer dock.
     const element = dock.current?.firstElementChild;
     const root = main.current;
     if (!element || !root || typeof ResizeObserver === "undefined") return;
@@ -234,13 +236,14 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
               inertCardId={sheetCard?.id ?? null}
               front={front}
               onShowPending={showPending}
+              onQuote={onQuote}
               browserCard={{
                 anchorItemId: browserAnchor(view.items),
                 node: <BrowserPreview key={id} sessionId={id} view={view} onShowPending={showPending} onCancel={() => setConfirmStop(true)} />,
               }}
             />
           </CardHostContext.Provider>
-          <QueueList sessionId={id} queue={view.queue.filter((message) => message.id !== view.delivering)} running={running} />
+          <QueueList sessionId={id} queue={view.queue.filter((message) => message.id !== view.delivering)} running={running} onQuote={onQuote} />
         </div>
       </div>
       {!atBottom ? (
@@ -260,6 +263,8 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
             onShowPending={waiting ? showPending : undefined}
             onSent={() => scrollToEnd()}
             draft={starter ?? draft}
+            quote={quote}
+            onQuoteApplied={() => setQuote(null)}
             onDraftApplied={() => {
               setStarter(null);
               onDraftApplied?.();
@@ -282,7 +287,10 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
         open={confirmStop && running}
         scope={{ kind: "all", tasks: view.subagents.filter((task) => task.status === "running" || task.status === "waiting_human").length }}
         onClose={() => setConfirmStop(false)}
-        onConfirm={() => void client.stopSession(id).catch(() => toast.notify("Could not stop the agent", "error"))}
+        onConfirm={() => {
+          setConfirmStop(false);
+          void client.stopSession(id).catch(() => toast.notify("Could not stop the agent", "error"));
+        }}
       />
     </main>
   );

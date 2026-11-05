@@ -13,7 +13,7 @@ const SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    agent: { $ref: "#/$defs/AgentConfig", description: "Python sidecar launch settings." },
+    agent: { $ref: "#/$defs/AgentConfig", description: "Bun/TypeScript sidecar launch settings." },
     credentials: { type: "object", description: "Opaque credential sources." },
     memory: { $ref: "#/$defs/MemoryConfig" },
     models: { $ref: "#/$defs/ModelsConfig" },
@@ -61,7 +61,7 @@ const SCHEMA = {
 };
 
 const CONFIG = {
-  agent: { command: ["python", "-m", "openside_agent"], startup_timeout_ms: 30000 },
+  agent: { command: ["bun", "run", "agent/src/main.ts"], startup_timeout_ms: 30000 },
   memory: { default_retention: "permanent", history: true, embedding: { model_dir: null } },
   models: { default: "script", fallback: [] },
   tickets: { confirm_ttl_secs: 600, takeover_ttl_secs: 900 },

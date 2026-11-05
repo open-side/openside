@@ -1,12 +1,15 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSummary } from "../api/types";
+import { ClientContext } from "../context";
 import { isUnread, people, type AgentsState } from "../hooks/useAgents";
+import { ShellContext } from "../shell";
 import { seen } from "../state/seen";
 import { agentSummary } from "../test/agents";
-import { rowTime, Sidebar } from "./Sidebar";
+import { fakeClient, json } from "../test/fakeDaemon";
+import { Sidebar } from "./Sidebar";
 
 const roster = (): AgentSummary[] => [
   agentSummary("mina", "Mina", { last_message_at: "2026-10-12T08:00:00Z" }),
@@ -21,11 +24,19 @@ function team(agents: AgentSummary[] | null): AgentsState {
   return { agents, error: null, offline: false, refresh: () => {} };
 }
 
-function setup(agents: AgentSummary[] | null, path = "/history") {
+const toggleSidebar = vi.fn();
+
+function setup(agents: AgentSummary[] | null, path = "/history", onClose?: () => void) {
+  // Pinned tabs and agent tabs are absent: those sections render nothing.
+  const { client } = fakeClient(() => json(404, { code: "not_found", message: "none" }));
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <Sidebar team={team(agents)} />
-    </MemoryRouter>,
+    <ClientContext.Provider value={client}>
+      <ShellContext.Provider value={{ openDrawer: () => undefined, refreshSessions: () => undefined, sidebarCollapsed: false, toggleSidebar }}>
+        <MemoryRouter initialEntries={[path]}>
+          <Sidebar team={team(agents)} tabs={[]} onClose={onClose} />
+        </MemoryRouter>
+      </ShellContext.Provider>
+    </ClientContext.Provider>,
   );
 }
 
@@ -57,45 +68,56 @@ describe("people order", () => {
     expect(within(screen.getByRole("list", { name: "Hidden teammates" })).getByRole("link", { name: /^Quiet/ })).toBeInTheDocument();
   });
 
-  it("offers History, Workspace and Settings, and no new chat", () => {
+  it("offers New task, Show all, History, Workspace and Settings, and no new chat", () => {
     setup(roster());
-    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
-    expect(screen.getByRole("link", { name: "Workspace" })).toHaveAttribute("href", "/workspace");
+    expect(screen.getByRole("link", { name: "New task" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Show all" })).toHaveAttribute("href", "/history");
+    expect(screen.getByRole("heading", { name: "Chats" })).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "Sections" });
+    expect(within(nav).getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
+    expect(within(nav).getByRole("link", { name: "Workspace" })).toHaveAttribute("href", "/workspace");
     expect(screen.queryByRole("link", { name: "New chat" })).toBeNull();
     expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Pinned" })).toBeNull();
   });
 
-  it("hints at teammates while the assistant is alone", () => {
-    setup([agentSummary("chief", "openside")]);
-    expect(screen.getByText(/openside can bring in a teammate/)).toBeInTheDocument();
+  it("marks New task current on Home", () => {
+    setup(roster(), "/");
+    expect(screen.getByRole("link", { name: "New task" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("collapses on desktop and closes in the drawer", async () => {
+    const user = userEvent.setup();
+    const { unmount } = setup(roster());
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    expect(toggleSidebar).toHaveBeenCalledTimes(1);
+    unmount();
+    const onClose = vi.fn();
+    setup(roster(), "/history", onClose);
+    expect(screen.queryByRole("button", { name: "Collapse sidebar" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Close menu" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("row state", () => {
-  it("shows live activity, working dots and Needs you", () => {
+  it("shows a live dot while working and Needs you; activity goes to the tooltip", () => {
     setup([
       agentSummary("chief", "openside", { needs_you: true, session_status: "waiting_human" }),
       agentSummary("theo", "Theo", { session_status: "running", activity: "Checking prices", last_activity: "Old preview" }),
       agentSummary("mina", "Mina", { last_activity: "Here is the weekly summary" }),
     ]);
-    expect(screen.getByRole("link", { name: "openside, Needs you" })).toBeInTheDocument();
+    expect(within(screen.getByRole("link", { name: "openside, Needs you" })).getByText("Needs you")).toHaveClass("row-badge");
     const theo = screen.getByRole("link", { name: "Theo, Working" });
-    expect(within(theo).getByText("Checking prices")).toHaveClass("live");
-    expect(theo.querySelector(".avatar-working")).not.toBeNull();
-    expect(within(screen.getByRole("link", { name: /^Mina/ })).getByText("Here is the weekly summary")).toBeInTheDocument();
+    expect(theo.querySelector(".live-dot")).not.toBeNull();
+    expect(theo).toHaveAttribute("title", "Theo · Checking prices");
+    expect(screen.getByRole("link", { name: /^Mina/ })).toHaveAttribute("title", "Mina · Here is the weekly summary");
+    expect(screen.queryByText("Here is the weekly summary")).toBeNull();
   });
 
   it("falls back to the role when there is no message yet", () => {
     setup([agentSummary("chief", "openside"), agentSummary("mina", "Mina", { persona: { role: "Watches prices", voice: "", responsibilities: ["x"], boundaries: [] } })]);
-    expect(within(screen.getByRole("link", { name: /^Mina/ })).getByText("Watches prices")).toBeInTheDocument();
-  });
-
-  it("stamps today with the time, this week with the weekday and older with the date", () => {
-    const now = new Date(2026, 9, 12, 15, 0);
-    expect(rowTime(new Date(2026, 9, 12, 9, 5).toISOString(), now)).toMatch(/9.*05/);
-    expect(rowTime(new Date(2026, 9, 9, 9, 5).toISOString(), now)).not.toMatch(/\d{1,2}:\d{2}/);
-    expect(rowTime(new Date(2026, 8, 1, 9, 5).toISOString(), now)).toMatch(/1/);
-    expect(rowTime(null, now)).toBe("");
+    expect(screen.getByRole("link", { name: /^Mina/ })).toHaveAttribute("title", "Mina · Watches prices");
   });
 });
 

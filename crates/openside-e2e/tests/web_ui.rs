@@ -1,5 +1,5 @@
 //! Web UI acceptance for the session screen: the built PWA served by the real daemon,
-//! driven in headless Chromium against the real Python sidecar on a scripted model.
+//! driven in headless Chromium against the real Bun sidecar on a scripted model.
 //! Covers approval cards resuming the same tool call (desktop and a 390x844 phone
 //! viewport), the subagent view, secret_input through the UI, the takeover remote screen
 //! and rebuilding the screen from the event log after a reload.
@@ -253,19 +253,12 @@ async fn prepared(
     Some((harness, executable))
 }
 
-/// Tool-return parts Pydantic AI committed for `call`. The history snapshot is written as the
+/// Tool results the sidecar committed for `call`. The history snapshot is written as the
 /// run settles, which can trail the final answer on screen, so wait for it to show the call.
 async fn tool_returns(harness: &Harness, session: &str, call: &str) -> Vec<Value> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let returns: Vec<Value> = harness.snapshot(session)["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-            .filter(|part| part["part_kind"] == "tool-return" && part["tool_call_id"] == call)
-            .cloned()
-            .collect();
+        let returns = harness.tool_results(session, call);
         if !returns.is_empty() || tokio::time::Instant::now() >= deadline {
             return returns;
         }
@@ -797,8 +790,9 @@ async fn pp22_phone_viewport_approval_resumes_the_same_task() {
     );
     let returns = tool_returns(&harness, &session, "phone-write").await;
     assert_eq!(returns.len(), 1, "approved call resumed exactly once");
+    assert_eq!(returns[0]["isError"], false, "{returns:?}");
     assert!(
-        !returns[0]["content"].to_string().contains("denied"),
+        !returns[0]["details"].to_string().contains("denied"),
         "{returns:?}"
     );
     ui.close().await;
@@ -1009,11 +1003,11 @@ async fn web_ui_secret_input_and_takeover_screen_resume_the_agent() {
     let events = until_final(&mut stream, "all done").await;
     let code = tool_returns(&harness, &session, "code-step").await;
     assert_eq!(code.len(), 1);
-    assert_eq!(code[0]["content"]["status"], "filled");
+    assert_eq!(code[0]["details"]["status"], "filled");
     let captcha = tool_returns(&harness, &session, "captcha").await;
     assert_eq!(captcha.len(), 1, "takeover call resumed exactly once");
     assert!(
-        captcha[0]["content"]
+        captcha[0]["details"]
             .to_string()
             .contains("Clicked by human"),
         "{captcha:?}"
@@ -1166,7 +1160,7 @@ async fn web_ui_inline_code_form_finishes_a_login_without_leaving_the_conversati
     assert_eq!(*received.lock(), [OTP_CODE]);
     let otp = tool_returns(&harness, &session, "otp").await;
     assert_eq!(otp.len(), 1);
-    assert_eq!(otp[0]["content"], json!({"status":"filled"}));
+    assert_eq!(otp[0]["details"], json!({"status":"filled"}));
     assert_eq!(
         ui.eval("location.pathname + location.search").await,
         json!(path)

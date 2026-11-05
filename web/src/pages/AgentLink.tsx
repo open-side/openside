@@ -83,7 +83,7 @@ export function AgentLink() {
             <p className="section-list-description">
               Give it to the agent. It uses it once, on its own computer, to sign in; the agent’s setup tells it where to paste a link.
             </p>
-            <CliHint command="openside connect">On the agent’s computer, the command that takes this link is</CliHint>
+            <CliHint command="openside login">On the agent’s computer, the command that takes this link is</CliHint>
           </div>
         ) : (
           <ErrorNote>This link has expired. Create a new one.</ErrorNote>

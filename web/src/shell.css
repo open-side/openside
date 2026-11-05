@@ -1,0 +1,489 @@
+/* ---- Shell ---- */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  height: var(--app-height, 100dvh);
+  overflow: hidden;
+  background: var(--canvas);
+}
+.shell[data-sidebar="collapsed"] {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+.shell[data-sidebar="collapsed"] .shell-sidebar {
+  display: none;
+}
+.shell-sidebar {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+.shell-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: var(--app-height, 100dvh);
+  overflow: hidden;
+  background: var(--canvas);
+}
+/* Every screen is one `<main>` (or frame) filling the column; overlays position themselves. */
+.shell-content > :is(main, .page-frame) {
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 820px) {
+  .shell,
+  .shell[data-sidebar="collapsed"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell-sidebar {
+    display: none;
+  }
+}
+@media (min-width: 821px) {
+  .drawer-only {
+    display: none !important;
+  }
+}
+@media (max-width: 820px) {
+  .desktop-only {
+    display: none !important;
+  }
+}
+
+/* ---- Sidebar ---- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  background: var(--surface);
+}
+.ui-drawer .sidebar {
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  background: var(--canvas);
+}
+.sidebar-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--header-height);
+  padding: 0 var(--space-2) 0 var(--space-4);
+}
+.brand {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  text-decoration: none;
+}
+.brand svg {
+  flex: none;
+}
+
+/* One row shape for every entry in the rail: new task, people, tabs, the footer links. */
+.sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--row-height);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-row);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--fast) var(--ease);
+}
+.sidebar-row:hover {
+  background: var(--hover);
+}
+.sidebar-row[aria-current="page"] {
+  background: var(--active);
+}
+.sidebar-row > svg {
+  flex: none;
+  color: var(--muted);
+}
+.sidebar-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-new-task {
+  flex: none;
+  margin: 0 var(--space-2) var(--space-2);
+  font-weight: var(--weight-medium);
+}
+.sidebar-new-task > svg {
+  color: var(--text);
+}
+
+.session-list {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 var(--space-2) var(--space-3);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sidebar-section + .sidebar-section,
+.sidebar-pinned + .sidebar-section {
+  margin-top: var(--space-3);
+}
+.sidebar-section .section-heading {
+  margin: 0;
+}
+.sidebar-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sidebar-show-all {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.sidebar-pinned ul {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-1) var(--space-1) 0;
+  list-style: none;
+}
+.sidebar-pinned-tile {
+  display: grid;
+  place-items: center;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--muted);
+  transition: background-color var(--fast) var(--ease);
+}
+.sidebar-pinned-tile:hover {
+  background: var(--hover);
+}
+.sidebar-pinned-tile img {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-xs);
+}
+
+.tab-row .tab-favicon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-xs);
+}
+.tab-row .tab-title {
+  flex: 1;
+}
+.tab-row .tab-host {
+  flex: 0 1 auto;
+  max-width: 45%;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* The one coloured mark in the list: a run stopped on a question for the reader. */
+.row-badge {
+  flex: none;
+  color: var(--primary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+.row-options {
+  flex: none;
+  margin-right: var(--space-1);
+  color: var(--muted);
+  opacity: 0;
+}
+.session-row:hover .row-options,
+.row-options:focus-visible,
+.row-options[data-popup-open] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .row-options {
+    opacity: 1;
+  }
+}
+.sidebar-note {
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.manage-nav {
+  display: grid;
+  flex: none;
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+/* ---- Header ---- */
+
+/* In the flow of every screen's column: the thread scrolls beneath it, never under it. */
+.app-header {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: calc(var(--header-height) + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) max(var(--space-3), env(safe-area-inset-right)) 0 max(var(--space-4), env(safe-area-inset-left));
+  background: var(--canvas);
+}
+.app-header-start {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.app-header-heading {
+  min-width: 0;
+}
+.app-title {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-title);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-subtitle {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-header-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+}
+.app-header-actions:empty {
+  display: none;
+}
+@media (max-width: 820px) {
+  .app-header {
+    padding-left: max(var(--space-2), env(safe-area-inset-left));
+    padding-right: max(var(--space-2), env(safe-area-inset-right));
+    border-bottom: 1px solid var(--border);
+  }
+  .app-header .app-title {
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
+  }
+}
+/*
+ * On a phone the name must stay readable: the actions give up width before the heading does, and
+ * the model chip (a person's thread) shortens its label instead of pushing the title to one letter.
+ */
+@media (max-width: 480px) {
+  .app-header-start {
+    min-width: min(184px, 50%);
+  }
+  .app-header-actions {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .app-header-actions .ui-chip {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding-inline: 10px;
+    white-space: nowrap;
+  }
+  .app-header .person-heading {
+    gap: var(--space-2);
+    padding-right: var(--space-1);
+  }
+}
+
+/* ---- Home ---- */
+
+.home {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Desktop shows Home without a bar unless the sidebar is folded and the bar holds its toggle. */
+@media (min-width: 821px) {
+  .shell[data-sidebar="open"] .home > .app-header {
+    display: none;
+  }
+  .home > .app-header {
+    border-bottom: 0;
+  }
+}
+.home-loading {
+  display: grid;
+  flex: 1;
+  place-items: center;
+}
+.home-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 28vh max(var(--space-4), env(safe-area-inset-right)) var(--space-12) max(var(--space-4), env(safe-area-inset-left));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.home-column {
+  display: grid;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: var(--home-width);
+  margin: 0 auto;
+}
+.home-title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-title);
+  line-height: var(--leading-tight);
+  text-align: center;
+}
+.home-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* The column already sets the width; the dock's side gutters would inset the field from the chips and cards. */
+.home-column .composer-dock {
+  padding: 0;
+}
+@media (max-width: 820px) {
+  /* Desktop's 28vh lead clears the dock; a phone starts at the top, so it keeps the dock's room (CardAttention). */
+  .home-scroll {
+    margin-top: var(--otp-dock-space, 0px);
+    padding-top: var(--space-8);
+  }
+}
+
+.recent-tasks {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+}
+.recent-tasks .section-heading {
+  margin: 0;
+  padding-inline: 0;
+}
+.recent-tasks-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.recent-tasks-list > li {
+  display: grid;
+  min-width: 0;
+}
+.task-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  text-decoration: none;
+  transition: background-color var(--fast) var(--ease);
+}
+.task-card:hover {
+  background: var(--hover);
+}
+.task-card-status {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.task-card[data-status="running"] .task-card-status {
+  color: var(--primary);
+}
+.task-card[data-status="waiting_human"] .task-card-status {
+  color: var(--warn);
+}
+.task-card[data-status="failed"] .task-card-status {
+  color: var(--danger);
+}
+.task-card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: var(--weight-title);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.task-card-line {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-thumb {
+  width: 100%;
+  margin-top: var(--space-1);
+  aspect-ratio: 16 / 10;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--surface);
+}
+/* A phone swipes through the cards instead of stacking them. */
+@media (max-width: 820px) {
+  .recent-tasks-list {
+    display: flex;
+    margin-inline: calc(-1 * var(--space-4));
+    padding-inline: var(--space-4);
+    overflow-x: auto;
+    scroll-padding-inline: var(--space-4);
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+  }
+  .recent-tasks-list > li {
+    flex: 0 0 min(76%, 280px);
+    scroll-snap-align: start;
+  }
+}

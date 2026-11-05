@@ -115,7 +115,7 @@ export function Select({
       <BaseSelect.Portal>
         <BaseSelect.Backdrop className="ui-select-backdrop" />
         <BaseSelect.Positioner className="ui-select-positioner" side="bottom" align="start" sideOffset={6} collisionPadding={8} alignItemWithTrigger={false}>
-          <BaseSelect.Popup className="ui-select-popup glass-float">
+          <BaseSelect.Popup className="ui-select-popup surface-overlay">
             <BaseSelect.List className="ui-select-list thin-scroll">
               {options.map((item) =>
                 isGroup(item) ? (

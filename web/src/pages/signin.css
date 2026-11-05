@@ -1,0 +1,102 @@
+/* ---- Sign-in and pairing: the onboarding guide's left column on its own, on the canvas ---- */
+
+.token-entry {
+  display: grid;
+  min-height: var(--app-height, 100dvh);
+  place-items: center;
+  padding: max(env(safe-area-inset-top), 24px) 20px max(env(safe-area-inset-bottom), 24px);
+  background: var(--canvas);
+}
+.token-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: min(440px, 100%);
+  padding: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-bubble);
+  background: var(--canvas);
+  box-shadow: var(--shadow-overlay);
+  color: var(--text);
+}
+.token-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--space-3);
+}
+.token-brand span {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-title);
+  letter-spacing: -0.4px;
+}
+.token-card h1 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.03em;
+  line-height: var(--leading-tight);
+}
+.token-card > p,
+.token-card .field > span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+.token-card .field > span {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.token-card input {
+  min-height: 48px;
+  padding-inline: 14px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+}
+.token-card input::placeholder {
+  color: var(--faint);
+}
+.token-card > .token-help {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-md);
+}
+/* Card code is the CLI hint; `.cli-hint code` (pages.css) paints it, this only sizes it. */
+.token-card code {
+  font-size: var(--text-sm);
+}
+.token-card form {
+  display: grid;
+  gap: var(--space-3);
+}
+.token-card .ui-button {
+  width: 100%;
+  min-height: 48px;
+  font-size: 0.9375rem;
+}
+.token-card a {
+  color: var(--primary);
+  font-weight: var(--weight-medium);
+  text-underline-offset: 2px;
+}
+.token-card .loading-row {
+  padding-inline: 0;
+}
+
+/* Phones: the card is the page; a frame around it would only cost width. */
+@media (max-width: 520px) {
+  .token-entry {
+    place-items: start stretch;
+  }
+  .token-card {
+    width: 100%;
+    padding: var(--space-6) var(--space-1);
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .token-card h1 {
+    font-size: 1.625rem;
+  }
+}

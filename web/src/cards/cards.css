@@ -1,27 +1,26 @@
 /*
  * Conversation cards (cards/render.ts): sign-in, code, payment and form asks, read-only results,
  * and activity/hand-off rows. Shared by the web app and the extension side panel, which copies
- * this file next to its panel. Cards are strong glass in both themes (dark translucent navy,
- * white text, white primary pill) so their text keeps contrast on any backdrop. Every token has a
- * fallback because the side panel does not define the web app's glass tokens.
+ * this file and tokens.css next to its panel. Cards are flat solid surfaces from tokens.css:
+ * a raised card with a hairline when open, a bubble-coloured row when collapsed.
  */
 .oc-root {
-  --oc-fg: var(--glass-strong-fg, #f5f6fb);
-  --oc-muted: var(--glass-strong-muted, rgb(245 246 251 / 0.66));
-  --oc-line: var(--glass-strong-border, rgb(255 255 255 / 0.1));
-  --oc-field: var(--glass-input-bg, rgb(255 255 255 / 0.08));
-  --oc-field-line: rgb(255 255 255 / 0.14);
-  --oc-wash: rgb(255 255 255 / 0.07);
-  --oc-wash-strong: rgb(255 255 255 / 0.12);
-  --oc-pill-bg: var(--pill-primary-bg, #fff);
-  --oc-pill-fg: var(--pill-primary-fg, #111318);
-  --oc-focus: rgb(255 255 255 / 0.6);
-  --oc-success: #47cd89;
-  --oc-warn: #fdb022;
-  --oc-danger: #ff9b91;
-  --oc-info: #9fc0ff;
-  --oc-ease: var(--ease, cubic-bezier(0.2, 0, 0, 1));
-  --oc-fast: var(--fast, 140ms);
+  --oc-fg: var(--text);
+  --oc-muted: var(--muted);
+  --oc-line: var(--border);
+  --oc-field: var(--canvas);
+  --oc-field-line: var(--control-border);
+  --oc-wash: var(--surface);
+  --oc-wash-strong: var(--hover);
+  --oc-pill-bg: var(--primary);
+  --oc-pill-fg: var(--primary-foreground);
+  --oc-focus: var(--primary);
+  --oc-success: var(--success);
+  --oc-warn: var(--warn);
+  --oc-danger: var(--danger);
+  --oc-info: var(--primary);
+  --oc-ease: var(--ease);
+  --oc-fast: var(--fast);
   display: grid;
   /* The screen-reader live region is absolutely placed; without a positioned root it escapes the thread's scroller and lets the page scroll under the composer. */
   position: relative;
@@ -30,8 +29,8 @@
   max-width: 100%;
   min-width: 0;
   color: var(--oc-fg);
-  font-size: 0.9375rem;
-  line-height: 1.45;
+  font-size: var(--text-md);
+  line-height: 1.5;
 }
 .oc-root *,
 .oc-root *::before,
@@ -61,20 +60,19 @@
   max-width: 100%;
   overflow: hidden;
   border: 1px solid var(--oc-line);
-  border-radius: var(--radius-pill, 9999px);
-  background: var(--glass-strong-bg, rgb(28 34 58 / 0.94));
-  box-shadow: 0 12px 40px rgb(10 14 30 / 0.22);
-  -webkit-backdrop-filter: var(--blur-glass, blur(24px) saturate(1.5));
-  backdrop-filter: var(--blur-glass, blur(24px) saturate(1.5));
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
 }
 .oc-card[data-open="false"] {
   width: fit-content;
   max-width: min(100%, 424px);
+  border-color: transparent;
+  border-radius: var(--radius-bubble);
+  background: var(--bubble);
 }
 .oc-card[data-open="true"] {
   width: min(100%, 424px);
-  padding: 20px;
-  border-radius: var(--radius-2xl, 24px);
+  padding: var(--space-4);
 }
 .oc-card[data-variant="result"][data-open="true"] {
   width: min(100%, 512px);
@@ -87,19 +85,19 @@
 }
 .oc-card[data-open="true"] > .oc-body {
   display: grid;
-  gap: 12px;
-  margin-top: 14px;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
 }
 
 /* ---- collapsed bubble --------------------------------------------------------------------- */
 .oc-pill {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   width: 100%;
-  min-height: 48px;
+  min-height: 44px;
   margin: 0;
-  padding: 0 20px;
+  padding: 0 var(--space-4);
   border: 0;
   background: transparent;
   color: inherit;
@@ -110,12 +108,12 @@ button.oc-pill {
   cursor: pointer;
 }
 button.oc-pill:hover {
-  background: var(--oc-wash);
+  background: var(--hover);
 }
 .oc-pill-text {
   min-width: 0;
   overflow: hidden;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -124,8 +122,9 @@ button.oc-pill:hover {
   flex: none;
   color: var(--oc-muted);
 }
+/* A question still waiting for the person keeps an edge, so it reads apart from settled rows. */
 .oc-card[data-ask="pending"][data-open="false"] {
-  border-color: rgb(255 255 255 / 0.2);
+  border-color: var(--control-border);
 }
 
 /* ---- header ------------------------------------------------------------------------------- */
@@ -141,22 +140,22 @@ button.oc-pill:hover {
 }
 .oc-title {
   margin: 0;
-  font-size: 1.0625rem;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: var(--weight-title);
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
 .oc-subtitle {
   margin: 2px 0 0;
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
 .oc-origin {
   margin: 2px 0 0;
   color: var(--oc-muted);
-  font-family: var(--font-code, ui-monospace, monospace);
-  font-size: 0.75rem;
+  font-family: var(--font-code);
+  font-size: var(--text-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -170,7 +169,7 @@ button.oc-pill:hover {
   margin: -4px -6px -4px 0;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-pill, 9999px);
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--oc-muted);
   cursor: pointer;
@@ -192,7 +191,7 @@ button.oc-pill:hover {
   height: var(--oc-mark-size);
   overflow: hidden;
   border-radius: calc(var(--oc-mark-size) * 0.3);
-  background: rgb(255 255 255 / 0.16);
+  background: var(--active);
   color: var(--oc-fg);
   font-size: calc(var(--oc-mark-size) * 0.55);
   font-weight: 600;
@@ -231,11 +230,11 @@ button.oc-pill:hover {
   height: 28px;
 }
 .oc-status[data-status="done"] {
-  background: rgb(71 205 137 / 0.2);
+  background: color-mix(in srgb, var(--oc-success) 14%, transparent);
   color: var(--oc-success);
 }
 .oc-status[data-status="failed"] {
-  background: rgb(255 155 145 / 0.2);
+  background: var(--danger-surface);
   color: var(--oc-danger);
 }
 .oc-status[data-status="expired"] {
@@ -246,7 +245,7 @@ button.oc-pill:hover {
   flex: none;
   width: 14px;
   height: 14px;
-  border: 2px solid rgb(255 255 255 / 0.25);
+  border: 2px solid var(--oc-line);
   border-top-color: var(--oc-fg);
   border-radius: 50%;
   animation: oc-spin 0.9s linear infinite;
@@ -281,11 +280,11 @@ button.oc-pill:hover {
   min-height: 36px;
   padding: 0 14px;
   border: 1px solid var(--oc-field-line);
-  border-radius: var(--radius-pill, 9999px);
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--oc-muted);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 .oc-more:hover {
@@ -305,7 +304,7 @@ button.oc-pill:hover {
 }
 .oc-kv dt {
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-kv dd {
   min-width: 0;
@@ -333,12 +332,12 @@ button.oc-pill:hover {
 }
 .oc-rating {
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-link {
-  color: inherit;
+  color: var(--primary);
   text-decoration: underline;
-  text-decoration-color: rgb(255 255 255 / 0.4);
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
   text-underline-offset: 3px;
 }
 .oc-link:hover {
@@ -377,7 +376,7 @@ button.oc-pill:hover {
 .oc-asker {
   margin: 0;
   color: var(--oc-muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   overflow-wrap: anywhere;
 }
@@ -398,7 +397,7 @@ button.oc-pill:hover {
 }
 .oc-host {
   color: var(--oc-muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 400;
   overflow-wrap: anywhere;
 }
@@ -409,7 +408,7 @@ button.oc-pill:hover {
 }
 .oc-qty {
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-item-meta {
   display: flex;
@@ -418,7 +417,7 @@ button.oc-pill:hover {
   gap: 2px 8px;
   margin: 2px 0 0;
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-item-side {
   flex: none;
@@ -429,8 +428,8 @@ button.oc-pill:hover {
   display: block;
   flex: none;
   overflow: hidden;
-  border-radius: var(--radius-md, 12px);
-  background: var(--oc-wash-strong);
+  border-radius: var(--radius-md);
+  background: var(--oc-wash);
 }
 .oc-thumb[data-size="lg"] {
   width: 77px;
@@ -463,20 +462,21 @@ button.oc-pill:hover {
 }
 .oc-media figcaption {
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 
 /* Tables */
+/* Results stay flat: a hairline frame and row rules, no fill. */
 .oc-table-scroll {
   overflow-x: auto;
-  border-radius: var(--radius-md, 12px);
-  background: var(--oc-wash);
+  border: 1px solid var(--oc-line);
+  border-radius: var(--radius-md);
   overscroll-behavior-x: contain;
 }
 .oc-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-table[data-layout="scroll"] {
   min-width: max-content;
@@ -489,7 +489,7 @@ button.oc-pill:hover {
 }
 .oc-table th {
   color: var(--oc-muted);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   white-space: nowrap;
 }
 .oc-table tbody tr + tr td {
@@ -510,7 +510,7 @@ button.oc-pill:hover {
   gap: 8px;
   margin: 0;
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-notice > svg,
 .oc-notice > .oc-spinner {
@@ -539,10 +539,9 @@ button.oc-pill:hover {
 .oc-bubbles .oc-notice {
   width: fit-content;
   max-width: min(100%, 424px);
-  padding: 8px 14px;
-  border: 1px solid var(--oc-line);
-  border-radius: var(--radius-lg, 16px);
-  background: var(--glass-strong-bg, rgb(28 34 58 / 0.94));
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-bubble);
+  background: var(--bubble);
   color: var(--oc-fg);
 }
 
@@ -566,7 +565,7 @@ button.oc-pill:hover {
 }
 .oc-person-text span {
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-people-arrow {
   display: grid;
@@ -585,7 +584,8 @@ button.oc-pill:hover {
 }
 .oc-field > label {
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .oc-field-pair {
   display: grid;
@@ -599,34 +599,34 @@ button.oc-pill:hover {
 .oc-control textarea {
   display: block;
   width: 100%;
-  min-height: 48px;
+  min-height: 44px;
   margin: 0;
-  padding: 0 20px;
+  padding: 0 var(--space-3);
   border: 1px solid var(--oc-field-line);
-  border-radius: var(--radius-pill, 9999px);
+  border-radius: var(--radius-md);
   background: var(--oc-field);
   color: var(--oc-fg);
   font: inherit;
-  font-size: 0.9375rem;
+  /* Never below 16px: iOS zooms into smaller fields. */
+  font-size: var(--text-base);
   transition: border-color var(--oc-fast) var(--oc-ease);
 }
 .oc-control textarea {
-  padding: 12px 20px;
-  border-radius: var(--radius-lg, 16px);
+  padding: 10px var(--space-3);
   resize: vertical;
 }
 .oc-control input[type="password"] + .oc-eye,
 .oc-eye {
   position: absolute;
   top: 50%;
-  right: 6px;
+  right: 4px;
   display: grid;
   place-items: center;
   width: 36px;
   height: 36px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-pill, 9999px);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--oc-muted);
   cursor: pointer;
@@ -638,8 +638,9 @@ button.oc-pill:hover {
 .oc-control:has(.oc-eye) input {
   padding-right: 48px;
 }
-.oc-control input::placeholder {
-  color: var(--oc-muted);
+.oc-control input::placeholder,
+.oc-control textarea::placeholder {
+  color: var(--faint);
 }
 .oc-control input:focus-visible,
 .oc-control textarea:focus-visible {
@@ -655,8 +656,8 @@ button.oc-pill:hover {
 .oc-hint {
   margin: 0;
   color: var(--oc-muted);
-  font-family: var(--font-code, ui-monospace, monospace);
-  font-size: 0.6875rem;
+  font-family: var(--font-code);
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 .oc-check,
@@ -673,17 +674,20 @@ button.oc-pill:hover {
   width: 20px;
   height: 20px;
   margin: 0;
-  accent-color: #fff;
+  accent-color: var(--primary);
 }
 .oc-radio {
-  padding: 8px 14px;
-  border: 1px solid var(--oc-line);
-  border-radius: var(--radius-md, 12px);
-  background: var(--oc-wash);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--oc-field-line);
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+.oc-radio:hover {
+  background: var(--hover);
 }
 .oc-radio:has(input:checked) {
   border-color: var(--oc-focus);
-  background: var(--oc-wash-strong);
+  background: var(--oc-wash);
 }
 .oc-details {
   border-top: 1px solid var(--oc-line);
@@ -694,7 +698,7 @@ button.oc-pill:hover {
   align-items: center;
   min-height: 36px;
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 .oc-details[open] {
@@ -717,7 +721,7 @@ button.oc-pill:hover {
   margin-bottom: 8px;
   padding: 0;
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-choices > legend + * {
   clear: both;
@@ -734,11 +738,11 @@ button.oc-pill:hover {
   height: 44px;
   padding: 0;
   border: 1px solid var(--oc-field-line);
-  border-radius: var(--radius-md, 12px);
-  background: var(--oc-wash);
+  border-radius: var(--radius-md);
+  background: transparent;
   color: var(--oc-fg);
   font: inherit;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   cursor: pointer;
 }
 .oc-provider:hover:not(:disabled) {
@@ -748,12 +752,12 @@ button.oc-pill:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-height: 48px;
-  padding: 8px 14px;
-  border: 1px solid var(--oc-line);
-  border-radius: var(--radius-md, 12px);
-  background: var(--oc-wash);
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--oc-field-line);
+  border-radius: var(--radius-md);
+  background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
@@ -768,11 +772,10 @@ button.oc-pill:hover {
 }
 .oc-option-note {
   color: var(--oc-muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 
-/* Suggestions (ui/suggest.ts). Opaque: the card is itself a backdrop-filter element, so a nested
-   blur would only see the card, not the page behind it. */
+/* Suggestions (ui/suggest.ts): a popup on the overlay surface, like every menu. */
 .oc-suggest-list {
   position: absolute;
   top: calc(100% + 6px);
@@ -786,24 +789,24 @@ button.oc-pill:hover {
   padding: 8px;
   overflow-y: auto;
   border: 1px solid var(--oc-line);
-  border-radius: var(--radius-lg, 16px);
-  background: rgb(28 34 58);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.4);
+  border-radius: var(--radius-lg);
+  background: var(--overlay);
+  box-shadow: var(--shadow-overlay);
   list-style: none;
 }
 .oc-suggest-list[hidden] {
   display: none;
 }
 .oc-suggest-option {
-  padding: 10px 14px;
+  padding: var(--space-2) var(--space-3);
   overflow: hidden;
-  border-radius: var(--radius-md, 12px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .oc-suggest-option[data-active] {
-  background: var(--oc-wash-strong);
+  background: var(--active);
 }
 
 /* ---- actions ------------------------------------------------------------------------------ */
@@ -820,12 +823,12 @@ button.oc-pill:hover {
   gap: 6px;
   min-width: 96px;
   min-height: 44px;
-  padding: 0 18px;
+  padding: 0 var(--space-4);
   border: 1px solid transparent;
-  border-radius: var(--radius-pill, 9999px);
+  border-radius: var(--radius-pill);
   color: inherit;
   font: inherit;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-decoration: none;
   cursor: pointer;
   transition: background var(--oc-fast) var(--oc-ease);
@@ -836,19 +839,22 @@ button.oc-pill:hover {
   color: var(--oc-pill-fg);
 }
 .oc-btn--primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--oc-pill-bg) 88%, #6b7280);
+  background: var(--primary-hover);
 }
 .oc-btn--secondary {
   border-color: var(--oc-field-line);
-  background: var(--oc-wash);
+  background: transparent;
 }
 .oc-btn--secondary:hover:not(:disabled) {
-  background: var(--oc-wash-strong);
+  background: var(--hover);
 }
 .oc-btn--destructive {
-  border-color: rgb(255 155 145 / 0.4);
+  border-color: var(--oc-field-line);
   background: transparent;
   color: var(--oc-danger);
+}
+.oc-btn--destructive:hover:not(:disabled) {
+  background: var(--danger-surface);
 }
 .oc-btn:disabled,
 .oc-option:disabled,
@@ -864,23 +870,24 @@ button.oc-pill:hover {
   position: absolute;
   width: 16px;
   height: 16px;
-  border: 2px solid rgb(0 0 0 / 0.25);
-  border-top-color: currentColor;
+  /* The label is hidden with a transparent colour, so the spinner names its colours itself. */
+  border: 2px solid var(--oc-line);
+  border-top-color: var(--oc-fg);
   border-radius: 50%;
   animation: oc-spin 0.9s linear infinite;
   content: "";
 }
 .oc-btn--primary[data-pending]::after {
-  border-color: rgb(17 19 24 / 0.25);
+  border-color: color-mix(in srgb, var(--oc-pill-fg) 30%, transparent);
   border-top-color: var(--oc-pill-fg);
 }
 .oc-error {
   margin: 0;
-  padding: 10px 14px;
-  border-radius: var(--radius-md, 12px);
-  background: rgb(255 155 145 / 0.14);
+  padding: 10px var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--danger-surface);
   color: var(--oc-danger);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 .oc-slot:empty {
   display: none;
@@ -892,18 +899,11 @@ button.oc-pill:hover {
   gap: 6px;
   margin: 0;
   color: var(--oc-muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 /* ---- phone -------------------------------------------------------------------------------- */
 @media (max-width: 640px) {
-  .oc-control input,
-  .oc-control textarea {
-    font-size: 16px;
-  }
-  .oc-card[data-open="true"] {
-    padding: 18px;
-  }
   .oc-btn {
     min-width: 0;
   }

@@ -1,6 +1,7 @@
 import { Ellipsis } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router";
 import { AppHeader } from "../components/AppHeader";
+import { BrowserButton } from "../components/BrowserButton";
 import { SessionMenu } from "../components/SessionMenu";
 import { displayTitle } from "../components/toolStatus";
 import { useTeam } from "../hooks/useAgents";
@@ -32,17 +33,20 @@ export function SessionPage() {
           // Status only: the model id is a provider identifier, not something to read in the title.
           subtitle={waiting ? "Needs you" : running ? "Working…" : view.status === "stopped" ? "Stopped" : undefined}
           actions={
-            <SessionMenu
-              session={{ id, title: view.title, pinned: view.pinned, archived: view.archived }}
-              label="Conversation options"
-              onChanged={shell.refreshSessions}
-              onDeleted={() => navigate("/history", { replace: true })}
-              trigger={
-                <IconButton label="Conversation options">
-                  <Ellipsis size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                </IconButton>
-              }
-            />
+            <>
+              <BrowserButton sessionId={id} view={view} />
+              <SessionMenu
+                session={{ id, title: view.title, pinned: view.pinned, archived: view.archived }}
+                label="Conversation options"
+                onChanged={shell.refreshSessions}
+                onDeleted={() => navigate("/history", { replace: true })}
+                trigger={
+                  <IconButton label="Conversation options">
+                    <Ellipsis size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                  </IconButton>
+                }
+              />
+            </>
           }
         />
       )}

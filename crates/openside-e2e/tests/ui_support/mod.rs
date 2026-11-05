@@ -210,7 +210,7 @@ impl Fixture {
         let script = json!({"responses":[tool("create_task", json!({"goal":format!("Compare {LONG_TITLE}")}), "visual-task"), send(&reply), send("The comparison is ready.")],
             "subagents":{"visual-task":[text(&format!("Task report: {LONG_TITLE}"))]}});
         let mut harness = Harness::prepare(env!("CARGO_BIN_EXE_e2e-opensided"), &script)
-            .expect("uv sync --project agent is required");
+            .expect("bun install --cwd agent is required");
         let config = harness.root().join("config/openside/config.toml");
         let original = std::fs::read_to_string(&config).unwrap();
         std::fs::write(
@@ -380,10 +380,12 @@ pub async fn assert_transient_status(ui: &mut Ui, harness: &Harness, session: &s
     ui.cdp
         .wait("!!document.querySelector('.typing .typing-dot')")
         .await;
-    let style = ui.cdp.eval("(() => { const el=document.querySelector('.typing'); const s=getComputedStyle(el); return {radius:parseFloat(s.borderRadius), height:el.getBoundingClientRect().height, background:s.backgroundColor}; })()").await;
-    assert!(
-        style["radius"].as_f64().unwrap() >= style["height"].as_f64().unwrap() / 2.0,
-        "status is a pill: {style}"
+    // The dots sit on the canvas where the reply will start (web/DESIGN.md), not in a framed pill.
+    let style = ui.cdp.eval("(() => { const el=document.querySelector('.typing'); const s=getComputedStyle(el); return {background:s.backgroundColor, border:parseFloat(s.borderTopWidth), dots:el.querySelectorAll('.typing-dot').length}; })()").await;
+    assert_eq!(
+        style,
+        json!({"background":"rgba(0, 0, 0, 0)","border":0,"dots":3}),
+        "typing dots sit on the canvas: {style}"
     );
     ui.cdp.wait("document.body.innerText.includes('The answer is ready.') && !document.querySelector('.typing')").await;
     let mut stream = harness.events(session, 0).await;

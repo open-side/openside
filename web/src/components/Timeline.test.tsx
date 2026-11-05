@@ -142,7 +142,7 @@ describe("Timeline tool activity", () => {
     await user.click(summary);
     // Each call is a sentence about what the agent did; the page's steps hang under the page.
     const lines = [...groups[0]!.querySelectorAll(".tool-line")];
-    expect(lines.map((line) => line.textContent)).toEqual(["Opened example.com", "Interacted with the pageFailed"]);
+    expect(lines.map((line) => line.textContent)).toEqual(["Opened example.comDone", "Interacted with the pageFailed"]);
     expect(groups[0]).not.toHaveTextContent(/browser_|Browser navigate/);
     expect([...groups[0]!.querySelectorAll("h4")].every((heading) => heading.closest("details.tool-tech"))).toBe(true);
     const failed = groups[0]!.querySelector<HTMLElement>("li.tool-failed")!;

@@ -65,8 +65,9 @@
 | 기능 | API | UI 위치 | 상태 |
 | --- | --- | --- | --- |
 | 토큰 입력·로그아웃 | `GET /v1/health` | `TokenEntry`, Settings 다이얼로그의 Sign out 버튼 | 구현 |
-| 대화 목록 | `GET /v1/sessions` | `Sidebar`(데스크톱 사이드바, 820px 이하는 Conversations 드로어) | 구현 |
-| 검색 | `GET /v1/sessions?q=` | 사이드바 검색창 | 구현 |
+| 대화 목록 | `GET /v1/agents`, `GET /v1/pinned-tabs`, `GET /v1/browser/tabs` | `Sidebar`(데스크톱 좌측 열, 820px 이하는 `Team menu` 드로어). 위에서부터 `New task`(홈 `/`으로 이동), 동기화된 고정 탭 타일을 보여 주는 `Pinned`, 어시스턴트를 맨 위에 두고 팀원을 한 줄씩 나열하는 `Chats`(작업 중 라이브 점·Needs you 배지·읽지 않음 점 표시, 숨긴 팀원은 `Hidden · N` 아래에 접음), `/history`로 이동하는 `Show all`, 브라우저 시트와 함께 해당 대화를 여는 에이전트 탭 목록 `Tabs` 순서로 표시한다. 데스크톱에서는 `Collapse sidebar` 또는 `Mod+S`로 사이드바를 접을 수 있으며, 선택 상태는 `localStorage`의 `openside.sidebar`에 저장한다. 헤더는 콘텐츠 위에 띄우지 않고 본문 위쪽의 페이지 흐름에 그대로 배치하므로 콘텐츠에 별도의 상단 패딩을 둘 필요가 없으며, 글래스(glass)나 블러 배경도 쓰지 않는다. | 구현 (`web/src/components/Sidebar.test.tsx`, `web/src/components/SidebarTabs.test.tsx`) |
+| 홈 | `POST /v1/sessions/{id}/messages`, `GET /v1/sessions/{id}/events` | `/` 경로의 `HomePage`: `What should we do?` 제목, 어시스턴트 스레드로 메시지를 보낸 뒤 `/agents/chief`를 여는 중앙 입력창, 모델 칩, 백그라운드 작업용 `Recent tasks` 카드를 표시한다. 어디서든 `Mod+Shift+E`를 누르면 홈을 열고, `Mod+E`를 누르면 메시지 입력창에 포커스를 맞춘다. | 구현 (`web/src/pages/HomePage.test.tsx`) |
+| 검색 | `GET /v1/sessions?q=` | `/history` 상단 검색창 | 구현 |
 | 고정 | `PATCH /v1/sessions/{id}` `{pinned}` | 대화 Options 메뉴 Pin/Unpin | 구현 |
 | 보관 | `PATCH /v1/sessions/{id}` `{archived}`, `?archived=true` | 대화 Options 메뉴 Archive/Unarchive, Archived 탭 | 구현 |
 | 새 대화 및 이름 변경 | `POST /v1/sessions`, `PATCH /v1/sessions/{id}` `{title}` | 첫 메시지를 전송할 때 새 대화가 생성되며, 첫 응답 이후 모델 제목이 붙는다. 대화 메뉴에서 이름을 변경할 수 있다. | 구현됨 |

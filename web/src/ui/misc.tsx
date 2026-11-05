@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cx } from "./Button";
 
 /** Accent spinner; decorative unless a label is given. */
@@ -77,5 +78,38 @@ export function Switch({ checked, onChange, label, id, disabled, "aria-described
       />
       <span className="ui-switch-track" aria-hidden="true" />
     </span>
+  );
+}
+
+export interface ChipProps {
+  children: ReactNode;
+  icon?: ReactNode;
+  /** Without a handler the chip is a plain label (`<span>`), not a control. */
+  onClick?: () => void;
+  /** Toggle state for filter chips; rendered as `aria-pressed`. */
+  pressed?: boolean;
+  title?: string;
+  "aria-label"?: string;
+}
+
+/** Quiet 32px pill: model picker, filters, context tags. */
+export function Chip({ children, icon, onClick, pressed, title, "aria-label": ariaLabel }: ChipProps) {
+  const content = (
+    <>
+      {icon}
+      <span className="ui-chip-label">{children}</span>
+    </>
+  );
+  if (!onClick) {
+    return (
+      <span className="ui-chip" title={title} aria-label={ariaLabel}>
+        {content}
+      </span>
+    );
+  }
+  return (
+    <button type="button" className="ui-chip" title={title} aria-label={ariaLabel} aria-pressed={pressed} onClick={onClick}>
+      {content}
+    </button>
   );
 }

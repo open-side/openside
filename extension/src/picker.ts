@@ -15,7 +15,7 @@ export interface Picker {
 const TYPEAHEAD_RESET_MS = 700;
 
 /**
- * Select-only combobox (WAI-ARIA APG): the button keeps focus while a glass listbox opens under it
+ * Select-only combobox (WAI-ARIA APG): the button keeps focus while a listbox opens under it
  * and `aria-activedescendant` follows the highlighted option. It replaces the native `<select>`,
  * whose popup the browser draws and CSS cannot style. `root` is the container the markup is built in;
  * its `data-value` mirrors the selection for tests and tooling.
@@ -42,7 +42,7 @@ export function createPicker(root: HTMLElement, name: string, onChange: (value: 
 
   const list = document.createElement("ul");
   list.id = `${root.id}-list`;
-  list.className = "picker-list glass-float thin-scroll";
+  list.className = "picker-list surface-overlay thin-scroll";
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", name);
   list.hidden = true;

@@ -10,7 +10,7 @@ export interface DialogProps {
   description?: ReactNode;
   /** Back control before the heading, for dialogs that page through sections. */
   back?: { label: string; onClick: () => void };
-  /** `wide` fits grids and tables (640px instead of 420px); phones always get a full-width sheet. */
+  /** `wide` fits grids, tables and two-pane settings (880px instead of 440px); phones always get a full-width sheet. */
   size?: "default" | "wide";
   children?: ReactNode;
   /** Element focused when the dialog opens; defaults to the first focusable control. */
@@ -18,8 +18,8 @@ export interface DialogProps {
   className?: string;
 }
 
-// Matches the sheet breakpoint in ui.css.
-const SHEET_QUERY = "(max-width: 700px)";
+// Matches the phone breakpoint in ui.css (phone layout below 821px).
+const SHEET_QUERY = "(max-width: 820px)";
 // aside-relay's thresholds: 96px down, or a flick faster than 700px/s.
 const CLOSE_DISTANCE = 96;
 const CLOSE_VELOCITY = 0.7;
@@ -90,11 +90,11 @@ export function Dialog({ open, onClose, title, description, back, size = "defaul
         <BaseDialog.Viewport className="ui-dialog-viewport">
           <BaseDialog.Popup
             ref={popup}
-            className={cx("ui-dialog", "glass-float", size === "wide" && "ui-dialog--wide", className)}
+            className={cx("ui-dialog", "surface-overlay", size === "wide" && "ui-dialog--wide", className)}
             initialFocus={initialFocus}
           >
             <div className="ui-dialog-handle" aria-hidden="true" onPointerDown={startDrag}>
-              <span />
+              <span className="sheet-handle" />
             </div>
             <header
               className="ui-dialog-header"
@@ -208,7 +208,7 @@ export function Drawer({ open, onClose, label, children }: DrawerProps) {
     >
       <BaseDialog.Portal>
         <BaseDialog.Backdrop className="ui-backdrop ui-drawer-backdrop" />
-        <BaseDialog.Popup ref={ref} className="ui-drawer glass-float" aria-label={label} {...swipe}>
+        <BaseDialog.Popup ref={ref} className="ui-drawer" aria-label={label} {...swipe}>
           {children}
         </BaseDialog.Popup>
       </BaseDialog.Portal>

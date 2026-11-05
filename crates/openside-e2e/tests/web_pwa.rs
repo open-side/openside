@@ -359,15 +359,16 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
         ])
     );
 
-    // 1. Share a page link with an image: title, text and URL become the draft, the image an attachment.
+    // 1. Share a page link with an image: title, text and URL become the draft of Home's composer,
+    //    the image an attachment.
     ui.share(
         json!({"title":"Cool article","text":"Worth a read","url":"https://example.com/cool"}),
         &tiny_image(),
     )
     .await;
     ui.wait(
-        "the shared draft in the assistant's composer",
-        "location.pathname === '/agents/chief' && location.search === '' && (() => { const t = document.querySelector('.composer textarea'); \
+        "the shared draft in Home's composer",
+        "location.pathname === '/' && location.search === '' && (() => { const t = document.querySelector('main.home .composer textarea'); \
            return !!t && t.value === 'Cool article\\nWorth a read\\nhttps://example.com/cool' \
              && !!document.querySelector('.attachment-chip .attachment-thumb'); })()",
     )
@@ -382,7 +383,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
     )
     .await;
     ui.capture(&mut cdp, "share-sent-390x844").await;
-    // Shares land in the assistant's one continuous thread, not in a new conversation.
+    // Home hands shares to the assistant's one continuous thread, not to a new conversation.
     let agents = harness.request("GET", "/v1/agents", None).await;
     let home = agents.body["agents"]
         .as_array()
@@ -449,7 +450,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
     );
 
     // 3. Offline: the message is queued in IndexedDB and reaches the thread once the daemon is back.
-    ui.goto("/").await;
+    ui.goto("/agents/chief").await;
     ui.wait(
         "the assistant's thread",
         "location.pathname === '/agents/chief' && !!document.querySelector('.composer textarea')",
@@ -496,7 +497,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
     );
 
     // 4. The install banner appears on a phone once the browser offers installation.
-    ui.goto("/").await;
+    ui.goto("/agents/chief").await;
     ui.eval(
         "(() => { const e = new Event('beforeinstallprompt', { cancelable: true }); \
            e.prompt = async () => undefined; e.userChoice = Promise.resolve({ outcome: 'dismissed' }); \

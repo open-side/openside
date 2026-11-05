@@ -72,17 +72,25 @@ describe("TaskUnit", () => {
     expect(FakeSocket.last).toBeNull();
   });
 
-  it("a Task without a browser is only its steps: no title, no controls", () => {
+  it("a Task without a browser is a card of its status, task and steps, with only ✕ to stop it", () => {
     const progress = [
       { kind: "tool.started", tool_call_id: "c1", name: "web_fetch", args: {} },
       { kind: "tool.ended", tool_call_id: "c1", name: "web_fetch", result: {}, is_error: false, status_text: "Read the forecast" },
       { kind: "tool.started", tool_call_id: "c2", name: "web_fetch", args: {}, status_text: "Checking the radar" },
     ];
     setup({ ...task(), progress }, null);
-    expect(screen.getByRole("status")).toHaveTextContent("Checking the radar");
+    const card = screen.getByRole("status");
+    expect(card).toHaveTextContent("Working");
+    expect(card).toHaveTextContent("Sign in to mail");
+    expect(card).toHaveTextContent("Checking the radar");
     expect(within(screen.getByRole("list", { name: "Earlier steps" })).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Read the forecast"]);
+    expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["Stop this task"]);
+  });
+
+  it("a finished Task without a browser has nothing to stop", () => {
+    setup(task("completed", "Forecast read."), null);
+    expect(screen.getByRole("status")).toHaveTextContent("Done");
     expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.queryByText("Sign in to mail")).toBeNull();
   });
 
   it("the newest Task at work opens its browser by itself and folds into its result when done", () => {
@@ -170,5 +178,30 @@ describe("TaskUnit", () => {
     setup({ ...task("cancelled"), progress }, null);
     expect(within(screen.getByRole("list", { name: "Earlier steps" })).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Read the forecast"]);
     expect(screen.queryByText("Checking the radar")).toBeNull();
+  });
+});
+
+describe("TaskUnit stop", () => {
+  it("closes the confirmation as soon as Stop task is pressed, before the daemon answers", async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    const client = createClient({
+      token: () => "device-token",
+      fetch: ((input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push(`${init?.method ?? "GET"} ${new URL(String(input), "http://x").pathname}`);
+        return new Promise<Response>(() => undefined);
+      }) as typeof fetch,
+      webSocket: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    render(
+      <ClientContext.Provider value={client}>
+        <TaskUnit sessionId="s1" task={task()} state={undefined} newest={false} onShowPending={() => undefined} />
+      </ClientContext.Provider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Stop this task" }));
+    const dialog = await screen.findByRole("dialog", { name: "Stop this task?" });
+    await user.click(within(dialog).getByRole("button", { name: "Stop task" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls.some((call) => call.startsWith("POST") || call.startsWith("DELETE"))).toBe(true);
   });
 });

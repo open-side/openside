@@ -76,9 +76,9 @@
 .channel-empty {
   margin: 0;
   padding: 18px 16px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
   color: var(--muted);
   font-size: 0.875rem;
   text-align: center;
@@ -95,7 +95,7 @@
   margin: 0;
   padding: 16px 0 0;
   border: 0;
-  border-top: 1px solid var(--glass-inset-border);
+  border-top: 1px solid var(--border);
 }
 .channel-section > h3 {
   margin: 0;
@@ -121,7 +121,7 @@
   justify-content: space-between;
   gap: 12px;
   padding-top: 16px;
-  border-top: 1px solid var(--glass-inset-border);
+  border-top: 1px solid var(--border);
 }
 .channel-enable label {
   display: grid;

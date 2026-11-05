@@ -8,6 +8,7 @@ import { errorMessage } from "../hooks/useResource";
 import { BrandMark, Spinner } from "../ui";
 import { CliHint } from "./CliHint";
 import "./pages.css";
+import "./signin.css";
 
 /**
  * One exchange per code: the code is single-use, and React may run the effect twice

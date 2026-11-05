@@ -1,8 +1,10 @@
 /*
- * Ask side panel and options page. Tokens and component language follow the web app
- * (web/src/styles.css, web/src/ui/ui.css, web/DESIGN.md), which adopts mym0404/aside-relay (MIT).
- * The theme follows the browser (prefers-color-scheme); there is no in-extension picker.
- * The glass block below is a copy of the web glass tokens; web/src/styles.css is the source of truth.
+ * Ask side panel and options page. Every token comes from web/src/tokens.css, which the build copies
+ * beside this file as tokens.css and each page links first; this file only lays out components.
+ * The component language follows the web app (web/src/components/thread.css, web/src/ui/ui.css,
+ * web/DESIGN.md), which adopts mym0404/aside-relay (MIT): flat solid surfaces, hairline borders.
+ * The theme follows the browser (prefers-color-scheme): pages never set data-theme, and tokens.css
+ * applies its dark values to `:root:not([data-theme])` under that query.
  */
 
 @font-face {
@@ -13,155 +15,15 @@
   src: url("fonts/d2coding/D2Coding-Regular.woff2") format("woff2");
 }
 
-:root {
-  color-scheme: light dark;
-  --canvas: #ffffff;
-  --surface: #f7f7f7;
-  --bubble: #f1f1f1;
-  --text: #171717;
-  --muted: #666666;
-  --border: #e9e9e9;
-  --hover: color-mix(in srgb, var(--text) 8%, transparent);
-  --control-border: #dcdcdc;
-  --danger: #b42318;
-  --glass: rgb(255 255 255 / 0.6);
-  --glass-border: rgb(0 0 0 / 0.08);
-  --shadow-glass: 0 8px 40px rgb(29 29 31 / 0.12);
-  --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.06);
-  --primary: #2f6fed;
-  --primary-foreground: #ffffff;
-  --primary-hover: color-mix(in srgb, var(--primary) 86%, var(--text));
-  --font-sans: "Wanted Sans Variable", "Wanted Sans", -apple-system, BlinkMacSystemFont, system-ui, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
-  --font-code: "D2Coding", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --fast: 140ms;
-  --normal: 220ms;
-  --ease: cubic-bezier(0.2, 0, 0, 1);
-  /* Mirrors the radius scale in web/src/styles.css. */
-  --radius-xs: 4px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-2xl: 24px;
-  --radius-pill: 9999px;
-  --radius-row: var(--radius-lg);
-  --radius-card: var(--radius-2xl);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: #000000;
-    --surface: #141414;
-    --bubble: #181818;
-    --text: #f3f3f3;
-    --muted: #999999;
-    --border: #343434;
-    --hover: color-mix(in srgb, var(--text) 8%, transparent);
-    --control-border: #414141;
-    --danger: #ff9b91;
-    /* Navy-tinted so frosted chrome belongs to the deep gradient backdrop. */
-    --glass: rgb(24 28 46 / 0.7);
-    --glass-border: rgb(255 255 255 / 0.12);
-    --shadow-glass: 0 8px 40px rgb(0 0 0 / 0.32);
-    --shadow-popup: 0 12px 40px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4);
-  }
-}
+:root { color-scheme: light dark; }
 
-/* Glass-on-gradient: mirrors the token block in web/src/styles.css. Strong glass stays dark in both themes. */
-:root {
-  --backdrop:
-    radial-gradient(120% 60% at 50% 110%, rgb(255 214 196 / 0.9), transparent 70%),
-    linear-gradient(180deg, #bdd2ea 0%, #ccd6f0 44%, #e6dcec 80%, #f6e2d6 100%);
-  --glass-strong-bg: rgb(28 34 58 / 0.86);
-  --glass-strong-fg: #f5f6fb;
-  --glass-strong-muted: rgb(245 246 251 / 0.66);
-  --glass-strong-border: rgb(255 255 255 / 0.1);
-  --glass-input-bg: rgb(255 255 255 / 0.08);
-  --glass-inset-bg: rgb(255 255 255 / 0.55);
-  --glass-inset-border: rgb(23 26 36 / 0.08);
-  --bubble-user-bg: rgb(255 255 255 / 0.62);
-  --bubble-user-fg: #171a24;
-  --pill-primary-bg: #ffffff;
-  --pill-primary-fg: #111318;
-  --status-pill-bg: rgb(255 255 255 / 0.18);
-  --status-pill-border: rgb(23 26 36 / 0.14);
-  --radius-glass: 24px;
-  --blur-glass: blur(50px) saturate(1.6);
-  /* Floating surfaces: mirrors the --float-* tokens and .glass-float in web (styles.css, ui/ui.css). */
-  --float-bg: color-mix(in srgb, var(--glass) 70%, var(--canvas));
-  --float-bg-solid: color-mix(in srgb, var(--canvas) 96%, var(--text));
-  --float-border: var(--glass-border);
-  --float-shadow: var(--shadow-popup);
-  --float-blur: blur(24px) saturate(1.6);
-  --radius-float: 24px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --backdrop:
-      radial-gradient(120% 55% at 50% 112%, rgb(214 134 104 / 0.75), transparent 70%),
-      linear-gradient(180deg, #1c2747 0%, #2c3a6e 42%, #59629a 74%, #9b7f98 100%);
-    --bubble-user-bg: rgb(255 255 255 / 0.14);
-    --bubble-user-fg: #f5f6fb;
-    --glass-inset-bg: rgb(255 255 255 / 0.06);
-    --glass-inset-border: rgb(255 255 255 / 0.1);
-    --status-pill-bg: rgb(255 255 255 / 0.06);
-    --status-pill-border: rgb(255 255 255 / 0.16);
-  }
-}
-/* Every extension page sits on the gradient, where #666/#999 fall below 4.5:1 near its warm end
-   (dark #999 measured 2.7:1 on frosted cards). These keep secondary text AA on cards and bare backdrop;
-   strong glass sets its own --muted. */
-body.panel, body.options { --muted: #5a5e6e; }
-@media (prefers-color-scheme: dark) {
-  body.panel, body.options { --muted: #c3c7d6; }
-}
-@media (prefers-reduced-transparency: reduce) {
-  :root:root {
-    --glass: color-mix(in srgb, var(--canvas) 96%, var(--text));
-    --glass-strong-bg: rgb(28 34 58);
-    --blur-glass: none;
-    --float-blur: none;
-    --float-bg: var(--float-bg-solid);
-  }
-}
-.glass-float {
-  --float-hover: color-mix(in srgb, var(--text) 8%, transparent);
-  border: 1px solid var(--float-border);
-  background: var(--float-bg);
+/* Floating layers (picker list, toast): mirrors .surface-overlay in web/src/ui/ui.css. */
+.surface-overlay {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--overlay);
   color: var(--text);
-  box-shadow: var(--float-shadow);
-  -webkit-backdrop-filter: var(--float-blur);
-  backdrop-filter: var(--float-blur);
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass-float { background: var(--float-bg-solid); }
-}
-/* Inside strong glass the page tokens point at light-on-navy values (as in web), so Markdown, buttons and inputs stay readable. */
-.bubble.assistant,
-.composer {
-  color-scheme: dark;
-  --text: var(--glass-strong-fg);
-  --muted: var(--glass-strong-muted);
-  --border: rgb(255 255 255 / 0.14);
-  --control-border: rgb(255 255 255 / 0.18);
-  --hover: rgb(255 255 255 / 0.1);
-  --canvas: rgb(255 255 255 / 0.06);
-  --glass-inset-bg: rgb(255 255 255 / 0.06);
-  --glass-inset-border: rgb(255 255 255 / 0.1);
-  --surface: rgb(8 11 24 / 0.32);
-  --bubble: rgb(255 255 255 / 0.12);
-  --primary: var(--pill-primary-bg);
-  --primary-foreground: var(--pill-primary-fg);
-  --primary-hover: #e4e7ef;
-  --link: #a9c7ff;
-  --danger: #ff9b91;
-  border: 1px solid var(--glass-strong-border);
-  background: var(--glass-strong-bg);
-  color: var(--text);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .bubble.assistant, .composer { background: rgb(28 34 58 / 0.97); }
+  box-shadow: var(--shadow-overlay);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -171,14 +33,14 @@ body {
   background: var(--canvas);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 1rem;
+  font-size: var(--text-base);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, p { margin: 0; }
 svg { flex: none; }
 kbd, code { font-family: var(--font-code); font-size: 0.875em; }
-kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); background: var(--glass); }
+kbd { padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--surface); }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--primary) 28%, transparent); }
 .sr-only {
@@ -193,8 +55,8 @@ kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: va
   display: inline-grid;
   flex: 0 0 auto;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
@@ -207,25 +69,29 @@ kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: va
 .icon-button:hover:not(:disabled) { background: var(--hover); }
 .icon-button:active:not(:disabled) { transform: scale(0.9); }
 .icon-button:disabled { cursor: default; opacity: 0.4; }
-.icon-button.outlined { border-color: var(--glass-border); background: var(--glass); box-shadow: var(--shadow-glass); -webkit-backdrop-filter: blur(16px) saturate(1.6); backdrop-filter: blur(16px) saturate(1.6); }
+.icon-button.outlined { border-color: var(--control-border); }
 .icon-button.outlined:hover:not(:disabled) { background: var(--hover); }
-.icon-button.primary { width: 38px; height: 38px; background: var(--primary); color: var(--primary-foreground); }
-.icon-button.primary:hover:not(:disabled) { background: var(--primary-hover); }
+/* Monochrome like the web composer's send button (aside-relay); the accent stays for links and primary buttons. */
+.icon-button.primary { background: var(--send-bg); color: var(--send-fg); }
+.icon-button.primary:hover:not(:disabled) { background: var(--send-bg); opacity: 0.86; }
+@media (pointer: coarse) {
+  .icon-button { width: 44px; height: 44px; }
+}
 
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 44px;
-  padding: 0 18px;
+  padding: 0 var(--space-4);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-pill);
-  background: var(--glass-inset-bg);
+  background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 0.9375rem;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   line-height: 1.2;
   cursor: pointer;
   touch-action: manipulation;
@@ -237,7 +103,8 @@ kbd { padding: 1px 6px; border: 1px solid var(--glass-border); border-radius: va
 .button.primary { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
 .button.primary:hover:not(:disabled) { background: var(--primary-hover); }
 .button.danger { color: var(--danger); }
-.button.compact { min-height: 36px; padding: 0 14px; border-radius: var(--radius-pill); font-size: 0.875rem; }
+.button.danger:hover:not(:disabled) { background: var(--danger-surface); }
+.button.compact { min-height: 36px; padding: 0 14px; font-size: var(--text-sm); }
 .button.ghost { border-color: transparent; background: transparent; }
 .icon-button.small { width: 32px; height: 32px; color: var(--muted); }
 .icon-button.small:hover:not(:disabled) { color: var(--text); }
@@ -248,13 +115,14 @@ input, select, textarea { font: inherit; color: var(--text); }
 input {
   width: 100%;
   min-height: 44px;
-  padding: 10px 14px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--control-border);
-  border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
-  font-size: 1rem;
+  border-radius: var(--radius-md);
+  background: var(--canvas);
+  /* Never below 16px: smaller fields make mobile browsers zoom. */
+  font-size: var(--text-base);
 }
-input::placeholder, textarea::placeholder { color: var(--muted); }
+input::placeholder, textarea::placeholder { color: var(--faint); }
 
 /* Toast */
 
@@ -267,13 +135,12 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   align-items: center;
   gap: 10px;
   width: min(440px, calc(100vw - 32px));
-  padding: 10px 8px 10px 16px;
-  border-radius: var(--radius-float);
-  font-size: 0.875rem;
-  font-weight: 550;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   line-height: 1.4;
   translate: -50% 0;
-  animation: toast-in var(--normal) var(--ease);
+  animation: toast-in var(--normal) var(--ease-out);
 }
 .toast:has(#status:empty) { display: none; }
 .toast .toast-icon { color: var(--muted); }
@@ -293,62 +160,58 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   cursor: pointer;
   transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.toast-close:hover { background: var(--float-hover); color: var(--text); }
+.toast-close:hover { background: var(--hover); color: var(--text); }
 @keyframes toast-in { from { opacity: 0; translate: -50% -8px; } }
 
 /* Ask side panel */
 
-body.panel { position: relative; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; background: var(--backdrop); background-color: var(--canvas); }
+body.panel { position: relative; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
 /*
  * The side panel already sits under the browser's own "openside" title, so the bar carries only the
- * conversation switcher, the connection note and settings. Like the web header it floats over the
- * conversation as frosted pills, so text scrolls under the glass.
+ * conversation switcher, the connection note and settings. A solid header, like the web app's.
  */
 .bar {
-  position: absolute;
-  inset: 0 0 auto;
+  position: relative;
   z-index: 5;
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 6px;
-  min-height: 56px;
-  padding: 8px 10px;
-  pointer-events: none;
-}
-.bar > * { pointer-events: auto; }
-.session-picker .picker-button,
-.bar .icon-button,
-.connection {
-  border: 1px solid var(--glass-border);
-  background: var(--glass);
-  box-shadow: var(--shadow-glass);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
+  gap: var(--space-2);
+  height: 48px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--canvas);
 }
 .session-picker { position: relative; display: flex; flex: 0 1 auto; align-items: center; min-width: 0; }
 /* Settings stays at the trailing edge even while the picker is hidden (not paired). */
-.bar #pair { margin-left: auto; }
+.bar #pair { margin-left: auto; color: var(--muted); }
+.bar #pair:hover:not(:disabled) { color: var(--text); }
+/* A chip, like the web model button: the conversation's name with a chevron. */
 .picker-button {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   max-width: 100%;
-  height: 40px;
-  padding: 0 12px 0 16px;
+  height: 32px;
+  padding: 0 10px 0 14px;
+  border: 0;
   border-radius: var(--radius-pill);
+  background: var(--bubble);
   color: var(--text);
   font: inherit;
-  font-size: 0.9375rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   cursor: pointer;
   transition: background-color var(--fast) var(--ease);
 }
 .picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picker-chevron { flex: none; color: var(--muted); transition: transform var(--fast) var(--ease); }
 .picker-button[aria-expanded="true"] .picker-chevron { transform: rotate(180deg); }
-.session-picker .picker-button:hover { background: color-mix(in srgb, var(--glass) 70%, var(--hover)); }
+.session-picker .picker-button:hover { background: var(--hover); }
+@media (pointer: coarse) {
+  .picker-button { height: 44px; }
+}
 .picker-list {
   position: absolute;
   top: calc(100% + 6px);
@@ -362,11 +225,10 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   max-width: calc(100vw - 20px);
   max-height: min(320px, 70vh);
   margin: 0;
-  padding: 8px;
+  padding: 6px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
-  border-radius: var(--radius-float);
   list-style: none;
 }
 .picker-list[hidden] { display: none; }
@@ -374,42 +236,44 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
   min-height: 40px;
-  padding: 0 12px;
-  border-radius: var(--radius-lg);
-  font-size: 0.9375rem;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
   cursor: pointer;
 }
 .picker-option > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picker-option svg { color: var(--muted); }
-.picker-option[data-active] { background: var(--float-hover); }
-.picker-option[aria-selected="true"] { font-weight: 650; }
+.picker-option[data-active] { background: var(--hover); }
+.picker-option[aria-selected="true"] { font-weight: var(--weight-semibold); }
 .picker-button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (pointer: coarse) {
+  .picker-option { min-height: 44px; }
+}
 @media (forced-colors: active) {
   .picker-option[data-active] { outline: 2px solid Highlight; outline-offset: -2px; }
 }
-.bar .icon-button:hover:not(:disabled) { background: color-mix(in srgb, var(--glass) 70%, var(--hover)); }
-/* Same quiet outlined pill as the web status line. */
+/* A transient status chip (connecting, offline) that disappears once the panel is live. */
 .connection {
   display: flex;
   flex: none;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
-  padding: 0 12px 0 10px;
-  border-color: var(--status-pill-border);
+  min-width: 0;
+  height: 24px;
+  padding: 0 10px 0 8px;
   border-radius: var(--radius-pill);
+  background: var(--bubble);
   color: var(--muted);
-  font-size: 0.8125rem;
-  font-weight: 550;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   white-space: nowrap;
 }
-.connection::before { content: ""; width: 6px; height: 6px; border-radius: var(--radius-pill); background: currentColor; animation: breathe 1.2s var(--ease) infinite; }
+.connection::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: var(--radius-pill); background: currentColor; animation: breathe 1.2s var(--ease) infinite; }
 .connection:empty { display: none; }
 
 /* Never scroll sideways: text wraps, labels truncate, and code blocks and tables scroll inside their own box. */
-/* The top fade lets text scrolling under the floating bar dissolve instead of colliding with its pills. */
 .scroll {
   flex: 1;
   min-height: 0;
@@ -418,23 +282,21 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
   overflow-wrap: anywhere;
-  -webkit-mask-image: linear-gradient(transparent 0 16px, #000 64px);
-  mask-image: linear-gradient(transparent 0 16px, #000 64px);
 }
 .scroll:hover, .scroll[data-scrolling] { scrollbar-color: color-mix(in srgb, var(--text) 28%, transparent) transparent; }
-/* Chromium ignores ::-webkit-scrollbar once the standard pair is set, so reset it there to keep the track below the floating bar. Invisible until hover or a scroll (ui/scrollReveal). */
+/* Chromium ignores ::-webkit-scrollbar once the standard pair is set, so reset it there. Invisible until hover or a scroll (ui/scrollReveal). */
 @supports selector(::-webkit-scrollbar) {
   .scroll { scrollbar-width: auto; scrollbar-color: auto; }
   .scroll::-webkit-scrollbar { width: 10px; }
-  .scroll::-webkit-scrollbar-track { margin-top: 64px; background: transparent; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
   .scroll::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: var(--radius-pill); background-color: transparent; background-clip: padding-box; transition: background-color var(--normal) var(--ease); }
   .scroll:hover::-webkit-scrollbar-thumb, .scroll[data-scrolling]::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text) 28%, transparent); }
   .scroll::-webkit-scrollbar-thumb:hover, .scroll::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, var(--text) 46%, transparent); }
 }
-.column { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-height: 100%; padding: 64px 14px 20px; align-content: start; }
-.timeline { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.column { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); min-height: 100%; padding: var(--space-4) var(--space-4) var(--space-5); align-content: start; }
+.timeline { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
 /* A new prompt opens a new turn: more air above it than between a turn's own parts. */
-.timeline > .bubble.user:not(:first-child) { margin-top: 12px; }
+.timeline > .bubble.user:not(:first-child) { margin-top: var(--space-3); }
 .tickets { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .timeline:empty, .tickets:empty { display: none; }
 
@@ -442,69 +304,62 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
 .bubble.user {
   justify-self: end;
   max-width: 85%;
-  padding: 10px 16px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-2xl);
-  background: var(--bubble-user-bg);
-  color: var(--bubble-user-fg);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
+  padding: 10px var(--space-4);
+  border-radius: var(--radius-bubble);
+  background: var(--bubble);
+  color: var(--text);
+  line-height: var(--leading-user);
   white-space: pre-wrap;
 }
-/* Strong glass (see the token block); the bubble hugs short replies and caps long ones. */
+/* The agent's words sit on the canvas itself, the full width of the column, as in the web thread. */
 .bubble.assistant {
-  justify-self: start;
-  width: fit-content;
+  justify-self: stretch;
   min-width: 0;
-  max-width: 100%;
-  padding: 12px 16px;
-  border-radius: var(--radius-2xl);
-  box-shadow: 0 1px 2px rgb(10 14 30 / 0.12), 0 8px 24px rgb(10 14 30 / 0.12);
-  font-size: 0.9375rem;
-  line-height: 1.6;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-content);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
 }
-/* Delivery notes under the latest message and the typing dots before the agent's first words: mirrors web/src/styles.css ".receipt" and ".typing". */
+/* Delivery notes under the latest message and the typing dots before the agent's first words: mirrors the web thread's ".receipt" and ".typing". */
 .receipt {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   justify-self: end;
   margin: -4px 4px 0 0;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   line-height: 1.2;
 }
 .receipt-failed { flex-wrap: wrap; justify-content: flex-end; color: var(--danger); }
 .typing-row { justify-self: start; }
+/* Three dots on the canvas, where the reply will start (as in the web thread). */
 .typing {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 36px;
+  height: 28px;
   margin: 0;
-  padding: 0 16px;
-  border: 1px solid var(--status-pill-border);
-  border-radius: var(--radius-pill);
-  background: var(--status-pill-bg);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
+  padding: 0 2px;
 }
 .typing-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: typing-bounce 1.2s ease-in-out infinite; }
 .typing-dot:nth-child(3) { animation-delay: 0.15s; }
 .typing-dot:nth-child(4) { animation-delay: 0.3s; }
 @keyframes typing-bounce {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
-  30% { transform: translateY(-5px); opacity: 1; }
+  30% { transform: translateY(-4px); opacity: 1; }
 }
 @keyframes typing-pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 @keyframes breathe { 50% { opacity: 0.25; scale: 0.7; } }
 
-/* Markdown: mirrors web/src/styles.css ".markdown" so a reply reads the same in both. */
+/* Markdown: mirrors the web thread's ".markdown" so a reply reads the same in both. */
 .bubble.assistant > :first-child { margin-top: 0; }
 .bubble.assistant > :last-child { margin-bottom: 0; }
 .bubble.assistant :is(p, ul, ol, blockquote, .code-block, .table-scroll) { margin: 0 0 14px; }
 .bubble.assistant p { white-space: pre-wrap; }
-.bubble.assistant :is(h1, h2, h3, h4) { margin: 22px 0 10px; font-weight: 650; line-height: 1.35; }
+.bubble.assistant :is(h1, h2, h3, h4) { margin: 22px 0 10px; font-weight: var(--weight-title); line-height: 1.35; }
 .bubble.assistant h1 { font-size: 1.25rem; }
 .bubble.assistant h2 { font-size: 1.125rem; }
 .bubble.assistant h3 { font-size: 1.0625rem; }
@@ -515,8 +370,8 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
 .bubble.assistant li > :is(ul, ol) { margin: 4px 0 0; }
 .bubble.assistant blockquote { padding: 2px 0 2px 14px; border-left: 3px solid var(--border); color: var(--muted); }
 .bubble.assistant hr { margin: 20px 0; border: 0; border-top: 1px solid var(--border); }
-.bubble.assistant :not(pre) > code { padding: 1px 6px; border-radius: var(--radius-sm); background: var(--bubble); font-size: 0.875em; }
-.bubble.assistant a { color: var(--link); text-underline-offset: 2px; }
+.bubble.assistant :not(pre) > code { padding: 1px 6px; border-radius: var(--radius-xs); background: var(--bubble); font-size: 0.875em; }
+.bubble.assistant a { color: var(--primary); text-underline-offset: 2px; }
 .md-image {
   display: inline-flex;
   align-items: center;
@@ -526,20 +381,20 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   text-decoration: none;
   vertical-align: middle;
 }
 .bubble.assistant a.md-image { color: var(--text); }
 .table-scroll { overflow-x: auto; }
-.bubble.assistant table { border-collapse: collapse; font-size: 0.9375rem; }
+.bubble.assistant table { border-collapse: collapse; font-size: var(--text-md); }
 .bubble.assistant :is(th, td) { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-.bubble.assistant th { color: var(--muted); font-size: 0.8125rem; font-weight: 600; }
+.bubble.assistant th { color: var(--muted); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
 .bubble.assistant :is(th, td)[align="right"] { text-align: right; }
 .bubble.assistant :is(th, td)[align="center"] { text-align: center; }
 .code-block { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
-.code-block-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 0 14px; color: var(--muted); font-size: 0.75rem; font-weight: 600; }
-.code-block pre { margin: 0; padding: 6px 14px 14px; overflow-x: auto; font-family: var(--font-code); font-size: 0.8125rem; line-height: 1.4; }
+.code-block-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 0 14px; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+.code-block pre { margin: 0; padding: 6px 14px 14px; overflow-x: auto; font-family: var(--font-code); font-size: var(--text-sm); line-height: var(--leading-code); }
 .code-block pre code { font-size: inherit; }
 .code-block pre:focus-visible { outline-offset: -2px; }
 
@@ -560,18 +415,14 @@ body.panel { position: relative; display: flex; flex-direction: column; height: 
 body[data-paired="false"] .empty-unpaired { display: grid; }
 body[data-paired="false"] :is(.empty-paired, .session-picker, .dock) { display: none; }
 .empty-icon {
-  width: 52px;
-  height: 52px;
-  border: 1px solid var(--glass-border);
+  width: 48px;
+  height: 48px;
   border-radius: var(--radius-pill);
-  background: var(--glass);
-  box-shadow: var(--shadow-glass);
-  color: var(--text);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
+  background: var(--surface);
+  color: var(--muted);
 }
-.empty h2 { font-size: 1.125rem; font-weight: 650; letter-spacing: -0.01em; }
-.empty p { max-width: 30ch; color: color-mix(in srgb, var(--text) 68%, transparent); font-size: 0.9375rem; line-height: 1.55; }
+.empty h2 { font-size: var(--text-lg); font-weight: var(--weight-title); }
+.empty p { max-width: 30ch; color: var(--muted); font-size: var(--text-md); line-height: 1.55; }
 
 /* Cards are drawn by the shared renderer (web/src/cards, copied beside this file as cards.css). */
 .panel-card { min-width: 0; }
@@ -581,27 +432,29 @@ body[data-paired="false"] :is(.empty-paired, .session-picker, .dock) { display: 
 body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); animation-name: toast-rise; }
 @keyframes toast-rise { from { opacity: 0; translate: -50% 8px; } }
 
-.dock { position: relative; flex: none; padding: 6px 12px calc(12px + env(safe-area-inset-bottom)); }
-/* Strong glass pill floating on the gradient (see the token block). */
+.dock { position: relative; flex: none; padding: 6px 12px calc(12px + env(safe-area-inset-bottom)); background: var(--canvas); }
+/* Mirrors the web composer (web/src/components/thread.css): a solid pill on --surface with a hairline. */
 .composer {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   padding: 6px;
-  border-radius: var(--radius-2xl);
-  box-shadow: 0 2px 6px rgb(10 14 30 / 0.12), 0 12px 32px rgb(10 14 30 / 0.2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-composer);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   transition: border-color var(--fast) var(--ease);
 }
-.composer:focus-within { border-color: rgb(255 255 255 / 0.24); }
+.composer:focus-within { border-color: var(--control-border); }
 .composer-row { display: flex; align-items: flex-end; gap: 2px; }
 .composer-field { display: flex; flex: 1; min-width: 0; }
 .composer-field textarea {
   width: 100%;
-  min-height: 40px;
+  min-height: 36px;
   max-height: 200px;
-  padding: 8px 4px 8px 12px;
+  padding: 6px 4px 6px 10px;
   border: 0;
   background: transparent;
-  font-size: 1rem;
+  font-size: var(--text-base);
   line-height: 24px;
   field-sizing: content;
   overflow-y: auto;
@@ -611,22 +464,21 @@ body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); ani
 }
 .composer .icon-button { color: var(--muted); }
 .composer .icon-button:hover:not(:disabled) { color: var(--text); }
-/* Send is the white circle once there is something to send. */
-.composer .icon-button.primary { width: 40px; height: 40px; background: var(--pill-primary-bg); color: var(--pill-primary-fg); }
-.composer .icon-button.primary:hover:not(:disabled) { background: var(--primary-hover); }
-.composer:has(#message:placeholder-shown) .icon-button.primary { background: var(--hover); color: var(--muted); }
+/* Send is the monochrome circle once there is something to send. */
+.composer .icon-button.primary { background: var(--send-bg); color: var(--send-fg); }
+.composer .icon-button.primary:hover:not(:disabled) { background: var(--send-bg); color: var(--send-fg); }
+.composer:has(#message:placeholder-shown) .icon-button.primary { background: var(--active); color: var(--faint); }
 .context-chip {
   display: block;
   max-width: 100%;
   margin: 2px 4px 0;
   padding: 5px 12px;
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--bubble);
   color: var(--text);
-  font-size: 0.8125rem;
-  font-weight: 550;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -634,33 +486,33 @@ body.panel .toast { position: absolute; top: auto; bottom: calc(100% + 8px); ani
 
 /* Options page */
 
-body.options { overflow-y: auto; background: var(--backdrop); background-color: var(--canvas); }
-.page { display: grid; gap: 12px; width: min(520px, 100%); margin: 0 auto; padding: 14px 20px 24px; overflow-wrap: anywhere; }
-.page-head { display: grid; gap: 2px; }
-.pairing-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.875rem; font-weight: 550; }
+body.options { overflow-y: auto; }
+.page { display: grid; gap: var(--space-3); width: min(520px, 100%); margin: 0 auto; padding: var(--space-6) var(--space-5); overflow-wrap: anywhere; }
+.page-head { display: grid; gap: 2px; margin-bottom: var(--space-1); }
+.page-head > p { color: var(--muted); font-size: var(--text-md); }
+.pairing-state { display: flex; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-md); font-weight: var(--weight-medium); }
 .pairing-state::before { content: ""; flex: none; width: 8px; height: 8px; border: 1.5px solid currentColor; border-radius: var(--radius-pill); }
 .pairing-state[data-paired="true"] { color: var(--text); }
-.pairing-state[data-paired="true"]::before { border-color: var(--primary); background: var(--primary); }
-.page-head h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.015em; }
-/* Frosted, theme-aware sheets on the gradient, like the web manage pages; fields and quiet buttons sit on inset glass. */
+.pairing-state[data-paired="true"]::before { border-color: var(--success); background: var(--success); }
+.page-head h1 { font-size: var(--text-xl); font-weight: var(--weight-title); line-height: 1.25; }
+/* Flat settings groups, like the web manage pages. */
 .card {
   display: grid;
-  gap: 12px;
-  padding: 16px 20px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-glass);
-  background: var(--glass);
-  box-shadow: var(--shadow-glass);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
 }
-.card :is(input, .button:not(.primary, .ghost)) { border-color: var(--glass-inset-border); background: var(--glass-inset-bg); }
-.card-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.card h2 { display: flex; align-items: center; gap: 8px; font-size: 1.0625rem; font-weight: 650; }
-.field { display: grid; gap: 4px; }
-.field > span { color: var(--muted); font-size: 0.8125rem; font-weight: 550; }
-.hint { color: var(--muted); font-size: 0.875rem; line-height: 1.5; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.card-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.card h2 { display: flex; align-items: center; gap: var(--space-2); font-size: 15px; font-weight: var(--weight-title); }
+.card > summary { font-size: var(--text-md); font-weight: var(--weight-semibold); cursor: pointer; }
+details.card:not([open]) { gap: 0; }
+details.card > form { display: grid; gap: var(--space-3); }
+.field { display: grid; gap: 6px; }
+.field > span { color: var(--muted); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.hint { color: var(--muted); font-size: var(--text-sm); line-height: 1.5; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .import-sites { max-height: min(40vh, 24rem); overflow: hidden auto; overflow-wrap: anywhere; padding-left: 1.25rem; }
 .import-sites li + li { margin-top: 0.375rem; }
 /* Fixed at the top so it never covers the actions the user is about to press. */

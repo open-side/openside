@@ -11,18 +11,39 @@ import { ConversationCard } from "./ConversationCard";
 import "./card-surfaces.css";
 
 const POLL_MS = 5000;
+// ui Dialog and Drawer popups: Base UI modals that trap focus and hide the rest of the page.
+const MODAL = ".ui-dialog, .ui-drawer";
+
+/**
+ * Whether a modal dialog or the drawer is open. The dock is portaled beside them, so Base UI's
+ * focus trap and aria-hidden would leave a card that still takes presses; the dock follows the
+ * modal instead and goes inert until it closes.
+ */
+function useModalOpen(): boolean {
+  const [open, setOpen] = useState(() => document.querySelector(MODAL) !== null);
+  useEffect(() => {
+    const sync = () => setOpen(document.querySelector(MODAL) !== null);
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+  return open;
+}
 
 /**
  * A code, login, choice or phone approval from a conversation that is not on screen (another
  * conversation, a new chat, Settings over the conversation) floats here as the same collapsed
  * card the conversation shows, so the person answers where they are instead of being taken
- * anywhere. `sessions` (the sidebar's list) names the conversation that asked.
+ * anywhere. `sessions` (the sidebar's list) names the conversation that asked. While a modal
+ * dialog or the drawer is open the dock waits, dimmed and inert, until it closes.
  */
 export function CardAttention({ visibleSession, sessions }: { visibleSession: string | null; sessions: Session[] | null }) {
   const client = useClient();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [done, setDone] = useState<ReadonlySet<string>>(new Set());
   const dock = useRef<HTMLElement>(null);
+  const modal = useModalOpen();
 
   const load = useCallback(async () => {
     try {
@@ -49,9 +70,9 @@ export function CardAttention({ visibleSession, sessions }: { visibleSession: st
   const shown = tickets.filter((ticket) => ticket.session_id !== visibleSession && !done.has(ticket.id));
   const first = shown[0];
 
-  // The dock's height (a collapsed bubble, or the open card) is kept free at the top of the
-  // conversation (styles.css reads `--otp-dock-space`), so the dock never covers the timeline.
-  // `--otp-dock-height` is the same height for sheets and the remote screen.
+  // The dock's height (a collapsed bubble, or the open card) is kept free above the conversation's
+  // scroller (thread.css, team.css and shell.css read `--otp-dock-space`), so the dock never covers
+  // the timeline. `--otp-dock-height` is the same height for sheets and the remote screen.
   useLayoutEffect(() => {
     const element = dock.current;
     if (!element || typeof ResizeObserver === "undefined") return;
@@ -72,10 +93,10 @@ export function CardAttention({ visibleSession, sessions }: { visibleSession: st
 
   if (!first?.card) return null;
   const title = sessions?.find((session) => session.id === first.session_id)?.title;
-  // Portaled beside the dialogs rather than inside the app shell, which a modal Settings dialog
-  // hides from assistive tech and pointer input.
+  // Portaled beside the dialogs rather than inside the app shell so it floats over every route;
+  // under a modal it sits beneath the scrim (card-surfaces.css) and is inert.
   return createPortal(
-    <aside ref={dock} className="card-dock" aria-label={`${announcementTitle(first)} for ${siteOf(first.card.site.origin)}`}>
+    <aside ref={dock} className="card-dock" inert={modal} aria-label={`${announcementTitle(first)} for ${siteOf(first.card.site.origin)}`}>
       <ConversationCard
         key={first.id}
         card={first.card}

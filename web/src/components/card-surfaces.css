@@ -2,14 +2,15 @@
 
 /*
  * A request from another conversation. It rests as the card's own collapsed bubble just under the
- * header; the conversation keeps that height free (`--otp-dock-space`, styles.css), so it never
- * covers the timeline, a card or the composer. Tapping the bubble opens the card in place.
+ * header; the conversation, History and a phone's Home keep that height free above their scroller
+ * (`--otp-dock-space` as a margin), so it never covers the timeline, a card or the composer.
+ * Tapping the bubble opens the card in place.
  */
 .card-dock {
   position: fixed;
   top: calc(var(--header-height) + env(safe-area-inset-top) + 4px);
   right: max(16px, env(safe-area-inset-right));
-  /* Above dialogs (41) and the takeover screen (44): typing the code must never need to close Settings first. */
+  /* Above the takeover screen (44), so a code it asks for can be typed without leaving it. Modal dialogs and the drawer cover it (below). */
   z-index: 55;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -28,24 +29,32 @@
   width: 100%;
   min-width: 0;
 }
+/* Docked cards float over the conversation, so they take the overlay surface instead of the thread's raised card. */
+.card-dock .oc-card {
+  background: var(--overlay);
+  box-shadow: var(--shadow-overlay);
+}
 /* The text is the way to the conversation; the arrow says so without a second button. */
 .card-dock-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   max-width: 100%;
   margin: 0;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   /* Floats over scrolled conversation text, so it needs its own surface to stay legible. */
+  border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  background: var(--glass-strong-bg);
-  color: var(--glass-strong-muted);
-  font-size: 0.75rem;
-  -webkit-backdrop-filter: var(--float-blur);
-  backdrop-filter: var(--float-blur);
+  background: var(--overlay);
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
-/* The navigation drawer is a transient layer over the app: it and its scrim sit above the dock. */
-:root:has(.ui-drawer) .card-dock {
+/*
+ * A modal dialog or the navigation drawer is a transient layer over the app: it and its scrim sit
+ * above the dock, which CardAttention also makes inert meanwhile, so the dimmed card still says a
+ * request waits but nothing outside the modal takes a press or focus.
+ */
+:root:has(.ui-dialog, .ui-drawer) .card-dock {
   z-index: 39;
 }
 .card-dock-meta a {
@@ -64,7 +73,7 @@
   white-space: nowrap;
 }
 .card-dock-meta a:hover {
-  color: var(--glass-strong-fg);
+  color: var(--text);
 }
 .card-dock-meta a:focus-visible {
   outline: 2px solid var(--primary);
@@ -82,16 +91,10 @@
     width: auto;
   }
 }
-/*
- * Over a dialog or the remote screen the dock moves to the top edge and they make room below it,
- * so neither the dialog's header and Close nor the remote screen is ever covered.
- */
-:root:has(.ui-dialog, .takeover) .card-dock {
+/* Over the remote screen the dock moves to the top edge and the screen makes room below it, so it is never covered. */
+:root:has(.takeover) .card-dock {
   top: calc(8px + env(safe-area-inset-top));
   max-height: 50dvh;
-}
-:root:has(.card-dock) .ui-dialog {
-  max-height: calc(100dvh - var(--otp-dock-height, 0px) - 16px - env(safe-area-inset-top));
 }
 /* A canvas-colored border rather than an offset: the conversation must not show through the gap. */
 :root:has(.card-dock) .takeover {
@@ -111,38 +114,20 @@
   }
 }
 
-/* The sheet opened from a notification (`?ticket=`). */
-.card-sheet {
-  position: fixed;
-  inset: 0;
-  z-index: 70;
-  display: flex;
-  flex-direction: column;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-  overflow-y: auto;
-  background: var(--backdrop) var(--canvas);
-  color: var(--text);
-  outline: none;
+/*
+ * The sheet opened from a notification (`?ticket=`) is a ui Dialog (phone bottom sheet, desktop
+ * modal). The card shows its own title, so the dialog's heading only names it for assistive tech.
+ */
+.card-sheet .ui-dialog-heading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
-.card-sheet-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 64px;
-  padding: 0 10px;
-}
-.card-sheet-body {
-  width: 100%;
-  max-width: 440px;
-  margin: 0 auto;
-  padding: 12px 16px 32px;
-}
-@media (min-width: 701px) {
-  /* A wide window centers the form instead of leaving it at the top of an empty page. */
-  .card-sheet-body {
-    margin: auto;
-    padding-bottom: 96px;
-  }
+.card-sheet .ui-dialog-header {
+  justify-content: flex-end;
 }
 
 @media (prefers-reduced-motion: reduce) {

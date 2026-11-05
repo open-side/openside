@@ -177,7 +177,7 @@ describe("failed run next to the agent's own error row", () => {
 
 describe("typing dots styling", () => {
   // vitest runs from web/; the stylesheet is the shipped source, not a processed copy.
-  const css = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+  const css = readFileSync(resolve(process.cwd(), "src/components/thread.css"), "utf8");
 
   it("bounces vertically by default", () => {
     expect(css).toMatch(/@keyframes typing-bounce[^}]*\{[\s\S]*?translateY\(-5px\)/);

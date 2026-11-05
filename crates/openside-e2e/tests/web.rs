@@ -1,5 +1,5 @@
 //! Web UI acceptance: the built PWA served by the real daemon, driven in headless
-//! Chromium, answers an `ask_user` ticket and the real Python sidecar resumes.
+//! Chromium, answers an `ask_user` ticket and the real Bun sidecar resumes.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -146,10 +146,17 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
         true
     );
 
-    // Model selection now belongs to the assistant profile, not the composer.
+    // `/` is Home now; model selection belongs to the assistant profile in its thread.
+    page.wait(
+        "home",
+        "!!document.querySelector('.home .composer') && !!document.querySelector('.person-row[data-agent=chief] .person-link')",
+    )
+    .await;
+    page.eval("document.querySelector('.person-row[data-agent=chief] .person-link').click(); true")
+        .await;
     page.wait(
         "assistant profile",
-        "!!document.querySelector('.person-heading')",
+        "location.pathname === '/agents/chief' && !!document.querySelector('.person-heading')",
     )
     .await;
     page.eval("document.querySelector('.person-heading').click(); true")
@@ -285,15 +292,10 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
     assert_eq!(settled.body["status"], "idle");
     assert_eq!(settled.body["title"], "Discuss the request");
     let snapshot = harness.snapshot(&session);
-    let returns: Vec<_> = snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-        .filter(|part| part["part_kind"] == "tool-return" && part["tool_call_id"] == "ask-call")
-        .collect();
+    let returns = openside_e2e::tool_results(&snapshot, "ask-call");
     assert_eq!(returns.len(), 1, "deferred tool resumed exactly once");
-    assert_eq!(returns[0]["content"]["answer"], "blue");
+    assert_eq!(returns[0]["isError"], false);
+    assert_eq!(returns[0]["details"]["answer"], "blue");
 
     browser.shutdown().await.unwrap();
     harness.kill().await;

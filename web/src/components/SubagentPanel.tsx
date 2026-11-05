@@ -97,14 +97,9 @@ export function AgentsTray({ subagents }: { subagents: SubagentView[] }) {
   const waiting = delegated.some((child) => child.status === "waiting_human");
   return (
     <>
-      <button
-        type="button"
-        className={`tool-pill agents-pill${waiting ? " waiting-pill" : ""}`}
-        aria-haspopup="dialog"
-        onClick={() => setOpen(true)}
-      >
+      <button type="button" className={`ui-chip agents-pill${waiting ? " waiting-pill" : ""}`} aria-haspopup="dialog" onClick={() => setOpen(true)}>
         <Bot size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        <span className="tool-pill-label">{`${delegated.length} ${delegated.length === 1 ? "agent" : "agents"}`}</span>
+        <span className="ui-chip-label">{`${delegated.length} ${delegated.length === 1 ? "agent" : "agents"}`}</span>
       </button>
       <Dialog
         open={open}

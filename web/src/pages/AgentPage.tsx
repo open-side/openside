@@ -6,6 +6,8 @@ import type { Agent, AgentSummary } from "../api/types";
 import { AgentProfileSheet } from "../components/AgentProfileSheet";
 import { AppHeader } from "../components/AppHeader";
 import { Avatar } from "../components/Avatar";
+import { BrowserButton } from "../components/BrowserButton";
+import { ModelButton } from "../components/ModelSheet";
 import { useTeamActions } from "../components/TeamActions";
 import { Starters } from "../components/Starters";
 import { useClient } from "../context";
@@ -73,7 +75,7 @@ export function AgentPage() {
         empty={isChief ? (pick) => <ChiefWelcome agent={agent} onPick={pick} /> : undefined}
         draft={isChief ? draft : undefined}
         onDraftApplied={isChief ? () => setShareDraft(null) : undefined}
-        header={({ running, waiting }) => (
+        header={({ view, running, waiting }) => (
           <AppHeader
             heading={
               <button type="button" className="app-header-heading person-heading" onClick={() => setProfile(true)} aria-label={`${agent.name}'s profile`}>
@@ -85,32 +87,36 @@ export function AgentPage() {
               </button>
             }
             actions={
-              <PopoverMenu
-                label={`Options for ${agent.name}`}
-                trigger={
-                  <IconButton label={`Options for ${agent.name}`}>
-                    <Ellipsis size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                  </IconButton>
-                }
-              >
-                <MenuItem icon={<UserRound size={16} strokeWidth={ICON_STROKE} />} onClick={() => setProfile(true)}>
-                  Profile
-                </MenuItem>
-                {isChief || agent.status === "retired" ? null : (
-                  <>
-                    <MenuItem
-                      icon={agent.hidden ? <Eye size={16} strokeWidth={ICON_STROKE} /> : <EyeOff size={16} strokeWidth={ICON_STROKE} />}
-                      onClick={() => void setHidden(!agent.hidden)}
-                    >
-                      {agent.hidden ? "Show in sidebar" : "Hide from sidebar"}
-                    </MenuItem>
-                    <MenuSeparator />
-                    <MenuItem danger icon={<UserMinus size={16} strokeWidth={ICON_STROKE} />} onClick={() => retire(agent.id)}>
-                      Retire {agent.name}…
-                    </MenuItem>
-                  </>
-                )}
-              </PopoverMenu>
+              <>
+                <BrowserButton sessionId={agent.home_session_id} view={view} />
+                {agent.status === "retired" ? null : <ModelButton agent={agent} />}
+                <PopoverMenu
+                  label={`Options for ${agent.name}`}
+                  trigger={
+                    <IconButton label={`Options for ${agent.name}`}>
+                      <Ellipsis size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                    </IconButton>
+                  }
+                >
+                  <MenuItem icon={<UserRound size={16} strokeWidth={ICON_STROKE} />} onClick={() => setProfile(true)}>
+                    Profile
+                  </MenuItem>
+                  {isChief || agent.status === "retired" ? null : (
+                    <>
+                      <MenuItem
+                        icon={agent.hidden ? <Eye size={16} strokeWidth={ICON_STROKE} /> : <EyeOff size={16} strokeWidth={ICON_STROKE} />}
+                        onClick={() => void setHidden(!agent.hidden)}
+                      >
+                        {agent.hidden ? "Show in sidebar" : "Hide from sidebar"}
+                      </MenuItem>
+                      <MenuSeparator />
+                      <MenuItem danger icon={<UserMinus size={16} strokeWidth={ICON_STROKE} />} onClick={() => retire(agent.id)}>
+                        Retire {agent.name}…
+                      </MenuItem>
+                    </>
+                  )}
+                </PopoverMenu>
+              </>
             }
           />
         )}

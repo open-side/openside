@@ -570,7 +570,7 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
     ui.press("Open openside", None).await;
     ui.wait(
         "app home",
-        "__ob.where() === '/agents/chief' && !!document.querySelector('.composer')",
+        "__ob.where() === '/' && !!document.querySelector('main.home .composer')",
     )
     .await;
     assert_eq!(onboarding_state(harness).await, "completed");
@@ -578,7 +578,7 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
     // Shown once: a reload stays on the app.
     ui.goto("/").await;
     tokio::time::sleep(Duration::from_millis(1_000)).await;
-    assert_eq!(ui.eval("__ob.where()").await, "/agents/chief");
+    assert_eq!(ui.eval("__ob.where()").await, "/");
 
     // Reopened from Settings; leaving it again does not turn "completed" into "skipped".
     ui.press("Settings", None).await;
@@ -589,8 +589,11 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
     ui.wait("guide from settings", "__ob.where() === '/welcome'")
         .await;
     ui.press("Skip setup", None).await;
-    ui.wait("app again", "__ob.where() === '/agents/chief'")
-        .await;
+    ui.wait(
+        "app again",
+        "__ob.where() === '/' && !!document.querySelector('main.home')",
+    )
+    .await;
     assert_eq!(onboarding_state(harness).await, "completed");
 }
 
@@ -706,11 +709,15 @@ async fn scenario(ui: &mut Ui, harness: &Harness) {
     ui.goto("/").await;
     ui.wait("guide", "__ob.where() === '/welcome'").await;
     ui.press("Skip setup", None).await;
-    ui.wait("app", "__ob.where() === '/agents/chief'").await;
+    ui.wait(
+        "app",
+        "__ob.where() === '/' && !!document.querySelector('main.home')",
+    )
+    .await;
     assert_eq!(onboarding_state(harness).await, "skipped");
     ui.goto("/").await;
     tokio::time::sleep(Duration::from_millis(1_000)).await;
-    assert_eq!(ui.eval("__ob.where()").await, "/agents/chief");
+    assert_eq!(ui.eval("__ob.where()").await, "/");
 
     // A deep link is not interrupted even while the guide is pending.
     reset(harness).await;

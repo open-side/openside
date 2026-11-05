@@ -10,13 +10,15 @@ import { Sidebar } from "./components/Sidebar";
 import { TeamActionsProvider } from "./components/TeamActions";
 import { TokenEntry } from "./components/TokenEntry";
 import { ClientContext, useClient } from "./context";
-import { AgentsContext, CHIEF_ID, useAgents } from "./hooks/useAgents";
+import { useAgentTabs } from "./hooks/useAgentTabs";
+import { AgentsContext, useAgents } from "./hooks/useAgents";
 import { useSessionList } from "./hooks/useSessionList";
 import { useDeliverPending } from "./import/delivery";
 import { Landing, OnboardingGate } from "./onboarding/OnboardingGate";
 import { OnboardingPage } from "./onboarding/OnboardingPage";
 import { AgentPage } from "./pages/AgentPage";
 import { HistoryPage } from "./pages/HistoryPage";
+import { HomePage } from "./pages/HomePage";
 import { ManageDialogs } from "./pages/ManageDialogs";
 import { backgroundOf, manageTarget } from "./pages/manageRoutes";
 import { PairPage } from "./pages/PairPage";
@@ -25,6 +27,7 @@ import { useDesktopResync } from "./desktopNotify";
 import { usePushPresence } from "./push";
 import { PwaRuntime } from "./pwa/PwaRuntime";
 import { ShellContext, type Shell } from "./shell";
+import { useShortcuts } from "./shortcuts";
 import { Drawer, Spinner, ToastProvider } from "./ui";
 
 /**
@@ -43,6 +46,8 @@ function useVisualViewportHeight(root: RefObject<HTMLDivElement | null>) {
   }, [root]);
 }
 
+const SIDEBAR_KEY = "openside.sidebar";
+
 function Layout({ onSignOut, location }: { onSignOut: () => void; location: Location }) {
   const client = useClient();
   usePushPresence(client);
@@ -50,7 +55,10 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
   // Every conversation, for requests that float over another screen; the sidebar shows people.
   const list = useSessionList(client);
   const team = useAgents(client);
+  // One poller for both sidebars: the desktop column stays mounted while the phone drawer is open.
+  const tabs = useAgentTabs(client);
   const [drawer, setDrawer] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === "collapsed");
   const root = useRef<HTMLDivElement>(null);
   // The real location: inside a dialog route, the routes below render the background one.
   const { pathname } = location;
@@ -63,15 +71,24 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
   const { refresh: refreshTeam } = team;
   // Batches left over from an import whose delivery to this browser was interrupted.
   useDeliverPending(client);
+  const toggleSidebar = useCallback(() => setSidebarCollapsed((collapsed) => !collapsed), []);
+  useEffect(() => {
+    if (sidebarCollapsed) localStorage.setItem(SIDEBAR_KEY, "collapsed");
+    else localStorage.removeItem(SIDEBAR_KEY);
+  }, [sidebarCollapsed]);
+  const openDrawer = useCallback(() => setDrawer(true), []);
+  useShortcuts(toggleSidebar, openDrawer);
   const shell = useMemo<Shell>(
     () => ({
-      openDrawer: () => setDrawer(true),
+      openDrawer,
       refreshSessions: () => {
         refresh();
         refreshTeam();
       },
+      sidebarCollapsed,
+      toggleSidebar,
     }),
-    [refresh, refreshTeam],
+    [openDrawer, refresh, refreshTeam, sidebarCollapsed, toggleSidebar],
   );
   const openAgent = /^\/agents\/([^/]+)/.exec(pathname)?.[1];
   const visibleSession = manageTarget(pathname)
@@ -85,9 +102,9 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
       <ShellContext.Provider value={shell}>
         <AgentsContext.Provider value={team}>
           <TeamActionsProvider>
-            <div className="shell" ref={root} data-focus={pathname === "/welcome" || undefined}>
+            <div className="shell" ref={root} data-sidebar={sidebarCollapsed ? "collapsed" : "open"} data-focus={pathname === "/welcome" || undefined}>
               <aside className="shell-sidebar" aria-label="Team sidebar">
-                <Sidebar team={team} />
+                <Sidebar team={team} tabs={tabs} />
               </aside>
               <div className="shell-content">
                 <OnboardingGate>
@@ -103,7 +120,7 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
                 <AccessRequestDock />
               </div>
               <Drawer open={drawer} onClose={() => setDrawer(false)} label="Team menu">
-                <Sidebar team={team} onClose={() => setDrawer(false)} />
+                <Sidebar team={team} tabs={tabs} onClose={() => setDrawer(false)} />
               </Drawer>
               <ManageDialogs location={location} onSignOut={onSignOut} />
               {/* A conversation under a Settings or Workspace dialog is not visible, so its code request floats too. */}
@@ -123,7 +140,7 @@ function NotFound() {
       <main className="not-found">
         <p>Page not found.</p>
         <Link to="/" className="action-link">
-          Back to your assistant
+          Back to home
         </Link>
       </main>
     </div>
@@ -131,7 +148,7 @@ function NotFound() {
 }
 
 /** Stands in underneath a deep-linked dialog route that has no screen to return to. */
-const HOME: Location = { pathname: `/agents/${CHIEF_ID}`, search: "", hash: "", state: null, key: "home" };
+const HOME: Location = { pathname: "/", search: "", hash: "", state: null, key: "home" };
 
 /** Screens are added here; every screen talks to the daemon only through the API client. */
 function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
@@ -140,7 +157,14 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
   return (
     <Routes location={screen}>
       <Route element={<Layout onSignOut={onSignOut} location={location} />}>
-        <Route index element={<Landing onRoot={location.pathname === "/"} />} />
+        <Route
+          index
+          element={
+            <Landing>
+              <HomePage />
+            </Landing>
+          }
+        />
         <Route path="welcome" element={<OnboardingPage />} />
         <Route path="agents/:id" element={<AgentPage />} />
         <Route path="history" element={<HistoryPage />} />

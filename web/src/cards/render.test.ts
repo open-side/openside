@@ -588,7 +588,7 @@ describe("suggestions", () => {
     control.dispatchEvent(new Event("input", { bubbles: true }));
   };
 
-  it("offers saved values on a non-secret text area through the glass list and takes one only when chosen", () => {
+  it("offers saved values on a non-secret text area through the suggestion list and takes one only when chosen", () => {
     const blocks: Block[] = [{ type: "input_fields", id: "f", fields: [field({ id: "street", label: "Street address", kind: "textarea", autocomplete: "street-address", suggestions: ["1 Main St\nSpringfield", "9 Oak Ave"] })] }];
     mount(ask({ blocks, actions: [] }), { defaultOpen: true });
     const area = q<HTMLTextAreaElement>("textarea")!;

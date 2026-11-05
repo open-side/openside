@@ -6,7 +6,10 @@ import { consumeLocalAccessFragment } from "./localAccess";
 import { applyAccent, applyPalettes, applyTheme, loadAccent, loadPalettes, loadTheme } from "./theme";
 import { installScrollReveal } from "./ui/scrollReveal";
 import "./assets/fonts/wanted-sans/WantedSansVariable.css";
+import "./tokens.css";
 import "./styles.css";
+import "./shell.css";
+import "./components/thread.css";
 
 // theme-boot.js already painted these; reapplying covers a boot script that failed to load.
 applyTheme(loadTheme());

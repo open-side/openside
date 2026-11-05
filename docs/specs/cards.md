@@ -49,7 +49,7 @@ Pending ticket cards are rendered once, without a second tool/request summary. A
 
 `openside ticket resolve ID` prompts from authoritative page-form metadata; `-` reads one line per field from stdin. Secret, OTP, every login text field (including identifiers), and every payment field use hidden input or a pipe. Private values in argv are refused after fetching the ticket metadata, including raw login JSON. Checkbox answers are sent as booleans, and nonsecret initial values can be retained with a blank answer. Login, choice, saved-account, alternative-sign-in, and authenticator-enrollment flows retain their existing encodings.
 
-Hire and handoff cards include `openside team` navigation/action equivalents and an Open web link when the selected HTTP endpoint establishes a known web origin. A Unix socket or relay alone does not establish a web URL, so no address is guessed. Command hints preserve the selected `--socket`, `--url`, or `--remote` endpoint without including its token. Undo hire uses `openside team undo ID`; it is distinct from normal retirement.
+Hire and handoff cards include `openside team` navigation/action equivalents and an Open web link when the selected HTTP endpoint establishes a known web origin. A Unix socket or relay alone does not establish a web URL, so no address is guessed. Command hints preserve the selected `--socket`, `--url`, or `--host` endpoint without including its token. Undo hire uses `openside team undo ID`; it is distinct from normal retirement.
 
 ## Conversation behavior and acceptance
 

@@ -9,7 +9,8 @@ await build({ entryPoints: ["src/background.ts", "src/content.ts", "src/panel.ts
 for (const file of ["panel.html", "options.html", "import-permissions.html", "import-connect.html", "style.css"]) await copyFile(`static/${file}`, `${outdir}/${file}`);
 // icon-16 is drawn with a wider ring-to-slab gap so the two stay apart at toolbar size.
 await cp("static/icons", `${outdir}/icons`, { recursive: true });
-// The conversation cards and their stylesheet (and the avatar styles people blocks use) are shared with the web app; the notification icon is the app icon.
+// Design tokens, the conversation cards and their stylesheet (and the avatar styles people blocks use) are shared with the web app; the notification icon is the app icon.
+await copyFile("../web/src/tokens.css", `${outdir}/tokens.css`);
 await copyFile("../web/src/cards/cards.css", `${outdir}/cards.css`);
 await copyFile("../web/src/components/team.css", `${outdir}/team.css`);
 await copyFile("../web/public/icons/icon-192.png", `${outdir}/icon.png`);

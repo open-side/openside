@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClientContext } from "../context";
 import { usePushPresence } from "../push";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
-import { SettingsPage } from "./SettingsPage";
+import { SettingsNav, SettingsPage } from "./SettingsPage";
 
 const SUBSCRIPTION = {
   endpoint: "https://push.example/send/abc",
@@ -54,10 +54,11 @@ function daemon({ healthy = true }: { healthy?: boolean } = {}) {
 
 function setup(options?: { healthy?: boolean }) {
   const fake = daemon(options);
-  const handlers = { onModels: vi.fn(), onChannels: vi.fn(), onRemote: vi.fn(), onWorkspace: vi.fn(), onGuide: vi.fn(), onSignOut: vi.fn() };
+  const handlers = { onOpen: vi.fn(), onGuide: vi.fn(), onSignOut: vi.fn() };
   render(
     <ClientContext.Provider value={fake.client}>
-      <SettingsPage {...handlers} />
+      <SettingsNav current="settings" onOpen={handlers.onOpen} onGuide={handlers.onGuide} />
+      <SettingsPage onSignOut={handlers.onSignOut} />
     </ClientContext.Provider>,
   );
   return { ...fake, ...handlers };
@@ -74,34 +75,30 @@ afterEach(() => {
 describe("SettingsPage", () => {
   it("shows the daemon connection and opens Workspace and Sign out", async () => {
     const user = userEvent.setup();
-    const { onWorkspace, onSignOut } = setup();
+    const { onOpen, onSignOut } = setup();
     const connection = screen.getByRole("region", { name: "Connection" });
     expect(await within(connection).findByText("Connected")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Workspace/ }));
-    expect(onWorkspace).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: /^Workspace/ }));
+    expect(onOpen).toHaveBeenCalledWith("/workspace");
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(onSignOut).toHaveBeenCalledOnce();
   });
 
-  it("opens Models & accounts", async () => {
+  it.each([
+    [/^Models & accounts/, "/models"],
+    [/^Channels/, "/channels"],
+    [/^Remote access/, "/remote"],
+  ])("opens %s from the nav", async (name, path) => {
     const user = userEvent.setup();
-    const { onModels } = setup();
-    await user.click(screen.getByRole("button", { name: /Models & accounts/ }));
-    expect(onModels).toHaveBeenCalledOnce();
+    const { onOpen } = setup();
+    await user.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name }));
+    expect(onOpen).toHaveBeenCalledWith(path);
   });
 
-  it("opens Channels", async () => {
-    const user = userEvent.setup();
-    const { onChannels } = setup();
-    await user.click(screen.getByRole("button", { name: /Channels/ }));
-    expect(onChannels).toHaveBeenCalledOnce();
-  });
-
-  it("opens Remote access", async () => {
-    const user = userEvent.setup();
-    const { onRemote } = setup();
-    await user.click(screen.getByRole("button", { name: /Remote access/ }));
-    expect(onRemote).toHaveBeenCalledOnce();
+  it("marks the open pane as current", () => {
+    setup();
+    expect(screen.getByRole("button", { name: /^General/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: /^Channels/ })).not.toHaveAttribute("aria-current");
   });
 
   it("reopens the setup guide", async () => {

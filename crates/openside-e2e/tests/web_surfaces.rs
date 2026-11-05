@@ -1,5 +1,5 @@
-//! Computed-style acceptance for the web/PWA shell and the real MV3 extension panel.
-//! Captures accompany the assertions at the two reference viewports in both themes.
+//! Computed-style acceptance for the flat surface language (solid canvas, no blur, plain
+//! assistant text) in the web/PWA shell and the real MV3 extension panel. Captures accompany the assertions at the two reference viewports in both themes.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -9,13 +9,7 @@ use serde_json::{json, Value};
 use std::{path::PathBuf, time::Duration};
 use ui_support::{assert_transient_status, thinking_session, Cdp, Fixture, Ui, OWNER};
 
-fn glass_assertions(
-    backdrop: &str,
-    header: &str,
-    assistant: &str,
-    cards: &str,
-    primary: &str,
-) -> String {
+fn surface_assertions(page: &str, user: &str, send: &str) -> String {
     format!(
         r#"(() => {{
       const failures=[];
@@ -24,43 +18,40 @@ fn glass_assertions(
         const probe=document.createElement('span'); probe.style[property]=`var(${{name}})`; el.append(probe);
         const value=getComputedStyle(probe)[property]; probe.remove(); return value;
       }};
-      const page=style({backdrop});
-      if (page && !page.backgroundImage.includes('gradient')) failures.push(`backdrop is ${{page.backgroundImage}}`);
-      for (const selector of [{header}, '.composer']) {{
-        const s=style(selector);
-        if (s && !s.backdropFilter.includes('blur(')) failures.push(`${{selector}} has no blur: ${{s.backdropFilter}}`);
+      const pageEl=document.querySelector({page});
+      const pageStyle=style({page});
+      if (pageStyle && pageStyle.backgroundImage !== 'none') failures.push(`page has a background image: ${{pageStyle.backgroundImage}}`);
+      if (pageStyle && pageStyle.backgroundColor !== token(pageEl,'--canvas','backgroundColor')) failures.push(`page background ${{pageStyle.backgroundColor}} is not --canvas`);
+      for (const el of document.querySelectorAll('body *')) {{
+        const filter=getComputedStyle(el).backdropFilter;
+        if (filter && filter !== 'none') failures.push(`${{el.tagName.toLowerCase()}}.${{el.className}} blurs what is behind it: ${{filter}}`);
       }}
-      const bubble=style({assistant});
-      const el=document.querySelector({assistant});
-      if (bubble && bubble.backgroundColor !== token(el,'--glass-strong-bg','backgroundColor')) failures.push(`assistant background ${{bubble.backgroundColor}}`);
-      if (bubble && bubble.color !== token(el,'--glass-strong-fg','color')) failures.push(`assistant foreground ${{bubble.color}}`);
-      const cards=[...document.querySelectorAll({cards})];
+      const assistant=document.querySelector('.bubble.assistant');
+      const assistantStyle=style('.bubble.assistant');
+      if (assistantStyle && assistantStyle.backgroundColor !== 'rgba(0, 0, 0, 0)') failures.push(`assistant background ${{assistantStyle.backgroundColor}} is not transparent`);
+      if (assistantStyle && assistantStyle.color !== token(assistant,'--text','color')) failures.push(`assistant foreground ${{assistantStyle.color}} is not --text`);
+      const user=document.querySelector({user});
+      const userStyle=style({user});
+      if (userStyle && userStyle.backgroundColor !== token(user,'--bubble','backgroundColor')) failures.push(`user bubble ${{userStyle.backgroundColor}} is not --bubble`);
+      const cards=[...document.querySelectorAll('.oc-card[data-ticket][data-status=pending]')];
       if (cards.length !== 5) failures.push(`expected all five ticket surfaces, got ${{cards.length}}`);
       for (const el of cards) {{
         const s=getComputedStyle(el);
-        if (s.backgroundColor !== token(el,'--glass-strong-bg','backgroundColor')) failures.push(`card ${{el.className}} background ${{s.backgroundColor}}`);
+        if (s.backgroundColor !== token(el,'--surface-raised','backgroundColor')) failures.push(`card ${{el.className}} background ${{s.backgroundColor}} is not --surface-raised`);
       }}
-      const buttons=[...document.querySelectorAll({primary})];
-      if (buttons.length < 4) failures.push(`missing primary actions: ${{buttons.length}}`);
-      for (const button of buttons) {{
-        const pill=getComputedStyle(button);
-        if (pill.backgroundColor !== token(button,'--pill-primary-bg','backgroundColor')) failures.push(`primary ${{button.className}} background ${{pill.backgroundColor}}`);
-        if (pill.color !== token(button,'--pill-primary-fg','color')) failures.push(`primary foreground ${{pill.color}}`);
-        if (parseFloat(pill.borderRadius) < parseFloat(pill.height) / 2) failures.push(`primary ${{button.className}} is not a pill: ${{pill.borderRadius}}`);
-        if (pill.backgroundColor !== 'rgb(255, 255, 255)') failures.push(`primary is not white: ${{pill.backgroundColor}}`);
-      }}
+      const sendEl=document.querySelector({send});
+      const sendStyle=style({send});
+      if (sendStyle && sendStyle.backgroundColor !== token(sendEl,'--send-bg','backgroundColor')) failures.push(`send button ${{sendStyle.backgroundColor}} is not --send-bg`);
       return failures;
     }})()"#,
-        backdrop = json!(backdrop),
-        header = json!(header),
-        assistant = json!(assistant),
-        cards = json!(cards),
-        primary = json!(primary)
+        page = json!(page),
+        user = json!(user),
+        send = json!(send)
     )
 }
 
 #[tokio::test]
-async fn web_and_extension_share_glass_styles_and_transient_status_pills() {
+async fn web_and_extension_share_flat_surfaces_and_transient_status_pills() {
     let mut fixture = Fixture::start().await;
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let extension = fixture.harness.root().join("extension");
@@ -80,8 +71,8 @@ async fn web_and_extension_share_glass_styles_and_transient_status_pills() {
     let manifest: Value =
         serde_json::from_slice(&std::fs::read(extension.join("manifest.json")).unwrap()).unwrap();
     let out = PathBuf::from(
-        std::env::var("OPENSIDE_GLASS_DIR")
-            .unwrap_or_else(|_| "/tmp/openside-qa/polish/LastRows/after".into()),
+        std::env::var("OPENSIDE_SURFACES_DIR")
+            .unwrap_or_else(|_| "/tmp/openside-qa/redesign2/surfaces".into()),
     );
     std::fs::create_dir_all(&out).unwrap();
     let mut ui = Ui::open(
@@ -140,15 +131,18 @@ async fn web_and_extension_share_glass_styles_and_transient_status_pills() {
     panel
         .wait("!!document.querySelector('.bubble.assistant')")
         .await;
-    panel.eval("const draft=document.querySelector('#message'); draft.value='Glass acceptance draft'; draft.dispatchEvent(new Event('input',{bubbles:true})); true").await;
+    panel.eval("const draft=document.querySelector('#message'); draft.value='Surface acceptance draft'; draft.dispatchEvent(new Event('input',{bubbles:true})); true").await;
     fixture.cards().await;
-    let web = glass_assertions(".shell", ".app-header-heading", ".bubble.assistant", ".oc-card[data-ticket][data-status=pending]", ".composer button[type=submit], .oc-card[data-ticket][data-status=pending] .oc-btn--primary");
-    let extension = glass_assertions(
+    // The web user bubble is a column wrapper (text bubble plus attachments); the text paragraph is the bubble surface.
+    let web = surface_assertions(
+        ".shell-content",
+        ".bubble.user > p",
+        ".composer button[type=submit]",
+    );
+    let extension = surface_assertions(
         "body.panel",
-        ".bar .session-picker .picker-button",
-        ".bubble.assistant",
-        ".oc-card[data-ticket][data-status=pending]",
-        ".composer button[type=submit], .oc-card[data-ticket][data-status=pending] .oc-btn--primary",
+        ".bubble.user",
+        ".composer button[type=submit]",
     );
     let mut failures = Vec::new();
     for theme in ["light", "dark"] {
@@ -156,6 +150,17 @@ async fn web_and_extension_share_glass_styles_and_transient_status_pills() {
             ui.cdp.viewport(width, height, theme).await;
             ui.goto(&format!("/sessions/{}", fixture.session), "document.querySelectorAll('.oc-card[data-ticket][data-status=pending]').length === 5 && !!document.querySelector('.bubble.assistant')").await;
             ui.cdp.eval("document.querySelectorAll('.oc-card[data-ticket] .oc-pill').forEach(b => b.click()); true").await;
+            // An empty composer offers no Send to press (absent while a run queues, else disabled);
+            // drafts persist per conversation, so clear the one an earlier pass typed first.
+            ui.cdp.eval("(() => { const draft=document.querySelector('.composer textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(draft,''); draft.dispatchEvent(new Event('input',{bubbles:true})); return true; })()").await;
+            ui.cdp
+                .wait("!document.querySelector('.composer button[type=submit]:not(:disabled)')")
+                .await;
+            // Send only shows (enabled, in --send-bg) once there is a draft, as in the panel.
+            ui.cdp.eval("(() => { const draft=document.querySelector('.composer textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(draft,'Surface acceptance draft'); draft.dispatchEvent(new Event('input',{bubbles:true})); return true; })()").await;
+            ui.cdp
+                .wait("!!document.querySelector('.composer button[type=submit]:not(:disabled)')")
+                .await;
             let actual = ui.cdp.eval(&web).await;
             if actual != json!([]) {
                 failures.push(format!("web {theme} {width}x{height}: {actual}"));
@@ -196,7 +201,7 @@ async fn web_and_extension_share_glass_styles_and_transient_status_pills() {
     fixture.harness.kill().await;
     assert!(
         failures.is_empty(),
-        "glass style regressions:\n{}",
+        "surface style regressions:\n{}",
         failures.join("\n")
     );
 }

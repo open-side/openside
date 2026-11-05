@@ -4,6 +4,7 @@ import { useCallback, useState, type HTMLAttributes, type ReactNode } from "reac
 import type { Resource } from "../hooks/useResource";
 import { Button, cx, Dialog, DialogActions, ICON_STROKE, IconButton, PopoverMenu, Spinner } from "../ui";
 import "./pages.css";
+import "./signin.css";
 import { ScopeNotice } from "./ScopeNotice";
 
 /**

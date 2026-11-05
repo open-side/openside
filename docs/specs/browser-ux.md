@@ -72,4 +72,4 @@ cannot choose among unresolved alternatives; the Task asks which scope was meant
 Counts come from observed rows or explicit tool totals, never estimates. Group
 sizes are summed with contributing groups named, and unread and total counts are
 kept separate; an unavailable exact count is stated without inventing a number.
-The Task policy snapshot is checked by `agent/tests/test_browse_policy.py`.
+The Task policy snapshot is checked by `agent/tests/browse-policy.test.ts`.

@@ -69,3 +69,19 @@ export function taskLine(task: SubagentView): string {
     }
   }
 }
+
+/** The word a Task card leads with: where the Task stands, without its details. */
+export function taskStateLabel(task: SubagentView): "Working" | "Needs you" | "Done" | "Stopped" | "Failed" {
+  switch (task.status) {
+    case "running":
+      return "Working";
+    case "waiting_human":
+      return "Needs you";
+    case "completed":
+      return "Done";
+    case "cancelled":
+      return "Stopped";
+    case "failed":
+      return "Failed";
+  }
+}

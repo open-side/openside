@@ -1,11 +1,14 @@
 import { Check, Globe, Maximize2, Minimize2, Square, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useSearchParams } from "react-router";
 import { previewNotice, useBrowserPreview } from "../hooks/useBrowserPreview";
 import { pendingTickets, type BrowserStateView, type SessionView, type TimelineItem } from "../state/session";
 import { ICON_STROKE } from "../ui";
+import { useBrowserDock, type BrowserDock } from "./browserDock";
 import { BrowserFrame } from "./BrowserFrame";
 import { BrowserPip } from "./BrowserPip";
 import { BrowserSheet, useSessionTabs } from "./BrowserSheet";
+import { TakeoverView } from "./TakeoverView";
 import { firstSentence } from "./taskStatus";
 import { opensPage, safeFavicon } from "./toolCopy";
 import { lastHost, statusPhrase } from "./toolStatus";
@@ -68,38 +71,93 @@ export interface BrowserPreviewProps {
 }
 
 /**
- * The live browser card of an agent that browses itself: the tab's read-only screencast, a
- * status pill saying what the agent is doing, "Action needed" while a request waits, and a done
- * chip after the run, which then folds the card to a slim pill. Background Tasks show their own
- * tab in their Task unit (`TaskUnit`). Private sessions never show it.
+ * The live browser of an agent that browses itself: an inline card (the tab's read-only
+ * screencast, what the agent is doing, "Action needed" while a request waits, a done line after
+ * the run, which then folds the card to a slim pill), a floating PiP while that card is out of
+ * view, and the browser sheet. Background Tasks show their own tab in their Task unit
+ * (`TaskUnit`). Private sessions never show it. `?browser=open` opens the sheet once.
  */
-export function BrowserPreview({ sessionId, view, onShowPending, onCancel }: BrowserPreviewProps) {
+export function BrowserPreview(props: BrowserPreviewProps) {
+  // A private session never touches the dock, so its stored state stays untouched too.
+  return props.view.incognito ? null : <Docked {...props} />;
+}
+
+function Docked({ sessionId, view, onShowPending, onCancel }: BrowserPreviewProps) {
+  const dock = useBrowserDock(sessionId);
   const browserCalls = useMemo(() => view.items.filter((item) => item.type === "tool" && item.name.toLowerCase().startsWith("browser")).length, [view.items]);
   // Closing the idle card hides it until the agent touches the browser again.
   const [dismissedAt, setDismissedAt] = useState(-1);
-  if (view.incognito || browserCalls === 0 || browserCalls <= dismissedAt) return null;
-  return <Card sessionId={sessionId} view={view} onShowPending={onShowPending} onCancel={onCancel} onDismiss={() => setDismissedAt(browserCalls)} />;
+
+  const [params, setParams] = useSearchParams();
+  // Waits for the first events: until then `incognito` is unknown and a private session's link
+  // would open its sheet.
+  const linked = params.get("browser") === "open" && view.lastSeq > 0;
+  const { setSheet } = dock;
+  useEffect(() => {
+    if (!linked) return;
+    setSheet(true);
+    // Dropped once handled, so Back and a reload show the conversation.
+    setParams(
+      (current) => {
+        current.delete("browser");
+        return current;
+      },
+      { replace: true },
+    );
+  }, [linked, setSheet, setParams]);
+
+  const cardShown = browserCalls > dismissedAt && browserCalls > 0;
+  // The PiP stands in for the front agent's card. Where only Tasks browse, each Task unit already
+  // shows its tab inline, so the PiP waits for Show browser instead of floating over the thread.
+  const floatable = dock.pip !== "closed" && (cardShown || (dock.summoned && Object.keys(view.browserStates).length > 0));
+  // Nothing to show: keep the preview socket and the tab polling closed.
+  if (!cardShown && !floatable && !dock.sheet) return null;
+  return (
+    <Live
+      sessionId={sessionId}
+      view={view}
+      onShowPending={onShowPending}
+      onCancel={onCancel}
+      dock={dock}
+      cardShown={cardShown}
+      floatable={floatable}
+      onDismiss={() => {
+        setDismissedAt(browserCalls);
+        // Closing the card closes the browser; the header's Show browser brings the PiP back.
+        dock.setPip("closed");
+      }}
+    />
+  );
 }
 
-function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPreviewProps & { onDismiss: () => void }) {
+function Live({
+  sessionId,
+  view,
+  onShowPending,
+  onCancel,
+  dock,
+  cardShown,
+  floatable,
+  onDismiss,
+}: BrowserPreviewProps & { dock: BrowserDock; cardShown: boolean; floatable: boolean; onDismiss: () => void }) {
   const stream = useBrowserPreview(sessionId);
-  const [expanded, setExpanded] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [done, setDone] = useState(false);
   const [ripple, setRipple] = useState<Click | null>(null);
   const [element, setElement] = useState<HTMLElement | null>(null);
   const [away, setAway] = useState(false);
-  const [pipClosed, setPipClosed] = useState(false);
+  const [takingOver, setTakingOver] = useState(false);
   const tabs = useSessionTabs(sessionId);
   const running = view.status === "running";
-  const waiting = pendingTickets(view).length > 0;
+  const pending = pendingTickets(view);
+  const waiting = pending.length > 0;
+  const takeoverTicket = pending.find((ticket) => ticket.kind === "takeover");
   const runStart = useRef<number | null>(running ? Date.now() : null);
 
   useEffect(() => {
     if (running) {
       runStart.current ??= Date.now();
       setDone(false);
-      setPipClosed(false);
       return;
     }
     const started = runStart.current;
@@ -122,8 +180,8 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [click?.id]);
 
-  // Scrolled away from the card while the agent still works: the picture follows as a floating
-  // preview. While the card is still on screen or scrolled past downward it stays sticky (browser.css).
+  // Scrolled away from the card: the picture follows as the floating PiP. While the agent works
+  // and the card is scrolled past downward it stays sticky instead (browser.css).
   useEffect(() => {
     if (!element || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(([entry]) => setAway(!!entry && !entry.isIntersecting), {
@@ -147,27 +205,57 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
   const pageTitle = (liveTab?.title || pageState?.title)?.trim() ?? "";
   const title = pageTitle || pageHost || "Browser";
   const favicon = pageState ? safeFavicon(pageState.favicon) : null;
+  const siteIcon = favicon ? <img src={favicon} alt="" width={16} height={16} /> : <Globe size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />;
   const loading = currentTools(view.items).some((tool) => !tool.done && opensPage(tool));
 
-  if (expanded) {
-    return <BrowserSheet tabs={tabs} liveTabId={liveTabId} frame={frame?.data ?? null} state={state} onClose={() => setExpanded(false)} />;
+  const takeover =
+    takingOver && takeoverTicket ? (
+      <TakeoverView ticket={{ id: takeoverTicket.id, summary: takeoverTicket.summary, origin: takeoverTicket.target?.origin ?? null }} onClose={() => setTakingOver(false)} />
+    ) : null;
+
+  if (dock.sheet) {
+    return (
+      <BrowserSheet
+        tabs={tabs}
+        liveTabId={liveTabId}
+        frame={frame?.data ?? null}
+        state={state}
+        fallback={{ title: pageTitle, host: pageHost ?? "" }}
+        takeover={
+          takeoverTicket
+            ? {
+                origin: takeoverTicket.target?.origin ?? null,
+                onStart: () => {
+                  dock.setSheet(false);
+                  setTakingOver(true);
+                },
+              }
+            : undefined
+        }
+        onClose={() => dock.setSheet(false)}
+      />
+    );
   }
   // The session has no tab open (closed, or not opened yet): nothing to show until one is.
-  if (message?.type === "no_tab" && status === "open") return null;
+  if (message?.type === "no_tab" && status === "open") return takeover;
 
   const tone = waiting ? "warn" : running ? "running" : done ? "done" : "idle";
   const activity = view.thinking ? "Thinking" : statusPhrase(currentTools(view.items), lastHost(view.items));
   const reply = view.items.findLast((item): item is Extract<TimelineItem, { type: "assistant" }> => item.type === "assistant" && item.final)?.text;
   const summary = (reply ? firstSentence(reply) : null) ?? "Done";
+  // Idle, the open card already names the page beside its icon, so the status adds the site;
+  // the slim pill has no title of its own and names the page.
+  const idleText = minimized ? title : pageTitle && pageHost ? pageHost : null;
+  const statusText = tone === "running" ? `${activity}…` : tone === "done" ? summary : idleText;
 
-  const statusPill =
+  const statusLine =
     tone === "warn" ? (
-      <button type="button" className="browser-card-pill browser-card-status" data-tone="warn" onClick={onShowPending}>
-        <TriangleAlert size={18} strokeWidth={2} aria-hidden="true" />
-        <span className="browser-card-text">Action needed</span>
+      <button type="button" className="browser-card-action" onClick={onShowPending}>
+        <TriangleAlert size={16} strokeWidth={2} aria-hidden="true" />
+        Action needed
       </button>
-    ) : (
-      <p className="browser-card-pill browser-card-status" data-tone={tone} role="status">
+    ) : statusText ? (
+      <p className="browser-card-status" data-tone={tone} role="status">
         {tone === "running" ? (
           <span className="browser-card-dots" aria-hidden="true">
             <span />
@@ -175,43 +263,45 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
             <span />
           </span>
         ) : tone === "done" ? (
-          <Check size={18} strokeWidth={2.4} aria-hidden="true" />
+          <Check size={15} strokeWidth={2.4} aria-hidden="true" />
         ) : (
           <span className="live-dot" data-live={!!frame || undefined} aria-hidden="true" />
         )}
         <span key={tone === "running" ? activity : tone} className="browser-card-text">
-          {tone === "running" ? `${activity}…` : tone === "done" ? summary : title}
+          {statusText}
         </span>
       </p>
+    ) : (
+      <span className="browser-card-status" aria-hidden="true" />
     );
 
   const controls = (
-    <>
+    <span className="browser-card-controls">
       <button
         type="button"
-        className="browser-card-pill browser-card-control"
+        className="browser-card-control"
         aria-label={minimized ? "Restore" : "Minimize"}
         title={minimized ? "Restore" : "Minimize"}
         aria-expanded={!minimized}
         onClick={() => setMinimized(!minimized)}
       >
         {minimized ? (
-          <Maximize2 size={17} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          <Maximize2 size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
         ) : (
-          <Minimize2 size={17} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          <Minimize2 size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
         )}
       </button>
       {running ? (
-        <button type="button" className="browser-card-pill browser-card-stop" onClick={onCancel}>
-          <Square size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        <button type="button" className="browser-card-stop" onClick={onCancel}>
+          <Square size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
           Stop
         </button>
       ) : (
-        <button type="button" className="browser-card-pill browser-card-control" aria-label="Close" title="Close" onClick={onDismiss}>
-          <X size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        <button type="button" className="browser-card-control" aria-label="Close" title="Close" onClick={onDismiss}>
+          <X size={17} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </button>
       )}
-    </>
+    </span>
   );
 
   const screen = frame ? (
@@ -232,7 +322,7 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
     </span>
   );
 
-  return (
+  const card = cardShown ? (
     <section
       ref={setElement}
       className="browser-card"
@@ -243,35 +333,56 @@ function Card({ sessionId, view, onShowPending, onCancel, onDismiss }: BrowserPr
     >
       {minimized ? (
         <div className="browser-card-bar">
-          <button type="button" className="browser-card-thumb" aria-label={`Expand ${title}`} onClick={() => setExpanded(true)}>
-            {frame ? <BrowserFrame data={frame.data} /> : null}
+          <button type="button" className="browser-card-thumb" aria-label={`Expand ${title}`} onClick={() => dock.setSheet(true)}>
+            {frame ? <BrowserFrame data={frame.data} /> : siteIcon}
           </button>
-          {statusPill}
+          {statusLine}
           {controls}
         </div>
       ) : (
         <>
-          <button type="button" className="browser-card-screen" aria-label={`Expand ${title}`} onClick={() => setExpanded(true)}>
+          <button type="button" className="browser-card-screen" aria-label={`Expand ${title}`} onClick={() => dock.setSheet(true)}>
             {screen}
           </button>
-          {pageTitle || pageHost ? (
-            <span className="browser-card-chip">
-              {favicon ? <img src={favicon} alt="" width={16} height={16} /> : <Globe size={15} strokeWidth={ICON_STROKE} aria-hidden="true" />}
-              <span className="browser-card-chip-title">{pageTitle || pageHost}</span>
-              {pageTitle && pageHost ? <span className="browser-card-chip-host">{pageHost}</span> : null}
-            </span>
-          ) : null}
           <div className="browser-card-bar">
-            {statusPill}
+            <span className="browser-card-site">
+              {siteIcon}
+              <span className="browser-card-site-title">{title}</span>
+            </span>
+            {statusLine}
             {controls}
           </div>
         </>
       )}
-      {tone === "running" && away && !pipClosed && frame ? (
-        <BrowserPip label="Live browser" title={title} status={tone} live onExpand={() => setExpanded(true)} onClose={() => setPipClosed(true)}>
-          <BrowserFrame data={frame.data} />
-        </BrowserPip>
-      ) : null}
     </section>
+  ) : null;
+
+  // The PiP stands in for the card whenever the card is not on screen: scrolled away, closed,
+  // or never drawn because only the session's Tasks browsed (once summoned). While a request
+  // waits for the person it only floats when they asked for it, so it never covers the
+  // request's buttons by itself.
+  const pip =
+    floatable && !(cardShown && !away) && (!waiting || dock.summoned) ? (
+      <BrowserPip
+        label="Live browser"
+        title={title}
+        status={tone}
+        live={!!frame}
+        minimized={dock.pip === "minimized"}
+        onMinimizedChange={(next) => dock.setPip(next ? "minimized" : "open")}
+        thumb={frame ? <BrowserFrame data={frame.data} /> : siteIcon}
+        onExpand={() => dock.setSheet(true)}
+        onClose={() => dock.setPip("closed")}
+      >
+        {frame ? <BrowserFrame data={frame.data} /> : <p className="pip-state">{state}</p>}
+      </BrowserPip>
+    ) : null;
+
+  return (
+    <>
+      {card}
+      {pip}
+      {takeover}
+    </>
   );
 }

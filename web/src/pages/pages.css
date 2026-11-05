@@ -1,12 +1,11 @@
 /*
- * Settings, Workspace sections, sign-in and pairing. Layout and component language follow
- * aside-relay's Settings.tsx / Workspace.tsx (MIT; see NOTICE). Tokens live in styles.css.
+ * Settings, Workspace sections, sign-in and pairing. Layout follows aside-relay's Settings.tsx /
+ * Workspace.tsx (MIT; see NOTICE). Tokens live in tokens.css.
  *
- * One pattern for every list: a grouped list (`.resource-list`) on a glass inset inside the
- * frosted dialog, rows split by hairlines, controls at the row's end. Tints are mixed from
- * --text over transparent so they read on any backdrop. Colour marks state only (badges);
- * the accent is reserved for primary buttons, switches and focus.
- * Scale: type 0.75 / 0.8125 / 0.875 / 0.9375rem; radius 10 inline, 14 controls, 18 groups.
+ * One pattern for every list: a flat group (`.settings-group`, `.resource-list`) on
+ * --surface-raised with a 1px border and 16px radius, rows split by hairlines, controls at the
+ * row's end, no icon boxes. Colour marks state only (badges); the accent is reserved for primary
+ * buttons, switches and focus.
  */
 
 /* ---- Dialog content ---- */
@@ -54,9 +53,9 @@
 /* A grouped list of label/value rows (Settings: connection, notifications, appearance). */
 .settings-group {
   padding: 0 16px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
 }
 .status-row {
   display: flex;
@@ -64,10 +63,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 4px 12px;
-  min-height: 48px;
+  min-height: 44px;
   padding: 8px 0;
-  border-bottom: 1px solid var(--glass-inset-border);
-  font-size: 0.9375rem;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 .settings-group > :last-child {
@@ -77,40 +76,64 @@
   color: var(--muted);
 }
 
-/* The "Workspace" entry at the top of Settings and the section tiles of Workspace. */
-.workspace-entry,
-.workspace-tile {
+/*
+ * Settings and Workspace dialogs: `.settings-nav` is a rail beside the pane on wide screens and
+ * a grouped list of drill-in rows on phones (and on /workspace, where it is the whole dialog).
+ */
+.manage-dialog--rail {
+  height: min(760px, calc(100dvh - 48px));
+}
+.manage-layout {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+.manage-pane {
+  min-width: 0;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+.settings-nav-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--glass-inset-border);
-  background: var(--glass-inset-bg);
+  min-height: 52px;
+  padding: 10px 12px 10px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
   font: inherit;
   text-align: left;
   text-decoration: none;
   cursor: pointer;
-  transition:
-    background-color var(--fast) var(--ease),
-    border-color var(--fast) var(--ease);
+  transition: background-color var(--fast) var(--ease);
 }
-.workspace-entry {
-  min-height: 68px;
-  padding: 12px 14px 12px 16px;
-  border-radius: var(--radius-2xl);
+.settings-nav-row + .settings-nav-row {
+  border-top: 1px solid var(--border);
 }
-.workspace-entry:hover,
-.workspace-tile:hover {
-  border-color: color-mix(in srgb, var(--text) 18%, transparent);
-  background: color-mix(in srgb, var(--text) 4%, var(--glass-inset-bg));
+.settings-nav-row:hover {
+  background: var(--hover);
 }
-.workspace-entry > svg:last-child {
+.settings-nav-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.settings-nav-icon {
   flex: 0 0 auto;
   color: var(--muted);
 }
-.tile-copy {
+.settings-nav-copy {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -118,46 +141,75 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.tile-copy strong {
-  font-size: 0.9375rem;
-  font-weight: 620;
+.settings-nav-copy strong {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
-.tile-copy span {
+.settings-nav-detail {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
-
-.workspace-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: 1fr;
-  gap: 10px;
+.settings-nav-chevron {
+  flex: 0 0 auto;
+  color: var(--faint);
 }
-@media (max-width: 520px) {
-  .workspace-grid {
-    grid-template-columns: minmax(0, 1fr);
-    grid-auto-rows: auto;
+
+/* Phones: the Settings index lists the other panes; inside a pane the back control returns. */
+@media (max-width: 820px) {
+  .manage-layout[data-view="index"] .settings-nav-general,
+  .manage-layout[data-view="pane"] > .settings-nav {
+    display: none;
+  }
+  .manage-layout[data-view="index"] .settings-nav-general + .settings-nav-row {
+    border-top: 0;
   }
 }
-.workspace-tile {
-  min-height: 76px;
-  padding: 14px 16px;
-  border-radius: var(--radius-2xl);
+
+/* Wide screens: a 200px rail of 36px rows; the back control is redundant next to it. */
+@media (min-width: 821px) {
+  .manage-layout {
+    grid-template-columns: 200px minmax(0, 1fr);
+    align-items: start;
+  }
+  .manage-dialog--rail .ui-dialog-header > .ui-icon-button:first-child {
+    display: none;
+  }
+  .manage-layout > .settings-nav {
+    position: sticky;
+    top: 0;
+    gap: 2px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .manage-layout > .settings-nav .settings-nav-row {
+    gap: 10px;
+    min-height: var(--row-height);
+    padding: 6px 10px;
+    border: 0;
+    border-radius: var(--radius-row);
+  }
+  .manage-layout > .settings-nav .settings-nav-row[aria-current="page"] {
+    background: var(--active);
+  }
+  .manage-layout > .settings-nav .settings-nav-copy strong {
+    font-weight: var(--weight-medium);
+  }
+  .manage-layout > .settings-nav :is(.settings-nav-detail, .settings-nav-chevron) {
+    display: none;
+  }
+  .manage-layout > .settings-nav .settings-nav-icon {
+    width: 16px;
+    height: 16px;
+  }
 }
-.tile-icon,
-.resource-card-icon,
+
 .empty-state-icon {
   display: inline-grid;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text);
-}
-.tile-icon {
-  width: 38px;
-  height: 38px;
+  color: var(--muted);
 }
 
 /* ---- Section building blocks ---- */
@@ -210,20 +262,20 @@
   margin: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
   list-style: none;
 }
 .resource-list > li + li {
-  border-top: 1px solid var(--glass-inset-border);
+  border-top: 1px solid var(--border);
 }
 .resource-card {
   min-width: 0;
   padding: 14px 16px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
 }
 .resource-list .resource-card {
   border: 0;
@@ -236,9 +288,14 @@
   gap: 12px;
   min-width: 0;
 }
+/* A plain muted icon, no tile; favicons (`.site-mark--36`) keep a small tile of their own. */
 .resource-card-icon {
-  width: 36px;
-  height: 36px;
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
 }
 .resource-card-copy {
   flex: 1;
@@ -271,6 +328,9 @@
 }
 /* Everything under a row with a leading icon lines up with its text, not the icon. */
 .resource-card:has(> .resource-card-header > .resource-card-icon) > :not(.resource-card-header) {
+  margin-left: 36px;
+}
+.resource-card:has(> .resource-card-header > .site-mark--36) > :not(.resource-card-header) {
   margin-left: 48px;
 }
 .resource-card-body {
@@ -416,7 +476,7 @@
     margin: 0 -8px 0 0;
   }
   .resource-card-header:has(.resource-card-icon) > .resource-card-trailing:has(.inline-select) {
-    padding-left: 48px;
+    padding-left: 36px;
   }
   .resource-card-trailing .ui-select.inline-select {
     flex: 1;
@@ -431,17 +491,14 @@
   justify-content: center;
   gap: 6px;
   padding: 32px 24px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
   color: var(--muted);
   text-align: center;
 }
 .empty-state-icon {
-  width: 44px;
-  height: 44px;
-  margin-bottom: 6px;
-  border-radius: var(--radius-pill);
+  margin-bottom: 4px;
 }
 .empty-state strong {
   color: var(--text);
@@ -481,7 +538,7 @@
   gap: 10px 12px;
   padding: 12px 12px 12px 16px;
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  background: var(--danger-surface);
 }
 .load-error > svg {
   color: var(--danger);
@@ -633,9 +690,9 @@
   clear: both;
   margin: 0;
   padding: 0 16px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
 }
 .config-field {
   display: grid;
@@ -643,7 +700,7 @@
   align-items: center;
   gap: 8px 20px;
   padding: 12px 0;
-  border-bottom: 1px solid var(--glass-inset-border);
+  border-bottom: 1px solid var(--border);
 }
 .config-field:last-child {
   border-bottom: 0;
@@ -711,7 +768,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
-@media (max-width: 700px) {
+@media (max-width: 820px) {
   .config-field-control > :is(input, .ui-select) {
     min-height: 44px;
   }
@@ -736,33 +793,26 @@
   font-size: 0.8125rem;
   line-height: 1.4;
 }
+/* Sticks to the dialog body's bottom edge (its padding is 24px) on the dialog's own surface. */
 .config-save {
   position: sticky;
-  bottom: -22px;
+  bottom: -24px;
   z-index: 1;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin: 0 -22px -22px;
-  padding: 12px 22px calc(12px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--glass-border);
-  border-radius: 0 0 calc(var(--radius-glass) - 1px) calc(var(--radius-glass) - 1px);
-  background: var(--glass);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
+  margin: 0 0 -24px;
+  padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--overlay);
 }
 .config-save-status {
   flex: 1 1 auto;
   margin: 0;
   color: var(--muted);
-  font-size: 0.875rem;
-}
-@media (max-width: 700px) {
-  .config-save {
-    border-radius: 0;
-  }
+  font-size: var(--text-md);
 }
 
 /* A note's text is the row itself; it reads as content, not as a heading. */
@@ -782,9 +832,9 @@
   gap: 10px;
   margin: 0;
   padding: 14px 16px 14px 36px;
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
   font-size: 0.875rem;
   line-height: 1.6;
 }
@@ -801,7 +851,7 @@
   justify-content: space-between;
   gap: 12px;
   min-height: 52px;
-  border-bottom: 1px solid var(--glass-inset-border);
+  border-bottom: 1px solid var(--border);
   font-size: 0.9375rem;
 }
 .appearance .ui-select--inline {
@@ -904,7 +954,7 @@
 
 /* ---- Phone: every control a 44px target ---- */
 
-@media (max-width: 700px) {
+@media (max-width: 820px) {
   .manage-body .ui-button--compact,
   .ui-dialog .dialog-form .ui-button--compact,
   .row-disclosure,
@@ -917,113 +967,12 @@
   }
 }
 
-/* ---- Sign-in and pairing: a strong glass card on the gradient, like the in-chat cards ---- */
-
-.token-entry {
-  display: grid;
-  min-height: var(--app-height, 100dvh);
-  place-items: center;
-  padding: max(env(safe-area-inset-top), 24px) 16px max(env(safe-area-inset-bottom), 24px);
-  background: var(--backdrop);
-  background-attachment: fixed;
-}
-.token-card {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  width: min(420px, 100%);
-  padding: 28px 24px 24px;
-  border: 1px solid var(--glass-strong-border);
-  border-radius: var(--radius-glass);
-  background: var(--glass-strong-bg);
-  box-shadow: var(--shadow-popup);
-  color: var(--glass-strong-fg);
-  -webkit-backdrop-filter: var(--blur-glass);
-  backdrop-filter: var(--blur-glass);
-}
-.token-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-.token-brand span {
-  font-size: 1.3125rem;
-  font-weight: 650;
-  letter-spacing: -0.5px;
-}
-.token-card h1 {
-  margin: 0;
-  font-size: 1.125rem;
-  font-weight: 650;
-  line-height: 1.35;
-}
-.token-card > p,
-.token-card .field > span {
-  margin: 0;
-  color: var(--glass-strong-muted);
-  font-size: 0.9375rem;
-  line-height: 1.55;
-}
-.token-card .field > span {
-  font-size: 0.8125rem;
-}
-.token-card input {
-  min-height: 48px;
-  padding-inline: 18px;
-  border-color: var(--glass-strong-border);
-  border-radius: var(--radius-pill);
-  background: var(--glass-input-bg);
-  color: var(--glass-strong-fg);
-}
-.token-card input::placeholder {
-  color: var(--glass-strong-muted);
-}
-/* The light theme's --danger is a dark red meant for white surfaces; lift it on navy glass. */
-.token-card .error-note {
-  color: color-mix(in srgb, var(--danger) 40%, white);
-}
-.token-card > .token-help {
-  padding-top: 16px;
-  border-top: 1px solid var(--glass-strong-border);
-  font-size: 0.875rem;
-}
-.token-card code {
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: var(--glass-input-bg);
-  color: var(--glass-strong-fg);
-  font-size: 0.8125rem;
-}
-.token-card form {
-  display: grid;
-  gap: 12px;
-}
-.token-card .ui-button {
-  justify-self: end;
-  min-width: 7.5rem;
-  min-height: 44px;
-}
-.token-card .ui-button--primary,
-.token-card .ui-button--primary:hover:not(:disabled) {
-  background: var(--pill-primary-bg);
-  color: var(--pill-primary-fg);
-}
-.token-card .ui-button--primary:disabled {
-  opacity: 0.4;
-}
-.token-card a {
-  color: var(--glass-strong-fg);
-  font-weight: 550;
-}
-.token-card .loading-row {
-  color: var(--glass-strong-muted);
-}
-
 /* ---- Not found ---- */
 
 .page-frame {
   position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   overflow: hidden;
 }
@@ -1031,9 +980,10 @@
   display: grid;
   gap: 12px;
   justify-items: start;
+  width: 100%;
   max-width: var(--content-width);
   margin: 0 auto;
-  padding: calc(var(--header-height) + 24px) 20px 24px;
+  padding: 24px 20px;
 }
 .not-found p {
   margin: 0;
@@ -1083,7 +1033,7 @@
   justify-content: space-between;
   gap: 8px 12px;
   padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--glass-inset-border));
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border));
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--warn) 9%, transparent);
   font-size: 0.8125rem;
@@ -1135,9 +1085,9 @@
   overflow-wrap: anywhere;
 }
 .model-card .resource-card {
-  border: 1px solid var(--glass-inset-border);
-  border-radius: var(--radius-2xl);
-  background: var(--glass-inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
 }
 .model-card .restart-notice {
   margin-top: 4px;
@@ -1229,7 +1179,7 @@
   margin: 0;
   font-size: 0.9375rem;
 }
-@media (max-width: 700px) {
+@media (max-width: 820px) {
   .policy-rule {
     grid-template-columns: 1fr 1fr auto;
   }
@@ -1251,9 +1201,9 @@
   display: grid;
   gap: 4px;
   padding: 12px 14px;
-  border: 1px solid var(--glass-inset-border);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--glass-inset-bg);
+  background: var(--surface-raised);
 }
 .sync-report .settings-text {
   margin: 4px 0 0;

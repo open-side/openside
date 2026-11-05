@@ -190,10 +190,10 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
         browser: &browser,
         tab: tab.id.clone(),
     };
-    // The shell can render on `/` a moment before the index route redirects to the assistant.
+    // Pairing replaces the URL with `/`, which is Home.
     page.wait(
-        "app after pairing, on the assistant's thread",
-        "!!document.querySelector('.session-list') && location.pathname + location.hash === '/agents/chief'",
+        "app after pairing, on Home",
+        "!!document.querySelector('.session-list') && !!document.querySelector('main.home') && location.pathname + location.hash === '/'",
     )
     .await;
     page.eval(HELPERS).await;

@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClientContext } from "../context";
-import { SettingsPage } from "../pages/SettingsPage";
+import { SettingsNav, SettingsPage } from "../pages/SettingsPage";
 import { manageTarget, WORKSPACE_SECTIONS } from "../pages/manageRoutes";
 import { fakeClient, json } from "../test/fakeDaemon";
 
@@ -50,10 +50,12 @@ describe("static openside app help", () => {
     const noop = vi.fn();
     const { container } = render(
       <ClientContext.Provider value={client}>
-        <SettingsPage onModels={noop} onChannels={noop} onRemote={noop} onWorkspace={noop} onGuide={noop} onSignOut={noop} />
+        <SettingsNav current="settings" onOpen={noop} onGuide={noop} />
+        <SettingsPage onSignOut={noop} />
       </ClientContext.Provider>,
     );
-    const entries = [...container.querySelectorAll(".workspace-entry strong")].map((entry) => entry.textContent);
+    // General is the pane the Settings list sits on, so the help names its sections instead.
+    const entries = [...container.querySelectorAll(".settings-nav-row:not(.settings-nav-general) strong")].map((entry) => entry.textContent);
     expect(entries).toEqual(["Models & accounts", "Channels", "Remote access", "Workspace", "Setup guide"]);
     for (const entry of entries) expect(help).toContain(entry);
     for (const heading of ["Connection", "Notifications", "Appearance"]) {

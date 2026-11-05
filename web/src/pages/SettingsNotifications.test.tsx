@@ -78,7 +78,7 @@ function setup(override?: (call: Call) => Response | undefined) {
   const fake = daemon(override);
   render(
     <ClientContext.Provider value={fake.client}>
-      <SettingsPage onModels={vi.fn()} onChannels={vi.fn()} onRemote={vi.fn()} onWorkspace={vi.fn()} onGuide={vi.fn()} onSignOut={vi.fn()} />
+      <SettingsPage onSignOut={vi.fn()} />
     </ClientContext.Provider>,
   );
   return fake;

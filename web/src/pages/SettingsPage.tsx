@@ -1,11 +1,11 @@
-import { ChevronRight, Compass, Cpu, MessagesSquare, SlidersHorizontal, Smartphone } from "lucide-react";
+import { ChevronRight, Compass, Cpu, MessagesSquare, SlidersHorizontal, Smartphone, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Health } from "../api/types";
 import { AppearanceSettings } from "../components/AppearanceSettings";
 import { useClient } from "../context";
 import { desktopActive, desktopRequested, extensionAvailable } from "../desktopNotify";
 import { describeFailure, disableNotifications, enableNotifications, pushSupported, storedSubscription, subscriptionActive } from "../push";
-import { Button, ICON_STROKE } from "../ui";
+import { Button, cx, ICON_STROKE } from "../ui";
 import { Badge, ErrorNote, StatusRow } from "./blocks";
 
 /** aside-relay re-checks the connection every five seconds while Settings is open. */
@@ -167,60 +167,50 @@ function Connection() {
   );
 }
 
-/** Content of the Settings dialog (aside-relay `Settings.tsx`). */
-export function SettingsPage({ onModels, onChannels, onRemote, onWorkspace, onGuide, onSignOut }: { onModels: () => void; onChannels: () => void; onRemote: () => void; onWorkspace: () => void; onGuide: () => void; onSignOut: () => void }) {
+/** Panes of the Settings dialog; each keeps its own route. */
+export type SettingsPane = "settings" | "models" | "channels" | "remote";
+
+const NAV: { pane: SettingsPane | "workspace"; path: string; title: string; detail: string; Icon: LucideIcon }[] = [
+  { pane: "settings", path: "/settings", title: "General", detail: "Connection, notifications, appearance and sign-out", Icon: UserRound },
+  { pane: "models", path: "/models", title: "Models & accounts", detail: "Connect providers, add API keys and choose the fast and reasoning models", Icon: Cpu },
+  { pane: "channels", path: "/channels", title: "Channels", detail: "Telegram, Slack and Discord accounts, and who answers on each", Icon: MessagesSquare },
+  { pane: "remote", path: "/remote", title: "Remote access", detail: "Reach openside from your phone and connect it with a QR code", Icon: Smartphone },
+  { pane: "workspace", path: "/workspace", title: "Workspace", detail: "Skills, routines, memory, vault, devices and configuration", Icon: SlidersHorizontal },
+];
+
+function NavRow({ title, detail, Icon, current, className, onClick }: { title: string; detail: string; Icon: LucideIcon; current?: boolean; className?: string; onClick: () => void }) {
+  return (
+    <button type="button" className={cx("settings-nav-row", className)} aria-current={current ? "page" : undefined} onClick={onClick}>
+      <Icon className="settings-nav-icon" size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      <span className="settings-nav-copy">
+        <strong>{title}</strong>
+        <span className="settings-nav-detail">{detail}</span>
+      </span>
+      <ChevronRight className="settings-nav-chevron" size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+    </button>
+  );
+}
+
+/**
+ * The Settings panes: a rail beside the pane on wide screens, a grouped list of rows that drill
+ * into each pane on phones (aside-relay `Settings.tsx`). The phone list hides General, which is
+ * the screen it sits on.
+ */
+export function SettingsNav({ current, onOpen, onGuide }: { current: SettingsPane; onOpen: (path: string) => void; onGuide: () => void }) {
+  return (
+    <nav className="settings-nav" aria-label="Settings sections">
+      {NAV.map(({ pane, path, title, detail, Icon }) => (
+        <NavRow key={pane} title={title} detail={detail} Icon={Icon} current={pane === current} className={pane === "settings" ? "settings-nav-general" : undefined} onClick={() => onOpen(path)} />
+      ))}
+      <NavRow title="Setup guide" detail="Connect agents, import browser data, set up the vault and pair a phone" Icon={Compass} className="workspace-entry" onClick={onGuide} />
+    </nav>
+  );
+}
+
+/** The General pane of the Settings dialog. */
+export function SettingsPage({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div className="manage-body" data-section="settings">
-      <button type="button" className="workspace-entry" onClick={onModels}>
-        <span className="tile-icon" aria-hidden="true">
-          <Cpu size={20} strokeWidth={ICON_STROKE} />
-        </span>
-        <span className="tile-copy">
-          <strong>Models &amp; accounts</strong>
-          <span>Connect providers, add API keys and choose the fast and reasoning models</span>
-        </span>
-        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </button>
-      <button type="button" className="workspace-entry" onClick={onChannels}>
-        <span className="tile-icon" aria-hidden="true">
-          <MessagesSquare size={20} strokeWidth={ICON_STROKE} />
-        </span>
-        <span className="tile-copy">
-          <strong>Channels</strong>
-          <span>Telegram, Slack and Discord accounts, and who answers on each</span>
-        </span>
-        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </button>
-      <button type="button" className="workspace-entry" onClick={onRemote}>
-        <span className="tile-icon" aria-hidden="true">
-          <Smartphone size={20} strokeWidth={ICON_STROKE} />
-        </span>
-        <span className="tile-copy">
-          <strong>Remote access</strong>
-          <span>Reach openside from your phone and connect it with a QR code</span>
-        </span>
-        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </button>
-      <button type="button" className="workspace-entry" onClick={onWorkspace}>
-        <span className="tile-icon" aria-hidden="true">
-          <SlidersHorizontal size={20} strokeWidth={ICON_STROKE} />
-        </span>
-        <span className="tile-copy">
-          <strong>Workspace</strong>
-          <span>Skills, routines, memory, vault, devices and configuration</span>
-        </span>
-        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </button>
-      <button type="button" className="workspace-entry" onClick={onGuide}>
-        <span className="tile-icon" aria-hidden="true">
-          <Compass size={20} strokeWidth={ICON_STROKE} />
-        </span>
-        <span className="tile-copy">
-          <strong>Setup guide</strong>
-          <span>Connect agents, import browser data, set up the vault and pair a phone</span>
-        </span>
-        <ChevronRight size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </button>
       <Connection />
       <Notifications />
       <section aria-label="Appearance">

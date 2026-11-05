@@ -8,8 +8,13 @@ import { displayTitle } from "../components/toolStatus";
 import { useClient } from "../context";
 import { useTeam } from "../hooks/useAgents";
 import { useSessionList, type SessionListState } from "../hooks/useSessionList";
-import { ICON_STROKE, IconButton, Segmented, Spinner } from "../ui";
+import { Chip, ICON_STROKE, IconButton, Spinner } from "../ui";
 import "../components/team.css";
+
+const VIEWS = [
+  { value: "active", label: "Earlier" },
+  { value: "archived", label: "Archived" },
+] as const;
 
 /**
  * `/history`: conversations from before the team, archived ones, and retired teammates'
@@ -32,16 +37,13 @@ export function HistoryPage() {
               <span className="sr-only">Search conversations</span>
               <input type="search" value={query} onChange={(event) => list.setQuery(event.target.value)} placeholder={archived ? "Search archived" : "Search conversations"} />
             </label>
-            <Segmented
-              kind="tab"
-              label="Which conversations"
-              options={[
-                { value: "active", label: "Earlier" },
-                { value: "archived", label: "Archived" },
-              ]}
-              value={archived ? "archived" : "active"}
-              onChange={(value) => list.setArchived(value === "archived")}
-            />
+            <div className="history-views" role="group" aria-label="Which conversations">
+              {VIEWS.map((view) => (
+                <Chip key={view.value} pressed={archived === (view.value === "archived")} onClick={() => list.setArchived(view.value === "archived")}>
+                  {view.label}
+                </Chip>
+              ))}
+            </div>
           </div>
 
           {list.error && !list.offline ? (
@@ -51,7 +53,7 @@ export function HistoryPage() {
           ) : null}
 
           <section className="history-group" aria-labelledby="history-earlier">
-            <h2 id="history-earlier" className="session-group-heading">
+            <h2 id="history-earlier" className="section-heading">
               {archived ? "Archived" : query ? "Results" : "Earlier conversations"}
             </h2>
             {sessions === null ? (
@@ -73,14 +75,14 @@ export function HistoryPage() {
 
           {retired.length > 0 && !archived ? (
             <section className="history-group" aria-labelledby="history-retired">
-              <h2 id="history-retired" className="session-group-heading">
+              <h2 id="history-retired" className="section-heading">
                 Retired teammates
               </h2>
               <ul className="people" aria-label="Retired teammates">
                 {retired.map((agent) => (
                   <li key={agent.id} className="person-row">
-                    <Link to={`/sessions/${encodeURIComponent(agent.home_session_id)}`} className="person-link">
-                      <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={40} />
+                    <Link to={`/sessions/${encodeURIComponent(agent.home_session_id)}`} className="sidebar-row person-link history-person">
+                      <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={32} />
                       <span className="person-text">
                         <span className="person-name">{agent.name}</span>
                         <span className="person-second">{agent.persona.role}</span>

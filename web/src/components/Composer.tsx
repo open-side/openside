@@ -1,5 +1,5 @@
 import { ArrowUp, Eye, FileText, Hand, Plus, Square, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { AttachmentUpload, SkillSummary } from "../api/types";
 import { mayUse } from "../auth";
 import { newMessageId, useClient } from "../context";
@@ -9,7 +9,7 @@ import type { ShareDraft } from "../pwa/share";
 import { outgoing } from "../state/outgoing";
 import { ICON_STROKE, IconButton } from "../ui";
 
-// Same rules as the sidecar (agent/src/openside_agent/skills.py `_MENTION`): a mention starts
+// Same rules as the sidecar (agent/src/features/skills.ts `MENTION_SOURCE`): a mention starts
 // a word and ends before whitespace or punctuation; `/a/b` and `/a.md` are paths, not mentions.
 const MENTION = /(?:^|(?<=[\s([{"']))\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=$|[\s)\]}"',;!?]|[.:](?:$|\s))/g;
 const MAX_MENTIONS = 5;
@@ -20,8 +20,9 @@ export const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 1024 * 1024;
 /** The `/prefix` being typed right before the caret. */
 const TYPING = /(?:^|[\s([{"'])\/([a-z0-9-]*)$/;
-// Eight 24px lines plus the 16px vertical padding (styles.css .composer-field textarea).
-const MAX_INPUT_HEIGHT = 208;
+// Six 24px lines plus the 16px vertical padding; thread.css lowers the cap on phones through
+// the field's max-height, which this reads back.
+const MAX_INPUT_HEIGHT = 160;
 const PREWARM_EVERY_MS = 30_000;
 
 interface PendingFile {
@@ -60,7 +61,11 @@ export interface ComposerProps {
   reconnecting?: boolean;
   /** A request needs the person; shown as a button inside the message row, never a second row. */
   onShowPending?: () => void;
-  /** Called after every accepted message (the transcript scrolls back to the latest turn). */
+  /**
+   * Called once a message is on its way. In a thread that is right away (the transcript shows its
+   * delivery and scrolls back to it); on Home only after the daemon accepted it or the outbox
+   * holds it, since the person is taken to the thread that shows it.
+   */
   onSent?: () => void;
   /** Compact controls in the composer's bottom bar, after Add files (model picker, browser preview). */
   tools?: ReactNode;
@@ -68,16 +73,44 @@ export interface ComposerProps {
   draft?: ShareDraft | null;
   onDraftApplied?: () => void;
   addressee?: string;
+  /** A quoted message to put above what is already typed; applied once, then `onQuoteApplied` fires. */
+  quote?: { id: string; text: string } | null;
+  onQuoteApplied?: () => void;
+  /**
+   * `home` hands a new task to the assistant: its own prompt, focus on arrival, two lines tall,
+   * and nothing to stop, queue or switch.
+   */
+  variant?: "thread" | "home";
 }
 
-export function Composer({ sessionId, running = false, waiting = false, reconnecting = false, onStop, onShowPending, onSent, tools, draft, onDraftApplied, addressee }: ComposerProps) {
+export function Composer({
+  sessionId,
+  running: runningProp = false,
+  waiting: waitingProp = false,
+  reconnecting = false,
+  onStop,
+  onShowPending,
+  onSent,
+  tools,
+  draft,
+  onDraftApplied,
+  addressee,
+  quote,
+  onQuoteApplied,
+  variant = "thread",
+}: ComposerProps) {
+  const home = variant === "home";
+  const running = !home && runningProp;
+  const waiting = !home && waitingProp;
   const placeholder = reconnecting
     ? "Reconnecting… you can keep typing"
-    : waiting
-      ? "Answer above, or type a reply"
-      : running
-        ? "Add to the task…"
-        : `Message ${addressee ?? "openside"}`;
+    : home
+      ? "Ask AI a task, @ for context"
+      : waiting
+        ? "Answer above, or type a reply"
+        : running
+          ? "Add to the task…"
+          : `Message ${addressee ?? "openside"}`;
   const queueing = running || waiting;
   const client = useClient();
   const warmed = useRef({ key: "", at: -Infinity });
@@ -101,6 +134,18 @@ export function Composer({ sessionId, running = false, waiting = false, reconnec
     textarea.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- applied once per draft id
   }, [draft?.id]);
+
+  // A quoted message goes above whatever is already typed; the caret waits under the quote.
+  useEffect(() => {
+    if (!quote) return;
+    setText((current) => quote.text + current);
+    onQuoteApplied?.();
+    requestAnimationFrame(() => {
+      textarea.current?.focus();
+      textarea.current?.setSelectionRange(quote.text.length, quote.text.length);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- applied once per quote id
+  }, [quote?.id]);
 
   useEffect(() => {
     if (query === null) return;
@@ -133,14 +178,39 @@ export function Composer({ sessionId, running = false, waiting = false, reconnec
   );
 
   // Grow with the text up to a cap; only past the cap does the field scroll (and show a bar).
-  useLayoutEffect(() => {
+  const fit = useCallback(() => {
     const element = textarea.current;
     if (!element) return;
     element.style.height = "auto";
     const height = element.scrollHeight;
-    element.style.height = `${Math.min(height, MAX_INPUT_HEIGHT)}px`;
-    element.style.overflowY = height > MAX_INPUT_HEIGHT ? "auto" : "hidden";
-  }, [text]);
+    const cap = Number.parseFloat(getComputedStyle(element).maxHeight) || MAX_INPUT_HEIGHT;
+    element.style.height = `${Math.min(height, cap)}px`;
+    element.style.overflowY = height > cap ? "auto" : "hidden";
+  }, []);
+  useLayoutEffect(fit, [text, fit]);
+  // The same text wraps differently once the field narrows (Send, Stop and the hand button share
+  // its row; the viewport turns) or a web font replaces the fallback, so a height fitted earlier
+  // would cut the new last line in half. Only width changes refit: the height is ours to set.
+  useEffect(() => {
+    const element = textarea.current;
+    if (!element) return;
+    let width = element.clientWidth;
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            if (element.clientWidth === width) return;
+            width = element.clientWidth;
+            fit();
+          });
+    observer?.observe(element);
+    const fonts = typeof document.fonts?.addEventListener === "function" ? document.fonts : null;
+    fonts?.addEventListener("loadingdone", fit);
+    return () => {
+      observer?.disconnect();
+      fonts?.removeEventListener("loadingdone", fit);
+    };
+  }, [fit]);
 
   const chips = mentionedSkills(text, known);
   const open = query !== null && candidates.length > 0;
@@ -216,10 +286,14 @@ export function Composer({ sessionId, running = false, waiting = false, reconnec
       return;
     }
     // The conversation shows this message's delivery itself: Sending, Sent, or Not sent with Retry.
-    clearInput();
-    onSent?.();
-    setBusy(false);
+    // Home has no conversation on screen, so it keeps the words until they are safe.
+    if (!home) {
+      clearInput();
+      onSent?.();
+      setBusy(false);
+    }
     const failure = await outgoing.submit(client, { message_id: messageId, session_id: sessionId, text: body, attachments });
+    let kept = failure === null;
     if (failure?.status === 0) {
       // Unreachable daemon: the outbox delivers it later, and its notice replaces the bubble.
       try {
@@ -231,9 +305,20 @@ export function Composer({ sessionId, running = false, waiting = false, reconnec
           queued_at: Date.now(),
         });
         outgoing.forget(messageId);
+        kept = true;
       } catch {
         // Storage is unavailable too; the Not sent bubble stays and offers Retry.
       }
+    }
+    if (!home) return;
+    setBusy(false);
+    if (kept) {
+      clearInput();
+      onSent?.();
+    } else {
+      // The words are still here to send again, so the thread must not hold a Not sent copy too.
+      outgoing.forget(messageId);
+      setError(failure?.status === 0 ? "Can’t reach openside. Try again." : (failure?.message ?? "Couldn’t send the task. Try again."));
     }
   }
 
@@ -304,7 +389,7 @@ export function Composer({ sessionId, running = false, waiting = false, reconnec
           {error}
         </p>
       ) : null}
-      <form className="composer" onSubmit={send}>
+      <form className="composer" data-variant={variant} onSubmit={send}>
         {chips.length || files.length ? (
           <ul className="composer-chips" aria-label="Message context">
             {chips.map((name) => (
@@ -349,7 +434,8 @@ export function Composer({ sessionId, running = false, waiting = false, reconnec
             onChange={(e) => update(e.target.value, e.target.selectionStart ?? e.target.value.length)}
             onKeyDown={onKeyDown}
             onFocus={prewarm}
-            rows={1}
+            rows={home ? 2 : 1}
+            autoFocus={home}
             placeholder={placeholder}
             aria-autocomplete="list"
             aria-controls={open ? "skill-mentions" : undefined}
@@ -372,7 +458,7 @@ export function Composer({ sessionId, running = false, waiting = false, reconnec
           <IconButton label="Add files" className="composer-attach" onClick={() => picker.current?.click()}>
             <Plus size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </IconButton>
-          <div className="composer-tools">{tools}</div>
+          {home ? null : <div className="composer-tools">{tools}</div>}
           <div className="composer-actions">
             {onShowPending ? (
               <IconButton label="Show the request waiting for you" className="composer-needs" onClick={onShowPending}>
@@ -394,7 +480,7 @@ export function Composer({ sessionId, running = false, waiting = false, reconnec
           </div>
         </div>
         {open ? (
-          <ul id="skill-mentions" className="mention-list glass-float" role="listbox" aria-label="Skills">
+          <ul id="skill-mentions" className="mention-list surface-overlay" role="listbox" aria-label="Skills">
             {candidates.map((skill, index) => (
               <li
                 key={skill.name}

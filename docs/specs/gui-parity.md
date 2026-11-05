@@ -27,7 +27,7 @@ Status: **done** = a GUI path exists and the command is secondary or gone; **exc
 | "Scan a new QR code from openside pair." (three places) | `web/src/pages/PairPage.tsx` | "…from openside on the computer." | done |
 | "This pairing link has no code. Run openside pair ..." | `web/src/pages/PairPage.tsx` | Settings → Remote access → Connect a phone | done |
 | `openside pair [--agent] --name` (Devices) | `web/src/pages/DevicesPage.tsx` | "Connect a phone with a QR code" is primary; command is a `CliHint` | done |
-| `openside pair --agent`, `openside connect`, `openside --remote <name> mcp` (Devices, agent) | `web/src/pages/AgentLink.tsx`, `DevicesPage.tsx` | "Create a link" issues an `agent_client` pairing offer with local authority, with a name field, copy and countdown. The only command left is the agent-side `openside connect`, a `CliHint` | done |
+| `openside pair --agent`, `openside login`, `openside --host <name> mcp` (Devices, agent) | `web/src/pages/AgentLink.tsx`, `DevicesPage.tsx` | "Create a link" issues an `agent_client` pairing offer with local authority, with a name field, copy and countdown. The only command left is the agent-side `openside login`, a `CliHint` | done |
 | `--scope steer` / `--scope admin` explanation | `web/src/pages/DevicesPage.tsx` (removed) | Scopes are chosen with checkboxes in Connect a phone | done |
 | "Run `openside doctor` on the computer" (Vault unavailable) | `web/src/pages/VaultPage.tsx` | Diagnostics screen and an "Open Configuration" link; `openside doctor` is a `CliHint` | done |
 | `vault.unlock`, `vault.passphrase_cmd` wording | `web/src/pages/VaultPage.tsx` | "Choose the passphrase unlock method in Configuration" | done |
@@ -74,6 +74,6 @@ Status: **done** = a GUI path exists and the command is secondary or gone; **exc
 | Flow | Why | What the screen shows |
 |---|---|---|
 | First sign-in of Claude Code and Codex | A vendor login that happens in the vendor's own tool. openside cannot sign in for it | Models → account dialog shows the exact command with a copy button and waits for the sign-in to appear. API keys remain a fully in-app path |
-| Agent-side `openside connect` | The agent is a command-line program; there is no GUI on that side | A copyable hint next to "Create a link" |
+| Agent-side `openside login` | The agent is a command-line program; there is no GUI on that side | A copyable hint next to "Create a link" |
 | `openside remote local-access --json` paste | A fallback for a browser opened without the desktop launcher | A closed disclosure inside `LocalOnlyNotice`; the primary text is "reopen openside from this computer" |
 | Extension token form | Kept for direct token use | Closed disclosure; the "Pairing link" field is the primary path |
