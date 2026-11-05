@@ -469,6 +469,7 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
             model: "provider:model".into(),
             input_tokens: 1,
             output_tokens: 2,
+            effort: Some("low".into()),
         },
     ] {
         samples.push(SidecarMessage::Event { event });
@@ -523,6 +524,10 @@ fn schema_rejects_shapes_outside_the_contract() {
             "versions": {"runtime": "", "pi_agent_core": "", "pi_ai": "", "openside_agent": ""}}),
         json!({"v": 1, "type": "ready", "tools": [], "pending_deferred": [], "startup_ms": 1, "extra": 1}),
         json!({"v": 1, "type": "unknown"}),
+        json!({"v": 1, "type": "message_result", "message_id": "m", "outcome": "failed",
+            "reason": "x".repeat(513)}),
+        json!({"v": 1, "type": "event", "event": {"kind": "usage", "model": "m",
+            "input_tokens": 1, "output_tokens": 1, "effort": "off"}}),
     ] {
         assert!(!validator.is_valid(&bad), "{bad}");
     }

@@ -401,6 +401,8 @@ pub enum RuntimeEvent {
         input_tokens: u64,
         /// Output token count.
         output_tokens: u64,
+        /// Thinking effort the request was sent with after per-model resolution.
+        effort: Option<String>,
     },
     /// No run or sidecar message remains active.
     Settled,

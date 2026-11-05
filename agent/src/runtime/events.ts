@@ -1,14 +1,15 @@
 // Parent assistant stream -> wire events. Child agents emit no parent stream events.
-import type { AssistantMessage, AssistantMessageEvent, Usage as LlmUsage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent, Effort, Usage as LlmUsage } from "@oh-my-pi/pi-ai";
 import type { EventBody, Usage } from "../protocol/types";
 
 /** Daemon usage counts all prompt tokens, cached or not. */
-export function usageEvent(model: string, usage: LlmUsage): Usage {
+export function usageEvent(model: string, usage: LlmUsage, effort?: Effort): Usage {
 	return {
 		kind: "usage",
 		model,
 		input_tokens: usage.input + usage.cacheRead + usage.cacheWrite,
 		output_tokens: usage.output,
+		...(effort !== undefined ? { effort } : {}),
 	};
 }
 
@@ -19,6 +20,8 @@ export interface TurnEventsOptions {
 	/** Ultrabrowse: text waits until the response proves not to be the final answer. */
 	holdFinalText: boolean;
 	fallbackModel: string;
+	/** Thinking effort the request was actually sent with, after per-model resolution. */
+	servedEffort?: () => Effort | undefined;
 }
 
 export class TurnEvents {
@@ -52,7 +55,7 @@ export class TurnEvents {
 			emit({ kind: "assistant.delta", text: this.#held.join("") });
 		}
 		this.#held = [];
-		emit(usageEvent(message.model || this.options.fallbackModel, message.usage));
+		emit(usageEvent(message.model || this.options.fallbackModel, message.usage, this.options.servedEffort?.()));
 		emit({ kind: "turn.ended" });
 		this.turnOpen = false;
 	}

@@ -84,6 +84,7 @@ async fn session_model_is_creation_metadata_and_usage_never_rewrites_its_title()
                 model: "different:effective-model".into(),
                 input_tokens: 1,
                 output_tokens: 1,
+                effort: None,
             },
         )
         .await

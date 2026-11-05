@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { streamSimple } from "@oh-my-pi/pi-ai";
+import { type Effort, streamSimple } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { AuthUnavailable } from "../src/providers/errors";
+import { AuthUnavailable, EffortUnsupported } from "../src/providers/errors";
 import { Session, type SessionOptions } from "../src/runtime/session";
 import { Child } from "../src/runtime/subagents.ts";
 import type { JsonlConnection } from "../src/transport/jsonl";
@@ -431,6 +431,81 @@ describe("runtime", () => {
 				}
 				expect(error.code).toBe("auth_unavailable");
 				expect(error.fatal).toBe(true);
+			});
+		});
+	}
+
+	for (const [name, options, reason] of [
+		[
+			"thrown",
+			{
+				model: createMockModel({ handler: { content: ["unused"] } }),
+				streamFn: async () => {
+					throw new TypeError("fetch https://relay.invalid/v1?key=sk-secret failed");
+				},
+			},
+			"Model run failed (TypeError)",
+		],
+		[
+			"provider",
+			{ model: createMockModel({ handler: { throw: "status_code: 429, body: provider rejected request" } }) },
+			"Model run failed (status_code: 429, body: provider rejected request)",
+		],
+		[
+			"effort",
+			{
+				model: createMockModel({ handler: { content: ["unused"] } }),
+				streamFn: async () => {
+					throw new EffortUnsupported("xhigh", "anthropic:claude-haiku-5-5", ["low", "medium", "high"]);
+				},
+			},
+			"Model run failed (effort xhigh is not supported by anthropic:claude-haiku-5-5; supported: low, medium, high)",
+		],
+		[
+			"bounded",
+			{ model: createMockModel({ handler: { throw: "x".repeat(600) } }) },
+			`Model run failed (${"x".repeat(493)}…`,
+		],
+	] as const) {
+		it(`test_failed_run_reports_a_sanitized_reason[${name}]`, async () => {
+			await withFakeDaemon(session(options as SessionOptions), async daemon => {
+				await daemon.open();
+				daemon.user();
+				await daemon.until("settled");
+				const [result] = of(daemon, "message_result");
+				expect(result?.outcome).toBe("failed");
+				expect(result?.reason).toBe(reason);
+				const error = of(daemon, "error").find(item => item.code === "model_error");
+				expect(error?.message).toBe(`${reason}; check provider configuration`);
+				expect(JSON.stringify(daemon.outputs)).not.toContain("sk-secret");
+			});
+		});
+	}
+
+	for (const [name, agent, fixed, reasoning] of [
+		["runtime", { orchestration: "front", front_tools: [] }, undefined, "minimal"],
+		["person", { orchestration: "front", front_tools: [], effort: "xhigh" }, true, "xhigh"],
+	] as const) {
+		it(`test_effort_origin_reaches_the_stream_and_usage[${name}]`, async () => {
+			const silent = createMockModel({
+				handler: { content: [{ type: "toolCall", name: "stay_silent", arguments: {} }] },
+			});
+			const seen: { fixed: boolean | undefined; reasoning: string | undefined }[] = [];
+			const options: SessionOptions = {
+				makeStreamFn: (_port, ctx) => (_model, context, streamOptions) => {
+					if (ctx.onServedEffort === undefined) return streamSimple(silent, context, streamOptions);
+					seen.push({ fixed: ctx.effortFixed, reasoning: streamOptions?.reasoning });
+					ctx.onServedEffort("low" as Effort);
+					return streamSimple(silent, context, streamOptions);
+				},
+			};
+			await withFakeDaemon(session(options), async daemon => {
+				await daemon.open({ model: "anthropic:claude-haiku-5-5", agent: { ...agent, title_needed: false } });
+				daemon.user();
+				await daemon.until("settled");
+				expect(seen[0]).toEqual({ fixed, reasoning });
+				const usage = of(daemon, "event").find(item => item.event.kind === "usage");
+				expect(usage?.event.effort).toBe("low");
 			});
 		});
 	}

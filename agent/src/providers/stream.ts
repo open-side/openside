@@ -21,13 +21,14 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { clampThinkingLevelForModel, type Effort, getSupportedEfforts } from "@oh-my-pi/pi-catalog";
 import { DEFAULT_ANTIGRAVITY_VERSION } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { logRequestIdentity } from "../features/prompt-epoch";
 import type { CredentialUsage } from "../protocol/types";
 import { applyClaudeCodeVersion } from "./anthropic";
 import { type CredentialLease, type CredentialRpcPort, credentialRpcFor } from "./credential-rpc";
 import { activeEgress, anthropicDirectFetch, directFetch, Egress, EgressRefused, makeEgressFetch } from "./egress";
-import { AuthUnavailable } from "./errors";
+import { AuthUnavailable, EffortUnsupported } from "./errors";
 import { resolveModel, sanitizedErrorMessage, splitModelId } from "./models";
 import { ClassifiedOutcome, classifyResponse } from "./outcomes";
 import { type CredentialAttempt, makeCredentialFetch, requestApiKey } from "./request-auth";
@@ -44,6 +45,31 @@ export interface LeaseContext {
 	fallback?: string[];
 	/** `open.config.agent.provider_retry_delay_ms`; caps provider-internal retry waits. */
 	maxRetryDelayMs?: number;
+	/**
+	 * The requested effort was fixed by a person (`open.config.agent.effort`): candidates
+	 * that cannot serve it are skipped, and the run fails only when none can. Otherwise it
+	 * is runtime-chosen and clamped.
+	 */
+	effortFixed?: boolean;
+	/** Effort each visible request was sent with, after per-candidate resolution. */
+	onServedEffort?: (effort: Effort | undefined) => void;
+}
+
+/**
+ * The effort a candidate is asked for. Runtime defaults are provider-neutral (the front
+ * asks for `minimal`) and pi-ai throws before any request when the candidate's ladder
+ * lacks the tier (Claude has no `minimal`), so they move to the nearest served tier.
+ */
+export function servedEffort(
+	candidate: { id: string; model: Model<Api> },
+	requested: Effort | undefined,
+	fixed: boolean,
+): Effort | undefined {
+	if (requested === undefined) return undefined;
+	const supported = getSupportedEfforts(candidate.model);
+	if (supported.includes(requested)) return requested;
+	if (fixed) throw new EffortUnsupported(requested, candidate.id, supported);
+	return clampThinkingLevelForModel(candidate.model, requested);
 }
 
 const MAX_ATTEMPTS = 64;
@@ -200,14 +226,26 @@ export function makeStreamFn(port: CredentialRpcPort, ctx: LeaseContext): Stream
 			}
 			throw attempt.refusal;
 		}
-		const inner = streamSimple(model, context, {
-			...options,
-			signal: options?.signal ? AbortSignal.any([options.signal, handoff.signal]) : handoff.signal,
-			apiKey,
-			fetch,
-			preferWebsockets: false,
-			maxRetryDelayMs,
-		});
+		let inner: AssistantMessageEventStream;
+		try {
+			inner = streamSimple(model, context, {
+				...options,
+				signal: options?.signal ? AbortSignal.any([options.signal, handoff.signal]) : handoff.signal,
+				apiKey,
+				fetch,
+				preferWebsockets: false,
+				maxRetryDelayMs,
+			});
+		} catch (error) {
+			// pi-ai validates options synchronously, before any request: the lease goes
+			// back unused so its account is neither charged nor penalised.
+			try {
+				await report(new ClassifiedOutcome("cancelled"), false);
+			} finally {
+				attempt.clear();
+			}
+			throw error;
+		}
 		const events = inner[Symbol.asyncIterator]();
 		const buffered: AssistantMessageEvent[] = [];
 		let first: AssistantMessageEvent | undefined;
@@ -350,6 +388,8 @@ export function makeStreamFn(port: CredentialRpcPort, ctx: LeaseContext): Stream
 	};
 
 	return async (model, context, options) => {
+		// Each request reports its own effort; a later request without one must not inherit it.
+		ctx.onServedEffort?.(undefined);
 		if (model.api === "mock") return streamSimple(model, context, options);
 		const candidates: (() => Candidate)[] = [
 			() => ({ provider: ctx.provider, id: ctx.model, model }),
@@ -360,13 +400,29 @@ export function makeStreamFn(port: CredentialRpcPort, ctx: LeaseContext): Stream
 			})),
 		];
 		let failure: AssistantMessage | undefined;
+		let unsupported: EffortUnsupported | undefined;
 		for (const resolve of candidates) {
 			const candidate = resolve();
+			// Resolved before a lease is taken: an unservable fixed effort never spends one.
+			let effort: Effort | undefined;
+			try {
+				effort = servedEffort(candidate, options?.reasoning, ctx.effortFixed === true);
+			} catch (error) {
+				// A person-fixed effort is never downgraded; a candidate that cannot serve it is skipped.
+				if (!(error instanceof EffortUnsupported)) throw error;
+				unsupported ??= error;
+				continue;
+			}
+			const sent = options?.reasoning === effort ? options : { ...options, reasoning: effort };
 			admit(candidate.model.baseUrl);
-			const result = await runCandidate(candidate, context, options);
-			if (result.kind === "visible") return result.stream;
+			const result = await runCandidate(candidate, context, sent);
+			if (result.kind === "visible") {
+				ctx.onServedEffort?.(effort);
+				return result.stream;
+			}
 			if (result.kind === "failed") failure = result.error;
 		}
+		if (failure === undefined && unsupported !== undefined) throw unsupported;
 		const error = failure ?? emptyMessage(model, "error");
 		return streamOf([{ type: "error", reason: "error", error }]);
 	};

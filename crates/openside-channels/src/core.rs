@@ -577,6 +577,7 @@ impl<M: Messenger> Core<M> {
                         model,
                         input_tokens,
                         output_tokens,
+                        ..
                     } = &event.kind
                     {
                         let entry = totals.entry(model.clone()).or_default();

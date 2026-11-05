@@ -9989,6 +9989,11 @@ export interface components {
             text: string;
         } | {
             /**
+             * @description Thinking effort the request was sent with, after the runtime fitted its own
+             *     default to the model; absent when the request carried none.
+             */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
+            /**
              * Format: uint64
              * @description Input token count.
              */
@@ -10437,6 +10442,11 @@ export interface components {
             /** @description Text fragment, appended in sequence order. */
             text: string;
         } | {
+            /**
+             * @description Thinking effort the request was sent with, after the runtime fitted its own
+             *     default to the model; absent when the request carried none.
+             */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
             /**
              * Format: uint64
              * @description Input token count.

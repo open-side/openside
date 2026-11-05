@@ -4421,6 +4421,17 @@
           {
             "description": "Token usage for a model request.",
             "properties": {
+              "effort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ThinkingEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Thinking effort the request was sent with, after the runtime fitted its own\ndefault to the model; absent when the request carried none."
+              },
               "input_tokens": {
                 "description": "Input token count.",
                 "format": "uint64",
@@ -5900,6 +5911,17 @@
           {
             "description": "Token usage for a model request.",
             "properties": {
+              "effort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ThinkingEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Thinking effort the request was sent with, after the runtime fitted its own\ndefault to the model; absent when the request carried none."
+              },
               "input_tokens": {
                 "description": "Input token count.",
                 "format": "uint64",

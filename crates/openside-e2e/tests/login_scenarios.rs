@@ -665,6 +665,7 @@ async fn live_attempt(
                 model,
                 input_tokens,
                 output_tokens,
+                ..
             } => steps.push(
                 json!({"model":model,"input_tokens":input_tokens,"output_tokens":output_tokens}),
             ),

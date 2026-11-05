@@ -4,6 +4,8 @@
 
 export const MAX_LINE_BYTES = 4 * 1024 * 1024;
 export const MAX_USER_TEXT_BYTES = MAX_LINE_BYTES / 4;
+/** `message_result.reason` schema bound (`maxLength`). */
+export const MAX_REASON_CHARS = 512;
 export const STATE_FORMAT = "openside-agent-state/2";
 // Snapshots written by the retired Python sidecar; the runtime starts fresh on these.
 export const LEGACY_STATE_FORMAT = "openside-agent-state/1";
@@ -382,6 +384,8 @@ export interface Usage {
 	model: string;
 	input_tokens: number;
 	output_tokens: number;
+	/** Effort the request was sent with after per-model resolution; absent when it carried none. */
+	effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export type EventBody =
@@ -411,6 +415,7 @@ export interface MessageResult extends Envelope {
 	type: "message_result";
 	message_id: string;
 	outcome: MessageOutcome;
+	/** At most `MAX_REASON_CHARS` characters. */
 	reason?: string;
 }
 

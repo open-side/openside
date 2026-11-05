@@ -328,5 +328,7 @@ pub(crate) enum Event {
         model: String,
         input_tokens: u64,
         output_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
     },
 }

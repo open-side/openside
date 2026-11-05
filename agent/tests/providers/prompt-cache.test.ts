@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import type { Context, Tool } from "@oh-my-pi/pi-ai";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import type { Context, Effort, Tool } from "@oh-my-pi/pi-ai";
+import * as piAi from "@oh-my-pi/pi-ai";
+import { EffortUnsupported } from "../../src/providers/errors";
 import { resolveModel, setProviderBaseUrlForTests } from "../../src/providers/models";
 import { makeStreamFn } from "../../src/providers/stream";
 import { FakeCredentialDaemon, type ProviderServer, serveProvider } from "./fake-credential-daemon";
@@ -187,4 +189,123 @@ describe("prompt cache", () => {
 			}
 		});
 	}
+});
+
+describe("reasoning effort", () => {
+	const id = "anthropic:claude-haiku-5-5";
+	const ping: Context = { messages: [{ role: "user", content: "ping", timestamp: 1 }] };
+
+	function sentEffort(): unknown {
+		const body: unknown = JSON.parse(server?.seen[0]?.body ?? "{}");
+		if (typeof body !== "object" || body === null || !("output_config" in body)) return undefined;
+		const config = body.output_config;
+		return typeof config === "object" && config !== null && "effort" in config ? config.effort : undefined;
+	}
+
+	async function failureOf(run: Promise<unknown>): Promise<unknown> {
+		return run.then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+	}
+
+	it("test_runtime_minimal_effort_is_clamped_to_the_claude_ladder", async () => {
+		// Claude adaptive models serve low..max; an unclamped `minimal` threw inside
+		// pi-ai before any request and surfaced only as "Model run failed".
+		server = serveProvider(() => anthropicReply());
+		setProviderBaseUrlForTests("anthropic", server.url);
+		const served: (string | undefined)[] = [];
+		const stream = makeStreamFn(new FakeCredentialDaemon(1), {
+			provider: "anthropic",
+			model: id,
+			networkAllow: [],
+			onServedEffort: effort => served.push(effort),
+		});
+		const result = await (
+			await stream(resolveModel(id), ping, { maxTokens: 1024, reasoning: "minimal" as Effort })
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(sentEffort()).toBe("low");
+		// A later request without reasoning (e.g. a summary) reports none, not the stale `low`.
+		await (await stream(resolveModel(id), ping, { maxTokens: 16 })).result();
+		expect(served).toEqual([undefined, "low", undefined, undefined]);
+	});
+
+	it("test_person_fixed_effort_is_sent_unchanged_when_served", async () => {
+		server = serveProvider(() => anthropicReply());
+		setProviderBaseUrlForTests("anthropic", server.url);
+		const served: (string | undefined)[] = [];
+		const stream = makeStreamFn(new FakeCredentialDaemon(1), {
+			provider: "anthropic",
+			model: id,
+			networkAllow: [],
+			effortFixed: true,
+			onServedEffort: effort => served.push(effort),
+		});
+		await (await stream(resolveModel(id), ping, { maxTokens: 1024, reasoning: "high" as Effort })).result();
+		expect(sentEffort()).toBe("high");
+		expect(served).toEqual([undefined, "high"]);
+	});
+
+	it("test_person_fixed_effort_skips_a_candidate_that_cannot_serve_it", async () => {
+		// Claude has no `minimal`; the gpt-5-mini fallback serves it unchanged.
+		server = serveProvider(() => openaiReply());
+		setProviderBaseUrlForTests("openai", `${server.url}/v1`);
+		const daemon = new FakeCredentialDaemon(1);
+		const served: (string | undefined)[] = [];
+		const stream = makeStreamFn(daemon, {
+			provider: "anthropic",
+			model: id,
+			networkAllow: [],
+			fallback: ["openai:gpt-5-mini"],
+			effortFixed: true,
+			onServedEffort: effort => served.push(effort),
+		});
+		const result = await (
+			await stream(resolveModel(id), ping, { maxTokens: 1024, reasoning: "minimal" as Effort })
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(daemon.requests.map(request => request.model)).toEqual(["openai:gpt-5-mini"]);
+		const body: unknown = JSON.parse(server.seen[0]?.body ?? "{}");
+		expect(body).toMatchObject({ reasoning: { effort: "minimal" } });
+		expect(served).toEqual([undefined, "minimal"]);
+	});
+
+	it("test_person_fixed_unsupported_effort_fails_before_any_lease", async () => {
+		server = serveProvider(() => anthropicReply());
+		setProviderBaseUrlForTests("anthropic", server.url);
+		const daemon = new FakeCredentialDaemon(1);
+		const stream = makeStreamFn(daemon, { provider: "anthropic", model: id, networkAllow: [], effortFixed: true });
+		const failure = await failureOf(
+			Promise.resolve(stream(resolveModel(id), ping, { maxTokens: 1024, reasoning: "minimal" as Effort })),
+		);
+		expect(failure).toBeInstanceOf(EffortUnsupported);
+		expect(failure).toHaveProperty(
+			"message",
+			"effort minimal is not supported by anthropic:claude-haiku-5-5; supported: low, medium, high, xhigh, max",
+		);
+		expect(daemon.requests).toHaveLength(0);
+		expect(server.seen).toHaveLength(0);
+	});
+
+	it("test_synchronous_stream_throw_returns_the_lease", async () => {
+		server = serveProvider(() => anthropicReply());
+		setProviderBaseUrlForTests("anthropic", server.url);
+		const daemon = new FakeCredentialDaemon(1);
+		const stream = makeStreamFn(daemon, { provider: "anthropic", model: id, networkAllow: [] });
+		const thrown = spyOn(piAi, "streamSimple").mockImplementation(() => {
+			throw new Error("invalid request options");
+		});
+		try {
+			const failure = await failureOf(Promise.resolve(stream(resolveModel(id), ping, { maxTokens: 16 })));
+			expect(failure).toHaveProperty("message", "invalid request options");
+		} finally {
+			thrown.mockRestore();
+		}
+		expect(daemon.requests).toHaveLength(1);
+		expect(daemon.reports.map(report => [report.outcome.outcome, report.streamStarted])).toEqual([
+			["cancelled", false],
+		]);
+		expect(server.seen).toHaveLength(0);
+	});
 });

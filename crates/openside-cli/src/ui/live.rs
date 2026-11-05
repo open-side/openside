@@ -348,6 +348,7 @@ impl Live {
                 model,
                 input_tokens,
                 output_tokens,
+                ..
             } => {
                 self.model = Some(model.clone());
                 self.tokens_in += input_tokens;

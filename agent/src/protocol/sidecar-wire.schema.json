@@ -1399,6 +1399,7 @@
         "reason": {
           "anyOf": [
             {
+              "maxLength": 512,
               "type": "string"
             },
             {
@@ -2376,6 +2377,18 @@
         "output_tokens": {
           "title": "Output Tokens",
           "type": "integer"
+        },
+        "effort": {
+          "description": "Thinking effort the request was sent with, after per-model resolution; absent when the request carried none.",
+          "enum": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
         }
       },
       "required": [

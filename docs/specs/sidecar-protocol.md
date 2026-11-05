@@ -59,7 +59,7 @@ chief는 조율을 총괄한다. 반복 작업에는 teammate를 배정하고, �
 | `ready` | `tools[]`(실제 노출 이름), `pending_deferred[{tool_call_id, ticket_id, kind}]`, `startup_ms` | `open` 처리 완료. 데몬은 `tools` 집합이 `open.tools` 이름 집합과 **정확히 같지 않으면** 세션 시작을 거부(`tool_gate`) |
 | `event` | `event{kind, ...}` | 관측 이벤트(§5.1). 데몬이 세션 이벤트 로그로 정규화 |
 | `message_accepted` | `message_id` | 메시지가 대화 히스토리에 들어감(모델 요청에 포함) |
-| `message_result` | `message_id`, `outcome: completed\|aborted\|failed\|deferred`, `reason?` | 메시지를 포함한 런의 종료. 런에 들어간 모든 메시지마다 1회. `deferred` 로 끝난 메시지는 재개 런이 끝날 때 최종 결과(`completed`/`aborted`/`failed`)를 한 번 더 받는다. 재개 런이 다시 보류되면 `deferred` 를 반복해서 보내지 않는다 |
+| `message_result` | `message_id`, `outcome: completed\|aborted\|failed\|deferred`, `reason?` | 메시지를 포함한 런의 종료. 런에 들어간 모든 메시지마다 1회. `deferred` 로 끝난 메시지는 재개 런이 끝날 때 최종 결과(`completed`/`aborted`/`failed`)를 한 번 더 받는다. 재개 런이 다시 보류되면 `deferred` 를 반복해서 보내지 않는다. `reason`은 최대 512자이며(더 길면 잘라내고 끝에 `…`를 붙인다), 모델 런이 실패하면 `Model run failed (<detail>)` 형식으로 담는다 |
 | `tool_call` | `rpc_id`, `tool_call_id`, `name`, `args`, `subagent?`, `approval_ticket?` | reverse RPC. 동시에 여러 개 가능. 데몬은 같은 `rpc_id` 로 `tool_result` 를 1회 보낸다 |
 | `credential_request` | `id`, `request_id`, `provider`, `model`, `attempt`, `subagent?` | 연결에 바인딩된 데몬 세션에서 새 시도용 자격 증명 발급(§6.1) |
 | `credential_report` | `id`, `request_id`, `lease_id`, `outcome`, `stream_started`, `retry_after_ms?`, `scope`, `usage?`, `usage_windows[]` | 리스에 바인딩된 분류 결과, 관측된 토큰 수, 정제된 사용량 윈도우(§6.1) |
@@ -74,7 +74,7 @@ chief는 조율을 총괄한다. 반복 작업에는 teammate를 배정하고, �
 `state_snapshot`은 실행 종료 시점에 남기는 체크포인트일 뿐이며, 최종 해결 결과를 그대로 재생해도 된다는 근거가 아니다. 사이드카는 스냅샷을 복원할 때 저장되어 있던 미결 호출 해결 결과를 모두 폐기하고 데몬의 `ticket_resolved`를 대기한다.
 
 ### 5.1 `event.kind`
-`turn.started{}`, `turn.ended{}`(모델 요청 1회 단위), `assistant.delta{text}`, `assistant.final{text}`, `thinking.delta{text}`, `subagent.lifecycle{subagent_id, status, output?}`(`running`/`waiting_human`/`completed`/`failed`/`cancelled`), `subagent.progress{subagent_id, progress}`(`progress.kind`: `model_request`, `model_response`, `steer_queued`, `steer_injected`), `usage{model, input_tokens, output_tokens}`.
+`turn.started{}`, `turn.ended{}`(모델 요청 1회 단위), `assistant.delta{text}`, `assistant.final{text}`, `thinking.delta{text}`, `subagent.lifecycle{subagent_id, status, output?}`(`running`/`waiting_human`/`completed`/`failed`/`cancelled`), `subagent.progress{subagent_id, progress}`(`progress.kind`: `model_request`, `model_response`, `steer_queued`, `steer_injected`), `usage{model, input_tokens, output_tokens, effort?}`. `effort`는 사이드카가 모델에 맞게 보정한 뒤 실제로 요청에 실어 보낸 추론 강도이며, 요청에 추론 강도가 없었으면 생략한다. 데몬은 모르는 값을 버린다.
 툴 생명주기(`tool.started/ended`)는 **데몬이 직접** 기록한다(툴을 실행하는 쪽이 데몬이고, 인자 redaction 이 데몬에서 일어나므로). 사이드카는 보내지 않는다.
 
 어시스턴트의 첫 번째 응답이 완료되면 `session.title_proposed{title}`이 발행된다. 사이드카는 자체 백그라운드 작업에서 도구를 사용하지 않는 별도의 제목 생성 요청을 보낸다. 이 요청은 최대 48개 출력 토큰과 10초 제한 시간을 가지며, 완료 후 스냅샷에 `title_attempted`를 기록한다. 제목 생성 작업 때문에 `message_result`, `settled`, 후속 메시지, 세션 종료가 지연되지 않으며, 제목 제안 이벤트는 `settled` 이후에 도착할 수도 있다. 세션이 종료되면 제목 생성 작업은 취소되고 회수된다. 제목 생성에 실패하더라도 어시스턴트 응답이 실패 처리되지는 않는다. 데몬은 최대 6단어로 정규화된 제목만 수락하며, URL 형태는 절대 허용하지 않는다. 세션 생성 시 명시적으로 지정한 제목이나 사용자가 `session.updated`로 변경한 제목이 항상 우선하며, 변경된 제목이 현재 자동 생성 제목과 같더라도 마찬가지다. 제목 생성 요청은 별도의 `usage` 이벤트를 발생시키며, 화면에 보이는 대화 내용이나 스크립트 커서는 변경하지 않는다.

@@ -143,6 +143,10 @@ pub enum EventKind {
         input_tokens: u64,
         /// Output token count.
         output_tokens: u64,
+        /// Thinking effort the request was sent with, after the runtime fitted its own
+        /// default to the model; absent when the request carried none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<crate::ThinkingEffort>,
     },
     /// Tool call began.
     #[serde(rename = "tool.started")]

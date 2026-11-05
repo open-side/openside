@@ -3983,7 +3983,7 @@ Variants:
 - `kind=assistant.delta`: Incremental assistant output. Fields: `text`: string.
 - `kind=assistant.final`: Complete assistant response. Fields: `attachments`: [MessageDocument](#messagedocument)[] (optional), `text`: string.
 - `kind=thinking.delta`: Incremental model thinking output. Fields: `text`: string.
-- `kind=usage`: Token usage for a model request. Fields: `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
+- `kind=usage`: Token usage for a model request. Fields: `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
 - `kind=tool.started`: Tool call began. Fields: `args`: any, `name`: string, `tool_call_id`: string.
 - `kind=tool.updated`: Tool produced intermediate progress. Fields: `tool_call_id`: string, `update`: any.
 - `kind=tool.ended`: Tool completed or failed. Fields: `card`: [Card](#card) \| null (optional), `is_error`: boolean, `result`: any, `tool_call_id`: string.
@@ -4037,7 +4037,7 @@ Public event payloads with stable `kind` identifiers, dotted except for `usage`.
 - `kind=assistant.delta`: Incremental assistant output. Fields: `text`: string.
 - `kind=assistant.final`: Complete assistant response. Fields: `attachments`: [MessageDocument](#messagedocument)[] (optional), `text`: string.
 - `kind=thinking.delta`: Incremental model thinking output. Fields: `text`: string.
-- `kind=usage`: Token usage for a model request. Fields: `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
+- `kind=usage`: Token usage for a model request. Fields: `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
 - `kind=tool.started`: Tool call began. Fields: `args`: any, `name`: string, `tool_call_id`: string.
 - `kind=tool.updated`: Tool produced intermediate progress. Fields: `tool_call_id`: string, `update`: any.
 - `kind=tool.ended`: Tool completed or failed. Fields: `card`: [Card](#card) \| null (optional), `is_error`: boolean, `result`: any, `tool_call_id`: string.

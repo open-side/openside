@@ -296,11 +296,12 @@ async fn every_observation_maps_to_the_runtime_boundary() {
             },
         ),
         (
-            json!({"kind":"usage","model":spec().model,"input_tokens":13,"output_tokens":4}),
+            json!({"kind":"usage","model":spec().model,"input_tokens":13,"output_tokens":4,"effort":"low"}),
             RuntimeEvent::Usage {
                 model: spec().model,
                 input_tokens: 13,
                 output_tokens: 4,
+                effort: Some("low".into()),
             },
         ),
     ];

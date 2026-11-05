@@ -175,6 +175,7 @@ fn every_event_kind_round_trips() {
             model: "model".into(),
             input_tokens: 10,
             output_tokens: 5,
+            effort: Some(crate::ThinkingEffort::Low),
         },
         EventKind::ToolStarted {
             tool_call_id: "t1".into(),

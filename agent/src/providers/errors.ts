@@ -20,6 +20,18 @@ export class AuthUnavailable extends Error {
 	}
 }
 
+/**
+ * A person fixed the session's thinking effort and the candidate model cannot serve it.
+ * The run fails instead of silently downgrading; the text names only catalog data.
+ */
+export class EffortUnsupported extends Error {
+	override readonly name = "EffortUnsupported";
+
+	constructor(effort: string, model: string, supported: readonly string[]) {
+		super(`effort ${effort} is not supported by ${model}; supported: ${supported.join(", ") || "none"}`);
+	}
+}
+
 /** Walks `cause` chains so a wrapped pool failure is never mistaken for a provider error. */
 export function findAuthUnavailable(error: unknown): AuthUnavailable | undefined {
 	const seen = new Set<unknown>();

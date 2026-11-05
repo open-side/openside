@@ -954,10 +954,12 @@ fn runtime_event(message: SidecarMessage) -> Option<RuntimeEvent> {
                 model,
                 input_tokens,
                 output_tokens,
+                effort,
             } => RuntimeEvent::Usage {
                 model,
                 input_tokens,
                 output_tokens,
+                effort,
             },
         },
         SidecarMessage::MessageAccepted { message_id } => {

@@ -1858,10 +1858,14 @@ async fn record(shared: &Shared, id: &SessionId, event: RuntimeEvent) -> Result<
             model,
             input_tokens,
             output_tokens,
+            effort,
         } => EventKind::Usage {
             model,
             input_tokens,
             output_tokens,
+            // The sidecar is not trusted to name new tiers; an unknown one is dropped.
+            effort: effort
+                .and_then(|effort| serde_json::from_value(serde_json::Value::String(effort)).ok()),
         },
         RuntimeEvent::MessageResult {
             id: message_id,

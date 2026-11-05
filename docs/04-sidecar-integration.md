@@ -25,6 +25,8 @@
 - 프레이밍: UTF-8 JSON 한 줄(`\n`), 최대 4 MiB(`MAX_LINE_BYTES = 4194304`), 봉투 `{"v":1,"type":…}`.
 - 손상 입력(너무 긴 줄, JSON 아님, 모르는 `type`, 필수 필드 누락)은 그 줄만 버리고 `error{code:"protocol", fatal:false}`. 프로세스는 죽지 않는다.
 - `error.code`: `protocol`, `bad_request`, `stale_ticket`, `model_error`, `auth_unavailable`(fatal), `tool_gate`(fatal), `internal`.
+- 모델 런이 실패하면 사이드카는 `message_result.reason`과 `model_error` 오류 메시지에 `Model run failed (<detail>)` 형식으로 원인을 최대 512자까지 담는다. `<detail>`에는 `ModelRunError`의 이미 정제된 프로바이더 메시지(예: `status_code: 429, body: provider rejected request`)나 `EffortUnsupported` 메시지를 넣고, 그 밖의 예외는 예외 문구에 URL·프롬프트·자격 증명이 섞일 수 있으므로 오류 클래스 이름(예: `TypeError`)만 남긴다. pi-ai가 요청을 구성하는 도중 동기 예외를 던지면 리스를 `cancelled`로 보고해 계정에 과금이나 페널티가 붙지 않게 한다.
+- 런타임이 직접 정하는 추론 강도(프런트 에이전트의 `minimal`, 리서치 프로필의 `high`)는 매 요청 전에 각 후보 모델이 지원하는 가장 가까운 단계로 보정한다. Claude 모델에는 `minimal` 단계가 없어 그대로 두면 pi-ai가 요청을 보내기 전에 예외를 던지기 때문이다. 반면 사용자가 세션에 고정한 추론 강도(`open.config.agent.effort`)는 절대 낮추지 않는다. 이를 지원하지 않는 후보 모델은 건너뛰고, 지원하는 후보가 하나도 없으면 자격 증명 리스를 발급받기 전에 `Model run failed (effort <effort> is not supported by <model>; supported: <list>)`로 런이 실패한다.
 - 관측 이벤트(`event.kind`): `turn.*`, `assistant.delta|final`, `thinking.delta`, `usage`. 툴 생명주기(`tool.started/ended`)는 데몬만 기록한다(D6).
 - 데몬은 어떤 비밀값(모델 자격 증명, Vault 값, `secret_input`, 기능 토큰)도 프로토콜 메시지에 담지 않는다. 단, 에이전트가 실행한 페이지 스크립트의 반환값은 도구 결과로 전달되므로 내부 비밀값은 redaction만으로 보호된다(ADR-022).
 - 테스트용 스크립트 모델: `OPENSIDE_AGENT_SCRIPT=<JSON 경로>`를 지정하면 사이드카는 자격 증명 리스를 열지 않고 pi-ai 모의 모델로 응답을 재생한다(`agent/src/scripted.ts`, 프로토콜 §9, `crates/openside-e2e`).
