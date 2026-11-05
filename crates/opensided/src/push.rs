@@ -5,8 +5,9 @@
 //! bound to the device whose token registered them; revoking the device drops them.
 //! A `ticket.opened` event and a `session.settled` event of a session without pending
 //! tickets each push a [`PushNotification`] to every subscription whose client has not
-//! reported focus in the last [`PUSH_FOCUS_TTL_SECS`]. A 404/410 from the push service
-//! deletes the subscription.
+//! reported focus in the last [`PUSH_FOCUS_TTL_SECS`]. A settled push is titled with the
+//! session title and carries a plain-text [`excerpt`] of the run's last answer, except for
+//! incognito sessions. A 404/410 from the push service deletes the subscription.
 
 use std::{
     collections::HashMap,
@@ -24,8 +25,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use openside_proto::{
     CreatePushSubscriptionRequest, EventKind, PushNotification, PushPresenceRequest,
-    PushSubscription, PushSubscriptionList, Ticket, TicketKind, TicketStatus, VapidPublicKey,
-    PUSH_FOCUS_TTL_SECS,
+    PushSubscription, PushSubscriptionList, SessionId, Ticket, TicketKind, TicketStatus,
+    VapidPublicKey, PUSH_FOCUS_TTL_SECS,
 };
 use openside_push::{Sender, Subscription, VapidKey};
 use serde::{Deserialize, Serialize};
@@ -385,6 +386,225 @@ fn truncate(text: &str) -> String {
     out
 }
 
+const EXCERPT_CHARS: usize = 140;
+const SETTLED: &str = "Task finished";
+
+/// Lock-screen text of an answer: Markdown syntax, fenced code, images, citation links
+/// and `[citation needed]` markers removed, whitespace collapsed, at most
+/// [`EXCERPT_CHARS`] characters. `None` when nothing readable is left.
+fn excerpt(answer: &str) -> Option<String> {
+    let mut plain = String::new();
+    let mut fence: Option<&str> = None;
+    for line in answer.lines() {
+        let line = line.trim();
+        if let Some(marker) = fence {
+            if line.starts_with(marker) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(marker) = ["```", "~~~"].into_iter().find(|m| line.starts_with(m)) {
+            fence = Some(marker);
+            continue;
+        }
+        let line = block_text(line);
+        if !line.is_empty() {
+            inline_text(line, &mut plain);
+            plain.push(' ');
+        }
+    }
+    let mut out = String::new();
+    for word in plain.split_whitespace() {
+        // Removed citations leave "fact ." behind.
+        if !out.is_empty() && !word.starts_with(['.', ',', ';', ':', '!', '?']) {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    if out.chars().count() > EXCERPT_CHARS {
+        out = out.chars().take(EXCERPT_CHARS - 1).collect();
+        out.truncate(out.trim_end().len());
+        out.push('…');
+    }
+    Some(out)
+}
+
+/// A line without its block markup: quote, heading and list markers, table pipes;
+/// horizontal rules and table separators become empty.
+fn block_text(mut line: &str) -> &str {
+    while let Some(rest) = line.strip_prefix('>') {
+        line = rest.trim_start();
+    }
+    if line.len() >= 3 && line.chars().all(|c| matches!(c, '-' | '*' | '_' | ' ')) {
+        return "";
+    }
+    if line.starts_with('|') && line.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
+        return "";
+    }
+    let hashes = line.len() - line.trim_start_matches('#').len();
+    if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
+        return line[hashes..].trim_start();
+    }
+    for bullet in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(bullet) {
+            line = rest.trim_start();
+            return line
+                .strip_prefix("[ ] ")
+                .or_else(|| line.strip_prefix("[x] "))
+                .unwrap_or(line);
+        }
+    }
+    let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits > 0 {
+        if let Some(rest) = line[digits..]
+            .strip_prefix(". ")
+            .or_else(|| line[digits..].strip_prefix(") "))
+        {
+            return rest.trim_start();
+        }
+    }
+    line
+}
+
+/// Inline Markdown to plain text: links keep their label unless it is only a citation,
+/// images, autolinks and HTML tags go, emphasis and code marks go.
+fn inline_text(text: &str, out: &mut String) {
+    const MARKER: &str = "[citation needed]";
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if rest.starts_with(MARKER) {
+            rest = &rest[MARKER.len()..];
+            continue;
+        }
+        let image = c == '!' && rest[1..].starts_with('[');
+        let at = usize::from(image);
+        if c == '[' || image {
+            if let Some((label, after)) = link(&rest[at..]) {
+                if !image && !citation_label(label) {
+                    inline_text(label, out);
+                }
+                rest = after;
+                continue;
+            }
+        }
+        if c == '<' {
+            if let Some(end) = rest.find('>') {
+                let tag = &rest[1..end];
+                if tag.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!')
+                    && !tag.contains('<')
+                {
+                    rest = &rest[end + 1..];
+                    continue;
+                }
+            }
+        }
+        match c {
+            '*' | '`' | '~' => {}
+            '|' => out.push(' '),
+            // `snake_case` keeps its underscores; only emphasis at a word edge goes.
+            '_' if out.ends_with(|p: char| p.is_alphanumeric())
+                && rest[1..].starts_with(|n: char| n.is_alphanumeric()) =>
+            {
+                out.push('_')
+            }
+            '_' => {}
+            '\\' if rest[1..].starts_with(|n: char| n.is_ascii_punctuation()) => {
+                rest = &rest[1..];
+                let escaped = rest.chars().next().unwrap_or_default();
+                out.push(escaped);
+                rest = &rest[escaped.len_utf8()..];
+                continue;
+            }
+            c => out.push(c),
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+}
+
+/// `[label](target)` at the start of `text`: the label and what follows the link.
+fn link(text: &str) -> Option<(&str, &str)> {
+    let close = text.find("](")?;
+    let label = &text[1..close];
+    if label.contains(['[', ']']) {
+        return None;
+    }
+    let target = &text[close + 2..];
+    let end = target.find(')')?;
+    Some((label, &target[end + 1..]))
+}
+
+/// Research answers cite every fact as `[source](url)`; the label carries nothing to read.
+fn citation_label(label: &str) -> bool {
+    let label = label.trim();
+    label.is_empty()
+        || label.eq_ignore_ascii_case("source")
+        || label.eq_ignore_ascii_case("sources")
+        || label.chars().all(|c| c.is_ascii_digit())
+        || label.starts_with("http://")
+        || label.starts_with("https://")
+}
+
+fn settled_notification(
+    session_id: &SessionId,
+    title: &str,
+    incognito: bool,
+    excerpt: Option<String>,
+) -> PushNotification {
+    // Incognito answers stay off the lock screen.
+    let body = excerpt
+        .filter(|_| !incognito)
+        .unwrap_or_else(|| SETTLED.into());
+    let title = if title.trim().is_empty() {
+        SETTLED.into()
+    } else {
+        truncate(title)
+    };
+    PushNotification {
+        kind: "settled".into(),
+        session_id: session_id.as_str().to_owned(),
+        ticket_id: None,
+        title,
+        body,
+        url: format!("/sessions/{}", session_id.as_str()),
+    }
+}
+
+const MAX_ANSWERS: usize = 256;
+
+/// Excerpt of the latest answer per session since its run started; the event log has no
+/// cheap backwards read, and the bus already carries every final answer. Bounded because
+/// a session can answer and never settle.
+#[derive(Default)]
+struct Answers {
+    next: u64,
+    by_session: HashMap<SessionId, (u64, Option<String>)>,
+}
+
+impl Answers {
+    fn record(&mut self, session: SessionId, answer: &str) {
+        self.next += 1;
+        self.by_session
+            .insert(session, (self.next, excerpt(answer)));
+        if self.by_session.len() > MAX_ANSWERS {
+            let oldest = self
+                .by_session
+                .iter()
+                .min_by_key(|(_, (order, _))| *order)
+                .map(|(session, _)| session.clone());
+            if let Some(oldest) = oldest {
+                self.by_session.remove(&oldest);
+            }
+        }
+    }
+
+    fn take(&mut self, session: &SessionId) -> Option<String> {
+        self.by_session.remove(session).and_then(|(_, excerpt)| excerpt)
+    }
+}
+
 fn ticket_notification(ticket: &Ticket) -> PushNotification {
     let title = match ticket.kind {
         TicketKind::Confirm => "Approval needed",
@@ -523,6 +743,7 @@ pub(crate) fn start(shared: &Shared) {
     let mut events = shared.events.subscribe();
     let mut shutdown = shared.shutdown.subscribe();
     tokio::spawn(async move {
+        let mut answers = Answers::default();
         loop {
             let event = tokio::select! {
                 _ = shutdown.recv() => break,
@@ -530,7 +751,12 @@ pub(crate) fn start(shared: &Shared) {
             };
             let event = match event {
                 Ok(event) => event,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                // A missed event may have been a newer answer or a turn start: never
+                // attach an answer that might be stale.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    answers.by_session.clear();
+                    continue;
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             match event.kind {
@@ -540,7 +766,16 @@ pub(crate) fn start(shared: &Shared) {
                         .clamp(60, 86_400);
                     tokio::spawn(notify(s.clone(), ticket_notification(&ticket), ttl as u32));
                 }
+                EventKind::AssistantFinal { text, .. } => {
+                    answers.record(event.session_id, &text);
+                }
+                EventKind::TurnStarted {}
+                | EventKind::SessionStopped {}
+                | EventKind::SessionDeleted {} => {
+                    answers.take(&event.session_id);
+                }
                 EventKind::SessionSettled {} => {
+                    let excerpt = answers.take(&event.session_id);
                     let Ok(state) = s.db.state(&event.session_id).await else {
                         continue;
                     };
@@ -552,15 +787,20 @@ pub(crate) fn start(shared: &Shared) {
                     {
                         continue;
                     }
-                    let notification = PushNotification {
-                        kind: "settled".into(),
-                        session_id: event.session_id.as_str().to_owned(),
-                        ticket_id: None,
-                        title: "Task finished".into(),
-                        body: truncate(&state.title),
-                        url: format!("/sessions/{}", event.session_id.as_str()),
-                    };
-                    tokio::spawn(notify(s.clone(), notification, 3600));
+                    let notification = settled_notification(
+                        &event.session_id,
+                        &state.title,
+                        state.incognito,
+                        excerpt,
+                    );
+                    let s = s.clone();
+                    let session = event.session_id;
+                    tokio::spawn(async move {
+                        // A session deleted after the state read must not be announced.
+                        if s.db.state(&session).await.is_ok() {
+                            notify(s, notification, 3600).await;
+                        }
+                    });
                 }
                 _ => {}
             }
@@ -570,7 +810,9 @@ pub(crate) fn start(shared: &Shared) {
 
 #[cfg(test)]
 mod tests {
-    use super::known_push_service;
+    use openside_proto::SessionId;
+
+    use super::{excerpt, known_push_service, settled_notification, Answers, MAX_ANSWERS};
 
     #[test]
     fn chrome_numbered_shards_are_known_but_other_google_hosts_are_not() {
@@ -587,5 +829,69 @@ mod tests {
         ] {
             assert!(!known_push_service(host), "{host}");
         }
+    }
+
+    #[test]
+    fn excerpt_strips_markdown_and_citations() {
+        let answer = "## Flights\n\n\
+            Found **3** matching flights [source](https://a.test/1).\n\
+            - The cheapest is `UA124` at 08:30 [1](https://b.test) [citation needed].\n\
+            > See the [fare table](https://c.test/t) and ![chart](https://c.test/c.png)\n\
+            ```json\n{\"secret\": \"code block\"}\n```\n\
+            | a | b |\n|---|---|\n| x_y | <b>z</b> |";
+        assert_eq!(
+            excerpt(answer).as_deref(),
+            Some(
+                "Flights Found 3 matching flights. The cheapest is UA124 at 08:30. \
+                 See the fare table and a b x_y z"
+            )
+        );
+        assert_eq!(excerpt("```\nonly code\n```\n---\n"), None);
+        assert_eq!(excerpt("   "), None);
+        assert_eq!(excerpt("1. step one\n2) step _two_"), Some("step one step two".into()));
+        assert_eq!(excerpt(r"a \*literal\* star"), Some("a *literal* star".into()));
+    }
+
+    #[test]
+    fn excerpt_is_bounded_on_char_boundaries() {
+        let long = "가나다 ".repeat(100);
+        let out = excerpt(&long).unwrap();
+        assert_eq!(out.chars().count(), 140);
+        assert!(out.ends_with('…'));
+        assert!(!out.trim_end_matches('…').ends_with(' '));
+        let exact = "é".repeat(140);
+        assert_eq!(excerpt(&exact), Some(exact));
+    }
+
+    #[test]
+    fn settled_notification_is_titled_by_session_and_hides_incognito_answers() {
+        let id = SessionId::new("s1");
+        let shown = settled_notification(&id, "Find flights", false, excerpt("**Found** it."));
+        assert_eq!(
+            (shown.kind.as_str(), shown.title.as_str(), shown.body.as_str()),
+            ("settled", "Find flights", "Found it.")
+        );
+        assert_eq!(shown.url, "/sessions/s1");
+        assert_eq!(shown.ticket_id, None);
+        let private = settled_notification(&id, "Find flights", true, excerpt("Found it."));
+        assert_eq!(private.body, "Task finished");
+        let silent = settled_notification(&id, "", false, excerpt("```\ncode\n```"));
+        assert_eq!((silent.title.as_str(), silent.body.as_str()), ("Task finished", "Task finished"));
+        assert_eq!(settled_notification(&id, "t", false, None).body, "Task finished");
+    }
+
+    #[test]
+    fn answers_keep_excerpts_and_evict_the_oldest_session() {
+        let mut answers = Answers::default();
+        answers.record(SessionId::new("old"), &"word ".repeat(1000));
+        let kept = answers.by_session[&SessionId::new("old")].1.as_deref().unwrap();
+        assert_eq!(kept.chars().count(), 140);
+        for n in 0..MAX_ANSWERS {
+            answers.record(SessionId::new(&format!("s{n}")), "answer");
+        }
+        assert_eq!(answers.by_session.len(), MAX_ANSWERS);
+        assert_eq!(answers.take(&SessionId::new("old")), None);
+        assert_eq!(answers.take(&SessionId::new("s0")).as_deref(), Some("answer"));
+        assert_eq!(answers.take(&SessionId::new("s0")), None);
     }
 }
