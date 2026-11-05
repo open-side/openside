@@ -120,8 +120,8 @@ pub(crate) fn render(platform: Platform, daemon: &Path) -> String {
              KillMode=process\n\
              Restart=on-failure\n\
              RestartSec=2\n\
-             # User units get a minimal PATH; the sidecar needs uv, usually in ~/.local/bin.\n\
-             Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin\n\
+             # User units get a minimal PATH; the sidecar needs bun (~/.bun/bin or ~/.local/bin).\n\
+             Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin\n\
              \n\
              [Install]\n\
              WantedBy=default.target\n",
@@ -148,7 +148,7 @@ pub(crate) fn render(platform: Platform, daemon: &Path) -> String {
              \t<!-- Stop only the daemon; it decides whether Chromium outlives it (pending browser tickets). -->\n\
              \t<key>AbandonProcessGroup</key>\n\
              \t<true/>\n\
-             \t<!-- Agents get a minimal PATH; the sidecar needs uv (Homebrew or ~/.local/bin installs). -->\n\
+             \t<!-- Agents get a minimal PATH; the sidecar needs bun from Homebrew or /usr/local/bin. -->\n\
              \t<key>EnvironmentVariables</key>\n\
              \t<dict>\n\
              \t\t<key>PATH</key>\n\
@@ -244,9 +244,9 @@ mod tests {
         let unit = render(Platform::Systemd, &daemon);
         assert!(unit.contains(&format!("ExecStart=\"{}\"\n", daemon.display())));
         assert!(unit.contains("Restart=on-failure\n"));
-        // A user manager's default PATH has no ~/.local/bin, where uv usually lives; without it
-        // the daemon cannot start the sidecar (observed in a real VM boot, PP-4).
-        assert!(unit.contains("Environment=PATH=%h/.local/bin:"));
+        // A user manager's default PATH has neither ~/.bun/bin (bun's installer) nor ~/.local/bin;
+        // without them the daemon cannot start the sidecar (observed in a real VM boot, PP-4).
+        assert!(unit.contains("Environment=PATH=%h/.bun/bin:%h/.local/bin:"));
         assert!(unit.contains("KillMode=process\n"));
         assert!(unit.contains("WantedBy=default.target\n"));
         let path = root.path().join("openside.service");

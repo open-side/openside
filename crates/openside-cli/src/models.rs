@@ -56,6 +56,12 @@ pub(crate) enum ModelCommand {
         session: String,
         account: Option<String>,
     },
+    /// Model subscription accounts (Claude Code and Codex CLI homes); lists them without a
+    /// subcommand.
+    Accounts {
+        #[command(subcommand)]
+        command: Option<crate::model_accounts::SubscriptionCommand>,
+    },
 }
 #[derive(Subcommand)]
 pub(crate) enum PoolCommand {
@@ -216,6 +222,9 @@ pub(crate) async fn run<W: Write>(
         return list(client, json_output, stdout).await;
     };
     match command {
+        ModelCommand::Accounts { command } => {
+            crate::model_accounts::run(command.as_ref(), client, json_output, stdout).await
+        }
         ModelCommand::Set {
             model,
             fallbacks,

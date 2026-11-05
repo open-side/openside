@@ -3,12 +3,14 @@
 //! Every tool call becomes one or more `/v1/*` requests through the same [`Client`] the rest of
 //! the CLI uses, so requests outside `openside_proto::ROUTES` are refused before they leave the
 //! process and the daemon enforces the capability scopes of whichever token (or the local
-//! socket) the server was started with. The server holds no state of its own.
+//! socket) the server was started with. The only state it keeps is the session that `repl`
+//! calls without a `session_id` share.
 //!
-//! Two ways to use the browser: delegate a goal to the openside agent (`agent_*`), or drive the
-//! session browser directly with the same tools the agent has. Those direct tools are listed
-//! from the daemon's catalog (`GET /v1/tools`) on every `tools/list`, so they always match the
-//! daemon's own names and schemas; `browser_repl` runs Playwright-syntax scripts.
+//! The first tools are `exec` (delegate a prompt to the openside agent), `repl` (run a
+//! Playwright-syntax script in a session tab), `browser_profiles` and `memory_search`; then
+//! session, ticket and `agent_*` tools to follow runs, and the daemon's own browser tools, listed
+//! from its catalog (`GET /v1/tools`) on every `tools/list` so they always match the daemon's
+//! names and schemas.
 //!
 //! stdout carries the MCP protocol only; diagnostics go to stderr.
 
@@ -31,6 +33,7 @@ use serde_json::{json, Map, Value};
 use crate::{
     agent,
     client::{self, Client},
+    settings::{BrowserProfile, PROFILES},
     tool_call,
     wait::{self, Replay, Until},
 };
@@ -38,26 +41,23 @@ use crate::{
 const DEFAULT_WAIT_SECS: u64 = 120;
 const MAX_WAIT_SECS: u64 = 3600;
 
+/// What `openside mcp --account/--profile` and the CLI settings choose for new sessions.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Defaults<'a> {
+    /// Team agent id new sessions run as.
+    pub(crate) account: Option<&'a str>,
+    pub(crate) profile: BrowserProfile,
+    pub(crate) save_sessions: bool,
+}
+
 /// Runs the server on stdin/stdout until the client disconnects. Returns the process exit code.
 pub(crate) async fn run<E: Write>(
-    socket: Option<&Path>,
-    url: Option<&str>,
+    client: Client,
     token: Option<String>,
+    defaults: Defaults<'_>,
     stderr: &mut E,
-    remote: Option<String>,
 ) -> u8 {
-    let client = match Client::from_flags(socket, url, token.as_deref(), remote.as_deref()).await {
-        Ok(client) => client,
-        Err(error) => {
-            let _ = writeln!(
-                stderr,
-                "openside: {}",
-                redact(&error.to_string(), token.as_deref())
-            );
-            return 2;
-        }
-    };
-    let served = match Mcp::new(client, token.clone())
+    let served = match Mcp::new(client, token.clone(), defaults)
         .serve(rmcp::transport::stdio())
         .await
     {
@@ -93,6 +93,12 @@ pub(crate) fn redact(message: &str, token: Option<&str>) -> String {
 pub(crate) struct Mcp {
     client: Client,
     token: Option<String>,
+    account: Option<String>,
+    profile: BrowserProfile,
+    save_sessions: bool,
+    /// The session `repl` calls without a `session_id` use, and its profile; a different
+    /// profile starts a new session (and so new tabs).
+    scratch: tokio::sync::Mutex<Option<(BrowserProfile, String)>>,
 }
 
 /// Why a tool call did not produce a result.
@@ -186,26 +192,45 @@ struct MemorySearch {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BrowserRepl {
-    session_id: String,
+struct Repl {
     code: String,
+    session_id: Option<String>,
+    profile_id: Option<String>,
     tab_id: Option<String>,
     approval_ticket: Option<String>,
     wait: Option<bool>,
     timeout_secs: Option<u64>,
 }
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum Permission {
+    Ask,
+    Guard,
+    FullAccess,
+    ReadOnly,
+}
+
+impl From<Permission> for PolicyMode {
+    fn from(permission: Permission) -> Self {
+        match permission {
+            Permission::Ask | Permission::Guard => Self::Guard,
+            Permission::FullAccess => Self::Full,
+            Permission::ReadOnly => Self::ReadOnly,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AgentRun {
-    goal: String,
+struct Exec {
+    prompt: String,
     session_id: Option<String>,
-    #[serde(default)]
-    wait: bool,
+    profile_id: Option<String>,
+    wait: Option<bool>,
     timeout_secs: Option<u64>,
     model: Option<String>,
-    mode: Option<PolicyMode>,
-    browser_space: Option<BrowserSpace>,
+    permission: Option<Permission>,
 }
 
 #[derive(Deserialize)]
@@ -233,11 +258,58 @@ struct AgentCancel {
 }
 
 impl Mcp {
-    pub(crate) fn new(client: Client, token: Option<String>) -> Self {
+    pub(crate) fn new(client: Client, token: Option<String>, defaults: Defaults<'_>) -> Self {
         Self {
             client: client.with_agent_client(),
             token,
+            account: defaults.account.map(str::to_owned),
+            profile: defaults.profile,
+            save_sessions: defaults.save_sessions,
+            scratch: tokio::sync::Mutex::new(None),
         }
+    }
+
+    fn profile(&self, id: Option<&str>) -> Result<BrowserProfile, Failure> {
+        id.map_or(Ok(self.profile), |id| {
+            BrowserProfile::parse(id).map_err(Failure::Params)
+        })
+    }
+
+    fn create_request(&self, profile: BrowserProfile) -> openside_proto::CreateSessionRequest {
+        let mut create = openside_proto::CreateSessionRequest {
+            agent_id: self.account.clone(),
+            title: None,
+            model: None,
+            mode: None,
+            workspace: None,
+            incognito: false,
+            browser_space: BrowserSpace::Shared,
+            effort: None,
+            speed: None,
+            profile: None,
+        };
+        profile.apply(&mut create);
+        create
+    }
+
+    /// The session a `repl` call without `session_id` runs in: one per profile, created on
+    /// first use.
+    async fn scratch_session(&self, profile: BrowserProfile) -> Result<String, Failure> {
+        let mut scratch = self.scratch.lock().await;
+        if let Some((current, id)) = scratch.as_ref() {
+            if *current == profile {
+                return Ok(id.clone());
+            }
+        }
+        let mut create = self.create_request(profile);
+        create.title = Some("openside repl".into());
+        let session: openside_proto::Session = self
+            .client
+            .json("POST", "/v1/sessions", Some(&create))
+            .await?;
+        let id = session.id.to_string();
+        *scratch = Some((profile, id.clone()));
+        Ok(id)
     }
 
     fn redact(&self, message: String) -> String {
@@ -322,9 +394,16 @@ impl Mcp {
                 let path = memory_path(&parse(arguments)?);
                 Ok(self.client.get(&path).await?)
             }
-            "browser_repl" => {
-                let args: BrowserRepl = parse(arguments)?;
+            "repl" => {
+                let args: Repl = parse(arguments)?;
                 let wait = direct_wait(args.wait, args.timeout_secs)?;
+                let session = match args.session_id {
+                    Some(session) => session,
+                    None => {
+                        let profile = self.profile(args.profile_id.as_deref())?;
+                        self.scratch_session(profile).await?
+                    }
+                };
                 let outcome = tool_call::drive(
                     &self.client,
                     args.approval_ticket,
@@ -332,7 +411,7 @@ impl Mcp {
                     |approval| {
                         tool_call::repl(
                             &self.client,
-                            &args.session_id,
+                            &session,
                             &args.code,
                             args.tab_id.as_deref(),
                             approval,
@@ -341,9 +420,27 @@ impl Mcp {
                     |_, _| {},
                 )
                 .await?;
-                outcome_result(outcome)
+                let mut result = outcome_result(outcome)?;
+                if let Some(object) = result.as_object_mut() {
+                    object.insert("session_id".into(), json!(session));
+                }
+                Ok(result)
             }
-            "agent_run" => self.agent_run(parse(arguments)?, progress).await,
+            "browser_profiles" => {
+                let _: Empty = parse(arguments)?;
+                let profiles: Vec<Value> = PROFILES
+                    .iter()
+                    .map(|profile| {
+                        json!({
+                            "profileId": profile.id(),
+                            "default": *profile == self.profile,
+                            "description": profile.description(),
+                        })
+                    })
+                    .collect();
+                Ok(json!({ "profiles": profiles }))
+            }
+            "exec" => self.exec(parse(arguments)?, progress).await,
             "agent_status" => {
                 let args: SessionRef = parse(arguments)?;
                 self.agent_status(&args.session_id).await
@@ -478,29 +575,19 @@ impl Mcp {
         Ok((value, images))
     }
 
-    async fn agent_run(
-        &self,
-        args: AgentRun,
-        progress: Option<Progress>,
-    ) -> Result<Value, Failure> {
+    async fn exec(&self, args: Exec, progress: Option<Progress>) -> Result<Value, Failure> {
         let timeout = wait_timeout(args.timeout_secs)?;
-        if args.goal.trim().is_empty() {
-            return Err(Failure::Params("goal must not be empty".into()));
+        if args.prompt.trim().is_empty() {
+            return Err(Failure::Params("prompt must not be empty".into()));
         }
-        let create = openside_proto::CreateSessionRequest {
-            agent_id: None,
-            title: None,
-            model: args.model,
-            mode: args.mode,
-            workspace: None,
-            incognito: false,
-            browser_space: args.browser_space.unwrap_or_default(),
-        };
+        let mut create = self.create_request(self.profile(args.profile_id.as_deref())?);
+        create.model = args.model;
+        create.mode = args.permission.map(PolicyMode::from);
         let started = agent::start(
             &self.client,
             args.session_id.as_deref(),
             &create,
-            &args.goal,
+            &args.prompt,
         )
         .await?;
         let session = started.session.id.to_string();
@@ -509,7 +596,7 @@ impl Mcp {
             "message_id": started.message.id,
             "after_seq": started.session.last_seq,
         });
-        if !args.wait {
+        if !args.wait.unwrap_or(true) {
             result["next"] = json!("Poll agent_status, or call agent_result with session_id, message_id and after_seq to wait for the replies.");
             return Ok(result);
         }
@@ -521,10 +608,25 @@ impl Mcp {
         let waited = self
             .settle_with_progress(&session, replay, timeout, progress)
             .await?;
+        let finished = matches!(waited["status"].as_str(), Some("settled" | "stopped"));
         if let (Some(result), Value::Object(waited)) = (result.as_object_mut(), waited) {
             result.extend(waited);
         }
         result["tasks"] = self.tasks(&session).await?;
+        // Like `openside exec`: a finished run in a session this call created is archived
+        // unless `openside settings save-sessions true`.
+        if finished && args.session_id.is_none() && !self.save_sessions {
+            let archived = self
+                .client
+                .json::<Value, _>(
+                    "PATCH",
+                    &client::session_path(&session, ""),
+                    Some(&json!({"archived": true})),
+                )
+                .await
+                .is_ok();
+            result["archived"] = json!(archived);
+        }
         Ok(result)
     }
 
@@ -826,7 +928,7 @@ fn tool(name: &'static str, description: &'static str, read_only: bool, input: J
 
 fn direct_properties() -> Value {
     json!({
-        "session_id": {"type": "string", "description": "Session whose browser is driven (session_create or agent_run gives one)."},
+        "session_id": {"type": "string", "description": "Session whose browser is driven (session_create or exec gives one)."},
         "approval_ticket": {"type": "string",
             "description": "Approved ticket id from an earlier `deferred` result; normally the call waits and reruns by itself."},
         "wait": {"type": "boolean",
@@ -886,27 +988,60 @@ pub(crate) fn tools() -> Vec<Tool> {
             "description": "Only consider events after this sequence (`after_seq` from session_send, or `last_seq` from a timed-out wait)."},
     }));
     wait_props.extend(object(wait_args));
+    let profile_id = json!({"type": "string", "enum": PROFILES.map(BrowserProfile::id),
+        "description": "Browser profile for a new session (see browser_profiles); default: the server's profile."});
     let mut repl_props = object(json!({
         "code": {"type": "string", "description": "Playwright-syntax script; may run many actions in one call. The last expression is returned."},
         "tab_id": {"type": "string", "description": "Agent tab; optional when the session owns at most one tab."},
     }));
     repl_props.extend(object(direct_properties()));
+    repl_props.insert(
+        "session_id".into(),
+        json!({"type": "string", "description": "Session whose tab runs the script; default: one scratch session per profile, shared by calls without session_id."}),
+    );
+    repl_props.insert("profile_id".into(), profile_id.clone());
     vec![
         tool(
-            "agent_run",
-            "Delegate a goal to the openside browser agent (it plans, browses, signs in through the user's vault, and asks the user on their phone when it needs a person). Starts a new session unless session_id is given. Returns session_id, message_id and after_seq at once; with wait=true, waits for the run (progress arrives as notifications/progress when the client sends a progress token) and returns the replies. Needs the steer scope, plus read to wait.",
+            "exec",
+            "Delegate a prompt to the openside browser agent (it plans, browses, signs in through the user's vault, and asks the user on their phone when it needs a person). Starts a new session unless session_id is given. By default waits for the run (progress arrives as notifications/progress when the client sends a progress token) and returns the replies; with wait=false returns session_id, message_id and after_seq at once. Needs the steer scope, plus read to wait.",
             false,
             schema(
                 json!({
-                    "goal": {"type": "string", "description": "What the agent should do, self-contained."},
+                    "prompt": {"type": "string", "description": "What the agent should do, self-contained."},
                     "session_id": {"type": "string", "description": "Continue in this session instead of a new one."},
-                    "wait": {"type": "boolean", "description": "Wait for the run's end and return the replies."},
+                    "profile_id": profile_id,
+                    "wait": {"type": "boolean", "description": "Wait (default) for the run's end and return the replies."},
                     "timeout_secs": timeout,
-                    "model": {"type": "string", "description": "Provider-qualified model for a new session."},
-                    "mode": {"type": "string", "enum": ["read-only", "guard", "full"]},
-                    "browser_space": {"type": "string", "enum": ["shared", "isolated"], "description": "shared (default): the user's managed browser profile with its logins. isolated: own cookies and storage."},
+                    "model": {"type": "string", "description": "Provider-qualified model (provider:model) for a new session."},
+                    "permission": {"type": "string", "enum": ["ask", "guard", "full-access", "read-only"],
+                        "description": "Approval policy for a new session; ask and guard both ask a person before sensitive steps."},
                 }),
-                &["goal"],
+                &["prompt"],
+            ),
+        ),
+        tool(
+            "repl",
+            "Run a Playwright-syntax script (page, expect, console; page.evaluate where the daemon allows it) in a session's tab: batch many actions in one call. Each call gets a fresh script context; the tab keeps its state. See docs/specs/browser-repl.md. Sensitive steps wait for the user's approval.",
+            false,
+            schema(Value::Object(repl_props), &["code"]),
+        ),
+        tool(
+            "browser_profiles",
+            "List the browser profiles a session can use: shared (the user's signed-in browser), isolated (own cookies and storage) and incognito.",
+            true,
+            schema(json!({}), &[]),
+        ),
+        tool(
+            "memory_search",
+            "Search the user's local memory notes and browsing history.",
+            true,
+            schema(
+                json!({
+                    "query": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["note", "history"]},
+                    "limit": {"type": "integer", "minimum": 1},
+                }),
+                &[],
             ),
         ),
         tool(
@@ -917,13 +1052,13 @@ pub(crate) fn tools() -> Vec<Tool> {
         ),
         tool(
             "agent_result",
-            "Wait for a run started by agent_run and return the agent's replies, its Tasks and pending tickets. Status `waiting_human` means a person must answer a ticket in the openside app; `timeout` means call again.",
+            "Wait for a run started by exec and return the agent's replies, its Tasks and pending tickets. Status `waiting_human` means a person must answer a ticket in the openside app; `timeout` means call again.",
             true,
             schema(
                 json!({
                     "session_id": session_id,
-                    "after_seq": {"type": "integer", "minimum": 0, "description": "after_seq from agent_run."},
-                    "message_id": {"type": "string", "description": "message_id from agent_run."},
+                    "after_seq": {"type": "integer", "minimum": 0, "description": "after_seq from exec."},
+                    "message_id": {"type": "string", "description": "message_id from exec."},
                     "timeout_secs": timeout,
                 }),
                 &["session_id", "after_seq"],
@@ -1016,25 +1151,6 @@ pub(crate) fn tools() -> Vec<Tool> {
                 &["ticket_id"],
             ),
         ),
-        tool(
-            "memory_search",
-            "Search the user's local memory notes and browsing history.",
-            true,
-            schema(
-                json!({
-                    "query": {"type": "string"},
-                    "kind": {"type": "string", "enum": ["note", "history"]},
-                    "limit": {"type": "integer", "minimum": 1},
-                }),
-                &[],
-            ),
-        ),
-        tool(
-            "browser_repl",
-            "Run a Playwright-syntax script (page, expect, console; page.evaluate where the daemon allows it) in the session's tab: batch many actions in one call. See docs/specs/browser-repl.md. Sensitive steps wait for the user's approval.",
-            false,
-            schema(Value::Object(repl_props), &["session_id", "code"]),
-        ),
     ]
 }
 
@@ -1044,9 +1160,9 @@ impl ServerHandler for Mcp {
             .with_server_info(Implementation::new("openside", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "The user's openside browser agent and browser. For a multi-step web task, \
-                 delegate with agent_run (it uses the user's logins and asks the user on their \
-                 phone when a person is needed); to drive the browser yourself, create a session \
-                 and use the browser_* tools or browser_repl for a batch of steps. Each call is \
+                 delegate with exec (it uses the user's logins and asks the user on their \
+                 phone when a person is needed); to drive the browser yourself, use repl for a \
+                 batch of steps, or create a session and use the browser_* tools. Each call is \
                  limited by the token's scopes.",
             )
     }

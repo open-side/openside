@@ -1,5 +1,6 @@
-//! Remote daemon profiles: `openside connect`, `openside remote profiles list|rm`, and
-//! the `--remote NAME` / `OPENSIDE_REMOTE` connection every command accepts.
+//! Remote daemon profiles (session hosts): `openside login`, `openside logout`,
+//! `openside host list|use`, and the `--host NAME` / `OPENSIDE_HOST` connection every command
+//! accepts.
 //!
 //! A profile records how to reach the daemon (`direct` HTTPS such as Tailscale Serve or a
 //! Cloudflare Tunnel, or `relay` with the daemon's routing id and X25519 key) in
@@ -14,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::{Args, Subcommand};
+use clap::Args;
 use openside_proto::{ExchangePairingRequest, PairDeviceResponse};
 use serde::{Deserialize, Serialize};
 
@@ -264,21 +265,58 @@ mod keyring_store {
     }
 }
 
+/// Saved remote daemons by name.
+pub(crate) fn saved() -> Result<BTreeMap<String, Profile>, String> {
+    Ok(read_file(&file_path()?)?.remote)
+}
+
+/// The saved profile name for a host given by its name or its device id.
+pub(crate) fn find(host: &str) -> Result<String, String> {
+    let remote = saved()?;
+    if remote.contains_key(host) {
+        return Ok(host.to_owned());
+    }
+    remote
+        .iter()
+        .find(|(_, profile)| profile.device_id == host)
+        .map(|(name, _)| name.clone())
+        .ok_or_else(|| {
+            format!(
+                "no host named {host:?}; pair one with `openside login` (see `openside host list`)"
+            )
+        })
+}
+
 /// The profile and its device token.
 pub(crate) fn load(name: &str) -> Result<(Profile, String), String> {
     let path = file_path()?;
     let file = read_file(&path)?;
     let profile = file.remote.get(name).cloned().ok_or_else(|| {
-        format!("no remote named {name:?}; pair one with `openside connect` (see `openside remote profiles list`)")
+        format!("no host named {name:?}; pair one with `openside login` (see `openside host list`)")
     })?;
     let token = match profile.token_store.as_str() {
         "file" => profile.token.clone(),
         _ => keyring_store::get(name),
     }
     .ok_or_else(|| {
-        format!("the device token for remote {name:?} is missing; run `openside connect` again")
+        format!("the device token for host {name:?} is missing; run `openside login` again")
     })?;
     Ok((profile, token))
+}
+
+/// Delete a saved profile and its stored token.
+pub(crate) fn forget(name: &str) -> Result<Profile, String> {
+    let path = file_path()?;
+    let mut file = read_file(&path)?;
+    let profile = file
+        .remote
+        .remove(name)
+        .ok_or_else(|| format!("no host named {name:?}"))?;
+    if profile.token_store == "keyring" {
+        keyring_store::delete(name);
+    }
+    write_file(&path, &file)?;
+    Ok(profile)
 }
 
 fn valid_name(name: &str) -> bool {
@@ -315,27 +353,15 @@ pub(crate) fn save(
 }
 
 #[derive(Args)]
-pub(crate) struct ConnectArgs {
+pub(crate) struct LoginArgs {
     /// Pairing link; omit to read from stdin or a hidden prompt (recommended).
     link: Option<String>,
-    /// Profile name used with `--remote NAME`; default: the host name's first label.
+    /// Host name used with `--host NAME`; default: the host name's first label.
     #[arg(long)]
     name: Option<String>,
-    /// Replace an existing profile with the same name.
+    /// Replace an existing host with the same name.
     #[arg(long)]
     force: bool,
-}
-
-#[derive(Subcommand)]
-pub(crate) enum RemotesCommand {
-    /// Saved remote daemons (tokens are never shown).
-    List,
-    /// Forget a remote and delete its stored token. The daemon keeps the device until you
-    /// run `openside device revoke <id>` there.
-    Rm {
-        /// Profile name.
-        name: String,
-    },
 }
 
 fn default_name(link: &PairingLink) -> String {
@@ -358,7 +384,7 @@ fn read_pairing_link<R: Read, E: Write>(
 ) -> Result<PairingLink, String> {
     let text = match link {
         Some(link) => {
-            writeln!(stderr, "Warning: a pairing link in command arguments may appear in shell history and process listings. Prefer `openside connect` and enter it at the hidden prompt or pipe it through stdin.")
+            writeln!(stderr, "Warning: a pairing link in command arguments may appear in shell history and process listings. Prefer `openside login` and enter it at the hidden prompt or pipe it through stdin.")
                 .map_err(output_error)?;
             link.to_owned()
         }
@@ -367,9 +393,9 @@ fn read_pairing_link<R: Read, E: Write>(
     parse_link(&text)
 }
 
-/// Exchange the one-time code and save the profile without requiring credentials in argv.
-pub(crate) async fn connect<R: Read, W: Write, E: Write>(
-    args: &ConnectArgs,
+/// Exchange the one-time code and save the host without requiring credentials in argv.
+pub(crate) async fn login<R: Read, W: Write, E: Write>(
+    args: &LoginArgs,
     json: bool,
     stdin: &mut R,
     stdout: &mut W,
@@ -448,69 +474,9 @@ pub(crate) async fn connect<R: Read, W: Write, E: Write>(
     .map_err(output_error)?;
     writeln!(
         stdout,
-        "Use it with: openside --remote {name} <command>   (or OPENSIDE_REMOTE={name})"
+        "Use it with: openside --host {name} <command>   (or `openside host use {name}`)"
     )
     .map_err(output_error)
-}
-
-pub(crate) fn remotes<W: Write>(
-    command: &RemotesCommand,
-    json: bool,
-    stdout: &mut W,
-) -> Result<(), String> {
-    let path = file_path()?;
-    match command {
-        RemotesCommand::List => {
-            let file = read_file(&path)?;
-            for (name, profile) in &file.remote {
-                if json {
-                    emit(
-                        stdout,
-                        &serde_json::json!({
-                            "name": name, "transport": profile.transport, "url": profile.url,
-                            "device_id": profile.device_id, "scopes": profile.scopes,
-                            "token_store": profile.token_store,
-                        }),
-                    )?;
-                } else {
-                    let transport = match profile.transport {
-                        Transport::Direct => "direct",
-                        Transport::Relay => "relay",
-                    };
-                    writeln!(
-                        stdout,
-                        "{name}\t{transport}\t{}\t{}",
-                        profile.url, profile.device_id
-                    )
-                    .map_err(output_error)?;
-                }
-            }
-            Ok(())
-        }
-        RemotesCommand::Rm { name } => {
-            let mut file = read_file(&path)?;
-            let profile = file
-                .remote
-                .remove(name)
-                .ok_or_else(|| format!("no remote named {name:?}"))?;
-            if profile.token_store == "keyring" {
-                keyring_store::delete(name);
-            }
-            write_file(&path, &file)?;
-            if json {
-                return emit(
-                    stdout,
-                    &serde_json::json!({"removed": name, "device_id": profile.device_id}),
-                );
-            }
-            writeln!(
-                stdout,
-                "Removed {name}. The daemon still lists device {}; revoke it there with `openside device revoke {}`.",
-                profile.device_id, profile.device_id
-            )
-            .map_err(output_error)
-        }
-    }
 }
 
 #[cfg(test)]

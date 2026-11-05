@@ -1,4 +1,4 @@
-//! Waiting for a session's run to end, shared by `openside run --wait` and the MCP tools: the
+//! Waiting for a session's run to end, shared by the MCP tools and `openside exec`: the
 //! session's SSE stream is replayed from a known sequence and read until the run settles,
 //! stops, fails, or the timeout passes.
 
@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use http_body_util::BodyExt;
-use openside_proto::{Event, EventKind};
+use openside_proto::{Event, EventKind, MessageOutcome};
 use serde_json::{json, Value};
 
 use crate::{client::Client, sse::Decoder};
@@ -30,6 +30,67 @@ pub(crate) struct Until {
     pub(crate) through_human: bool,
 }
 
+/// What the run's own events say about a `session.settled`. Only the stream may decide this:
+/// the daemon commits a ticket's resolution before its `ticket.resolved` event is published,
+/// so a `GET /v1/tickets` snapshot taken at the boundary can already miss a ticket whose
+/// resolution event is still in flight.
+#[derive(Default)]
+pub(crate) struct Pause {
+    /// Tickets seen opened (or seeded) and not yet closed.
+    pub(crate) open_tickets: BTreeSet<String>,
+    /// Messages whose run paused on a ticket. The daemon closes each one later with its real
+    /// outcome (the resumed run, a stop, or a restart that fails it).
+    deferred: BTreeSet<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Settled {
+    /// The run is over.
+    Finished,
+    /// The run paused on a ticket a person still has to answer.
+    AwaitingPerson,
+    /// The run paused on a ticket that was already answered before this settlement arrived;
+    /// it resumes on its own, so the settlement is not the end.
+    Resuming,
+}
+
+impl Pause {
+    pub(crate) fn apply(&mut self, kind: &EventKind) {
+        match kind {
+            EventKind::TicketOpened { ticket } => {
+                self.open_tickets.insert(ticket.id.as_str().to_owned());
+            }
+            EventKind::TicketResolved { ticket_id, .. }
+            | EventKind::TicketRejected { ticket_id, .. }
+            | EventKind::TicketExpired { ticket_id, .. } => {
+                self.open_tickets.remove(ticket_id.as_str());
+            }
+            EventKind::MessageCompleted {
+                message_id,
+                outcome,
+                ..
+            } => {
+                if *outcome == MessageOutcome::Deferred {
+                    self.deferred.insert(message_id.as_str().to_owned());
+                } else {
+                    self.deferred.remove(message_id.as_str());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn settled(&self) -> Settled {
+        if !self.open_tickets.is_empty() {
+            Settled::AwaitingPerson
+        } else if !self.deferred.is_empty() {
+            Settled::Resuming
+        } else {
+            Settled::Finished
+        }
+    }
+}
+
 struct Wait {
     last_seq: u64,
     terminal_after: u64,
@@ -39,11 +100,12 @@ struct Wait {
     started: bool,
     replies: Vec<String>,
     message_done: bool,
-    /// Tickets this stream saw opened but not yet closed. A settle boundary is terminal only
-    /// while this is empty: the daemon commits a resolution before its `ticket.resolved`
-    /// event reaches this stream, so a `GET /v1/tickets` snapshot taken at the boundary can
-    /// already miss a ticket whose resolution event is still in flight.
-    open_tickets: BTreeSet<String>,
+    /// Ticket and deferred-run bookkeeping over every event in the window, not only the
+    /// terminal candidates, so the settle check never consults a snapshot that can race.
+    pause: Pause,
+    /// A settlement was only a pause the wait keeps going through; from then on a stream the
+    /// daemon closes is reopened from `last_seq`, as `openside exec` does.
+    parked: bool,
     status: Option<&'static str>,
     error: Option<String>,
 }
@@ -57,7 +119,8 @@ impl Wait {
             message_id: replay.message_id,
             replies: Vec::new(),
             message_done: false,
-            open_tickets: BTreeSet::new(),
+            pause: Pause::default(),
+            parked: false,
             status: None,
             error: None,
         }
@@ -68,19 +131,7 @@ impl Wait {
     }
 
     fn apply(&mut self, seq: u64, kind: &EventKind) {
-        // Ticket bookkeeping tracks every event in the window, not only the terminal
-        // candidates, so the settle check never consults a snapshot that can race the stream.
-        match kind {
-            EventKind::TicketOpened { ticket } => {
-                self.open_tickets.insert(ticket.id.as_str().to_owned());
-            }
-            EventKind::TicketResolved { ticket_id, .. }
-            | EventKind::TicketRejected { ticket_id, .. }
-            | EventKind::TicketExpired { ticket_id, .. } => {
-                self.open_tickets.remove(ticket_id.as_str());
-            }
-            _ => {}
-        }
+        self.pause.apply(kind);
         let current = seq > self.terminal_after;
         match kind {
             EventKind::AssistantFinal { text, .. } if self.started => {
@@ -104,7 +155,14 @@ impl Wait {
             EventKind::SessionSettled {}
                 if current && (self.message_id.is_none() || self.message_done) =>
             {
-                self.status = Some("settled");
+                self.status = match self.pause.settled() {
+                    Settled::Finished => Some("settled"),
+                    Settled::AwaitingPerson => Some("waiting_human"),
+                    Settled::Resuming => {
+                        self.parked = true;
+                        None
+                    }
+                };
             }
             EventKind::SessionStopped {} if current => self.status = Some("stopped"),
             _ => {}
@@ -179,46 +237,63 @@ async fn drive<F: FnMut(&Event)>(
     if through_human && state.last_seq > 0 {
         for ticket in pending_tickets(client, session).await? {
             if let Some(id) = ticket["id"].as_str() {
-                state.open_tickets.insert(id.to_owned());
+                state.pause.open_tickets.insert(id.to_owned());
             }
         }
     }
     let mut response = client.events(session, state.last_seq).await?;
-    let mut decoder = Decoder::default();
-    while let Some(frame) = response.body_mut().frame().await {
-        let frame = frame.map_err(|_| "event stream connection failed".to_owned())?;
-        let Ok(bytes) = frame.into_data() else {
-            continue;
-        };
-        for record in decoder.push(&bytes)? {
-            let event: Event = serde_json::from_slice(&record.data)
-                .map_err(|_| "invalid event JSON in SSE stream".to_owned())?;
-            if event.session_id.as_str() != session
-                || event.seq == 0
-                || record.id != Some(event.seq)
-            {
-                return Err("SSE event session/sequence does not match its envelope or id".into());
-            }
-            if event.seq <= state.last_seq {
+    loop {
+        let mut decoder = Decoder::default();
+        while let Some(frame) = response.body_mut().frame().await {
+            let frame = frame.map_err(|_| "event stream connection failed".to_owned())?;
+            let Ok(bytes) = frame.into_data() else {
                 continue;
-            }
-            state.last_seq = event.seq;
-            on_event(&event);
-            state.apply(event.seq, &event.kind);
-            // Suspended on a person's answer; the run resumes once the ticket is closed.
-            // The stream's own bookkeeping must decide this: a resolution is committed
-            // before its `ticket.resolved` event is published, so a `GET /v1/tickets`
-            // snapshot taken here can already miss the ticket while its resolution is
-            // still in flight to us.
-            if state.status == Some("settled") && through_human && !state.open_tickets.is_empty() {
-                state.status = None;
-            }
-            if state.status.is_some() {
-                return Ok(());
+            };
+            for record in decoder.push(&bytes)? {
+                let event: Event = serde_json::from_slice(&record.data)
+                    .map_err(|_| "invalid event JSON in SSE stream".to_owned())?;
+                if event.session_id.as_str() != session
+                    || event.seq == 0
+                    || record.id != Some(event.seq)
+                {
+                    return Err(
+                        "SSE event session/sequence does not match its envelope or id".into(),
+                    );
+                }
+                if event.seq <= state.last_seq {
+                    continue;
+                }
+                state.last_seq = event.seq;
+                on_event(&event);
+                state.apply(event.seq, &event.kind);
+                // Suspended on a person's answer; the run resumes once the ticket is closed.
+                if state.status == Some("waiting_human") && through_human {
+                    state.status = None;
+                    state.parked = true;
+                }
+                if state.status.is_some() {
+                    return Ok(());
+                }
             }
         }
+        if !state.parked {
+            return Err("event stream ended before the session settled or stopped".into());
+        }
+        response = reopen(client, session, state.last_seq).await?;
     }
-    Err("event stream ended before the session settled or stopped".into())
+}
+
+/// How long a parked wait pauses before reopening an event stream that the daemon closed.
+const RECONNECT_DELAY: Duration = Duration::from_millis(250);
+
+/// Reopens a parked wait's event stream after [`RECONNECT_DELAY`], from `last_seq`.
+pub(crate) async fn reopen(
+    client: &Client,
+    session: &str,
+    last_seq: u64,
+) -> Result<hyper::Response<hyper::body::Incoming>, String> {
+    tokio::time::sleep(RECONNECT_DELAY).await;
+    client.events(session, last_seq).await
 }
 
 #[cfg(test)]
@@ -267,5 +342,20 @@ mod tests {
             state.error.as_deref(),
             Some("auth_unavailable: credentials missing")
         );
+    }
+
+    #[test]
+    fn a_deferred_message_the_daemon_fails_ends_the_pause() {
+        let mut pause = Pause::default();
+        let completed = |outcome| EventKind::MessageCompleted {
+            message_id: openside_proto::MessageId::new("m-1"),
+            outcome,
+            reason: None,
+        };
+        pause.apply(&completed(MessageOutcome::Deferred));
+        assert_eq!(pause.settled(), Settled::Resuming);
+        // A runtime failure with no ticket left to wake the run closes the message as failed.
+        pause.apply(&completed(MessageOutcome::Failed));
+        assert_eq!(pause.settled(), Settled::Finished);
     }
 }

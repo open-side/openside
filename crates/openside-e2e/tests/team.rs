@@ -1,4 +1,4 @@
-//! Team lifecycle and CLI round trips through the real daemon and scripted Python sidecar.
+//! Team lifecycle and CLI round trips through the real daemon and scripted Bun sidecar.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -392,26 +392,37 @@ async fn cli_proposals_lists_suppression_and_allows_the_topic_again() {
 }
 
 #[tokio::test]
-async fn run_and_chat_default_to_chief_but_explicit_session_is_preserved() {
-    let script = json!({"responses":[send("first reply"),send("second reply")]});
+async fn exec_starts_its_own_session_and_resume_keeps_an_explicit_one() {
+    let script = json!({"responses":[text("first reply"),text("second reply")]});
     let Some(mut harness) = Harness::start(DAEMON, &script).await else {
         return;
     };
     let chief = get(&harness, "/v1/agents/chief").await;
     let home = chief["home_session_id"].as_str().unwrap();
-    for (verb, prompt, reply) in [
-        ("run", "First request", "first reply"),
-        ("chat", "Second request", "second reply"),
-    ] {
-        let output = cli(&harness, &[verb, prompt, "--wait", "--timeout", "30"]).await;
-        assert_eq!(output.last().unwrap()["session_id"], home);
-        assert!(
-            output
-                .iter()
-                .any(|record| record["kind"] == "assistant.final" && record["text"] == reply),
-            "{output:?}"
-        );
-    }
+    let output = cli(&harness, &["exec", "First request"]).await;
+    let first = output.last().unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(first, home);
+    assert!(
+        output
+            .iter()
+            .any(|record| record["kind"] == "assistant.final" && record["text"] == "first reply"),
+        "{output:?}"
+    );
+    // `--account u0` runs the new session as the chief, still outside its home session.
+    let output = cli(&harness, &["exec", "--account", "u0", "Second request"]).await;
+    let second = output.last().unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(second, home);
+    assert_eq!(
+        get(&harness, &format!("/v1/sessions/{second}")).await["agent_id"],
+        "chief"
+    );
+    // Both runs were archived once settled, so only the chief's home session is listed.
     assert_eq!(
         get(&harness, "/v1/sessions").await["sessions"]
             .as_array()
@@ -419,42 +430,30 @@ async fn run_and_chat_default_to_chief_but_explicit_session_is_preserved() {
             .len(),
         1
     );
-    let legacy = post(
+    let explicit = post(
         &harness,
         "/v1/sessions",
         json!({"title":"Explicit target"}),
         201,
     )
     .await;
-    let legacy_id = legacy["id"].as_str().unwrap();
+    let explicit_id = explicit["id"].as_str().unwrap();
     harness.replace_script(&json!({"responses":[text("third reply")]}));
     assert_eq!(
         cli(
             &harness,
-            &[
-                "run",
-                "Third request",
-                "--session",
-                legacy_id,
-                "--wait",
-                "--timeout",
-                "30"
-            ]
+            &["session", "resume", explicit_id, "Third request"]
         )
         .await
         .last()
         .unwrap()["session_id"],
-        legacy_id
+        explicit_id
     );
     let rejected = harness
-        .cli(
-            CLI,
-            &["--model", "script", "chat", "No ignored flags"],
-            None,
-        )
+        .cli(CLI, &["--model", "script", "session", "list"], None)
         .await;
     assert_eq!(rejected.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("openside session new"));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("put them after `exec`"));
     harness.kill().await;
 }
 

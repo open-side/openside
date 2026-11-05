@@ -4,100 +4,626 @@ Generated from the `openside` command definitions by `cargo run -q -p openside-c
 
 ## `openside`
 
-Non-interactive openside API client
+Run a browsing task in openside from the terminal.
 
 ```text
-Usage: openside [OPTIONS] [TASK] [COMMAND]
+Usage: openside [options] [prompt...]
+       openside [options] <command> [args...]
 ```
 
 | Argument | Description |
 |---|---|
+| `--account <id>` | Account selector: u0 (the chief), u1, ... or u1:<profile-id> |
+| `--host <host>` | Run on a session host: 'local', or a host saved by `openside login` (name or device id) Environment: `OPENSIDE_HOST`. |
+| `--profile <id>` | Browser profile on the selected host (see `openside host profiles`) |
+| `-m, --model <model>` | Model id, or provider:model (e.g. anthropic:claude-sonnet-4-5) |
+| `-p, --provider <provider>` | Model provider name |
+| `-s, --speed <speed>` | Model speed. With an agent-client token, fast needs the daemon host's local socket. One of `default`, `fast`. |
+| `--effort <effort>` | Thinking effort; ultrabrowse runs the session in openside's research profile. With an agent-client token, xhigh, max and ultrabrowse need the daemon host's local socket. One of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultrabrowse`. |
+| `--permission <mode>` | Session permission: ask/guard (ask a person before sensitive steps), full-access, or read-only One of `ask`, `guard`, `full-access`, `read-only`. |
+| `--workspace <PATH>` | Workspace folder for the session |
+| `--update` | Same as `openside update` |
 | `--json` | Emit JSON objects, one per line, with a final summary (task: the default when stdout is not a terminal) |
 | `--socket <PATH>` |  |
-| `--remote <NAME>` | Remote daemon profile saved by `openside connect` (see `openside remote profiles list`) Environment: `OPENSIDE_REMOTE`. |
 | `--url <URL>` | Loopback HTTP endpoint (requires a token) |
 | `--token <TOKEN>` | Environment: `OPENSIDE_TOKEN`. |
 | `--color <WHEN>` | Colour the human output: auto (a terminal that supports it; NO_COLOR and TERM=dumb turn it off), always (also into a pipe; CLICOLOR_FORCE does the same) or never One of `auto`, `always`, `never`. Default: `auto`. |
-| `[TASK]` |  |
-| `--model <MODEL>` | Model for the new session |
-| `--mode <MODE>` | Permission mode for the new session One of `read-only`, `guard`, `full`. |
-| `--workspace <PATH>` | Workspace for the new session |
-| `--browser-space <BROWSER_SPACE>` | Browser space for the new session: shared (default, the managed profile with its logins) or isolated (own cookies and storage, wiped when the session is archived or deleted) One of `shared`, `isolated`. |
+| `[prompt]` | Task prompt for the browser agent, or a URL to open; `-` reads it from stdin |
 
-`--socket`, `--url`, `--token` and `--json` are global and apply to every subcommand.
+`--host`, `--socket`, `--url`, `--token`, `--json` and `--color` are global and apply to every subcommand.
 
-### `openside accounts`
+### `openside account`
 
-Show credential-source accounts, configured models, usage and rate-limit blocks
+List and switch openside CLI accounts
 
 ```text
-Usage: openside accounts [OPTIONS] [COMMAND]
+Usage: openside account [OPTIONS] <COMMAND>
 ```
 
-#### `openside accounts add`
+#### `openside account list`
 
-Create an isolated CLI home and print the external sign-in command
+List local openside accounts
 
 ```text
-Usage: openside accounts add [OPTIONS] --label <LABEL> <SOURCE>
+Usage: openside account list [OPTIONS]
 ```
 
-| Argument | Description |
-|---|---|
-| `<SOURCE>` |  |
-| `--label <LABEL>` | Required. |
+#### `openside account status`
 
-#### `openside accounts show`
-
-Show login readiness and the exact external sign-in command for this account
+Show the active openside account
 
 ```text
-Usage: openside accounts show [OPTIONS] <SOURCE> <ACCOUNT_ID>
+Usage: openside account status [OPTIONS] [id]
 ```
 
 | Argument | Description |
 |---|---|
-| `<SOURCE>` |  |
-| `<ACCOUNT_ID>` |  |
+| `[id]` | Account to show instead of the active one |
 
-#### `openside accounts enable`
+#### `openside account use`
 
-Enable one existing subscription account
+Set the default openside CLI account
 
 ```text
-Usage: openside accounts enable [OPTIONS] <SOURCE> <ACCOUNT_ID>
+Usage: openside account use [OPTIONS] <id>
 ```
 
 | Argument | Description |
 |---|---|
-| `<SOURCE>` |  |
-| `<ACCOUNT_ID>` |  |
+| `<id>` |  |
 
-#### `openside accounts disable`
+### `openside login`
 
-Disable one existing subscription account
+Sign the CLI in to another computer's openside with a pairing link from `openside pair`
 
 ```text
-Usage: openside accounts disable [OPTIONS] <SOURCE> <ACCOUNT_ID>
+Usage: openside login [OPTIONS] [LINK]
 ```
 
 | Argument | Description |
 |---|---|
-| `<SOURCE>` |  |
-| `<ACCOUNT_ID>` |  |
+| `[LINK]` | Pairing link; omit to read from stdin or a hidden prompt (recommended) |
+| `--name <NAME>` | Host name used with `--host NAME`; default: the host name's first label |
+| `--force` | Replace an existing host with the same name |
 
-#### `openside accounts rm`
+### `openside logout`
 
-Remove an openside account; never delete the default user CLI home
+Sign the CLI out of a host and revoke its device token
 
 ```text
-Usage: openside accounts rm [OPTIONS] <SOURCE> <ACCOUNT_ID>
+Usage: openside logout [OPTIONS]
+```
+
+### `openside host`
+
+Inspect and select session hosts (this computer or a paired remote)
+
+```text
+Usage: openside host [OPTIONS] <COMMAND>
+```
+
+#### `openside host profiles`
+
+List browser profiles for the selected host and account
+
+```text
+Usage: openside host profiles [OPTIONS]
+```
+
+#### `openside host list`
+
+List available session hosts
+
+```text
+Usage: openside host list [OPTIONS]
+```
+
+#### `openside host use`
+
+Set the default session host
+
+```text
+Usage: openside host use [OPTIONS] <host>
 ```
 
 | Argument | Description |
 |---|---|
-| `<SOURCE>` |  |
-| `<ACCOUNT_ID>` |  |
+| `<host>` |  |
+
+#### `openside host status`
+
+Show the default session host
+
+```text
+Usage: openside host status [OPTIONS]
+```
+
+### `openside memory`
+
+Search and read openside's memory
+
+```text
+Usage: openside memory [OPTIONS] <COMMAND>
+```
+
+#### `openside memory search`
+
+Semantically search openside's memory
+
+```text
+Usage: openside memory search [OPTIONS] <query>...
+```
+
+| Argument | Description |
+|---|---|
+| `<query>` |  |
+| `--kind <KIND>` | One of `note`, `history`. |
+| `--limit <N>` |  |
+
+#### `openside memory list`
+
+List memories, most recently updated first
+
+```text
+Usage: openside memory list [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--kind <KIND>` | One of `note`, `history`. |
+| `--limit <N>` |  |
+
+#### `openside memory show`
+
+Print one memory, for example one id from `openside memory list`
+
+```text
+Usage: openside memory show [OPTIONS] <id>
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` |  |
+
+#### `openside memory path`
+
+Print the path of the local memory database
+
+```text
+Usage: openside memory path [OPTIONS]
+```
+
+#### `openside memory add`
+
+Remember a note. Secrets (keys, tokens, passwords, card numbers) are rejected
+
+```text
+Usage: openside memory add [OPTIONS] <CONTENT>
+```
+
+| Argument | Description |
+|---|---|
+| `<CONTENT>` |  |
+| `--tag <TAG>` |  |
+| `--retention <RETENTION>` | One of `permanent`, `days_90`, `days_30`, `hours_24`. |
+
+#### `openside memory edit`
+
+Change a memory's content, tags or retention; each change adds a history version
+
+```text
+Usage: openside memory edit [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+| `--content <TEXT>` |  |
+| `--tag <TAG>` |  |
+| `--clear-tags` | Remove every tag |
+| `--retention <RETENTION>` | One of `permanent`, `days_90`, `days_30`, `hours_24`. |
+
+#### `openside memory rm`
+
+Delete a memory; stored history snapshots are scrubbed
+
+```text
+Usage: openside memory rm [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside memory history`
+
+Show a memory's change history (time, actor, operation)
+
+```text
+Usage: openside memory history [OPTIONS] <ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<ID>` |  |
+
+#### `openside memory model`
+
+Manage the local embedding model
+
+```text
+Usage: openside memory model [OPTIONS] <COMMAND>
+```
+
+##### `openside memory model fetch`
+
+Download a static (model2vec-style) embedding model into memory.embedding.model_dir
+
+```text
+Usage: openside memory model fetch [OPTIONS] <REPO>
+```
+
+| Argument | Description |
+|---|---|
+| `<REPO>` | Hugging Face repository, `owner/name` |
+| `--revision <REVISION>` | Default: `main`. |
+| `--endpoint <URL>` | Default: `https://huggingface.co`. Environment: `OPENSIDE_HF_ENDPOINT`. |
+| `--config <PATH>` |  |
+
+### `openside skills`
+
+Browse and install skills, including the openside-browser skill for coding agents
+
+```text
+Usage: openside skills [OPTIONS] <COMMAND>
+```
+
+#### `openside skills list`
+
+List skills with descriptions; with a query, the ones the `/name` picker would offer
+
+```text
+Usage: openside skills list [OPTIONS] [QUERY]
+```
+
+| Argument | Description |
+|---|---|
+| `[QUERY]` |  |
+| `--session <SESSION_ID>` | Also list the project skills of this session's workspace |
+
+#### `openside skills show`
+
+Print a skill's instructions and files, for example openside-browser
+
+```text
+Usage: openside skills show [OPTIONS] <NAME>
+```
+
+| Argument | Description |
+|---|---|
+| `<NAME>` |  |
+| `--session <SESSION_ID>` |  |
+
+#### `openside skills install`
+
+Install the openside-browser skill into your coding agents (Claude Code, Codex, omp, and any in `[skills.agents]`), so they can hand browsing to `openside`. Works without a daemon
+
+```text
+Usage: openside skills install [OPTIONS] [AGENT]
+```
+
+| Argument | Description |
+|---|---|
+| `[AGENT]` | One agent only; its skills directory comes from `[skills.agents]`, `OPENSIDE_SKILLS_<AGENT>_DIR`, or that agent's own convention. Without it, every agent whose home directory exists gets the skill |
+| `--to-dir <PATH>` | Install into this skills directory instead |
+| `--force` | Replace an installed copy |
+| `--config <PATH>` |  |
+
+#### `openside skills new`
+
+Create a skill in the library
+
+```text
+Usage: openside skills new [OPTIONS] --description <TEXT> <NAME>
+```
+
+| Argument | Description |
+|---|---|
+| `<NAME>` |  |
+| `--description <TEXT>` | Required. |
+| `--body <TEXT>` | Instructions (the Markdown below the frontmatter) Default: ``. |
+
+#### `openside skills enable`
+
+Offer a skill to agents again
+
+```text
+Usage: openside skills enable [OPTIONS] <NAME>
+```
+
+| Argument | Description |
+|---|---|
+| `<NAME>` |  |
+
+#### `openside skills disable`
+
+Stop offering a skill to agents without deleting it
+
+```text
+Usage: openside skills disable [OPTIONS] <NAME>
+```
+
+| Argument | Description |
+|---|---|
+| `<NAME>` |  |
+
+#### `openside skills rm`
+
+Delete a skill from the library
+
+```text
+Usage: openside skills rm [OPTIONS] <NAME>
+```
+
+| Argument | Description |
+|---|---|
+| `<NAME>` |  |
+
+#### `openside skills import`
+
+Copy a skill into openside's library, from a directory or from another agent's skills directory. Works without a daemon
+
+```text
+Usage: openside skills import [OPTIONS] <SOURCE>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` | A skill directory, or a skill name when `--from` or `--from-dir` is given |
+| `--from <AGENT>` | Agent whose skills directory holds `source` |
+| `--from-dir <PATH>` | Skills directory that holds `source` |
+| `--allow-scripts` | Keep executable files; without this a skill that has any is refused |
+| `--force` | Replace a library skill of the same name |
+| `--config <PATH>` |  |
+
+### `openside exec`
+
+Run a browser agent session
+
+```text
+Usage: openside exec [OPTIONS] <prompt>...
+```
+
+| Argument | Description |
+|---|---|
+| `--account <id>` | Account selector: u0 (the chief), u1, ... or u1:<profile-id> |
+| `--profile <id>` | Browser profile on the selected host (see `openside host profiles`) |
+| `-m, --model <model>` | Model id, or provider:model (e.g. anthropic:claude-sonnet-4-5) |
+| `-p, --provider <provider>` | Model provider name |
+| `-s, --speed <speed>` | Model speed. With an agent-client token, fast needs the daemon host's local socket. One of `default`, `fast`. |
+| `--effort <effort>` | Thinking effort; ultrabrowse runs the session in openside's research profile. With an agent-client token, xhigh, max and ultrabrowse need the daemon host's local socket. One of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultrabrowse`. |
+| `--permission <mode>` | Session permission: ask/guard (ask a person before sensitive steps), full-access, or read-only One of `ask`, `guard`, `full-access`, `read-only`. |
+| `--workspace <PATH>` | Workspace folder for the session |
+| `<prompt>` | Task prompt for the browser agent; `-` reads it from stdin |
+
+### `openside repl`
+
+Run Playwright-style JavaScript in an openside agent tab
+
+```text
+Usage: openside repl [OPTIONS] [code]...
+```
+
+| Argument | Description |
+|---|---|
+| `--account <id>` | Account selector: u0 (the chief), u1, ... or u1:<profile-id> |
+| `--profile <id>` | Browser profile on the selected host (see `openside host profiles`) |
+| `--session <id>` | Session whose agent tab runs the code; default: a new session for this command |
+| `--tab <id>` | Agent tab to drive; optional when the session owns at most one tab |
+| `[code]` | JavaScript to run (`-` reads it from stdin); without it, every stdin line is a snippet |
+
+### `openside mcp`
+
+Start the MCP server over stdio
+
+```text
+Usage: openside mcp [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--account <id>` | Account selector: u0 (the chief), u1, ... or u1:<profile-id> |
+| `--profile <id>` | Browser profile on the selected host (see `openside host profiles`) |
+
+### `openside guide`
+
+Show how to use openside for browser tasks
+
+```text
+Usage: openside guide [OPTIONS] [topic]
+```
+
+| Argument | Description |
+|---|---|
+| `[topic]` | One of `repl`. |
+
+### `openside update`
+
+Show the installed version and how to update it
+
+```text
+Usage: openside update [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `-y, --yes` | Do not ask for confirmation |
+
+### `openside session`
+
+Inspect and control browser sessions
+
+```text
+Usage: openside session [OPTIONS] <COMMAND>
+```
+
+#### `openside session list`
+
+List sessions, including unsaved sessions
+
+```text
+Usage: openside session list [OPTIONS]
+```
+
+#### `openside session resume`
+
+Continue an existing session
+
+```text
+Usage: openside session resume [OPTIONS] <id> [prompt]...
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` |  |
+| `[prompt]` |  |
+| `--last-event-id <SEQ>` | Override the persisted last-seen SSE sequence |
+
+#### `openside session stop`
+
+Stop a running session, or one of its Tasks with --task
+
+```text
+Usage: openside session stop [OPTIONS] <id>
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` |  |
+| `--task <TASK_ID>` | Cancel only this Task; the agent and the other Tasks keep running |
+
+#### `openside session steer`
+
+Interrupt a session with a new prompt
+
+```text
+Usage: openside session steer [OPTIONS] <id> <prompt>...
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` |  |
+| `<prompt>` |  |
+| `--task <TASK_ID>` | Steer this Task instead of the session's agent (ids from `openside session tasks`) |
+
+#### `openside session queue`
+
+Queue a follow-up prompt after the current step
+
+```text
+Usage: openside session queue [OPTIONS] <id> <prompt>...
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` |  |
+| `<prompt>` |  |
+
+#### `openside session archive`
+
+Archive a session
+
+```text
+Usage: openside session archive [OPTIONS] <id>
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` |  |
+
+#### `openside session delete`
+
+Delete a session
+
+```text
+Usage: openside session delete [OPTIONS] <id>
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` |  |
+
+#### `openside session new`
+
+Create an empty session to drive with `browser` or `repl`; prints its id
+
+```text
+Usage: openside session new [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--title <TITLE>` |  |
+| `--account <id>` | Account selector: u0 (the chief), u1, ... or u1:<profile-id> |
+| `--profile <id>` | Browser profile on the selected host (see `openside host profiles`) |
+| `-m, --model <model>` | Model id, or provider:model (e.g. anthropic:claude-sonnet-4-5) |
+| `-p, --provider <provider>` | Model provider name |
+| `-s, --speed <speed>` | Model speed. With an agent-client token, fast needs the daemon host's local socket. One of `default`, `fast`. |
+| `--effort <effort>` | Thinking effort; ultrabrowse runs the session in openside's research profile. With an agent-client token, xhigh, max and ultrabrowse need the daemon host's local socket. One of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultrabrowse`. |
+| `--permission <mode>` | Session permission: ask/guard (ask a person before sensitive steps), full-access, or read-only One of `ask`, `guard`, `full-access`, `read-only`. |
+| `--workspace <PATH>` | Workspace folder for the session |
+
+#### `openside session tasks`
+
+List a session's Tasks and subagents with their status and results
+
+```text
+Usage: openside session tasks [OPTIONS] <id>
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` |  |
+
+### `openside settings`
+
+Configure openside CLI settings
+
+```text
+Usage: openside settings [OPTIONS] <COMMAND>
+```
+
+#### `openside settings get`
+
+Print the effective CLI settings as JSON
+
+```text
+Usage: openside settings get [OPTIONS]
+```
+
+#### `openside settings save-sessions`
+
+Show CLI sessions in the chat list
+
+```text
+Usage: openside settings save-sessions [OPTIONS] <value>
+```
+
+| Argument | Description |
+|---|---|
+| `<value>` | One of `true`, `false`. |
+
+#### `openside settings set-default-profile`
+
+Set the default profile for CLI commands
+
+```text
+Usage: openside settings set-default-profile [OPTIONS] <id>
+```
+
+| Argument | Description |
+|---|---|
+| `<id>` | A profile (`shared`, `isolated`, `incognito`), an account (`u1`), both (`u1:isolated`), or `default` |
 
 ### `openside models`
 
@@ -162,6 +688,79 @@ Usage: openside models account [OPTIONS] <SESSION> [ACCOUNT]
 |---|---|
 | `<SESSION>` |  |
 | `[ACCOUNT]` |  |
+
+#### `openside models accounts`
+
+Model subscription accounts (Claude Code and Codex CLI homes); lists them without a subcommand
+
+```text
+Usage: openside models accounts [OPTIONS] [COMMAND]
+```
+
+##### `openside models accounts add`
+
+Create an isolated CLI home and print the external sign-in command
+
+```text
+Usage: openside models accounts add [OPTIONS] --label <LABEL> <SOURCE>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `--label <LABEL>` | Required. |
+
+##### `openside models accounts show`
+
+Show login readiness and the exact external sign-in command for this account
+
+```text
+Usage: openside models accounts show [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+
+##### `openside models accounts enable`
+
+Enable one existing subscription account
+
+```text
+Usage: openside models accounts enable [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+
+##### `openside models accounts disable`
+
+Disable one existing subscription account
+
+```text
+Usage: openside models accounts disable [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
+
+##### `openside models accounts rm`
+
+Remove a subscription account; never delete the default user CLI home
+
+```text
+Usage: openside models accounts rm [OPTIONS] <SOURCE> <ACCOUNT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<SOURCE>` |  |
+| `<ACCOUNT_ID>` |  |
 
 ### `openside key`
 
@@ -425,53 +1024,9 @@ Usage: openside team proposals allow [OPTIONS] <KEY>
 |---|---|
 | `<KEY>` |  |
 
-### `openside session`
-
-```text
-Usage: openside session [OPTIONS] <COMMAND>
-```
-
-#### `openside session list`
-
-```text
-Usage: openside session list [OPTIONS]
-```
-
-#### `openside session new`
-
-Create an empty session to drive with `browser` or `repl`; prints its id
-
-```text
-Usage: openside session new [OPTIONS]
-```
-
-| Argument | Description |
-|---|---|
-| `--title <TITLE>` |  |
-
-#### `openside session resume`
-
-```text
-Usage: openside session resume [OPTIONS] <ID> [TEXT]
-```
-
-| Argument | Description |
-|---|---|
-| `<ID>` |  |
-| `[TEXT]` |  |
-| `--last-event-id <SEQ>` | Override the persisted last-seen SSE sequence |
-
-#### `openside session stop`
-
-```text
-Usage: openside session stop [OPTIONS] <ID>
-```
-
-| Argument | Description |
-|---|---|
-| `<ID>` |  |
-
 ### `openside ticket`
+
+List and answer tickets: the steps that need a person
 
 ```text
 Usage: openside ticket [OPTIONS] <COMMAND>
@@ -535,6 +1090,8 @@ Usage: openside ticket reject [OPTIONS] <ID>
 | `--reason <TEXT>` |  |
 
 ### `openside routine`
+
+Manage scheduled routines
 
 ```text
 Usage: openside routine [OPTIONS] <COMMAND>
@@ -650,115 +1207,6 @@ Show routine drafts found in repeated requests; nothing is created
 ```text
 Usage: openside routine suggest [OPTIONS]
 ```
-
-### `openside memory`
-
-```text
-Usage: openside memory [OPTIONS] <COMMAND>
-```
-
-#### `openside memory search`
-
-Search memories; without a query, list the most recently updated ones
-
-```text
-Usage: openside memory search [OPTIONS] [QUERY]
-```
-
-| Argument | Description |
-|---|---|
-| `[QUERY]` |  |
-| `--kind <KIND>` | One of `note`, `history`. |
-| `--limit <N>` |  |
-
-#### `openside memory add`
-
-Remember a note. Secrets (keys, tokens, passwords, card numbers) are rejected
-
-```text
-Usage: openside memory add [OPTIONS] <CONTENT>
-```
-
-| Argument | Description |
-|---|---|
-| `<CONTENT>` |  |
-| `--tag <TAG>` |  |
-| `--retention <RETENTION>` | One of `permanent`, `days_90`, `days_30`, `hours_24`. |
-
-#### `openside memory show`
-
-Show one memory
-
-```text
-Usage: openside memory show [OPTIONS] <ID>
-```
-
-| Argument | Description |
-|---|---|
-| `<ID>` |  |
-
-#### `openside memory edit`
-
-Change a memory's content, tags or retention; each change adds a history version
-
-```text
-Usage: openside memory edit [OPTIONS] <ID>
-```
-
-| Argument | Description |
-|---|---|
-| `<ID>` |  |
-| `--content <TEXT>` |  |
-| `--tag <TAG>` |  |
-| `--clear-tags` | Remove every tag |
-| `--retention <RETENTION>` | One of `permanent`, `days_90`, `days_30`, `hours_24`. |
-
-#### `openside memory rm`
-
-Delete a memory; stored history snapshots are scrubbed
-
-```text
-Usage: openside memory rm [OPTIONS] <ID>
-```
-
-| Argument | Description |
-|---|---|
-| `<ID>` |  |
-
-#### `openside memory history`
-
-Show a memory's change history (time, actor, operation)
-
-```text
-Usage: openside memory history [OPTIONS] <ID>
-```
-
-| Argument | Description |
-|---|---|
-| `<ID>` |  |
-
-#### `openside memory model`
-
-Manage the local embedding model
-
-```text
-Usage: openside memory model [OPTIONS] <COMMAND>
-```
-
-##### `openside memory model fetch`
-
-Download a static (model2vec-style) embedding model into memory.embedding.model_dir
-
-```text
-Usage: openside memory model fetch [OPTIONS] <REPO>
-```
-
-| Argument | Description |
-|---|---|
-| `<REPO>` | Hugging Face repository, `owner/name` |
-| `--revision <REVISION>` | Default: `main`. |
-| `--endpoint <URL>` | Default: `https://huggingface.co`. Environment: `OPENSIDE_HF_ENDPOINT`. |
-| `--config <PATH>` |  |
 
 ### `openside token`
 
@@ -1101,175 +1549,6 @@ Usage: openside policy test [OPTIONS] <TARGET> <CAPABILITY>
 | `<CAPABILITY>` | fs_read, fs_write, exec, browse, fetch, vault_use or sensitive |
 | `--mode <MODE>` | Session mode to evaluate under (default: the policy's default_mode) One of `read-only`, `guard`, `full`. |
 | `--workspace <PATH>` | Approved workspace for guard mode |
-
-### `openside skills`
-
-```text
-Usage: openside skills [OPTIONS] <COMMAND>
-```
-
-#### `openside skills list`
-
-List skills; with a query, the ones the `/name` picker would offer
-
-```text
-Usage: openside skills list [OPTIONS] [QUERY]
-```
-
-| Argument | Description |
-|---|---|
-| `[QUERY]` |  |
-| `--session <SESSION_ID>` | Also list the project skills of this session's workspace |
-
-#### `openside skills show`
-
-Show a skill's instructions and files
-
-```text
-Usage: openside skills show [OPTIONS] <NAME>
-```
-
-| Argument | Description |
-|---|---|
-| `<NAME>` |  |
-| `--session <SESSION_ID>` |  |
-
-#### `openside skills new`
-
-Create a skill in the library
-
-```text
-Usage: openside skills new [OPTIONS] --description <TEXT> <NAME>
-```
-
-| Argument | Description |
-|---|---|
-| `<NAME>` |  |
-| `--description <TEXT>` | Required. |
-| `--body <TEXT>` | Instructions (the Markdown below the frontmatter) Default: ``. |
-
-#### `openside skills enable`
-
-Offer a skill to agents again
-
-```text
-Usage: openside skills enable [OPTIONS] <NAME>
-```
-
-| Argument | Description |
-|---|---|
-| `<NAME>` |  |
-
-#### `openside skills disable`
-
-Stop offering a skill to agents without deleting it
-
-```text
-Usage: openside skills disable [OPTIONS] <NAME>
-```
-
-| Argument | Description |
-|---|---|
-| `<NAME>` |  |
-
-#### `openside skills rm`
-
-Delete a skill from the library
-
-```text
-Usage: openside skills rm [OPTIONS] <NAME>
-```
-
-| Argument | Description |
-|---|---|
-| `<NAME>` |  |
-
-#### `openside skills install`
-
-Install openside's browser skill for another agent (for example `claude`, `codex`), so that agent can hand browsing to `openside`. Works without a daemon
-
-```text
-Usage: openside skills install [OPTIONS] <AGENT>
-```
-
-| Argument | Description |
-|---|---|
-| `<AGENT>` | Agent name; its skills directory comes from `[skills.agents]`, `OPENSIDE_SKILLS_<AGENT>_DIR`, or that agent's own convention |
-| `--to-dir <PATH>` | Install into this skills directory instead |
-| `--force` | Replace an installed copy |
-| `--config <PATH>` |  |
-
-#### `openside skills import`
-
-Copy a skill into openside's library, from a directory or from another agent's skills directory. Works without a daemon
-
-```text
-Usage: openside skills import [OPTIONS] <SOURCE>
-```
-
-| Argument | Description |
-|---|---|
-| `<SOURCE>` | A skill directory, or a skill name when `--from` or `--from-dir` is given |
-| `--from <AGENT>` | Agent whose skills directory holds `source` |
-| `--from-dir <PATH>` | Skills directory that holds `source` |
-| `--allow-scripts` | Keep executable files; without this a skill that has any is refused |
-| `--force` | Replace a library skill of the same name |
-| `--config <PATH>` |  |
-
-### `openside run`
-
-Delegate a goal to the openside browser agent; prints the session and message ids
-
-```text
-Usage: openside run [OPTIONS] <GOAL>
-```
-
-| Argument | Description |
-|---|---|
-| `<GOAL>` | What the agent should do; `-` reads it from stdin |
-| `--session <SESSION_ID>` | Run in this session instead of the chief's home conversation |
-| `--wait` | Wait until the run ends (through any tickets a person answers) and print the replies |
-| `--follow` | Stream the run's text, progress and tickets until the session settles |
-| `--timeout <SECS>` | With --wait: give up after this many seconds (status `timeout`, exit 1) |
-
-### `openside steer`
-
-Steer a running agent, or one of its Tasks with --task
-
-```text
-Usage: openside steer [OPTIONS] <SESSION> <TEXT>
-```
-
-| Argument | Description |
-|---|---|
-| `<SESSION>` | Session to steer |
-| `<TEXT>` | The guidance to send |
-| `--task <TASK_ID>` | Steer this Task instead of the session's agent (ids from `openside tasks`) |
-
-### `openside cancel`
-
-Cancel one Task with --task, otherwise stop the session's run
-
-```text
-Usage: openside cancel [OPTIONS] <SESSION>
-```
-
-| Argument | Description |
-|---|---|
-| `<SESSION>` | Session whose run or Task to cancel |
-| `--task <TASK_ID>` | Cancel only this Task; the agent and the other Tasks keep running |
-
-### `openside tasks`
-
-List a session's Tasks and subagents with their status and results
-
-```text
-Usage: openside tasks [OPTIONS] <SESSION>
-```
-
-| Argument | Description |
-|---|---|
-| `<SESSION>` | Session to list |
 
 ### `openside browser`
 
@@ -1627,29 +1906,6 @@ Usage: openside browser vault-passkey [OPTIONS] <SESSION> [ARG]...
 | `--timeout <SECS>` | Stop waiting for a person after this many seconds |
 | `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
 
-### `openside repl`
-
-Run Playwright-syntax JavaScript in a session's agent tab
-
-```text
-Usage: openside repl [OPTIONS] <SESSION>
-```
-
-| Argument | Description |
-|---|---|
-| `<SESSION>` | Session whose agent tab runs the code |
-| `--tab <TAB_ID>` | Agent tab to drive; optional when the session owns at most one tab |
-| `--eval <CODE>` | Run this snippet instead of reading stdin |
-| `-i, --interactive` | Run every stdin line as its own snippet |
-
-### `openside mcp`
-
-Serve the public API to MCP clients over stdio (docs/specs/mcp.md)
-
-```text
-Usage: openside mcp [OPTIONS]
-```
-
 ### `openside import`
 
 Import history, bookmarks and cookies from a Chrome, Chromium or Firefox profile
@@ -1668,6 +1924,8 @@ Usage: openside import [OPTIONS] --from <BROWSER:DIR> --into <PROFILE>
 | `--config <PATH>` | Configuration file (data directory and browser location) |
 
 ### `openside doctor`
+
+Diagnose the local installation without a daemon
 
 ```text
 Usage: openside doctor [OPTIONS]
@@ -1692,23 +1950,9 @@ Usage: openside pair [OPTIONS]
 | `--via <TRANSPORT>` | Transport the QR link uses: tailscale, cloudflare or relay. Default: the first enabled `remote.mode` One of `tailscale`, `cloudflare`, `relay`. |
 | `--agent` | Pair an external CLI/MCP agent instead of a person's phone/browser. Its token cannot approve confirmations for sessions it drives |
 
-### `openside connect`
-
-Pair this computer with a remote daemon from its pairing link and save it as a `--remote` profile
-
-```text
-Usage: openside connect [OPTIONS] [LINK]
-```
-
-| Argument | Description |
-|---|---|
-| `[LINK]` | Pairing link; omit to read from stdin or a hidden prompt (recommended) |
-| `--name <NAME>` | Profile name used with `--remote NAME`; default: the host name's first label |
-| `--force` | Replace an existing profile with the same name |
-
 ### `openside remote`
 
-This daemon's remote access (Tailscale, Cloudflare Tunnel or a relay) and the saved profiles for reaching other daemons
+This daemon's remote access (Tailscale, Cloudflare Tunnel or a relay)
 
 ```text
 Usage: openside remote [OPTIONS] <COMMAND>
@@ -1747,34 +1991,6 @@ Bootstrap the browser on this computer with local-person authority (local socket
 ```text
 Usage: openside remote local-access [OPTIONS]
 ```
-
-#### `openside remote profiles`
-
-Saved profiles for reaching other daemons with `--remote NAME` (add one with `openside connect`)
-
-```text
-Usage: openside remote profiles [OPTIONS] <COMMAND>
-```
-
-##### `openside remote profiles list`
-
-Saved remote daemons (tokens are never shown)
-
-```text
-Usage: openside remote profiles list [OPTIONS]
-```
-
-##### `openside remote profiles rm`
-
-Forget a remote and delete its stored token. The daemon keeps the device until you run `openside device revoke <id>` there
-
-```text
-Usage: openside remote profiles rm [OPTIONS] <NAME>
-```
-
-| Argument | Description |
-|---|---|
-| `<NAME>` | Profile name |
 
 ### `openside device`
 

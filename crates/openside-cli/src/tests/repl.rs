@@ -84,7 +84,7 @@ async fn repl_eval_stdin_and_interactive_post_snippets_and_print_results() {
 
     let (code, out, err) = cli(
         &socket,
-        &["repl", "s-1", "--eval", "await page.title()"],
+        &["repl", "--session", "s-1", "await page.title()"],
         "",
     )
     .await;
@@ -92,20 +92,31 @@ async fn repl_eval_stdin_and_interactive_post_snippets_and_print_results() {
     assert_eq!(out, "log line\n{\"echo\":\"await page.title()\"}\n");
     assert_eq!(
         posts().last().unwrap(),
-        &json!({"code":"await page.title()"})
+        &json!({"code":"await page.title()","persistent":true})
     );
 
     let script = "await page.goto('https://example.test');\npage.url()\n";
-    let (code, ..) = cli(&socket, &["repl", "s-1", "--tab", "tab-7"], script).await;
+    let (code, ..) = cli(
+        &socket,
+        &["repl", "--session", "s-1", "--tab", "tab-7", "-"],
+        script,
+    )
+    .await;
     assert_eq!(code, 0);
     assert_eq!(
         posts().last().unwrap(),
-        &json!({"code": script, "tab_id": "tab-7"})
+        &json!({"code": script, "tab_id": "tab-7", "persistent": true})
     );
 
-    // Interactive mode runs each non-empty line and keeps the tab the daemon reported.
+    // Without code each non-empty stdin line is a snippet. `--tab` goes with the first one only,
+    // so a later `openTab` keeps `page` instead of being reset to that tab.
     let before = posts().len();
-    let (code, out, err) = cli(&socket, &["repl", "s-1", "-i"], "1 + 1\n\n2 + 2\n").await;
+    let (code, out, err) = cli(
+        &socket,
+        &["repl", "--session", "s-1", "--tab", "tab-7"],
+        "1 + 1\n\n2 + 2\n",
+    )
+    .await;
     assert_eq!(code, 0, "{err}");
     assert_eq!(out.matches("log line").count(), 2);
     assert_eq!(err, "> > > > ");
@@ -113,12 +124,12 @@ async fn repl_eval_stdin_and_interactive_post_snippets_and_print_results() {
     assert_eq!(
         sent[before..],
         [
-            json!({"code":"1 + 1\n"}),
-            json!({"code":"2 + 2\n","tab_id":"tab-1"})
+            json!({"code":"1 + 1\n","tab_id":"tab-7","persistent":true}),
+            json!({"code":"2 + 2\n","persistent":true})
         ]
     );
 
-    let (code, out, err) = cli(&socket, &["--json", "repl", "s-1", "--eval", "x"], "").await;
+    let (code, out, err) = cli(&socket, &["--json", "repl", "--session", "s-1", "x"], "").await;
     assert_eq!(code, 0, "{err}");
     let first: Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
     assert_eq!(first["status"], "done");
@@ -126,16 +137,16 @@ async fn repl_eval_stdin_and_interactive_post_snippets_and_print_results() {
 
     let (code, _, err) = cli(
         &socket,
-        &["repl", "s-1", "--eval", "throw new Error('boom')"],
+        &["repl", "--session", "s-1", "throw new Error('boom')"],
         "",
     )
     .await;
     assert_eq!(code, 1);
     assert_eq!(err, "Error: boom\n");
-    let (code, _, err) = cli(&socket, &["repl", "s-1", "--eval", "denied"], "").await;
+    let (code, _, err) = cli(&socket, &["repl", "--session", "s-1", "denied"], "").await;
     assert_eq!(code, 1);
     assert!(err.contains("policy_denied"), "{err}");
-    let (code, _, err) = cli(&socket, &["repl", "s-1"], "  \n").await;
+    let (code, _, err) = cli(&socket, &["repl", "--session", "s-1", "-"], "  \n").await;
     assert_eq!(code, 1);
     assert!(err.contains("no code"), "{err}");
     server.abort();
@@ -145,7 +156,7 @@ async fn repl_eval_stdin_and_interactive_post_snippets_and_print_results() {
 async fn repl_waits_for_approval_then_reruns_with_the_ticket() {
     let environment = Environment::new().await;
     let (socket, seen, server) = daemon(&environment).await;
-    let (code, out, err) = cli(&socket, &["repl", "s-1", "--eval", "approve-me"], "").await;
+    let (code, out, err) = cli(&socket, &["repl", "--session", "s-1", "approve-me"], "").await;
     assert_eq!(code, 0, "{err}");
     assert_eq!(out, "log line\n\"bought\"\n");
     assert!(err.contains("Approval needed (ticket t-9)"), "{err}");
@@ -166,7 +177,7 @@ async fn repl_waits_for_approval_then_reruns_with_the_ticket() {
     );
     assert_eq!(
         seen[3].2,
-        json!({"code":"approve-me","approval_ticket":"t-9"})
+        json!({"code":"approve-me","approval_ticket":"t-9","persistent":true})
     );
     server.abort();
 }

@@ -1,5 +1,6 @@
 //! `openside remote setup tailscale|cloudflare|relay|off`, `openside remote status` and
-//! `openside remote profiles list|rm` (see remotes.rs).
+//! `openside remote local-access`; reaching other daemons is `openside login` / `--host` (see
+//! remotes.rs).
 //!
 //! Setup edits `config.toml` in place (comments kept) and then runs the doctor's remote
 //! checks; the daemon picks the change up on its next start. Status asks the running daemon
@@ -60,12 +61,6 @@ pub(crate) enum RemoteCommand {
     Status,
     /// Bootstrap the browser on this computer with local-person authority (local socket only).
     LocalAccess,
-    /// Saved profiles for reaching other daemons with `--remote NAME` (add one with
-    /// `openside connect`).
-    Profiles {
-        #[command(subcommand)]
-        command: crate::remotes::RemotesCommand,
-    },
 }
 
 fn table<'a>(
@@ -203,7 +198,7 @@ fn apply(
             } else {
                 notes.push("No --token-file: the daemon reads OPENSIDE_RELAY_TOKEN.".into());
             }
-            notes.push("Pair devices with `openside pair --via relay`; enter the link at `openside connect` (hidden prompt or stdin). The CLI encrypts traffic to the daemon; trust the operator that serves the browser app.".into());
+            notes.push("Pair devices with `openside pair --via relay`; enter the link at `openside login` (hidden prompt or stdin). The CLI encrypts traffic to the daemon; trust the operator that serves the browser app.".into());
             "relay"
         }
     };

@@ -81,7 +81,7 @@ async fn memory_commands_build_requests_and_print_results() {
     assert_eq!(out, "m-1\tnote\t0.500\tAisle seat preferred\n");
     assert_eq!(last().1, "/v1/memory?q=seat+%26+aisle&kind=note&limit=3");
 
-    let (code, ..) = cli(&socket, &["memory", "search"]).await;
+    let (code, ..) = cli(&socket, &["memory", "list"]).await;
     assert_eq!(code, 0);
     assert_eq!(last().1, "/v1/memory");
 

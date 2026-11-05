@@ -5,8 +5,6 @@
 
 mod ui_support;
 
-use ui_support::send;
-
 use std::{
     os::unix::fs::PermissionsExt,
     process::{Output, Stdio},
@@ -66,7 +64,7 @@ impl RemoteComputer {
         let mut command = self.command();
         command.args(args);
         if let Some(name) = remote_env {
-            command.env("OPENSIDE_REMOTE", name);
+            command.env("OPENSIDE_HOST", name);
         }
         tokio::time::timeout(Duration::from_secs(60), command.output())
             .await
@@ -76,7 +74,7 @@ impl RemoteComputer {
 
     async fn mcp(&self, name: &str) -> RunningService<RoleClient, ()> {
         let mut command = self.command();
-        command.args(["mcp", "--remote", name]);
+        command.args(["mcp", "--host", name]);
         let (transport, _) = TokioChildProcess::builder(command)
             .stderr(Stdio::null())
             .spawn()
@@ -193,11 +191,10 @@ async fn remote_agent_and_browser(relay: bool) {
         .expect("Chromium is required for remote browser acceptance");
     let mut harness = Harness::prepare(
         DAEMON,
-        &json!({"responses":[
-            send("remote scripted answer")
-        ]}),
+        // The harness runs `orchestration = "single"`: a plain text answer ends the run.
+        &json!({"responses":[ui_support::text("remote scripted answer")]}),
     )
-    .expect("scripted Python runtime is required");
+    .expect("scripted Bun sidecar is required");
     harness.append_config(&format!("[browser]\nexecutable = {}\n", json!(executable)));
     let relay_server = if relay {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -253,7 +250,7 @@ async fn remote_agent_and_browser(relay: bool) {
     let link = pairing_link(&harness, relay, &["read", "steer", "browse", "approve"]).await;
     let connected = json_output(
         computer
-            .cli(&["--json", "connect", &link, "--name", "desk"], None)
+            .cli(&["--json", "login", &link, "--name", "desk"], None)
             .await,
     );
     assert_eq!(connected["name"], "desk");
@@ -276,18 +273,18 @@ async fn remote_agent_and_browser(relay: bool) {
         "remote machine has no local daemon"
     );
 
+    // `exec` archives its session once done unless CLI sessions are kept; this test reuses it.
+    let kept = computer
+        .cli(&["settings", "save-sessions", "true"], None)
+        .await;
+    assert!(
+        kept.status.success(),
+        "{}",
+        String::from_utf8_lossy(&kept.stderr)
+    );
     let output = computer
         .cli(
-            &[
-                "--remote",
-                "desk",
-                "--json",
-                "run",
-                "--wait",
-                "--timeout",
-                "30",
-                "answer remotely",
-            ],
+            &["--host", "desk", "--json", "exec", "answer remotely"],
             None,
         )
         .await;
@@ -296,13 +293,18 @@ async fn remote_agent_and_browser(relay: bool) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let result: Value = String::from_utf8_lossy(&output.stdout)
+    let replies: Vec<Value> = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|value| value["type"] == "result")
-        .expect("CLI waited for the delegated answer");
-    assert_eq!(result["status"], "settled");
-    assert_eq!(result["replies"], json!(["remote scripted answer"]));
+        .filter(|value| value["kind"] == "assistant.final")
+        .map(|value| value["text"].clone())
+        .collect();
+    assert_eq!(
+        replies,
+        [json!("remote scripted answer")],
+        "CLI waited for the delegated answer: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     let summary: Value = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -324,7 +326,7 @@ async fn remote_agent_and_browser(relay: bool) {
         computer
             .cli(
                 &[
-                    "--remote",
+                    "--host",
                     "desk",
                     "--json",
                     "browser",
@@ -342,7 +344,7 @@ async fn remote_agent_and_browser(relay: bool) {
         computer
             .cli(
                 &[
-                    "--remote",
+                    "--host",
                     "desk",
                     "--json",
                     "browser",
@@ -366,8 +368,8 @@ async fn remote_agent_and_browser(relay: bool) {
     let mut mcp = computer.mcp("desk").await;
     let run = ok(
         &mcp,
-        "agent_run",
-        json!({"goal":"answer from remote MCP","wait":true,"timeout_secs":30}),
+        "exec",
+        json!({"prompt":"answer from remote MCP","wait":true,"timeout_secs":30}),
     )
     .await;
     assert_eq!(run["status"], "settled", "{run}");
@@ -387,16 +389,13 @@ async fn remote_agent_and_browser(relay: bool) {
     let read_link = pairing_link(&harness, relay, &["read"]).await;
     let read_profile = json_output(
         computer
-            .cli(&["--json", "connect", &read_link, "--name", "reader"], None)
+            .cli(&["--json", "login", &read_link, "--name", "reader"], None)
             .await,
     );
     assert_eq!(read_profile["scopes"], json!(["read"]));
     let before = harness.request("GET", "/v1/sessions", None).await.body;
     let refused = computer
-        .cli(
-            &["--remote", "reader", "run", "--wait", "must not execute"],
-            None,
-        )
+        .cli(&["--host", "reader", "exec", "must not execute"], None)
         .await;
     assert!(!refused.status.success());
     assert!(
@@ -408,8 +407,8 @@ async fn remote_agent_and_browser(relay: bool) {
     ok(&reader, "session_list", json!({})).await;
     for (tool, args) in [
         (
-            "agent_run",
-            json!({"session_id":session,"goal":"must not execute"}),
+            "exec",
+            json!({"session_id":session,"prompt":"must not execute"}),
         ),
         (
             "browser_snapshot",

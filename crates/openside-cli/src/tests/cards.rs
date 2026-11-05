@@ -638,7 +638,7 @@ async fn ticket_show_and_list_render_only_canonical_card_content() {
 }
 
 #[tokio::test]
-async fn run_wait_prints_presented_and_hired_cards_and_json_keeps_their_event_envelopes() {
+async fn resume_prints_presented_and_hired_cards_and_json_keeps_their_event_envelopes() {
     let product = serde_json::to_value(fixture(CardKind::ProductList)).unwrap();
     let mut hired = fixture(CardKind::Hire);
     hired.status = CardStatus::Done;
@@ -677,10 +677,26 @@ async fn run_wait_prints_presented_and_hired_cards_and_json_keeps_their_event_en
     ];
     for json_mode in [false, true] {
         replay(&fixture, source.clone()).await;
+        // Each pass replays a fresh log, so the cursor saved by the previous pass must not apply.
         let args = if json_mode {
-            vec!["--json", "run", "compare", "--session", "s-1", "--wait"]
+            vec![
+                "--json",
+                "session",
+                "resume",
+                "s-1",
+                "compare",
+                "--last-event-id",
+                "0",
+            ]
         } else {
-            vec!["run", "compare", "--session", "s-1", "--wait"]
+            vec![
+                "session",
+                "resume",
+                "s-1",
+                "compare",
+                "--last-event-id",
+                "0",
+            ]
         };
         let (code, output, error) = fixture.run(&args).await;
         assert_eq!(code, 0, "{error}");

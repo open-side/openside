@@ -92,7 +92,10 @@ pub(crate) fn sessions(ui: &Ui, list: &SessionList) -> String {
             Cell::role(
                 ui,
                 Role::Dim,
-                title.iter().map(|s| s.text.clone()).collect::<String>(),
+                format!(
+                    "{} (unsaved)",
+                    title.iter().map(|s| s.text.clone()).collect::<String>()
+                ),
             )
         } else {
             Cell::spans(title)

@@ -214,7 +214,7 @@ async fn capture_cli_screens() {
         ("help", vec!["--help"], 100u16),
         ("help-narrow", vec!["--help"], 60),
         ("no-args", vec![], 100),
-        ("accounts", vec!["accounts"], 110),
+        ("accounts", vec!["models", "accounts"], 110),
         ("models", vec!["models"], 110),
         ("doctor", vec!["doctor"], 100),
         ("skills", vec!["skills", "list"], 100),

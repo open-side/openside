@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::{client::Client, emit, output_error};
 #[derive(Subcommand)]
-pub(crate) enum AccountCommand {
+pub(crate) enum SubscriptionCommand {
     /// Create an isolated CLI home and print the external sign-in command.
     Add {
         source: String,
@@ -19,12 +19,12 @@ pub(crate) enum AccountCommand {
     Enable { source: String, account_id: String },
     /// Disable one existing subscription account.
     Disable { source: String, account_id: String },
-    /// Remove an openside account; never delete the default user CLI home.
+    /// Remove a subscription account; never delete the default user CLI home.
     Rm { source: String, account_id: String },
 }
 
 pub(crate) async fn run<W: Write>(
-    command: Option<&AccountCommand>,
+    command: Option<&SubscriptionCommand>,
     client: &Client,
     json_output: bool,
     stdout: &mut W,
@@ -33,11 +33,11 @@ pub(crate) async fn run<W: Write>(
         return list(client, json_output, stdout).await;
     };
     let (source, id) = match command {
-        AccountCommand::Add { source, .. } => (source, None),
-        AccountCommand::Show { source, account_id }
-        | AccountCommand::Enable { source, account_id }
-        | AccountCommand::Disable { source, account_id }
-        | AccountCommand::Rm { source, account_id } => (source, Some(account_id)),
+        SubscriptionCommand::Add { source, .. } => (source, None),
+        SubscriptionCommand::Show { source, account_id }
+        | SubscriptionCommand::Enable { source, account_id }
+        | SubscriptionCommand::Disable { source, account_id }
+        | SubscriptionCommand::Rm { source, account_id } => (source, Some(account_id)),
     };
     if !matches!(source.as_str(), "claude-code" | "codex-cli") {
         return Err("source must be claude-code or codex-cli".into());
@@ -48,23 +48,23 @@ pub(crate) async fn run<W: Write>(
         path.push_str(crate::models::component(id)?);
     }
     let account: SubscriptionAccount = match command {
-        AccountCommand::Add { label, .. } => {
+        SubscriptionCommand::Add { label, .. } => {
             client
                 .json("POST", &path, Some(&json!({"label":label})))
                 .await?
         }
-        AccountCommand::Show { .. } => client.get(&path).await?,
-        AccountCommand::Enable { .. } => {
+        SubscriptionCommand::Show { .. } => client.get(&path).await?,
+        SubscriptionCommand::Enable { .. } => {
             client
                 .json("PATCH", &path, Some(&json!({"enabled":true})))
                 .await?
         }
-        AccountCommand::Disable { .. } => {
+        SubscriptionCommand::Disable { .. } => {
             client
                 .json("PATCH", &path, Some(&json!({"enabled":false})))
                 .await?
         }
-        AccountCommand::Rm { .. } => {
+        SubscriptionCommand::Rm { .. } => {
             client.send("DELETE", &path).await?;
             if !json_output {
                 writeln!(stdout, "Subscription account removed").map_err(output_error)?;

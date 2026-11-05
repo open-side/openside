@@ -260,11 +260,6 @@ pub(crate) async fn execute<W: Write>(
     }
 }
 
-pub(crate) async fn chief_home(client: &Client) -> Result<String, String> {
-    let chief: Agent = client.get("/v1/agents/chief").await?;
-    Ok(chief.home_session_id.to_string())
-}
-
 fn agent_path(id: &str, suffix: &str) -> String {
     let id = client::encode_segment(id);
     if suffix.is_empty() {

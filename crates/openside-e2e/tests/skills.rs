@@ -1,4 +1,4 @@
-//! Real Python sidecar and real CLI: skills listed in the prompt can be mentioned as
+//! Real Bun sidecar and real CLI: skills listed in the prompt can be mentioned as
 //! `/name` in chat; the sidecar loads them through the daemon's `skill` tool before the
 //! model runs. Disabled and unknown skills are never loaded. `openside skills install`
 //! writes a skill another agent can use.
@@ -236,14 +236,14 @@ async fn install_makes_the_browser_skill_available_to_another_agent() {
     assert!(delegation.contains("**Delegate**") && delegation.contains("judgement"));
     assert!(delegation.contains("**Drive**") && delegation.contains("exact steps"));
     for command in [
-        "openside run --wait",
-        "openside tasks",
-        "openside steer",
-        "openside cancel",
+        "openside exec",
+        "openside session tasks",
+        "openside session steer",
+        "openside session stop",
         "openside repl",
         "openside browser",
         "ticket_wait",
-        "--remote NAME",
+        "--host NAME",
     ] {
         assert!(
             installed.contains(command),

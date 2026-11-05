@@ -49,11 +49,11 @@ async fn model_catalog_and_key_commands_use_public_routes_and_stdin_without_echo
         vec!["models", "pool", "list"],
         vec!["models", "pool", "set", "anthropic", "vault:key1"],
         vec!["models", "account", "session-1", "vault:key1"],
-        vec!["accounts", "add", "codex-cli", "--label", "Work"],
-        vec!["accounts", "show", "codex-cli", "sub1"],
-        vec!["accounts", "enable", "codex-cli", "sub1"],
-        vec!["accounts", "disable", "codex-cli", "sub1"],
-        vec!["accounts", "rm", "codex-cli", "sub1"],
+        vec!["models", "accounts", "add", "codex-cli", "--label", "Work"],
+        vec!["models", "accounts", "show", "codex-cli", "sub1"],
+        vec!["models", "accounts", "enable", "codex-cli", "sub1"],
+        vec!["models", "accounts", "disable", "codex-cli", "sub1"],
+        vec!["models", "accounts", "rm", "codex-cli", "sub1"],
         vec!["models", "set", "anthropic:test-ready", "--fast", "none"],
     ] {
         let mut argv = vec![

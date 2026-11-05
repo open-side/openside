@@ -22,6 +22,8 @@ struct Mock {
     last_seq: Option<u64>,
     /// Pending tickets served by `GET /v1/tickets`.
     tickets: Vec<Value>,
+    /// Events logged only after the first event stream closed, served from the next one.
+    later: Vec<Value>,
 }
 
 type Shared = Arc<Mutex<Mock>>;
@@ -164,6 +166,8 @@ async fn handle(State(shared): State<Shared>, request: Request<Body>) -> Respons
                     Ok(format!("id: {seq}\ndata: {event}\n\n").into_bytes())
                 })
                 .collect();
+            let later = std::mem::take(&mut mock.later);
+            mock.events.extend(later);
             let hang = mock.hang;
             let stream = stream::iter(std::mem::take(&mut chunks));
             let body = if hang {
@@ -242,7 +246,15 @@ impl Rig {
         });
         let client = Client::new(Some(&socket), None, None).unwrap();
         let (server_io, client_io) = tokio::io::duplex(1 << 20);
-        let handler = Mcp::new(client, token.map(str::to_owned));
+        let handler = Mcp::new(
+            client,
+            token.map(str::to_owned),
+            crate::mcp::Defaults {
+                account: None,
+                profile: crate::settings::BrowserProfile::Shared,
+                save_sessions: false,
+            },
+        );
         let server = tokio::spawn(async move {
             let running = handler.serve(server_io).await.unwrap();
             let _ = running.waiting().await;
@@ -308,13 +320,14 @@ async fn tools_list_is_the_documented_set_plus_the_daemon_catalog() {
         [
             "agent_cancel",
             "agent_result",
-            "agent_run",
             "agent_status",
             "agent_steer",
             "browser_open_tab",
-            "browser_repl",
+            "browser_profiles",
             "browser_snapshot",
+            "exec",
             "memory_search",
+            "repl",
             "request_login",
             "session_create",
             "session_list",
@@ -326,6 +339,12 @@ async fn tools_list_is_the_documented_set_plus_the_daemon_catalog() {
             "ticket_wait",
         ]
     );
+    let order: Vec<_> = tools
+        .iter()
+        .take(4)
+        .map(|tool| tool.name.to_string())
+        .collect();
+    assert_eq!(order, ["exec", "repl", "browser_profiles", "memory_search"]);
     for tool in &tools {
         assert_eq!(tool.input_schema["type"], "object", "{}", tool.name);
         assert_eq!(
@@ -345,6 +364,7 @@ async fn tools_list_is_the_documented_set_plus_the_daemon_catalog() {
                 | "agent_status"
                 | "agent_result"
                 | "browser_snapshot"
+                | "browser_profiles"
         );
         assert_eq!(read_only, Some(expected), "{}", tool.name);
     }
@@ -698,11 +718,11 @@ async fn catalog_tools_call_the_tools_route_and_wait_for_the_person() {
 }
 
 #[tokio::test]
-async fn browser_repl_maps_every_status() {
+async fn repl_maps_every_status() {
     let rig = Rig::new(|_| {}).await;
     let deferred = rig
         .call(
-            "browser_repl",
+            "repl",
             json!({"session_id":"s-1","code":"approval-needed","wait":false}),
         )
         .await
@@ -713,7 +733,7 @@ async fn browser_repl_maps_every_status() {
     assert_eq!(deferred["ticket_id"], "t-9");
     let approved = rig
         .call(
-            "browser_repl",
+            "repl",
             json!({"session_id":"s-1","code":"approval-needed","approval_ticket":"t-9"}),
         )
         .await
@@ -728,7 +748,7 @@ async fn browser_repl_maps_every_status() {
 
     let snapshot = rig
         .call(
-            "browser_repl",
+            "repl",
             json!({"session_id":"s-1","code":"await page.snapshot()","tab_id":"tab-1"}),
         )
         .await
@@ -740,16 +760,13 @@ async fn browser_repl_maps_every_status() {
     );
 
     let denied = rig
-        .call(
-            "browser_repl",
-            json!({"session_id":"s-1","code":"policy-denied"}),
-        )
+        .call("repl", json!({"session_id":"s-1","code":"policy-denied"}))
         .await
         .unwrap();
     assert_eq!(denied.is_error, Some(true));
     assert!(text(&denied).contains("policy_denied"));
     let thrown = rig
-        .call("browser_repl", json!({"session_id":"s-1","code":"throws"}))
+        .call("repl", json!({"session_id":"s-1","code":"throws"}))
         .await
         .unwrap();
     assert_eq!(thrown.is_error, Some(true));
@@ -760,10 +777,13 @@ async fn browser_repl_maps_every_status() {
 }
 
 #[tokio::test]
-async fn agent_run_delegates_the_goal_and_waits_for_the_replies() {
+async fn exec_delegates_the_prompt_and_waits_for_the_replies() {
     let rig = Rig::new(|mock| mock.events = message_events(vec![])).await;
     let started = rig
-        .call("agent_run", json!({"goal":"find the cheapest flight"}))
+        .call(
+            "exec",
+            json!({"prompt":"find the cheapest flight","wait":false}),
+        )
         .await
         .unwrap();
     assert_ne!(started.is_error, Some(true), "{}", text(&started));
@@ -793,8 +813,8 @@ async fn agent_run_delegates_the_goal_and_waits_for_the_replies() {
 
     let waited = rig
         .call(
-            "agent_run",
-            json!({"goal":"again","session_id":"s-1","wait":true,"timeout_secs":20}),
+            "exec",
+            json!({"prompt":"again","session_id":"s-1","wait":true,"timeout_secs":20}),
         )
         .await
         .unwrap();
@@ -995,4 +1015,86 @@ async fn the_token_is_scrubbed_from_argument_errors_and_stderr_text() {
         "bad [REDACTED] here"
     );
     assert_eq!(crate::mcp::redact("same", None), "same");
+}
+
+/// The run pauses on t-1 and the ticket is answered before the pause's `session.settled`.
+fn answered_before_the_pause_settles() -> Vec<Value> {
+    vec![
+        event(9, "message.injected", json!({"message_id":"m-1"})),
+        event(10, "ticket.opened", json!({"ticket": ticket()})),
+        event(
+            11,
+            "message.completed",
+            json!({"message_id":"m-1","outcome":"deferred"}),
+        ),
+        event(
+            12,
+            "ticket.resolved",
+            json!({"ticket_id":"t-1","resolution":{"value":true}}),
+        ),
+        event(13, "session.settled", json!({})),
+        event(14, "turn.started", json!({})),
+        event(15, "assistant.final", json!({"text":"deployed"})),
+        event(
+            16,
+            "message.completed",
+            json!({"message_id":"m-1","outcome":"completed"}),
+        ),
+        event(17, "session.settled", json!({})),
+    ]
+}
+
+#[tokio::test]
+async fn exec_waits_for_the_resumed_run_when_the_ticket_is_answered_before_the_pause_settles() {
+    let rig = Rig::new(|mock| mock.events = answered_before_the_pause_settles()).await;
+    let result = rig
+        .call("exec", json!({"prompt":"deploy","timeout_secs":20}))
+        .await
+        .unwrap();
+    let result: Value = serde_json::from_str(&text(&result)).unwrap();
+    assert_eq!(result["status"], "settled", "{result}");
+    assert_eq!(result["replies"], json!(["deployed"]));
+    assert_eq!(result["last_seq"], 17);
+}
+
+#[tokio::test]
+async fn exec_reports_waiting_human_from_the_stream_while_the_ticket_is_open() {
+    // The pause settles with t-1 open; the end-of-wait ticket snapshot (empty here) must not
+    // turn that into `settled`, since a resolution can be committed before its event arrives.
+    let mut events = answered_before_the_pause_settles();
+    events.truncate(3);
+    events.push(event(12, "session.settled", json!({})));
+    let rig = Rig::new(|mock| mock.events = events).await;
+    let result = rig
+        .call("exec", json!({"prompt":"deploy","timeout_secs":20}))
+        .await
+        .unwrap();
+    let result: Value = serde_json::from_str(&text(&result)).unwrap();
+    assert_eq!(result["status"], "waiting_human", "{result}");
+    assert_eq!(result["last_seq"], 12);
+    assert!(result.get("archived").is_none(), "{result}");
+}
+
+#[tokio::test]
+async fn a_wait_through_a_resuming_pause_reopens_the_stream_the_daemon_closed() {
+    let mut events = answered_before_the_pause_settles();
+    let later = events.split_off(5);
+    let rig = Rig::new(|mock| {
+        mock.events = events;
+        mock.later = later;
+    })
+    .await;
+    let result = rig
+        .call("exec", json!({"prompt":"deploy","timeout_secs":20}))
+        .await
+        .unwrap();
+    let result: Value = serde_json::from_str(&text(&result)).unwrap();
+    assert_eq!(result["status"], "settled", "{result}");
+    assert_eq!(result["replies"], json!(["deployed"]));
+    let streams = rig
+        .requests()
+        .into_iter()
+        .filter(|(method, target, _)| method == "GET" && target == "/v1/sessions/s-1/events")
+        .count();
+    assert_eq!(streams, 2);
 }

@@ -1,4 +1,4 @@
-//! Routines against the real daemon and the credential-free Python sidecar.
+//! Routines against the real daemon and the credential-free Bun sidecar.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -171,6 +171,7 @@ async fn heartbeat_follows_up_an_existing_session_and_deleting_it_pauses_the_rou
     let Some(mut harness) = start(&["first answer", "heartbeat answer"]).await else {
         return;
     };
+    keep_cli_sessions(&harness).await;
     let task = harness.cli(CLI, &["a task"], None).await;
     assert!(
         task.status.success(),
@@ -392,9 +393,23 @@ fn tool(name: &str, args: Value, call: &str) -> Value {
     json!({"parts":[{"type":"tool_call","name":name,"args":args,"id":call}]})
 }
 
+/// `exec` archives its session once done unless CLI sessions are kept; heartbeats follow up
+/// the CLI session, so the person keeps it on the chat list.
+async fn keep_cli_sessions(harness: &Harness) {
+    let kept = harness
+        .cli(CLI, &["settings", "save-sessions", "true"], None)
+        .await;
+    assert!(
+        kept.status.success(),
+        "{}",
+        String::from_utf8_lossy(&kept.stderr)
+    );
+}
+
 /// A session with one finished turn and a heartbeat routine whose first run is parked on an
 /// `ask_user` ticket: its message ends `deferred`. Returns `(session, routine, ticket)`.
 async fn parked_heartbeat(harness: &Harness) -> (String, String, String) {
+    keep_cli_sessions(harness).await;
     let task = harness.cli(CLI, &["a task"], None).await;
     assert!(
         task.status.success(),
@@ -648,17 +663,10 @@ async fn scripted_routine_proposal_resumes_once_after_owner_consent_across_resta
         let events = collect_until_final(&mut stream, "Owner answered").await;
         let snapshot = harness.snapshot(session);
         assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
-        let returns: Vec<_> = snapshot["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-            .filter(|part| {
-                part["part_kind"] == "tool-return" && part["tool_call_id"] == "routine-propose-call"
-            })
-            .collect();
+        let returns = openside_e2e::tool_results(&snapshot, "routine-propose-call");
         assert_eq!(returns.len(), 1);
-        assert_eq!(returns[0]["content"]["approved"], approved);
+        assert_eq!(returns[0]["isError"], false);
+        assert_eq!(returns[0]["details"]["approved"], approved);
         let routines = harness.request("GET", "/v1/routines", None).await;
         assert_eq!(
             routines.body["routines"].as_array().unwrap().len(),
@@ -668,7 +676,7 @@ async fn scripted_routine_proposal_resumes_once_after_owner_consent_across_resta
             let routine = &routines.body["routines"][0];
             assert_eq!(routine["action"], payload["action"]);
             assert_eq!(routine["schedule"], payload["schedule"]);
-            assert_eq!(returns[0]["content"]["routine_id"], routine["id"]);
+            assert_eq!(returns[0]["details"]["routine_id"], routine["id"]);
             let mut stream = harness.events(session, events.last().unwrap().seq).await;
             let run = harness
                 .request(

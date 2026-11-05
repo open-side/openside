@@ -1,6 +1,6 @@
-//! PP-11: a headless CLI task that asks the user parks on a ticket instead of hanging, exits
-//! successfully with `waiting_human`, and finishes after a remote client with the right
-//! scope answers the ticket; a read-only remote client cannot.
+//! PP-11: a headless CLI task that asks the user parks on a ticket instead of hanging; the
+//! same `exec` process keeps following while a remote client with the right scope answers the
+//! ticket (a read-only remote client cannot), then exits 0 with the run's final answer.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -39,6 +39,32 @@ async fn mint(harness: &Harness, scope: &str) -> String {
     minted.trim().split_once('\t').unwrap().1.to_owned()
 }
 
+/// The first pending ticket once its run has parked on it (the daemon has committed the
+/// snapshot and reports `waiting_human`), polled while the CLI is still following the run.
+async fn parked_ticket(harness: &Harness) -> Value {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let pending = harness
+            .request("GET", "/v1/tickets?status=pending", None)
+            .await;
+        if let Some(ticket) = pending.body["tickets"].get(0) {
+            let session = ticket["session_id"].as_str().unwrap();
+            let state = harness
+                .request("GET", &format!("/v1/sessions/{session}"), None)
+                .await;
+            if state.body["status"] == "waiting_human" {
+                return ticket.clone();
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no parked ticket: {}",
+            pending.body
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
 async fn headless_ask_waits_for_a_ticket_and_a_scoped_remote_answer_resumes_it() {
     let Some(mut harness) = Harness::start(
@@ -54,85 +80,82 @@ async fn headless_ask_waits_for_a_ticket_and_a_scoped_remote_answer_resumes_it()
         return;
     };
 
-    // Headless: stdout is a pipe, no terminal to answer on.
-    let output = harness.cli(CLI, &["--json", "pick a color"], None).await;
+    // Headless: stdout is a pipe, no terminal to answer on. `exec` keeps following through the
+    // open ticket, so the answers below happen while that process is still running.
+    let (output, (session, ticket)) =
+        tokio::join!(harness.cli(CLI, &["--json", "pick a color"], None), async {
+            let pending = parked_ticket(&harness).await;
+            let ticket = pending["id"].as_str().unwrap().to_owned();
+            let session = pending["session_id"].as_str().unwrap().to_owned();
+
+            // The ticket is discoverable from another process.
+            let listed = harness.cli(CLI, &["--json", "ticket", "list"], None).await;
+            assert!(
+                String::from_utf8_lossy(&listed.stdout).contains(&ticket),
+                "{listed:?}"
+            );
+            assert_eq!(
+                harness.snapshot(&session)["pending_deferred"][0]["tool_call_id"],
+                "ask-call"
+            );
+
+            // A remote client with read scope sees the ticket but cannot answer it...
+            let read = mint(&harness, "read").await;
+            let path = format!("/v1/tickets/{ticket}/resolve");
+            let refused = harness
+                .tcp_request("POST", &path, Some(&read), Some(json!({"value":"blue"})))
+                .await;
+            assert_eq!(refused.status, 403, "{}", refused.body);
+            assert_eq!(
+                harness
+                    .tcp_request("GET", "/v1/tickets", Some(&read), None)
+                    .await
+                    .status,
+                200
+            );
+            assert_eq!(
+                harness
+                    .request("GET", &format!("/v1/sessions/{session}"), None)
+                    .await
+                    .body["status"],
+                "waiting_human"
+            );
+
+            // ...an approve-scoped one can.
+            let approve = mint(&harness, "approve").await;
+            let resolved = harness
+                .tcp_request("POST", &path, Some(&approve), Some(json!({"value":"blue"})))
+                .await;
+            assert_eq!(resolved.status, 200, "{}", resolved.body);
+            (session, ticket)
+        });
+
+    // The waiting process shows the ticket, then the run continuing from the answer to its end.
     let records = parse(&output);
     let summary = records.last().unwrap();
     assert_eq!(summary["type"], "summary");
-    assert_eq!(summary["status"], "waiting_human", "{summary}");
+    assert_eq!(summary["status"], "settled", "{summary}");
     assert_eq!(summary["exit_code"], 0);
-    let session = summary["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(summary["session_id"], session.as_str());
     let opened = records
         .iter()
         .find(|record| record["kind"] == "ticket.opened")
         .expect("ticket.opened record");
-    let ticket = opened["ticket"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(opened["ticket"]["id"], ticket.as_str());
     assert_eq!(opened["ticket"]["kind"], "info");
     assert_eq!(opened["ticket"]["tool_call_id"], "ask-call");
-
-    // The ticket is discoverable from another process.
-    let listed = harness.cli(CLI, &["--json", "ticket", "list"], None).await;
-    assert!(
-        String::from_utf8_lossy(&listed.stdout).contains(&ticket),
-        "{listed:?}"
-    );
-    assert_eq!(
-        harness.snapshot(&session)["pending_deferred"][0]["tool_call_id"],
-        "ask-call"
-    );
-
-    // A remote client with read scope sees the ticket but cannot answer it...
-    let read = mint(&harness, "read").await;
-    let path = format!("/v1/tickets/{ticket}/resolve");
-    let refused = harness
-        .tcp_request("POST", &path, Some(&read), Some(json!({"value":"blue"})))
-        .await;
-    assert_eq!(refused.status, 403, "{}", refused.body);
-    assert_eq!(
-        harness
-            .tcp_request("GET", "/v1/tickets", Some(&read), None)
-            .await
-            .status,
-        200
-    );
-    assert_eq!(
-        harness
-            .request("GET", &format!("/v1/sessions/{session}"), None)
-            .await
-            .body["status"],
-        "waiting_human"
-    );
-
-    // ...an approve-scoped one can.
-    let approve = mint(&harness, "approve").await;
-    let resolved = harness
-        .tcp_request("POST", &path, Some(&approve), Some(json!({"value":"blue"})))
-        .await;
-    assert_eq!(resolved.status, 200, "{}", resolved.body);
-
-    // Resuming from the saved cursor shows the run continue from the answer to its end.
-    let output = harness
-        .cli(CLI, &["--json", "session", "resume", &session], None)
-        .await;
-    let records = parse(&output);
-    assert_eq!(records.last().unwrap()["status"], "settled", "{records:?}");
     assert!(records
         .iter()
         .any(|record| record["kind"] == "assistant.final" && record["text"] == "blue selected"));
     let snapshot = harness.snapshot(&session);
     assert!(snapshot["pending_deferred"].as_array().unwrap().is_empty());
-    let returns: Vec<_> = snapshot["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
-        .filter(|part| part["part_kind"] == "tool-return" && part["tool_call_id"] == "ask-call")
-        .collect();
+    let returns = openside_e2e::tool_results(&snapshot, "ask-call");
     assert_eq!(
         returns.len(),
         1,
         "the deferred call resumes once under its original id"
     );
-    assert_eq!(returns[0]["content"]["answer"], "blue");
+    assert_eq!(returns[0]["isError"], false);
+    assert_eq!(returns[0]["details"]["answer"], "blue");
     harness.kill().await;
 }

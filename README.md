@@ -7,7 +7,7 @@
 
 [한국어](README.ko.md)
 
-openside is a local-first, agent-native browser. A Rust daemon (`opensided`) owns sessions, policy, a secrets vault and a Chromium instance, and runs every tool itself. A Python sidecar (`agent/`, Pydantic AI) runs the model loop and proxies tool calls back to the daemon. You talk to it through the `openside` CLI, a web/PWA UI, an MV3 extension for stock Chromium, MCP, or chat bots. A patched Chromium build is optional.
+openside is a local-first, agent-native browser. A Rust daemon (`opensided`) owns sessions, policy, a secrets vault and a Chromium instance, and runs every tool itself. A Bun/TypeScript sidecar (`agent/`, on omp's pi-agent-core) runs the model loop and proxies tool calls back to the daemon. You talk to it through the `openside` CLI, a web/PWA UI, an MV3 extension for stock Chromium, MCP, or chat bots. A patched Chromium build is optional.
 
 openside is an independent project and is not affiliated with Aside or at-inc.
 
@@ -23,11 +23,11 @@ See [docs/PLATFORMS.md](docs/PLATFORMS.md).
 
 ## Build and run
 
-Requirements: Rust stable via [rustup](https://rustup.rs) (the repository pins the channel), a C compiler, [uv](https://docs.astral.sh/uv/) (it installs Python 3.13), Node.js 22+ with pnpm 9, and a Chromium-based browser. [bubblewrap](https://github.com/containers/bubblewrap) is optional; if present, the shell tool runs inside it.
+Requirements: Rust stable via [rustup](https://rustup.rs) (the repository pins the channel), a C compiler, [Bun](https://bun.sh) 1.4.4 or newer, Node.js 22+ with pnpm 9, and a Chromium-based browser. [bubblewrap](https://github.com/containers/bubblewrap) is optional; if present, the shell tool runs inside it.
 
 ```bash
 cargo build --release -p opensided -p openside-cli
-uv sync --project agent
+(cd agent && bun install --frozen-lockfile)
 pnpm -C web install && pnpm -C web build                # optional web UI
 pnpm -C extension install && pnpm -C extension build    # optional extension (load extension/dist unpacked)
 ```
@@ -45,7 +45,7 @@ anthropic = ["env"]   # reads ANTHROPIC_API_KEY
 Then:
 
 ```bash
-target/release/openside doctor                                         # check Python, uv, browser, sandbox, credentials
+target/release/openside doctor                                         # check Bun, sidecar dependencies, browser, sandbox, credentials
 OPENSIDE_UI_DIR=web/dist target/release/opensided --listen 127.0.0.1:7777   # keep running
 # in another terminal:
 target/release/openside "summarise this README"
@@ -59,9 +59,31 @@ More: [docs/INSTALL.md](docs/INSTALL.md), [docs/CONFIGURATION.md](docs/CONFIGURA
 ## Where you can use it
 
 - Remote access: reach the daemon from a phone or another computer over Tailscale Serve, a Cloudflare Tunnel or your own relay; set it up with `openside remote setup` ([docs/REMOTE.md](docs/REMOTE.md)).
-- MCP and delegation: `openside mcp` serves the browser and agent tools to other agents, and `openside run` hands a goal to the openside browser agent ([docs/specs/mcp.md](docs/specs/mcp.md)).
+- MCP and delegation: `openside mcp` serves the browser and agent tools to other agents, and `openside exec` hands a task to the openside browser agent ([docs/specs/mcp.md](docs/specs/mcp.md)).
 - First run: the web UI opens `/welcome` to detect installed agents, import browser profiles and set up the vault ([docs/specs/onboarding.md](docs/specs/onboarding.md)).
 - Phone app: the web UI installs as a PWA, with a share target, shortcuts, a pending-ticket badge and an offline outbox.
+
+## CLI commands
+
+`openside [options] [prompt...]` runs a task, just like `openside exec`; a prompt that is only an http(s) URL opens that page in a new tab instead. A run keeps going while a person answers its tickets and exits once it settles. Ctrl-C while following a run (`exec` or `session resume`) detaches without stopping it: it prints how to resume or stop the session and exits 130; a second Ctrl-C exits at once. `openside --help` lists every command, and [docs/reference/cli.md](docs/reference/cli.md) has the full reference. The commands were renamed to follow Aside's CLI, with no aliases for the old names; because a bare word starts a prompt, `openside run tests` is now the prompt "run tests". Only the removed `--remote` flag, or `OPENSIDE_REMOTE` without `OPENSIDE_HOST`, fails with a hint that names the replacement:
+
+| Before | Now |
+|---|---|
+| `openside run GOAL`, `openside chat GOAL` | `openside exec PROMPT` or `openside PROMPT` (always a new session) |
+| `run --session ID GOAL --wait` | `openside session resume ID PROMPT` |
+| `steer`, `cancel`, `tasks` | `session steer\|queue`, `session stop [--task ID]`, `session tasks` |
+| `connect` | `login` (and `logout`) |
+| `remote profiles list\|rm` | `host list`, `host use NAME`, `host status`, `logout --host NAME` |
+| `--remote NAME`, `OPENSIDE_REMOTE` | `--host NAME`, `OPENSIDE_HOST` |
+| `--mode read-only\|guard\|full` (new sessions) | `--permission read-only\|ask\|guard\|full-access` |
+| `--browser-space isolated` | `--profile isolated` (or `--profile incognito`) |
+| `accounts …` | `models accounts …` |
+| `repl ID --eval CODE`, `repl ID --interactive` | `repl --session ID CODE`; without code, one snippet per stdin line |
+| `memory search` without a query | `memory list` |
+| MCP `agent_run {goal, mode, browser_space}` | MCP `exec {prompt, permission, profile_id}` |
+| MCP `browser_repl` | MCP `repl` |
+
+`routine add --mode` and `policy test --mode` keep their names and values. Task options (`-m`, `-p`, `-s`, `--effort`, `--permission`, `--profile`, `--account`, `--workspace`) go before a bare prompt or after `exec`; before any other command they are a usage error.
 
 ## Security
 
@@ -76,7 +98,7 @@ are omitted from agent tool results, not hidden from page scripts the agent runs
 Confirm approvals, choice answers, authenticator enrollment and saving a login require
 a paired person device; agent clients and the local socket may deny or cancel, not approve.
 Issue agent pairing links on the daemon host with `openside pair --agent`, then redeem
-them with `openside connect`. An ordinary phone/browser link keeps its person-device
+them with `openside login`. An ordinary phone/browser link keeps its person-device
 approval authority even when a CLI redeems it; do not give that token to an agent.
 
 ## Documentation

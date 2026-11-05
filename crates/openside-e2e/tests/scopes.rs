@@ -132,8 +132,8 @@ async fn sandboxed_client_needs_a_token_and_stays_inside_its_scope() {
             "--token",
             "not-a-token",
             "repl",
+            "--session",
             &session,
-            "--eval",
             "1 + 1",
         ],
     ] {
@@ -149,7 +149,15 @@ async fn sandboxed_client_needs_a_token_and_stays_inside_its_scope() {
     let output = sandboxed(
         harness.root(),
         &[
-            cli, "--url", &url, "--token", token, "repl", &session, "--eval", "1 + 1",
+            cli,
+            "--url",
+            &url,
+            "--token",
+            token,
+            "repl",
+            "--session",
+            &session,
+            "1 + 1",
         ],
     )
     .await;

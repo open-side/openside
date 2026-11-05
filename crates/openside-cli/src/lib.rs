@@ -1,8 +1,19 @@
 //! Non-interactive client of the openside public API v1.
 //!
-//! `openside "task"` creates a session and follows its SSE stream. Session commands
-//! are `session list`, `session resume <id> [text] [--last-event-id <seq>]`, and
-//! `session stop <id>`. Tickets support `ticket list [--all]`, `show <id>`,
+//! `openside [options] [prompt...]` (the same as `openside exec`) creates a session, sends the
+//! prompt and follows its SSE stream. The commands mirror a browser-agent CLI: `account`
+//! (team agents as `u0`, `u1`, ...), `login`/`logout` (pairing with a remote daemon), `host`
+//! (`local` or a saved remote, selected with `--host`), `memory`, `skills`, `exec`, `repl`,
+//! `mcp`, `guide`, `update`, `session` and `settings` (`cli.toml` next to the daemon's
+//! configuration). openside's own administration follows: `models`, `key`, `channels`,
+//! `team`, `ticket`, `routine`, `token`, `vault`, `connections`, `sync`, `policy`, `browser`,
+//! `import`, `doctor`, `pair`, `remote`, `device` and `service`. `docs/reference/cli.md` is
+//! the generated reference.
+//!
+//! Session commands are `session list` (saved and unsaved sessions), `session resume <id>
+//! [prompt...] [--last-event-id <seq>]`, `session stop|steer|queue|archive|delete`,
+//! `session new` and `session tasks`. A finished `exec` or `repl` session is archived unless
+//! `settings save-sessions true`. Tickets support `ticket list [--all]`, `show <id>`,
 //! `resolve <id> <value>`, `done <id>`, and `reject <id> [--reason TEXT]`.
 //! Resolution values are parsed as JSON when valid, otherwise as strings.
 //! For `secret_input`, `resolve <id>` with no value asks for it at a hidden prompt on the
@@ -16,54 +27,37 @@
 //! `--alternative ID` and `--account ITEM_ID` answer it without typing. A `choice` ticket lists
 //! the page's options and sends `{"option": id}` for the picked number. `-` reads the same
 //! answers from piped stdin, one line per prompt.
-//! Apart from `repl`, `vault init|unlock|add`, and `key set`, these are the only stdin-reading
-//! commands, and they never print the supplied value.
-//! `--model`, `--mode read-only|guard|full`, and `--workspace PATH` select session
-//! creation settings; workspace paths are canonicalized to absolute paths.
-//! `doctor [--config PATH] [--json]` diagnoses local installation without a daemon.
-//! `models` lists grouped model readiness; `key set <provider>` reads a hidden stdin line and
-//! stores the value in the Vault; `key list|rm <provider>` never prints stored values.
-//! `routine list|show|add|run|runs|pause|resume|rm|suggest` manage scheduled routines
-//! (`docs/specs/routines.md`); `add` takes `--cron EXPR [--timezone ZONE]` or
-//! `--interval-secs N`, and `--heartbeat SESSION` to follow up an existing session.
-//! `memory search|add|show|edit|rm|history` manage local memory (`docs/specs/memory.md`).
-//! `token create --scope SCOPE...` mints a scoped device token (admin, normally over the
-//! socket) and prints `device_id<TAB>token`. `policy show|set <file>|test <target>
-//! <capability>` reads, replaces or evaluates the live daemon policy (`docs/specs/policy.md`).
-//! `vault status|init|unlock|lock|add|rm|items|policy|audit` sets up, unlocks and administers
-//! the vault; `init`, `unlock` and `add` read passphrases and values at prompts (one per line
-//! from piped stdin) and nothing prints a stored value (`docs/specs/vault.md`).
-//! `repl <session-id> [--tab ID] [--eval CODE | --interactive]` runs Playwright-syntax
-//! JavaScript in one of the session's agent tabs (`docs/specs/browser-repl.md`); without
-//! `--eval` it reads the snippet from stdin, or one snippet per line with `--interactive`.
+//! Apart from `login`, a `-` prompt, `repl`, `vault init|unlock|add`, and `key set`, these are
+//! the only stdin-reading commands, and they never print the supplied value.
+//! `-m/--model`, `-p/--provider`, `--permission ask|guard|full-access|read-only`, `--account`,
+//! `--profile shared|isolated|incognito` and `--workspace PATH` select session creation
+//! settings; workspace paths are canonicalized to absolute paths. `--effort` and a non-default
+//! `--speed` are accepted by the parser but refused until the daemon supports them.
 //! `memory model fetch <owner/name>` runs without a daemon and is the only command that
 //! reaches the internet: it downloads a static embedding model over HTTPS (redirects
 //! allowed) into `memory.embedding.model_dir`.
-//! `skills list|show|new|enable|disable|rm` manage the skill library (`docs/specs/skills.md`);
-//! `skills install <agent>` puts openside's browser skill into another agent's skills
-//! directory and `skills import` copies a skill into the library; both run without a daemon.
 //! `mcp` serves the public API as an MCP server on stdin/stdout (`docs/specs/mcp.md`); it uses
 //! the same connection and token as every other command, so the token's scopes bound what an
 //! MCP client can do. `--json` has no effect: stdout carries only the MCP protocol.
-//! `run GOAL [--session ID] [--wait|--follow]` delegates a goal to the openside browser agent
-//! (detached by default; `--wait` waits through human tickets and prints the replies) and
-//! `steer`, `cancel` and `tasks` manage the run and its Tasks. `browser <verb> <session> ARGS`
-//! calls one of the session's browser or human-step tools directly, and `session new` creates
-//! a session to drive (`docs/specs/mcp.md`).
-//! `remote setup|status` configures and inspects this daemon's remote transports, `connect`
-//! saves another daemon as a profile and `remote profiles list|rm` manages the saved profiles
-//! that `--remote NAME` selects (`docs/REMOTE.md`).
+//! `remote setup|status` configures and inspects this daemon's remote transports
+//! (`docs/REMOTE.md`).
 //!
 //! The default connection is the daemon socket resolved from the shared configuration
-//! (`daemon.socket`/`OPENSIDE_SOCKET`, else `<runtime dir>/opensided.sock`).
-//! `--socket` overrides it. `--url` accepts only HTTP loopback addresses and needs
-//! `--token` or `OPENSIDE_TOKEN`; redirects, proxies, and DNS are never used.
+//! (`daemon.socket`/`OPENSIDE_SOCKET`, else `<runtime dir>/opensided.sock`), or the host
+//! chosen with `openside host use`. `--host NAME`/`OPENSIDE_HOST` selects a remote saved by
+//! `openside login` (or `local`); `--socket` overrides the socket. `--url` accepts only HTTP
+//! loopback addresses and needs `--token` or `OPENSIDE_TOKEN`; redirects, proxies, and DNS
+//! are never used.
 //! `--json` emits raw API objects/events and a final `{"type":"summary", ...}`
 //! object, one per line. `openside "task"` does this by default when stdout is not a
 //! terminal (`openside "x" | cat`); other commands need `--json` explicitly. Ticket
 //! instructions go to stderr, including in JSON mode.
-//! No command requires a TTY. A settled session with pending tickets exits successfully
-//! with status `waiting_human`.
+//! No command requires a TTY. `exec` (and a bare prompt, and `session resume ID PROMPT`) keeps
+//! following a session that settles with pending tickets: it prints each ticket and how to
+//! resolve it, then exits only once the run settles with no ticket left or is stopped.
+//! `session resume ID` without a prompt exits successfully with status `waiting_human`
+//! instead. A bare prompt that is a single http(s) URL opens that page in a new tab of the
+//! openside browser (`browser_open_tab`) instead of starting a task.
 //!
 //! On a terminal the output is designed for people: a branded `--help`, aligned
 //! tables, status glyphs, grouped `doctor` sections, and a live `openside "task"` view
@@ -84,16 +78,19 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
-mod accounts;
+mod account;
 mod agent;
 mod browser;
 mod channels;
 mod client;
 mod connections;
 mod cursor;
+mod guide;
+mod host;
 mod import;
 mod mcp;
 mod memory;
+mod model_accounts;
 mod models;
 mod pair;
 mod policy;
@@ -104,6 +101,7 @@ mod remotes;
 mod repl;
 mod routines;
 mod service;
+mod settings;
 mod skills;
 mod sse;
 mod sync;
@@ -111,6 +109,7 @@ mod team;
 mod token;
 mod tool_call;
 mod ui;
+mod update;
 mod vault;
 mod wait;
 
@@ -121,13 +120,14 @@ use std::{
     path::PathBuf,
 };
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use openside_config::doctor::{self, DoctorOptions, Status};
 use openside_config::StoredVault;
 use openside_proto::{
     BrowserSpace, CreateSessionRequest, Event, EventKind, LoginFieldKind, Message, MessageMode,
     MessageOutcome, PolicyMode, RejectTicketRequest, ResolveTicketRequest, Session, SessionList,
-    SessionStatus, SubmitMessageRequest, Ticket, TicketChoice, TicketKind, TicketList, TicketLogin,
+    SessionProfile, SessionSpeed, SessionStatus, SubmitMessageRequest, ThinkingEffort, Ticket,
+    TicketChoice, TicketKind, TicketList, TicketLogin,
 };
 use openside_vault::StoredFormat;
 use serde::Serialize;
@@ -135,18 +135,143 @@ use serde_json::{json, Value};
 
 use client::Client;
 use cursor::Cursor;
+use settings::{AccountRef, AccountSelector, BrowserProfile};
 use sse::Decoder;
+
+const ROOT_AFTER_HELP: &str = "\
+Model options:
+  Without -m, sessions use the default model from `openside models`.
+  Pass --model provider:model (or provider/model), or --model NAME --provider PROVIDER. A provider in --model wins over --provider.
+  --permission ask and --permission guard are the same (Guard, the default); read-only never acts on pages.
+
+A prompt that is only an http(s) URL opens that page in a new openside tab instead of starting a task.
+When a step needs a person, the ticket and how to answer it are printed and the run waits until it is answered.
+
+Examples:
+  openside \"Find the unread message from Alex in my inbox\"
+  openside https://example.com
+  openside -m anthropic:claude-sonnet-4-5 \"Draft a reply to the latest support email\"
+  openside --permission full-access \"Fill in the expense form from the receipts tab\"
+  openside --account u1 \"Check today's failed payments\"
+  openside --host laptop \"Find a hotel near the venue for next weekend\"
+  openside guide";
+
+const TASK_AFTER_HELP: &str = "\
+Model options:
+  Without -m, sessions use the default model from `openside models`.
+  Pass --model provider:model (or provider/model), or --model NAME --provider PROVIDER. A provider in --model wins over --provider.
+  --permission ask and --permission guard are the same (Guard, the default); read-only never acts on pages.
+
+When a step needs a person, the ticket and how to answer it are printed and the run waits until it is answered.
+
+Examples:
+  openside exec \"Find the unread message from Alex in my inbox\"
+  openside exec --profile isolated \"Check the pricing page while signed out\"
+  openside exec --account u1:isolated \"Compare the two plans\"";
+
+const REPL_AFTER_HELP: &str = "\
+Notes:
+  Playwright-style JavaScript, 120s per call. page starts unset; call openTab(url) or getTabs() first, or pass --tab ID.
+  Variables and attached tabs carry over between calls in the same session (--session ID, or one stdin line per call).
+  The last expression's value is printed, then console.log output. Read `openside guide repl` first.
+
+Examples:
+  openside repl \"await openTab('https://example.com'); await page.title()\"
+  openside repl --session <id> \"await page.snapshot()\"
+  openside repl --session <id> -
+  openside repl --host laptop --profile isolated";
+
+const MCP_AFTER_HELP: &str = "\
+Tools: exec, repl, browser_profiles, memory_search, then session, ticket and agent_* tools and the daemon's browser tools.
+
+Examples:
+  openside mcp
+  openside mcp --account u1
+  openside mcp --host laptop --profile isolated";
+
+const SESSION_AFTER_HELP: &str = "\
+steer interrupts the current step. queue waits and runs next.
+resume with a prompt runs it like exec, waiting through tickets; without one it follows the session until it settles or waits on a ticket.
+
+Examples:
+  openside session list
+  openside session resume <id> \"Check the third result\"
+  openside session stop <id>
+  openside session steer <id> \"Stop searching and open the inbox\"
+  openside session queue <id> \"Then export the list to CSV\"";
+
+const HOST_AFTER_HELP: &str = "\
+Hosts are `local` (this computer's daemon) and the remote daemons saved by `openside login`.
+
+Examples:
+  openside host list
+  openside host profiles --host laptop
+  openside host use laptop
+  openside host status";
+
+const ACCOUNT_AFTER_HELP: &str = "\
+Accounts are the daemon's team agents: u0 is the chief, u1, u2, ... the teammates (`openside team list`).
+
+Examples:
+  openside account list
+  openside account status u1
+  openside account use u1";
 
 #[derive(Parser)]
 #[command(
     name = "openside",
     version,
-    about = "Non-interactive openside API client",
+    about = "Run a browsing task in openside from the terminal.",
+    override_usage = "openside [options] [prompt...]\n       openside [options] <command> [args...]",
+    disable_version_flag = true,
     arg_required_else_help = true,
+    after_help = ROOT_AFTER_HELP,
     color = clap::ColorChoice::Never,
     styles = ui::clap_styles()
 )]
 struct Args {
+    #[arg(short = 'V', long, action = ArgAction::Version, help = "Print version")]
+    version: Option<bool>,
+    #[arg(
+        long,
+        value_name = "id",
+        help = "Account selector: u0 (the chief), u1, ... or u1:<profile-id>"
+    )]
+    account: Option<String>,
+    #[arg(
+        long,
+        global = true,
+        env = "OPENSIDE_HOST",
+        conflicts_with_all = ["socket", "url"],
+        value_name = "host",
+        help = "Run on a session host: 'local', or a host saved by `openside login` (name or device id)"
+    )]
+    host: Option<String>,
+    #[arg(
+        long,
+        value_name = "id",
+        help = "Browser profile on the selected host (see `openside host profiles`)"
+    )]
+    profile: Option<String>,
+    #[command(flatten)]
+    task: TaskOptions,
+    #[arg(long, help = "Same as `openside update`")]
+    update: bool,
+    #[command(flatten)]
+    connection: Connection,
+    #[arg(
+        value_name = "prompt",
+        help = "Task prompt for the browser agent, or a URL to open; `-` reads it from stdin"
+    )]
+    prompt: Vec<String>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// How the CLI reaches the daemon besides `--host`.
+#[derive(ClapArgs)]
+#[command(next_help_heading = "Connection options")]
+struct Connection {
     #[arg(
         long,
         global = true,
@@ -155,15 +280,6 @@ struct Args {
     json: bool,
     #[arg(long, global = true, conflicts_with = "url", value_name = "PATH")]
     socket: Option<PathBuf>,
-    #[arg(
-        long,
-        global = true,
-        env = "OPENSIDE_REMOTE",
-        conflicts_with_all = ["socket", "url"],
-        value_name = "NAME",
-        help = "Remote daemon profile saved by `openside connect` (see `openside remote profiles list`)"
-    )]
-    remote: Option<String>,
     #[arg(
         long,
         global = true,
@@ -188,30 +304,202 @@ struct Args {
         help = "Colour the human output: auto (a terminal that supports it; NO_COLOR and TERM=dumb turn it off), always (also into a pipe; CLICOLOR_FORCE does the same) or never"
     )]
     color: ui::ColorWhen,
-    #[command(subcommand)]
-    command: Option<Command>,
-    #[arg(value_name = "TASK")]
-    task: Option<String>,
-    #[arg(long, value_name = "MODEL", help = "Model for the new session")]
+}
+
+/// Model and permission settings of a new session.
+#[derive(ClapArgs, Default)]
+struct TaskOptions {
+    #[arg(
+        short,
+        long,
+        value_name = "model",
+        help = "Model id, or provider:model (e.g. anthropic:claude-sonnet-4-5)"
+    )]
     model: Option<String>,
-    #[arg(long, value_enum, help = "Permission mode for the new session")]
-    mode: Option<Mode>,
-    #[arg(long, value_name = "PATH", help = "Workspace for the new session")]
-    workspace: Option<PathBuf>,
+    #[arg(short, long, value_name = "provider", help = "Model provider name")]
+    provider: Option<String>,
+    #[arg(
+        short,
+        long,
+        value_enum,
+        value_name = "speed",
+        help = "Model speed. With an agent-client token, fast needs the daemon host's local socket."
+    )]
+    speed: Option<Speed>,
     #[arg(
         long,
         value_enum,
-        help = "Browser space for the new session: shared (default, the managed profile with its logins) or isolated (own cookies and storage, wiped when the session is archived or deleted)"
+        value_name = "effort",
+        help = "Thinking effort; ultrabrowse runs the session in openside's research profile. With an agent-client token, xhigh, max and ultrabrowse need the daemon host's local socket."
     )]
-    browser_space: Option<Space>,
+    effort: Option<Effort>,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "mode",
+        help = "Session permission: ask/guard (ask a person before sensitive steps), full-access, or read-only"
+    )]
+    permission: Option<Permission>,
+    #[arg(long, value_name = "PATH", help = "Workspace folder for the session")]
+    workspace: Option<PathBuf>,
+}
+
+/// Which account and browser profile a new session uses.
+#[derive(ClapArgs, Default)]
+struct Target {
+    #[arg(
+        long,
+        value_name = "id",
+        help = "Account selector: u0 (the chief), u1, ... or u1:<profile-id>"
+    )]
+    account: Option<String>,
+    #[arg(
+        long,
+        value_name = "id",
+        help = "Browser profile on the selected host (see `openside host profiles`)"
+    )]
+    profile: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Speed {
+    Default,
+    Fast,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Effort {
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+    Ultrabrowse,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Permission {
+    Ask,
+    Guard,
+    FullAccess,
+    ReadOnly,
+}
+
+impl From<Permission> for PolicyMode {
+    fn from(permission: Permission) -> Self {
+        match permission {
+            Permission::Ask | Permission::Guard => Self::Guard,
+            Permission::FullAccess => Self::Full,
+            Permission::ReadOnly => Self::ReadOnly,
+        }
+    }
+}
+
+/// `--mode` of `routine add` and `policy test`: the daemon's policy modes by name.
+#[derive(Clone, Copy, ValueEnum)]
+enum Mode {
+    ReadOnly,
+    Guard,
+    Full,
+}
+
+impl From<Mode> for PolicyMode {
+    fn from(mode: Mode) -> Self {
+        match mode {
+            Mode::ReadOnly => Self::ReadOnly,
+            Mode::Guard => Self::Guard,
+            Mode::Full => Self::Full,
+        }
+    }
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Show credential-source accounts, configured models, usage and rate-limit blocks.
-    Accounts {
+    /// List and switch openside CLI accounts.
+    #[command(after_help = ACCOUNT_AFTER_HELP)]
+    Account {
         #[command(subcommand)]
-        command: Option<accounts::AccountCommand>,
+        command: account::AccountCommand,
+    },
+    /// Sign the CLI in to another computer's openside with a pairing link from `openside pair`
+    Login(remotes::LoginArgs),
+    /// Sign the CLI out of a host and revoke its device token
+    Logout,
+    /// Inspect and select session hosts (this computer or a paired remote)
+    #[command(after_help = HOST_AFTER_HELP)]
+    Host {
+        #[command(subcommand)]
+        command: host::HostCommand,
+    },
+    /// Search and read openside's memory
+    Memory {
+        #[command(subcommand)]
+        command: memory::MemoryCommand,
+    },
+    /// Browse and install skills, including the openside-browser skill for coding agents
+    Skills {
+        #[command(subcommand)]
+        command: skills::SkillsCommand,
+    },
+    /// Run a browser agent session.
+    #[command(after_help = TASK_AFTER_HELP)]
+    Exec {
+        #[command(flatten)]
+        target: Target,
+        #[command(flatten)]
+        task: TaskOptions,
+        #[arg(
+            value_name = "prompt",
+            required = true,
+            help = "Task prompt for the browser agent; `-` reads it from stdin"
+        )]
+        prompt: Vec<String>,
+    },
+    /// Run Playwright-style JavaScript in an openside agent tab.
+    #[command(after_help = REPL_AFTER_HELP)]
+    Repl {
+        #[command(flatten)]
+        target: Target,
+        /// Session whose agent tab runs the code; default: a new session for this command.
+        #[arg(long, value_name = "id")]
+        session: Option<String>,
+        /// Agent tab to drive; optional when the session owns at most one tab.
+        #[arg(long, value_name = "id")]
+        tab: Option<String>,
+        /// JavaScript to run (`-` reads it from stdin); without it, every stdin line is a snippet
+        #[arg(value_name = "code")]
+        code: Vec<String>,
+    },
+    /// Start the MCP server over stdio.
+    #[command(after_help = MCP_AFTER_HELP)]
+    Mcp {
+        #[command(flatten)]
+        target: Target,
+    },
+    /// Show how to use openside for browser tasks.
+    Guide {
+        #[arg(value_enum, value_name = "topic")]
+        topic: Option<guide::Topic>,
+    },
+    /// Show the installed version and how to update it.
+    Update {
+        /// Do not ask for confirmation.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Inspect and control browser sessions.
+    #[command(after_help = SESSION_AFTER_HELP)]
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+    /// Configure openside CLI settings.
+    #[command(after_help = settings::SETTINGS_AFTER_HELP)]
+    Settings {
+        #[command(subcommand)]
+        command: settings::SettingsCommand,
     },
     /// List models grouped by provider, with credential readiness and source.
     Models {
@@ -233,21 +521,15 @@ enum Command {
         #[command(subcommand)]
         command: Option<team::TeamCommand>,
     },
-    Session {
-        #[command(subcommand)]
-        command: SessionCommand,
-    },
+    /// List and answer tickets: the steps that need a person.
     Ticket {
         #[command(subcommand)]
         command: TicketCommand,
     },
+    /// Manage scheduled routines.
     Routine {
         #[command(subcommand)]
         command: routines::RoutineCommand,
-    },
-    Memory {
-        #[command(subcommand)]
-        command: memory::MemoryCommand,
     },
     /// Mint scoped device tokens.
     Token {
@@ -274,85 +556,21 @@ enum Command {
         #[command(subcommand)]
         command: policy::PolicyCommand,
     },
-    Skills {
-        #[command(subcommand)]
-        command: skills::SkillsCommand,
-    },
-    /// Delegate a goal to the openside browser agent; prints the session and message ids.
-    #[command(visible_alias = "chat")]
-    Run {
-        /// What the agent should do; `-` reads it from stdin.
-        goal: String,
-        /// Run in this session instead of the chief's home conversation.
-        #[arg(long, value_name = "SESSION_ID")]
-        session: Option<String>,
-        /// Wait until the run ends (through any tickets a person answers) and print the replies.
-        #[arg(long, conflicts_with = "follow")]
-        wait: bool,
-        /// Stream the run's text, progress and tickets until the session settles.
-        #[arg(long)]
-        follow: bool,
-        /// With --wait: give up after this many seconds (status `timeout`, exit 1).
-        #[arg(long, value_name = "SECS", requires = "wait")]
-        timeout: Option<u64>,
-    },
-    /// Steer a running agent, or one of its Tasks with --task.
-    Steer {
-        /// Session to steer.
-        session: String,
-        /// The guidance to send.
-        text: String,
-        /// Steer this Task instead of the session's agent (ids from `openside tasks`).
-        #[arg(long, value_name = "TASK_ID")]
-        task: Option<String>,
-    },
-    /// Cancel one Task with --task, otherwise stop the session's run.
-    Cancel {
-        /// Session whose run or Task to cancel.
-        session: String,
-        /// Cancel only this Task; the agent and the other Tasks keep running.
-        #[arg(long, value_name = "TASK_ID")]
-        task: Option<String>,
-    },
-    /// List a session's Tasks and subagents with their status and results.
-    Tasks {
-        /// Session to list.
-        session: String,
-    },
     /// Call the session's browser and human-step tools directly, like the in-app agent.
     Browser {
         #[command(subcommand)]
         command: browser::BrowserCommand,
     },
-    /// Run Playwright-syntax JavaScript in a session's agent tab.
-    Repl {
-        /// Session whose agent tab runs the code.
-        session: String,
-        /// Agent tab to drive; optional when the session owns at most one tab.
-        #[arg(long = "tab", value_name = "TAB_ID")]
-        tab: Option<String>,
-        /// Run this snippet instead of reading stdin.
-        #[arg(long, value_name = "CODE", conflicts_with = "interactive")]
-        eval: Option<String>,
-        /// Run every stdin line as its own snippet.
-        #[arg(long, short)]
-        interactive: bool,
-    },
-    /// Serve the public API to MCP clients over stdio (docs/specs/mcp.md).
-    Mcp,
     /// Import history, bookmarks and cookies from a Chrome, Chromium or Firefox profile.
     Import(import::ImportArgs),
+    /// Diagnose the local installation without a daemon.
     Doctor {
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
     /// Pair a phone or browser: print a one-time QR code valid for 3 minutes (local socket).
     Pair(pair::PairArgs),
-    /// Pair this computer with a remote daemon from its pairing link and save it as a
-    /// `--remote` profile.
-    Connect(remotes::ConnectArgs),
-    /// This daemon's remote access (Tailscale, Cloudflare Tunnel or a relay) and the saved
-    /// profiles for reaching other daemons.
+    /// This daemon's remote access (Tailscale, Cloudflare Tunnel or a relay).
     Remote {
         #[command(subcommand)]
         command: remote::RemoteCommand,
@@ -371,15 +589,14 @@ enum Command {
 
 #[derive(Subcommand)]
 enum SessionCommand {
+    /// List sessions, including unsaved sessions.
     List,
-    /// Create an empty session to drive with `browser` or `repl`; prints its id.
-    New {
-        #[arg(long)]
-        title: Option<String>,
-    },
+    /// Continue an existing session.
     Resume {
+        #[arg(value_name = "id")]
         id: String,
-        text: Option<String>,
+        #[arg(value_name = "prompt")]
+        prompt: Vec<String>,
         #[arg(
             long,
             value_name = "SEQ",
@@ -387,7 +604,53 @@ enum SessionCommand {
         )]
         last_event_id: Option<u64>,
     },
+    /// Stop a running session, or one of its Tasks with --task.
     Stop {
+        #[arg(value_name = "id")]
+        id: String,
+        /// Cancel only this Task; the agent and the other Tasks keep running.
+        #[arg(long, value_name = "TASK_ID")]
+        task: Option<String>,
+    },
+    /// Interrupt a session with a new prompt.
+    Steer {
+        #[arg(value_name = "id")]
+        id: String,
+        #[arg(value_name = "prompt", required = true)]
+        prompt: Vec<String>,
+        /// Steer this Task instead of the session's agent (ids from `openside session tasks`).
+        #[arg(long, value_name = "TASK_ID")]
+        task: Option<String>,
+    },
+    /// Queue a follow-up prompt after the current step.
+    Queue {
+        #[arg(value_name = "id")]
+        id: String,
+        #[arg(value_name = "prompt", required = true)]
+        prompt: Vec<String>,
+    },
+    /// Archive a session.
+    Archive {
+        #[arg(value_name = "id")]
+        id: String,
+    },
+    /// Delete a session.
+    Delete {
+        #[arg(value_name = "id")]
+        id: String,
+    },
+    /// Create an empty session to drive with `browser` or `repl`; prints its id.
+    New {
+        #[arg(long)]
+        title: Option<String>,
+        #[command(flatten)]
+        target: Target,
+        #[command(flatten)]
+        task: TaskOptions,
+    },
+    /// List a session's Tasks and subagents with their status and results.
+    Tasks {
+        #[arg(value_name = "id")]
         id: String,
     },
 }
@@ -446,44 +709,14 @@ enum TicketCommand {
     },
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum Mode {
-    ReadOnly,
-    Guard,
-    Full,
-}
-
-impl From<Mode> for PolicyMode {
-    fn from(mode: Mode) -> Self {
-        match mode {
-            Mode::ReadOnly => Self::ReadOnly,
-            Mode::Guard => Self::Guard,
-            Mode::Full => Self::Full,
-        }
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum Space {
-    Shared,
-    Isolated,
-}
-
-impl From<Space> for BrowserSpace {
-    fn from(space: Space) -> Self {
-        match space {
-            Space::Shared => Self::Shared,
-            Space::Isolated => Self::Isolated,
-        }
-    }
-}
-
 #[derive(Default)]
 struct Summary {
     session_id: Option<String>,
     last_seq: Option<u64>,
     status: &'static str,
     failed: bool,
+    /// Ctrl-C detached from a followed run, which keeps going on the daemon: exit 130.
+    interrupted: bool,
 }
 
 /// Markdown reference of every command and option, generated from the clap definitions.
@@ -580,6 +813,7 @@ where
     let channel_input = argv
         .windows(2)
         .any(|pair| pair[0] == "channels" && pair[1] == "add");
+    let legacy_remote = uses_legacy_remote_flag(&argv);
     let parsed = match ui::pretty() {
         Some(ui) => {
             use clap::{CommandFactory, FromArgMatches};
@@ -593,16 +827,12 @@ where
         }
         None => Args::try_parse_from(argv),
     };
-    let args = match parsed {
-        Ok(mut args) => {
-            args.json |=
-                json_when_task && args.task.is_some() && args.color != ui::ColorWhen::Always;
-            args
-        }
+    let mut args = match parsed {
+        Ok(args) => args,
         Err(error) => {
             let usage = error.use_stderr();
             let result = if usage {
-                if key_input {
+                let shown = if key_input {
                     writeln!(stderr, "openside: invalid key command; use `openside key set <provider>` and supply the key on stdin")
                 } else if channel_input {
                     writeln!(stderr, "openside: invalid channel command; use `openside channels add <kind> <id> --label <label>` and supply credentials on hidden stdin")
@@ -610,6 +840,11 @@ where
                     write!(stderr, "{}", ui::render_help_error(&error, ui))
                 } else {
                     write!(stderr, "{error}")
+                };
+                if legacy_remote && error.kind() == clap::error::ErrorKind::UnknownArgument {
+                    shown.and_then(|()| writeln!(stderr, "{LEGACY_REMOTE_HINT}"))
+                } else {
+                    shown
                 }
             } else if let Some(ui) = ui::pretty() {
                 write!(stdout, "{}", ui::render_help_error(&error, ui))
@@ -625,114 +860,176 @@ where
             };
         }
     };
-    if args.task.is_some() == args.command.is_some() {
-        let _ = writeln!(
+    let is_task = matches!(args.command, None | Some(Command::Exec { .. }));
+    args.connection.json |=
+        json_when_task && is_task && !args.update && args.connection.color != ui::ColorWhen::Always;
+    let json = args.connection.json;
+    if args.update || matches!(args.command, Some(Command::Update { .. })) {
+        return finish(
+            update::print(json, stdout),
+            &args,
+            Summary::default(),
+            stdout,
             stderr,
-            "openside: provide either a task or a subcommand, not both"
         );
-        if args.json {
-            let _ = emit(
-                stdout,
-                &json!({"type":"summary","status":"error","exit_code":2}),
-            );
-        }
-        return 2;
     }
-    let creates_session = matches!(
-        args.command,
-        None | Some(Command::Session {
-            command: SessionCommand::New { .. }
-        })
-    );
-    if !creates_session
-        && (args.model.is_some()
-            || args.mode.is_some()
-            || args.workspace.is_some()
-            || args.browser_space.is_some())
+    if args.host.is_none()
+        && std::env::var_os("OPENSIDE_REMOTE").is_some_and(|value| !value.is_empty())
     {
-        let _ = writeln!(
+        return usage_error(
+            "OPENSIDE_REMOTE is no longer read; set OPENSIDE_HOST to the host name instead",
+            json,
+            stdout,
             stderr,
-            "openside: --model, --mode, --workspace and --browser-space apply only to new sessions; use `openside session new --model MODEL --mode MODE --workspace PATH --browser-space SPACE` or a bare task"
         );
-        if args.json {
-            let _ = emit(
-                stdout,
-                &json!({"type":"summary","status":"error","exit_code":2}),
-            );
-        }
-        return 2;
     }
-    if matches!(args.command, Some(Command::Mcp)) {
-        return mcp::run(
-            args.socket.as_deref(),
-            args.url.as_deref(),
-            args.token,
+    if args.command.is_none() && args.prompt.is_empty() {
+        return usage_error(
+            "provide a prompt or a command (see `openside --help`)",
+            json,
+            stdout,
             stderr,
-            args.remote.clone(),
-        )
-        .await;
+        );
     }
-    let mut summary = Summary::default();
-    let result = if let Some(Command::Doctor { config }) = &args.command {
-        run_doctor(config.as_deref(), args.json, stdout, &mut summary).await
-    } else if let Some(Command::Import(import_args)) = &args.command {
-        import::run(import_args, args.json, stdout).await
-    } else if let Some(Command::Service { command }) = &args.command {
-        service::execute(command, stdout)
-    } else if let Some(Command::Connect(connect)) = &args.command {
-        remotes::connect(connect, args.json, stdin, stdout, stderr).await
-    } else if let Some(Command::Remote {
-        command: remote::RemoteCommand::Profiles { command },
-    }) = &args.command
-    {
-        remotes::remotes(command, args.json, stdout)
-    } else if let Some(Command::Remote {
-        command: remote::RemoteCommand::Setup(setup),
-    }) = &args.command
-    {
-        remote::setup(setup, args.json, stdout).await
-    } else if let Some(Command::Memory {
-        command: memory::MemoryCommand::Model { command },
-    }) = &args.command
-    {
-        memory::model(command, args.json, stdout).await
-    } else if let Some(Command::Skills { command }) = args
-        .command
-        .as_ref()
-        .filter(|command| matches!(command, Command::Skills { command } if command.is_local()))
-    {
-        skills::local(command, args.json, stdout)
-    } else {
-        let client = match Client::from_flags(
-            args.socket.as_deref(),
-            args.url.as_deref(),
-            args.token.as_deref(),
-            args.remote.as_deref(),
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(error) => {
-                let _ = writeln!(stderr, "openside: {error}");
-                if args.json {
-                    let _ = emit(
-                        stdout,
-                        &json!({"type":"summary","status":"error","exit_code":2}),
-                    );
-                }
-                return 2;
-            }
-        };
-        execute(&args, &client, stdin, stdout, stderr, &mut summary).await
+    // Subcommand names win over the bare prompt, so root-only task options are checked here:
+    // clap's args_conflicts_with_subcommands would also count the global connection flags.
+    if args.command.is_some() && root_task_flags(&args) {
+        return usage_error(
+            "--account, --profile, -m, -p, -s, --effort, --permission and --workspace before a \
+             command apply only to a bare prompt; put them after `exec`",
+            json,
+            stdout,
+            stderr,
+        );
+    }
+    if let Err(error) = task_options(&args).map_or(Ok(()), check_task_options) {
+        return usage_error(&error, json, stdout, stderr);
+    }
+    let saved = match settings::load() {
+        Ok(saved) => saved,
+        Err(error) => return usage_error(&error, json, stdout, stderr),
     };
+    let (account, profile) = target_of(&args);
+    let chosen = match choose(account, profile, &saved) {
+        Ok(chosen) => chosen,
+        Err(error) => return usage_error(&error, json, stdout, stderr),
+    };
+    let host = match selected_host(&args, &saved) {
+        Ok(host) => host,
+        Err(error) => return usage_error(&error, json, stdout, stderr),
+    };
+    let mut summary = Summary::default();
+    let result = match &args.command {
+        Some(Command::Doctor { config }) => {
+            run_doctor(config.as_deref(), json, stdout, &mut summary).await
+        }
+        Some(Command::Import(import_args)) => import::run(import_args, json, stdout).await,
+        Some(Command::Service { command }) => service::execute(command, stdout),
+        Some(Command::Login(login)) => remotes::login(login, json, stdin, stdout, stderr).await,
+        Some(Command::Logout) => host::logout(host.as_deref(), json, stdout, stderr).await,
+        Some(Command::Host { command }) if !matches!(command, host::HostCommand::Status) => {
+            host::local(command, host.as_deref(), chosen.profile, json, stdout)
+        }
+        Some(Command::Guide { topic }) => guide::print(*topic, stdout),
+        Some(Command::Settings { command }) if matches!(command.account(), Ok(None)) => {
+            settings::execute(command, None, stdout)
+        }
+        Some(Command::Remote {
+            command: remote::RemoteCommand::Setup(setup),
+        }) => remote::setup(setup, json, stdout).await,
+        Some(Command::Memory {
+            command: memory::MemoryCommand::Model { command },
+        }) => memory::model(command, json, stdout).await,
+        Some(Command::Memory {
+            command: memory::MemoryCommand::Path,
+        }) => match host {
+            None => memory::path(json, stdout),
+            Some(_) => Err(
+                "memory path shows this computer's database; it does not apply with --host".into(),
+            ),
+        },
+        Some(Command::Skills { command }) if command.is_local() => {
+            skills::local(command, json, stdout)
+        }
+        _ => {
+            let client = match Client::from_flags(
+                args.connection.socket.as_deref(),
+                args.connection.url.as_deref(),
+                args.connection.token.as_deref(),
+                host.as_deref(),
+            )
+            .await
+            {
+                Ok(client) => client,
+                Err(error) => return usage_error(&error, json, stdout, stderr),
+            };
+            if matches!(args.command, Some(Command::Mcp { .. })) {
+                let account = match agent_id(&client, chosen.account.as_ref()).await {
+                    Ok(account) => account,
+                    Err(error) => {
+                        let _ = writeln!(stderr, "openside: {error}");
+                        return 1;
+                    }
+                };
+                let defaults = mcp::Defaults {
+                    account: account.as_deref(),
+                    profile: chosen.profile,
+                    save_sessions: saved.save_sessions,
+                };
+                return mcp::run(client, args.connection.token.clone(), defaults, stderr).await;
+            }
+            let context = Context {
+                client: &client,
+                host: host.as_deref(),
+                saved: &saved,
+                chosen: &chosen,
+            };
+            execute(&args, &context, stdin, stdout, stderr, &mut summary).await
+        }
+    };
+    finish(result, &args, summary, stdout, stderr)
+}
+
+/// Report a usage or connection-configuration error: exit code 2.
+fn usage_error<W: Write, E: Write>(
+    message: &str,
+    json: bool,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> u8 {
+    let _ = writeln!(stderr, "openside: {message}");
+    if json {
+        let _ = emit(
+            stdout,
+            &json!({"type":"summary","status":"error","exit_code":2}),
+        );
+    }
+    2
+}
+
+fn finish<W: Write, E: Write>(
+    result: Result<(), String>,
+    args: &Args,
+    mut summary: Summary,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> u8 {
     let exit_code = if let Err(error) = result {
-        let detail = match args.token.as_deref().filter(|token| !token.is_empty()) {
+        let detail = match args
+            .connection
+            .token
+            .as_deref()
+            .filter(|token| !token.is_empty())
+        {
             Some(token) => error.replace(token, "[REDACTED]"),
             None => error,
         };
         let _ = writeln!(stderr, "openside: {detail}");
         summary.status = "error";
         1
+    } else if summary.interrupted {
+        summary.status = "interrupted";
+        130
     } else {
         // Commands that run without a daemon never set a status of their own.
         if summary.status.is_empty() {
@@ -740,7 +1037,7 @@ where
         }
         u8::from(summary.failed)
     };
-    if args.json
+    if args.connection.json
         && emit(
             stdout,
             &json!({
@@ -758,144 +1055,103 @@ where
     exit_code
 }
 
+const LEGACY_REMOTE_HINT: &str =
+    "hint: `--remote` is now `--host` (and OPENSIDE_REMOTE is now OPENSIDE_HOST)";
+
+/// Whether the removed global `--remote` flag appears before any `--` separator.
+fn uses_legacy_remote_flag(argv: &[OsString]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|arg| *arg != "--")
+        .any(|arg| {
+            arg == "--remote" || arg.to_str().is_some_and(|arg| arg.starts_with("--remote="))
+        })
+}
+
+/// What every command that talks to a daemon shares.
+struct Context<'a> {
+    client: &'a Client,
+    /// The remote host, or `None` for this computer's daemon.
+    host: Option<&'a str>,
+    saved: &'a settings::CliSettings,
+    chosen: &'a Chosen,
+}
+
 async fn execute<R: Read, W: Write, E: Write>(
     args: &Args,
-    client: &Client,
+    context: &Context<'_>,
     stdin: &mut R,
     stdout: &mut W,
     stderr: &mut E,
     summary: &mut Summary,
 ) -> Result<(), String> {
+    let client = context.client;
     summary.status = "ok";
     match &args.command {
-        Some(Command::Accounts { command }) => {
-            accounts::run(command.as_ref(), client, args.json, stdout).await
+        None => {
+            if let Some(url) = bare_url(&args.prompt) {
+                return open_url(args, context, url, stdout, stderr, summary).await;
+            }
+            let run = Exec {
+                task: &args.task,
+                prompt: &args.prompt,
+            };
+            exec(args, context, run, stdin, stdout, stderr, summary).await
+        }
+        Some(Command::Exec { task, prompt, .. }) => {
+            exec(
+                args,
+                context,
+                Exec { task, prompt },
+                stdin,
+                stdout,
+                stderr,
+                summary,
+            )
+            .await
+        }
+        Some(Command::Account { command }) => {
+            account::execute(command, client, args.connection.json, stdout).await
+        }
+        Some(Command::Host { .. }) => {
+            host::status(context.host, client, args.connection.json, stdout).await
+        }
+        Some(Command::Settings { command }) => {
+            let account = match command.account()? {
+                Some(selector) => Some(account::resolve(client, &selector).await?),
+                None => None,
+            };
+            settings::execute(command, account, stdout)
         }
         Some(Command::Models { command }) => {
-            models::run(command.as_ref(), client, args.json, stdout).await
+            models::run(command.as_ref(), client, args.connection.json, stdout).await
         }
         Some(Command::Key { command }) => {
-            models::key(command, client, args.json, stdin, stdout, stderr).await
+            models::key(command, client, args.connection.json, stdin, stdout, stderr).await
         }
         Some(Command::Channels { command }) => {
-            channels::run(command, client, args.json, stdin, stdout, stderr).await
+            channels::run(command, client, args.connection.json, stdin, stdout, stderr).await
         }
         Some(Command::Team { command }) => {
-            team::execute(command.as_ref(), args.json, client, stdout).await
-        }
-        None => {
-            let task = args
-                .task
-                .as_deref()
-                .ok_or("a task or subcommand is required")?;
-            let session: Session = client
-                .json("POST", "/v1/sessions", Some(&create_request(args, None)?))
-                .await?;
-            summary.session_id = Some(session.id.to_string());
-            send_message(client, session.id.as_str(), task).await?;
-            follow(
-                args,
-                client,
-                session.id.as_str(),
-                ReplayPoint {
-                    last_seen: 0,
-                    terminal_after: session.last_seq,
-                    end_at: None,
-                },
-                stdout,
-                stderr,
-                summary,
-            )
-            .await
-        }
-        Some(Command::Run {
-            goal,
-            session,
-            wait,
-            follow: stream,
-            timeout,
-        }) => {
-            let goal = if goal == "-" {
-                let mut text = String::new();
-                stdin
-                    .read_to_string(&mut text)
-                    .map_err(|_| "could not read the goal from stdin".to_owned())?;
-                text
-            } else {
-                goal.clone()
-            };
-            if goal.trim().is_empty() {
-                return Err("the goal is empty".into());
-            }
-            let create = create_request(args, None)?;
-            let default_home = match session {
-                None => Some(team::chief_home(client).await?),
-                Some(_) => None,
-            };
-            let target = session.as_deref().or(default_home.as_deref());
-            if *stream {
-                let started = agent::start(client, target, &create, &goal).await?;
-                summary.session_id = Some(started.session.id.to_string());
-                return follow(
-                    args,
-                    client,
-                    started.session.id.as_str(),
-                    ReplayPoint {
-                        last_seen: started.session.last_seq,
-                        terminal_after: started.session.last_seq,
-                        end_at: None,
-                    },
-                    stdout,
-                    stderr,
-                    summary,
-                )
-                .await;
-            }
-            agent::run(
-                agent::RunOptions {
-                    goal: &goal,
-                    session: target,
-                    create,
-                    wait: *wait,
-                    timeout: timeout.map(std::time::Duration::from_secs),
-                    json: args.json,
-                },
-                client,
-                stdout,
-                stderr,
-                summary,
-            )
-            .await
-        }
-        Some(Command::Steer {
-            session,
-            text,
-            task,
-        }) => {
-            agent::steer(
-                client,
-                session,
-                task.as_deref(),
-                text,
-                args.json,
-                stdout,
-                summary,
-            )
-            .await
-        }
-        Some(Command::Cancel { session, task }) => {
-            agent::cancel(client, session, task.as_deref(), args.json, stdout, summary).await
-        }
-        Some(Command::Tasks { session }) => {
-            agent::tasks(client, session, args.json, stdout, summary).await
+            team::execute(command.as_ref(), args.connection.json, client, stdout).await
         }
         Some(Command::Browser { command }) => {
-            browser::execute(command, args.json, client, stdout, stderr, summary).await
+            browser::execute(
+                command,
+                args.connection.json,
+                client,
+                stdout,
+                stderr,
+                summary,
+            )
+            .await
         }
         Some(Command::Session { command }) => match command {
             SessionCommand::List => {
-                let list: SessionList = client.get("/v1/sessions").await?;
-                if args.json {
+                let mut list: SessionList = client.get("/v1/sessions").await?;
+                let unsaved: SessionList = client.get("/v1/sessions?archived=true").await?;
+                list.sessions.extend(unsaved.sessions);
+                if args.connection.json {
                     emit(stdout, &list)?;
                 } else if let Some(ui) = ui::pretty() {
                     write!(stdout, "{}", ui::sessions(ui, &list)).map_err(output_error)?;
@@ -903,9 +1159,10 @@ async fn execute<R: Read, W: Write, E: Write>(
                     for session in &list.sessions {
                         writeln!(
                             stdout,
-                            "{}\t{}\t{}",
+                            "{}\t{}\t{}\t{}",
                             session.id,
                             status_name(session.status),
+                            if session.archived { "unsaved" } else { "saved" },
                             session.title
                         )
                         .map_err(output_error)?;
@@ -913,40 +1170,99 @@ async fn execute<R: Read, W: Write, E: Write>(
                 }
                 Ok(())
             }
-            SessionCommand::New { title } => {
-                let session: Session = client
-                    .json(
-                        "POST",
-                        "/v1/sessions",
-                        Some(&create_request(args, title.clone())?),
-                    )
-                    .await?;
+            SessionCommand::New { title, task, .. } => {
+                let create = create_request(context, task, title.clone()).await?;
+                let session: Session = client.json("POST", "/v1/sessions", Some(&create)).await?;
                 summary.session_id = Some(session.id.to_string());
                 summary.last_seq = Some(session.last_seq);
-                if args.json {
+                if args.connection.json {
                     emit(stdout, &session)
                 } else {
                     writeln!(stdout, "{}", session.id).map_err(output_error)
                 }
             }
-            SessionCommand::Stop { id } => {
+            SessionCommand::Stop {
+                id,
+                task: Some(task),
+            } => {
+                agent::cancel(
+                    client,
+                    id,
+                    Some(task),
+                    args.connection.json,
+                    stdout,
+                    summary,
+                )
+                .await
+            }
+            SessionCommand::Stop { id, task: None } => {
                 let session: Session = client
                     .json::<_, Value>("POST", &client::session_path(id, "stop"), None)
                     .await?;
                 summary.session_id = Some(session.id.to_string());
                 summary.last_seq = Some(session.last_seq);
-                if args.json {
+                if args.connection.json {
                     emit(stdout, &session)?;
                 } else {
                     writeln!(stdout, "Stopped session {}", session.id).map_err(output_error)?;
                 }
                 Ok(())
             }
+            SessionCommand::Steer { id, prompt, task } => {
+                summary.session_id = Some(id.clone());
+                let text = prompt.join(" ");
+                agent::deliver(
+                    client,
+                    id,
+                    task.as_deref(),
+                    &text,
+                    MessageMode::Steer,
+                    args.connection.json,
+                    stdout,
+                )
+                .await
+            }
+            SessionCommand::Queue { id, prompt } => {
+                summary.session_id = Some(id.clone());
+                let text = prompt.join(" ");
+                agent::deliver(
+                    client,
+                    id,
+                    None,
+                    &text,
+                    MessageMode::Queue,
+                    args.connection.json,
+                    stdout,
+                )
+                .await
+            }
+            SessionCommand::Archive { id } => {
+                summary.session_id = Some(id.clone());
+                let session = archive(client, id).await?;
+                if args.connection.json {
+                    emit(stdout, &session)
+                } else {
+                    writeln!(stdout, "ok").map_err(output_error)
+                }
+            }
+            SessionCommand::Delete { id } => {
+                summary.session_id = Some(id.clone());
+                client.send("DELETE", &client::session_path(id, "")).await?;
+                if args.connection.json {
+                    emit(stdout, &json!({"deleted": id}))
+                } else {
+                    writeln!(stdout, "ok").map_err(output_error)
+                }
+            }
+            SessionCommand::Tasks { id } => {
+                agent::tasks(client, id, args.connection.json, stdout, summary).await
+            }
             SessionCommand::Resume {
                 id,
-                text,
+                prompt,
                 last_event_id,
             } => {
+                let text = (!prompt.is_empty()).then(|| prompt.join(" "));
                 let session: Session = client.get(&client::session_path(id, "")).await?;
                 let cursor = Cursor::new(client.endpoint_key(), id)?;
                 let last_seq = match last_event_id {
@@ -958,11 +1274,11 @@ async fn execute<R: Read, W: Write, E: Write>(
                 }
                 summary.session_id = Some(id.clone());
                 summary.last_seq = Some(last_seq);
-                if let Some(text) = text {
+                if let Some(text) = &text {
                     send_message(client, id, text).await?;
                 } else if last_seq == session.last_seq && session.status != SessionStatus::Running {
                     summary.status = status_name(session.status);
-                    print_waiting(args.json, stdout, id, summary.status)?;
+                    print_waiting(args.connection.json, stdout, id, summary.status)?;
                     return Ok(());
                 }
                 let terminal_after = if text.is_some() || session.status == SessionStatus::Running {
@@ -981,7 +1297,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                 } else {
                     None
                 };
-                follow(
+                follow_or_detach(
                     args,
                     client,
                     id,
@@ -989,6 +1305,8 @@ async fn execute<R: Read, W: Write, E: Write>(
                         last_seen: last_seq,
                         terminal_after,
                         end_at,
+                        // A new prompt continues the session the way `exec` runs one.
+                        wait_tickets: text.is_some(),
                     },
                     stdout,
                     stderr,
@@ -1005,7 +1323,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                     "/v1/tickets?status=pending"
                 };
                 let list: TicketList = client.get(path).await?;
-                if args.json {
+                if args.connection.json {
                     emit(stdout, &list)?;
                 } else if list.tickets.iter().any(|ticket| ticket.card.is_some()) {
                     for ticket in &list.tickets {
@@ -1031,8 +1349,8 @@ async fn execute<R: Read, W: Write, E: Write>(
             }
             TicketCommand::Show { id } => {
                 let ticket: Ticket = client.get(&client::ticket_path(id, "")).await?;
-                print_ticket(args.json, client, stdout, &ticket, summary)?;
-                if !args.json && ticket.card.is_none() {
+                print_ticket(args.connection.json, client, stdout, &ticket, summary)?;
+                if !args.connection.json && ticket.card.is_none() {
                     print_ticket_details(stdout, &ticket)?;
                 }
                 Ok(())
@@ -1168,13 +1486,13 @@ async fn execute<R: Read, W: Write, E: Write>(
                     })?,
                     _ => result?,
                 };
-                print_ticket(args.json, client, stdout, &ticket, summary)
+                print_ticket(args.connection.json, client, stdout, &ticket, summary)
             }
             TicketCommand::Done { id } => {
                 let ticket: Ticket = client
                     .json::<_, Value>("POST", &client::ticket_path(id, "done"), None)
                     .await?;
-                print_ticket(args.json, client, stdout, &ticket, summary)
+                print_ticket(args.connection.json, client, stdout, &ticket, summary)
             }
             TicketCommand::Reject { id, reason } => {
                 let ticket: Ticket = client
@@ -1186,44 +1504,71 @@ async fn execute<R: Read, W: Write, E: Write>(
                         }),
                     )
                     .await?;
-                print_ticket(args.json, client, stdout, &ticket, summary)
+                print_ticket(args.connection.json, client, stdout, &ticket, summary)
             }
         },
         Some(Command::Routine { command }) => {
-            routines::execute(command, args.json, client, stdout).await
+            routines::execute(command, args.connection.json, client, stdout).await
         }
         Some(Command::Memory { command }) => {
-            memory::execute(command, args.json, client, stdout).await
+            memory::execute(command, args.connection.json, client, stdout).await
         }
         Some(Command::Skills { command }) => {
-            skills::execute(command, args.json, client, stdout).await
+            skills::execute(command, args.connection.json, client, stdout).await
         }
         Some(Command::Token { command }) => {
-            token::execute(command, args.json, client, stdout).await
+            token::execute(command, args.connection.json, client, stdout).await
         }
         Some(Command::Policy { command }) => {
-            policy::execute(command, args.json, client, stdout).await
+            policy::execute(command, args.connection.json, client, stdout).await
         }
         Some(Command::Vault { command }) => {
-            vault::execute(command, args.json, client, stdin, stdout, stderr).await
+            vault::execute(command, args.connection.json, client, stdin, stdout, stderr).await
         }
         Some(Command::Connections { command }) => {
-            connections::execute(command, args.json, client, stdout, stderr, summary).await
+            connections::execute(
+                command,
+                args.connection.json,
+                client,
+                stdout,
+                stderr,
+                summary,
+            )
+            .await
         }
-        Some(Command::Sync { command }) => sync::execute(command, args.json, client, stdout).await,
+        Some(Command::Sync { command }) => {
+            sync::execute(command, args.connection.json, client, stdout).await
+        }
         Some(Command::Repl {
-            session,
-            tab,
-            eval,
-            interactive,
+            session, tab, code, ..
         }) => {
-            repl::execute(
+            let scratch = match session {
+                Some(_) => None,
+                None => {
+                    let mut create = create_request(
+                        context,
+                        &TaskOptions::default(),
+                        Some("openside repl".into()),
+                    )
+                    .await?;
+                    create.workspace = None;
+                    let created: Session =
+                        client.json("POST", "/v1/sessions", Some(&create)).await?;
+                    writeln!(stderr, "Session: {}", created.id).map_err(output_error)?;
+                    Some(created.id.to_string())
+                }
+            };
+            let id = session
+                .as_deref()
+                .or(scratch.as_deref())
+                .unwrap_or_default();
+            let code = (!code.is_empty()).then(|| code.join(" "));
+            let result = repl::execute(
                 repl::ReplOptions {
-                    session,
+                    session: id,
                     tab: tab.as_deref(),
-                    eval: eval.as_deref(),
-                    interactive: *interactive,
-                    json: args.json,
+                    code: code.as_deref(),
+                    json: args.connection.json,
                 },
                 client,
                 stdin,
@@ -1231,24 +1576,341 @@ async fn execute<R: Read, W: Write, E: Write>(
                 stderr,
                 summary,
             )
-            .await
-        }
-        Some(Command::Mcp) => unreachable!("mcp serves on stdio before the CLI client runs"),
-        Some(Command::Doctor { .. }) => unreachable!("doctor runs without an API client"),
-        Some(Command::Import(_)) => unreachable!("import runs without an API client"),
-        Some(Command::Pair(pair_args)) => pair::pair(pair_args, args.json, client, stdout).await,
-        Some(Command::Device { command }) => pair::device(command, args.json, client, stdout).await,
-        Some(Command::Service { .. }) => unreachable!("service runs without an API client"),
-        Some(Command::Connect(_)) => unreachable!("connect runs without an API client"),
-        Some(Command::Remote { command }) => match command {
-            remote::RemoteCommand::Status => remote::status(client, args.json, stdout).await,
-            remote::RemoteCommand::LocalAccess => {
-                remote::local_access(client, args.json, stdout).await
+            .await;
+            if scratch.is_some() {
+                forget_session(context, id, stderr).await;
             }
-            remote::RemoteCommand::Setup(_) | remote::RemoteCommand::Profiles { .. } => {
-                unreachable!("remote setup and profiles run without an API client")
+            result
+        }
+        Some(Command::Pair(pair_args)) => {
+            pair::pair(pair_args, args.connection.json, client, stdout).await
+        }
+        Some(Command::Device { command }) => {
+            pair::device(command, args.connection.json, client, stdout).await
+        }
+        Some(Command::Remote { command }) => match command {
+            remote::RemoteCommand::Status => {
+                remote::status(client, args.connection.json, stdout).await
+            }
+            remote::RemoteCommand::LocalAccess => {
+                remote::local_access(client, args.connection.json, stdout).await
+            }
+            remote::RemoteCommand::Setup(_) => {
+                unreachable!("remote setup runs without an API client")
             }
         },
+        Some(
+            Command::Mcp { .. }
+            | Command::Doctor { .. }
+            | Command::Import(_)
+            | Command::Service { .. }
+            | Command::Login(_)
+            | Command::Logout
+            | Command::Guide { .. }
+            | Command::Update { .. },
+        ) => unreachable!("runs without the CLI's API client"),
+    }
+}
+
+/// The prompt and new-session options of `openside [prompt...]` and `openside exec`.
+struct Exec<'a> {
+    task: &'a TaskOptions,
+    prompt: &'a [String],
+}
+
+async fn exec<R: Read, W: Write, E: Write>(
+    args: &Args,
+    context: &Context<'_>,
+    run: Exec<'_>,
+    stdin: &mut R,
+    stdout: &mut W,
+    stderr: &mut E,
+    summary: &mut Summary,
+) -> Result<(), String> {
+    let client = context.client;
+    let prompt = if run.prompt == ["-"] {
+        let mut text = String::new();
+        stdin
+            .read_to_string(&mut text)
+            .map_err(|_| "could not read the prompt from stdin".to_owned())?;
+        text
+    } else {
+        run.prompt.join(" ")
+    };
+    if prompt.trim().is_empty() {
+        return Err("the prompt is empty".into());
+    }
+    let create = create_request(context, run.task, None).await?;
+    let session: Session = client.json("POST", "/v1/sessions", Some(&create)).await?;
+    let id = session.id.to_string();
+    summary.session_id = Some(id.clone());
+    send_message(client, &id, &prompt).await?;
+    let followed = follow_or_detach(
+        args,
+        client,
+        &id,
+        ReplayPoint {
+            last_seen: 0,
+            terminal_after: session.last_seq,
+            end_at: None,
+            wait_tickets: true,
+        },
+        stdout,
+        stderr,
+        summary,
+    )
+    .await;
+    // A detached run is still going; archiving it would close its isolated tabs.
+    if followed.is_ok() && !summary.interrupted && matches!(summary.status, "settled" | "stopped") {
+        forget_session(context, &id, stderr).await;
+    }
+    followed
+}
+
+/// The prompt when it is exactly one absolute http(s) URL and nothing else.
+fn bare_url(prompt: &[String]) -> Option<&str> {
+    let [only] = prompt else {
+        return None;
+    };
+    let text = only.trim();
+    let url = url::Url::parse(text).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host().is_some()).then_some(text)
+}
+
+/// `openside <url>`: open the page in a new openside browser tab, like a person typing it in
+/// the address bar, without starting an agent run. The session that owns the tab is archived
+/// like an `exec` session, except in an isolated or incognito profile, where archiving would
+/// close the tab that was just opened.
+async fn open_url<W: Write, E: Write>(
+    args: &Args,
+    context: &Context<'_>,
+    url: &str,
+    stdout: &mut W,
+    stderr: &mut E,
+    summary: &mut Summary,
+) -> Result<(), String> {
+    let client = context.client;
+    let mut create = create_request(context, &args.task, Some(format!("Open {url}"))).await?;
+    create.workspace = None;
+    let shared = create.browser_space == BrowserSpace::Shared && !create.incognito;
+    let session: Session = client.json("POST", "/v1/sessions", Some(&create)).await?;
+    let id = session.id.to_string();
+    summary.session_id = Some(id.clone());
+    let arguments = json!({ "url": url });
+    let tool_call::Outcome { value, ok } = tool_call::drive(
+        client,
+        None,
+        Some(None),
+        |approval| tool_call::tool(client, &id, "browser_open_tab", &arguments, approval),
+        |ticket, approval| {
+            // Best effort: a closed stderr must not abort a call a person is about to answer.
+            let _ = if approval {
+                writeln!(
+                    stderr,
+                    "Approval needed (ticket {ticket}). Ask a person to approve on another paired web or phone device; this client cannot approve its own work.\nWaiting; the tab opens once approved."
+                )
+            } else {
+                writeln!(
+                    stderr,
+                    "Waiting for a person to answer ticket {ticket} in the openside app (or: {}).",
+                    client.ticket_command(ticket, "resolve", None)
+                )
+            };
+            let _ = stderr.flush();
+        },
+    )
+    .await?;
+    if shared {
+        forget_session(context, &id, stderr).await;
+    }
+    if !ok {
+        summary.failed = true;
+        summary.status = "error";
+        if args.connection.json {
+            return emit(stdout, &value);
+        }
+        return Err(format!("could not open {url}: {value}"));
+    }
+    if args.connection.json {
+        return emit(stdout, &value);
+    }
+    match value["result"]["tab_id"].as_str() {
+        Some(tab) => writeln!(stdout, "Opened {url} in tab {tab}"),
+        None => writeln!(stdout, "Opened {url}"),
+    }
+    .map_err(output_error)
+}
+
+/// Archive a session this command created once it is done, unless the person keeps CLI
+/// sessions (`settings save-sessions true`). A failure only warns: the run itself succeeded.
+async fn forget_session<E: Write>(context: &Context<'_>, id: &str, stderr: &mut E) {
+    if context.saved.save_sessions {
+        return;
+    }
+    if let Err(error) = archive(context.client, id).await {
+        let _ = writeln!(
+            stderr,
+            "openside: warning: could not archive session {id}: {error}"
+        );
+    }
+}
+
+async fn archive(client: &Client, id: &str) -> Result<Session, String> {
+    client
+        .json(
+            "PATCH",
+            &client::session_path(id, ""),
+            Some(&json!({"archived": true})),
+        )
+        .await
+}
+
+/// The account and browser profile new sessions use, from the flags and the CLI settings.
+struct Chosen {
+    account: Option<AccountSelector>,
+    profile: BrowserProfile,
+}
+
+/// `--account` beats the saved account; `--profile` beats the profile in `--account u1:<id>`,
+/// which beats the saved profile. An explicit account without a profile uses its first profile.
+fn choose(
+    account: Option<&str>,
+    profile: Option<&str>,
+    saved: &settings::CliSettings,
+) -> Result<Chosen, String> {
+    let flag = account.map(AccountSelector::parse).transpose()?;
+    let profile = match profile {
+        Some(id) => BrowserProfile::parse(id)?,
+        None => match &flag {
+            Some(selector) => selector.profile.unwrap_or(BrowserProfile::Shared),
+            None => saved.profile.unwrap_or(BrowserProfile::Shared),
+        },
+    };
+    let account = flag.or_else(|| {
+        saved.account.clone().map(|id| AccountSelector {
+            account: AccountRef::Id(id),
+            profile: None,
+        })
+    });
+    Ok(Chosen { account, profile })
+}
+
+/// The agent id an account selector names; `uN` needs the daemon's roster.
+async fn agent_id(
+    client: &Client,
+    selector: Option<&AccountSelector>,
+) -> Result<Option<String>, String> {
+    match selector {
+        None => Ok(None),
+        Some(AccountSelector {
+            account: AccountRef::Id(id),
+            ..
+        }) => Ok(Some(id.clone())),
+        Some(selector) => account::resolve(client, selector).await.map(Some),
+    }
+}
+
+/// `--host` (or `OPENSIDE_HOST`), else the saved default unless `--socket`/`--url` picks the
+/// connection; `None` is this computer's daemon.
+fn selected_host(args: &Args, saved: &settings::CliSettings) -> Result<Option<String>, String> {
+    match &args.host {
+        Some(host) => host::canonical(host),
+        None if args.connection.socket.is_some() || args.connection.url.is_some() => Ok(None),
+        None => match &saved.host {
+            Some(host) => host::canonical(host),
+            None => Ok(None),
+        },
+    }
+}
+
+/// The account and profile flags of the command being run.
+fn target_of(args: &Args) -> (Option<&str>, Option<&str>) {
+    let target = match &args.command {
+        None => return (args.account.as_deref(), args.profile.as_deref()),
+        Some(
+            Command::Exec { target, .. }
+            | Command::Repl { target, .. }
+            | Command::Mcp { target }
+            | Command::Session {
+                command: SessionCommand::New { target, .. },
+            },
+        ) => target,
+        Some(_) => return (None, None),
+    };
+    (target.account.as_deref(), target.profile.as_deref())
+}
+
+/// The new-session model options of the command being run, if it takes them.
+fn task_options(args: &Args) -> Option<&TaskOptions> {
+    match &args.command {
+        None => Some(&args.task),
+        Some(
+            Command::Exec { task, .. }
+            | Command::Session {
+                command: SessionCommand::New { task, .. },
+            },
+        ) => Some(task),
+        Some(_) => None,
+    }
+}
+
+fn root_task_flags(args: &Args) -> bool {
+    let task = &args.task;
+    args.account.is_some()
+        || args.profile.is_some()
+        || task.model.is_some()
+        || task.provider.is_some()
+        || task.speed.is_some()
+        || task.effort.is_some()
+        || task.permission.is_some()
+        || task.workspace.is_some()
+}
+
+fn check_task_options(task: &TaskOptions) -> Result<(), String> {
+    model_selector(task).map(|_| ())
+}
+
+/// `--effort` as the daemon's per-session effort and agent profile. `ultrabrowse` is openside's
+/// research profile rather than a reasoning level: it selects `profile: ultrabrowse` at `max`.
+fn session_effort(task: &TaskOptions) -> (Option<ThinkingEffort>, Option<SessionProfile>) {
+    let effort = match task.effort {
+        None => None,
+        Some(Effort::Off) => Some(ThinkingEffort::Off),
+        Some(Effort::Minimal) => Some(ThinkingEffort::Minimal),
+        Some(Effort::Low) => Some(ThinkingEffort::Low),
+        Some(Effort::Medium) => Some(ThinkingEffort::Medium),
+        Some(Effort::High) => Some(ThinkingEffort::High),
+        Some(Effort::Xhigh) => Some(ThinkingEffort::Xhigh),
+        Some(Effort::Max) => Some(ThinkingEffort::Max),
+        Some(Effort::Ultrabrowse) => {
+            return (Some(ThinkingEffort::Max), Some(SessionProfile::Ultrabrowse))
+        }
+    };
+    (effort, None)
+}
+
+/// `-m provider:model`, `-m provider/model`, or `-m model -p provider`; daemon model ids are
+/// `provider:model`.
+fn model_selector(task: &TaskOptions) -> Result<Option<String>, String> {
+    match (task.model.as_deref(), task.provider.as_deref()) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err("--provider needs --model".into()),
+        (Some(model), provider) => {
+            if model.is_empty() {
+                return Err("--model must not be empty".into());
+            }
+            Ok(Some(
+                if let Some((provider, name)) = model.split_once('/') {
+                    format!("{provider}:{name}")
+                } else if model.contains(':') {
+                    model.to_owned()
+                } else if let Some(provider) = provider {
+                    format!("{provider}:{model}")
+                } else {
+                    model.to_owned()
+                },
+            ))
+        }
     }
 }
 
@@ -1587,15 +2249,20 @@ fn print_waiting<W: Write>(
     Ok(())
 }
 
-/// The new-session request the global `--model`, `--mode`, `--workspace` and `--browser-space`
-/// describe; workspace paths are made absolute.
-fn create_request(args: &Args, title: Option<String>) -> Result<CreateSessionRequest, String> {
-    Ok(CreateSessionRequest {
-        agent_id: None,
+/// A new-session request from the model options, the chosen account and browser profile;
+/// workspace paths are made absolute.
+async fn create_request(
+    context: &Context<'_>,
+    task: &TaskOptions,
+    title: Option<String>,
+) -> Result<CreateSessionRequest, String> {
+    let (effort, profile) = session_effort(task);
+    let mut create = CreateSessionRequest {
+        agent_id: agent_id(context.client, context.chosen.account.as_ref()).await?,
         title,
-        model: args.model.clone(),
-        mode: args.mode.map(Into::into),
-        workspace: args
+        model: model_selector(task)?,
+        mode: task.permission.map(Into::into),
+        workspace: task
             .workspace
             .as_ref()
             .map(|path| {
@@ -1607,8 +2274,16 @@ fn create_request(args: &Args, title: Option<String>) -> Result<CreateSessionReq
             })
             .transpose()?,
         incognito: false,
-        browser_space: args.browser_space.map(Into::into).unwrap_or_default(),
-    })
+        browser_space: BrowserSpace::Shared,
+        effort,
+        speed: task.speed.map(|speed| match speed {
+            Speed::Default => SessionSpeed::Default,
+            Speed::Fast => SessionSpeed::Fast,
+        }),
+        profile,
+    };
+    context.chosen.profile.apply(&mut create);
+    Ok(create)
 }
 
 async fn send_message(client: &Client, id: &str, text: &str) -> Result<(), String> {
@@ -1632,6 +2307,55 @@ struct ReplayPoint {
     terminal_after: u64,
     // Metadata can follow a terminal marker, so idle replay ends at the observed log boundary.
     end_at: Option<(u64, &'static str)>,
+    /// `exec`: a settlement that leaves tickets pending is not the end; keep following until
+    /// the resumed run settles with none left or the session stops.
+    wait_tickets: bool,
+}
+
+/// What Ctrl-C prints while following: the run is not stopped, only this terminal detaches.
+fn detach_notice(prefix: &str, id: &str) -> String {
+    format!(
+        "Session {id} keeps running. Resume: {prefix} session resume {id} · Stop: {prefix} session stop {id}"
+    )
+}
+
+/// [`follow`], except that Ctrl-C detaches instead of killing the process mid-stream: the run
+/// keeps going on the daemon, the notice says how to get back, and the exit code is 130.
+async fn follow_or_detach<W: Write, E: Write>(
+    args: &Args,
+    client: &Client,
+    id: &str,
+    replay: ReplayPoint,
+    stdout: &mut W,
+    stderr: &mut E,
+    summary: &mut Summary,
+) -> Result<(), String> {
+    {
+        // Dropping the follow future first lets its stderr guard erase the live status line.
+        let run = std::pin::pin!(follow(
+            args,
+            client,
+            id,
+            replay,
+            &mut *stdout,
+            &mut *stderr,
+            &mut *summary
+        ));
+        tokio::select! {
+            result = run => return result,
+            // Without a SIGINT handler the branch is disabled and the default action stays.
+            Ok(()) = tokio::signal::ctrl_c() => {}
+        }
+    }
+    // Installing the handler replaced the default action; restore "a second Ctrl-C exits now"
+    // for whatever remains (the notice, the JSON summary, flushing).
+    tokio::spawn(async {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            std::process::exit(130);
+        }
+    });
+    summary.interrupted = true;
+    writeln!(stderr, "\n{}", detach_notice(&client.short_prefix(), id)).map_err(output_error)
 }
 
 async fn follow<W: Write, E: Write>(
@@ -1648,7 +2372,7 @@ async fn follow<W: Write, E: Write>(
     let mut stderr_guard = ui::live::Stderr::new(stderr);
     let stderr = &mut stderr_guard;
     let mut live = ui::pretty()
-        .filter(|_| !args.json)
+        .filter(|_| !args.connection.json)
         .map(|ui| ui::live::Live::new(*ui));
     if let Some(live) = live.as_mut() {
         live.begin(id, stderr)?;
@@ -1656,7 +2380,7 @@ async fn follow<W: Write, E: Write>(
     let mut last_seq = replay.last_seen;
     let cursor = Cursor::new(client.endpoint_key(), id)?;
     summary.last_seq = Some(last_seq);
-    let mut pending = BTreeSet::new();
+    let mut pause = wait::Pause::default();
     let mut seeded = Vec::new();
     let mut shown_tickets = BTreeSet::new();
     let web_origin = client.web_origin();
@@ -1672,7 +2396,7 @@ async fn follow<W: Write, E: Write>(
             .into_iter()
             .filter(|ticket| ticket.session_id.as_str() == id)
         {
-            pending.insert(ticket.id.to_string());
+            pause.open_tickets.insert(ticket.id.to_string());
             seeded.push(ticket);
         }
     }
@@ -1680,7 +2404,18 @@ async fn follow<W: Write, E: Write>(
     let mut decoder = Decoder::default();
     let mut saw_delta = false;
     let mut ends_with_newline = true;
-    while let Some(frame) = ui::live::next_frame(&mut response, &mut live, stderr).await {
+    // Set once `exec` settles on a pause (tickets pending, or a deferred run not yet resumed);
+    // from then on a closed stream is reopened.
+    let mut parked = false;
+    loop {
+        let Some(frame) = ui::live::next_frame(&mut response, &mut live, stderr).await else {
+            if !parked {
+                break;
+            }
+            response = wait::reopen(client, id, last_seq).await?;
+            decoder = Decoder::default();
+            continue;
+        };
         let frame = frame.map_err(|_| "event stream connection failed".to_owned())?;
         let Ok(bytes) = frame.into_data() else {
             continue;
@@ -1694,7 +2429,7 @@ async fn follow<W: Write, E: Write>(
             if event.seq <= last_seq {
                 continue;
             }
-            if args.json {
+            if args.connection.json {
                 emit(stdout, &event)?;
             } else if let Some(live) = live.as_mut() {
                 if let Some(card) = ui::cards::event_card(&event.kind) {
@@ -1751,10 +2486,9 @@ async fn follow<W: Write, E: Write>(
             cursor.save(last_seq)?;
             match &event.kind {
                 EventKind::TicketOpened { ticket } => {
-                    pending.insert(ticket.id.to_string());
                     shown_tickets.insert(ticket.id.to_string());
                     // On a terminal the notice shares the screen with a half-written reply line.
-                    if !args.json && !ends_with_newline {
+                    if !args.connection.json && !ends_with_newline {
                         writeln!(stdout).map_err(output_error)?;
                         ends_with_newline = true;
                         stdout.flush().map_err(output_error)?;
@@ -1808,11 +2542,6 @@ async fn follow<W: Write, E: Write>(
                         stderr.flush().map_err(output_error)?;
                     }
                 }
-                EventKind::TicketResolved { ticket_id, .. }
-                | EventKind::TicketRejected { ticket_id, .. }
-                | EventKind::TicketExpired { ticket_id, .. } => {
-                    pending.remove(ticket_id.as_str());
-                }
                 EventKind::MessageCompleted {
                     outcome: MessageOutcome::Deferred,
                     ..
@@ -1821,6 +2550,7 @@ async fn follow<W: Write, E: Write>(
                 }
                 _ => {}
             }
+            pause.apply(&event.kind);
             if let EventKind::RuntimeError { code, message, .. } = &event.kind {
                 if code == "sandbox_unavailable" {
                     writeln!(stderr, "openside: warning: {message}").map_err(output_error)?;
@@ -1832,23 +2562,52 @@ async fn follow<W: Write, E: Write>(
                 (event.seq >= seq).then_some(status)
             } else {
                 match event.kind {
-                    EventKind::SessionSettled {} => Some(if pending.is_empty() {
-                        "settled"
-                    } else {
-                        "waiting_human"
-                    }),
+                    EventKind::SessionSettled {} => match pause.settled() {
+                        wait::Settled::Finished => Some("settled"),
+                        wait::Settled::AwaitingPerson => Some("waiting_human"),
+                        wait::Settled::Resuming => Some("resuming"),
+                    },
                     EventKind::SessionStopped {} => Some("stopped"),
                     _ => None,
                 }
             };
-            if let Some(status) = terminal.filter(|_| event.seq > replay.terminal_after) {
+            let terminal = terminal.filter(|_| event.seq > replay.terminal_after);
+            // The ticket was answered before the pause settled: the run resumes on its own,
+            // so keep following (and reopen the stream if the daemon closes it meanwhile).
+            if terminal == Some("resuming") {
+                parked = true;
+                continue;
+            }
+            if let (Some("waiting_human"), true) = (terminal, replay.wait_tickets) {
+                parked = true;
+                summary.status = "waiting_human";
+                if !args.connection.json && !ends_with_newline {
+                    writeln!(stdout).map_err(output_error)?;
+                    ends_with_newline = true;
+                    stdout.flush().map_err(output_error)?;
+                }
+                let ids = pause
+                    .open_tickets
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(
+                    stderr,
+                    "Waiting for a person to answer ticket {ids}; the run continues once it is resolved. List open tickets with `openside ticket list`; `openside session resume {id}` follows this session later."
+                )
+                .map_err(output_error)?;
+                stderr.flush().map_err(output_error)?;
+                continue;
+            }
+            if let Some(status) = terminal {
                 summary.status = status;
-                if !args.json && !ends_with_newline {
+                if !args.connection.json && !ends_with_newline {
                     writeln!(stdout).map_err(output_error)?;
                 }
-                if !args.json {
+                if !args.connection.json {
                     for ticket in &seeded {
-                        if pending.contains(ticket.id.as_str())
+                        if pause.open_tickets.contains(ticket.id.as_str())
                             && !shown_tickets.contains(ticket.id.as_str())
                         {
                             if let Some(card) = &ticket.card {
@@ -1873,7 +2632,7 @@ async fn follow<W: Write, E: Write>(
                 if let Some(live) = live.as_mut() {
                     live.finish(status, id, stdout, stderr)?;
                 } else {
-                    print_waiting(args.json, stdout, id, status)?;
+                    print_waiting(args.connection.json, stdout, id, status)?;
                 }
                 return Ok(());
             }

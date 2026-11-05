@@ -118,11 +118,11 @@ token_file = "/path/to/relay-token"
 CLI에서 릴레이 데몬에 연결할 때는 페어링 코드가 프로세스 목록(argv)에 노출되지 않도록 주소 없이 명령어를 실행한 뒤 숨겨진 프롬프트나 표준 입력(stdin)으로 링크를 붙여넣는 방식을 권장한다(인자로 링크를 넘길 수도 있으나 stderr 경고가 출력된다).
 
 ```sh
-openside connect --name desk
-openside --remote desk session list
+openside login --name desk
+openside --host desk session list
 ```
 
-환경 변수 `OPENSIDE_REMOTE=desk`를 지정하거나 `openside mcp --remote desk`로 원격 데몬에 MCP 서버를 연결할 수 있다. 원격 목록은 `openside remote profiles list`와 `openside remote profiles rm <이름>`으로 관리한다. 인증 토큰은 시스템 키링에 저장하며, 지원되지 않는 환경에서는 `0600` 권한의 파일(`OPENSIDE_REMOTE_TOKEN_STORE=file`)을 사용한다.
+환경 변수 `OPENSIDE_HOST=desk`를 설정하거나 `openside mcp --host desk`로 MCP 서버를 원격 데몬에 연결할 수 있다. `openside host list`는 저장된 호스트를 보여 주고, `openside host use <name>`은 지정한 호스트를 기본값으로 설정하며, `openside logout --host <name>`은 해당 호스트의 기기 토큰을 폐기하고 호스트를 삭제한다. 인증 토큰은 시스템 키링에 저장하며, 키링을 지원하지 않는 환경에서는 `0600` 권한의 파일(`OPENSIDE_REMOTE_TOKEN_STORE=file`)을 사용한다.
 
 **신뢰 모델 주의사항**: 독립적으로 설치된 CLI와 MCP는 페어링 QR 코드나 링크에 고정(pinning)된 데몬 공개키와 Noise 프로토콜 종단간 암호화(E2EE)로 릴레이 연결을 보호한다. 반면 릴레이가 제공하는 PWA는 릴레이 운영자가 서빙하는 HTML과 JS 코드를 신뢰해야 한다. 따라서 자체 호스팅 릴레이를 운영하거나, 릴레이를 거치지 않고 데몬 또는 Tailscale 오리진에 직접 연결하여 PWA를 불러오는 구성을 권장한다.
 
@@ -143,7 +143,7 @@ openside pair --scope read --scope steer --name 태블릿
 openside pair --agent --via relay --scope read --scope steer --scope browse
 ```
 
-사람의 판단과 승인 권한은 프롬프트 지침이 아니라 데몬이 직접 강제하는 규칙이다. 기기와 토큰의 역할(`kind`)은 코드를 교환할 때가 아니라 운영자가 오퍼나 토큰을 발급할 때 결정된다. 데몬 호스트에서 일반 `openside pair`를 실행하면 `person_device` 오퍼가 생성되고(웹 UI 선택지 'Pair a phone/browser'), `openside pair --agent`를 실행하면 `agent_client` 오퍼가 생성된다(웹 UI 선택지 'Connect an agent / CLI'). `openside token create`는 기본적으로 `agent_client` 토큰을 발급하며, 로컬 소켓 전용인 `openside token create --person`을 실행하면 확장 프로그램·웹·모바일 기기용 `person_device` 토큰을 명시적으로 발급한다. `openside connect`는 오퍼에 지정된 역할을 그대로 물려받을 뿐 변경할 수 없으므로, `person_device` 오퍼를 교환하면 그대로 `person_device`가 된다. 로컬 Unix 소켓 자체는 식별자가 `local`이며 `agent_client`로 분류된다. `person_device` 토큰을 에이전트에 넘기면 사람의 승인 권한까지 부여되므로 에이전트에는 절대 `person_device` 토큰을 주어서는 안 된다. 로컬 소켓에 접근할 수 있는 동일 UID 프로세스는 의도적으로 `person_device` 토큰을 발급할 수 있으므로, 이 구분은 OS 샌드박스 경계가 아니라 신뢰받는 운영자의 제어 수단이다.
+사람의 판단과 승인 권한은 프롬프트 지침이 아니라 데몬이 직접 강제하는 규칙이다. 기기와 토큰의 역할(`kind`)은 코드를 교환할 때가 아니라 운영자가 오퍼나 토큰을 발급할 때 결정된다. 데몬 호스트에서 일반 `openside pair`를 실행하면 `person_device` 오퍼가 생성되고(웹 UI 선택지 'Pair a phone/browser'), `openside pair --agent`를 실행하면 `agent_client` 오퍼가 생성된다(웹 UI 선택지 'Connect an agent / CLI'). `openside token create`는 기본적으로 `agent_client` 토큰을 발급하며, 로컬 소켓 전용인 `openside token create --person`을 실행하면 확장 프로그램·웹·모바일 기기용 `person_device` 토큰을 명시적으로 발급한다. `openside login`은 오퍼에 지정된 역할을 그대로 물려받을 뿐 변경할 수 없으므로, `person_device` 오퍼를 교환하면 그대로 `person_device`가 된다. 로컬 Unix 소켓 자체는 식별자가 `local`이며 `agent_client`로 분류된다. `person_device` 토큰을 에이전트에 넘기면 사람의 승인 권한까지 부여되므로 에이전트에는 절대 `person_device` 토큰을 주어서는 안 된다. 로컬 소켓에 접근할 수 있는 동일 UID 프로세스는 의도적으로 `person_device` 토큰을 발급할 수 있으므로, 이 구분은 OS 샌드박스 경계가 아니라 신뢰받는 운영자의 제어 수단이다.
 
 사람의 판단이나 승인이 필요한 작업은 기존 스코프에 더해 반드시 `person_device` 역할이 있어야만 수행할 수 있다. 여기에는 확인(confirm) 티켓 승인(`true` 또는 `"approve"`), 모든 선택지(`choice`) 티켓 응답, `secret_input`의 `{totp}` 영구 등록, `login`의 `save: true` 저장이 포함된다. `agent_client`나 로컬 소켓(`local`)이 이러한 작업을 시도하면 해당 티켓을 직접 생성하거나 세션을 구동한 주체가 아니더라도 `403 person_approval_required` 오류로 거부된다. 거부된 티켓은 승인 대기(pending) 상태를 그대로 유지하며 페이지 조작이나 Vault 등록·저장도 일절 실행되지 않는다. 반면 확인 티켓 거절(`false` 또는 `"reject"`)과 거절·취소 엔드포인트 호출은 필요한 스코프만 있으면 에이전트에서도 허용된다.
 
@@ -244,7 +244,7 @@ inhibit_sleep = true
 
 ## 모바일 엔드투엔드 검증 증거
 
-`crates/openside-e2e/tests/mobile_remote.rs`는 임시 포트에서 비공개 데몬, 스크립트 기반 Python 사이드카, 픽스처 웹사이트, 암호화된 셀프 호스팅 릴레이를 실행한다. 데스크톱 브라우저는 소켓 전용 로컬 접근 권한을 얻어 Remote access 화면을 열고 휴대전화 페어링 제안을 생성한다. `zbarimg`로 렌더링된 스크린샷의 QR 코드를 디코딩하고, 휴대전화는 디코딩된 링크로 접속한다. 이 흐름을 검증할 때 CLI로 만든 페어링 제안이나 미리 주입한 모바일 토큰으로 대체하지 않는다.
+`crates/openside-e2e/tests/mobile_remote.rs`는 임시 포트에서 비공개 데몬, 스크립트 기반 Bun 사이드카, 픽스처 웹사이트, 암호화된 셀프 호스팅 릴레이를 실행한다. 데스크톱 브라우저는 소켓 전용 로컬 접근 권한을 얻어 Remote access 화면을 열고 휴대전화 페어링 제안을 생성한다. `zbarimg`로 렌더링된 스크린샷의 QR 코드를 디코딩하고, 휴대전화는 디코딩된 링크로 접속한다. 이 흐름을 검증할 때 CLI로 만든 페어링 제안이나 미리 주입한 모바일 토큰으로 대체하지 않는다.
 
 두 모바일 프로필은 390×844 CSS 픽셀, DPR 3, 터치 포인트 5개, iPhone Safari 및 Android Chrome과 유사한 User-Agent를 갖춘 헤드리스 Chromium을 사용한다. 프로덕션 매니페스트 및 서비스 워커, 대화 목록, 새로 시작한 채팅, 새로고침 없는 증분 어시스턴트 이벤트 및 실시간 이벤트 갱신, 사람 전용 승인 규칙, 빨간색에서 파란색으로 바뀌는 실제 프리뷰 JPEG 픽셀, 스크립트 모델 입력에 SHA-256이 나타나는 사진을 모두 검증한다.
 

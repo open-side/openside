@@ -1,9 +1,12 @@
-//! `openside repl <session-id>`: run Playwright-syntax JavaScript in one of the session's
-//! agent tabs through `POST /v1/sessions/{id}/repl` (`browser_repl`, same policy, tickets,
-//! and audit as an agent call). `--eval CODE` runs one snippet; otherwise stdin is one snippet,
-//! or with `--interactive` every stdin line is its own snippet. Each snippet gets a fresh
-//! JavaScript context. When a step needs approval the command prints the ticket, waits until
-//! it is resolved in another process, and reruns the snippet under that approval.
+//! `openside repl [code...]`: run Playwright-syntax JavaScript in an openside browser session
+//! through `POST /v1/sessions/{id}/repl` (`browser_repl`, same policy, tickets, and audit as an
+//! agent call). The session is `--session ID` or a new one for this invocation. Code given as
+//! arguments runs once (`-` reads one snippet from stdin); without code every stdin line is its
+//! own snippet. Snippets are `persistent`: `const`/`let` bindings and attached tabs carry over
+//! between calls in the same session, and `page` starts unset until `openTab(url)` or
+//! `--tab ID` (sent with the first snippet only, so later snippets keep whatever `page` became).
+//! When a step needs approval the command prints the ticket, waits until it is resolved in
+//! another process, and reruns the snippet under that approval.
 
 use std::io::{BufRead, BufReader, Read, Write};
 
@@ -20,8 +23,8 @@ use crate::{
 pub(crate) struct ReplOptions<'a> {
     pub(crate) session: &'a str,
     pub(crate) tab: Option<&'a str>,
-    pub(crate) eval: Option<&'a str>,
-    pub(crate) interactive: bool,
+    /// The joined `code` arguments; `None` reads one snippet per stdin line.
+    pub(crate) code: Option<&'a str>,
     pub(crate) json: bool,
 }
 
@@ -35,18 +38,18 @@ pub(crate) async fn execute<R: Read, W: Write, E: Write>(
 ) -> Result<(), String> {
     summary.session_id = Some(options.session.to_owned());
     let mut tab = options.tab.map(str::to_owned);
-    if let Some(code) = options.eval {
-        return snippet(&options, client, code, &mut tab, stdout, stderr, summary).await;
-    }
-    if !options.interactive {
-        let mut code = String::new();
-        stdin
-            .read_to_string(&mut code)
-            .map_err(|_| "could not read the snippet from stdin".to_owned())?;
+    if let Some(code) = options.code {
+        let code = if code == "-" {
+            let mut text = String::new();
+            stdin
+                .read_to_string(&mut text)
+                .map_err(|_| "could not read the snippet from stdin".to_owned())?;
+            text
+        } else {
+            code.to_owned()
+        };
         if code.trim().is_empty() {
-            return Err(
-                "no code: pass --eval CODE, pipe a snippet to stdin, or use --interactive".into(),
-            );
+            return Err("no code: pass JavaScript as arguments, `-` to read it from stdin, or nothing for one snippet per line".into());
         }
         return snippet(&options, client, &code, &mut tab, stdout, stderr, summary).await;
     }
@@ -81,10 +84,12 @@ async fn snippet<W: Write, E: Write>(
     summary: &mut Summary,
 ) -> Result<(), String> {
     let path = crate::client::session_path(options.session, "repl");
+    // Re-sending the tab would make it `page` again and undo a later `openTab`.
     let mut request = ReplRequest {
         code: code.to_owned(),
-        tab_id: tab.clone(),
+        tab_id: tab.take(),
         approval_ticket: None,
+        persistent: true,
     };
     let response = loop {
         let response: ReplResponse = client.json("POST", &path, Some(&request)).await?;
@@ -121,9 +126,6 @@ async fn snippet<W: Write, E: Write>(
     match response.status {
         ReplStatus::Done => {
             let result = response.result.unwrap_or(Value::Null);
-            if let Some(id) = result["tab_id"].as_str() {
-                *tab = Some(id.to_owned());
-            }
             if !options.json {
                 for line in result["console"].as_array().into_iter().flatten() {
                     writeln!(stdout, "{}", line.as_str().unwrap_or_default())

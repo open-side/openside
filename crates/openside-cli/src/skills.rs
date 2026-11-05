@@ -18,18 +18,35 @@ use crate::{client::Client, emit, output_error};
 
 #[derive(Subcommand)]
 pub(crate) enum SkillsCommand {
-    /// List skills; with a query, the ones the `/name` picker would offer.
+    /// List skills with descriptions; with a query, the ones the `/name` picker would offer.
     List {
         query: Option<String>,
         /// Also list the project skills of this session's workspace.
         #[arg(long, value_name = "SESSION_ID")]
         session: Option<String>,
     },
-    /// Show a skill's instructions and files.
+    /// Print a skill's instructions and files, for example openside-browser
     Show {
         name: String,
         #[arg(long, value_name = "SESSION_ID")]
         session: Option<String>,
+    },
+    /// Install the openside-browser skill into your coding agents (Claude Code, Codex, omp,
+    /// and any in `[skills.agents]`), so they can hand browsing to `openside`. Works without a
+    /// daemon.
+    Install {
+        /// One agent only; its skills directory comes from `[skills.agents]`,
+        /// `OPENSIDE_SKILLS_<AGENT>_DIR`, or that agent's own convention. Without it, every
+        /// agent whose home directory exists gets the skill.
+        agent: Option<String>,
+        /// Install into this skills directory instead.
+        #[arg(long, value_name = "PATH", requires = "agent")]
+        to_dir: Option<PathBuf>,
+        /// Replace an installed copy.
+        #[arg(long)]
+        force: bool,
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
     /// Create a skill in the library.
     New {
@@ -46,21 +63,6 @@ pub(crate) enum SkillsCommand {
     Disable { name: String },
     /// Delete a skill from the library.
     Rm { name: String },
-    /// Install openside's browser skill for another agent (for example `claude`, `codex`),
-    /// so that agent can hand browsing to `openside`. Works without a daemon.
-    Install {
-        /// Agent name; its skills directory comes from `[skills.agents]`,
-        /// `OPENSIDE_SKILLS_<AGENT>_DIR`, or that agent's own convention.
-        agent: String,
-        /// Install into this skills directory instead.
-        #[arg(long, value_name = "PATH")]
-        to_dir: Option<PathBuf>,
-        /// Replace an installed copy.
-        #[arg(long)]
-        force: bool,
-        #[arg(long, value_name = "PATH")]
-        config: Option<PathBuf>,
-    },
     /// Copy a skill into openside's library, from a directory or from another agent's
     /// skills directory. Works without a daemon.
     Import {
@@ -272,33 +274,80 @@ pub(crate) fn local<W: Write>(
             force,
             config,
         } => {
-            let target = match to_dir {
-                Some(dir) => dir.clone(),
-                None => agent_dir(&local_config(config.as_deref())?, agent)?,
+            let local = local_config(config.as_deref())?;
+            let targets: Vec<(String, PathBuf)> = match (agent, to_dir) {
+                (Some(agent), Some(dir)) => vec![(agent.clone(), dir.clone())],
+                (Some(agent), None) => vec![(agent.clone(), agent_dir(&local, agent)?)],
+                (None, _) => {
+                    let mut names: Vec<String> = openside_skills::BUILTIN_AGENTS
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect();
+                    names.extend(local.agents.keys().cloned());
+                    names.sort();
+                    names.dedup();
+                    // An agent counts as present when its home directory (the parent of its
+                    // skills directory) exists; configured directories are always used.
+                    names
+                        .into_iter()
+                        .filter_map(|name| {
+                            let dir = agent_dir(&local, &name).ok()?;
+                            let present = local.agents.contains_key(&name)
+                                || dir.parent().is_some_and(Path::is_dir);
+                            present.then_some((name, dir))
+                        })
+                        .collect()
+                }
             };
-            let files = bundled(BROWSER_SKILL).ok_or("the bundled browser skill is missing")?;
-            let installed =
-                openside_skills::install::write_skill(&target, BROWSER_SKILL, files, *force)
-                    .map_err(|error| match error {
-                        openside_skills::Error::Exists(name) => format!(
-                            "{name} is already installed in {}; use --force to replace it",
-                            target.display()
-                        ),
-                        other => other.to_string(),
-                    })?;
-            if json {
-                return emit(
-                    stdout,
-                    &json!({"agent": agent, "skill": installed.name, "path": installed.path, "files": installed.files}),
+            if targets.is_empty() {
+                return Err(
+                    "no coding agent was found (Claude Code, Codex, omp); pass an agent name, for example `openside skills install claude`"
+                        .into(),
                 );
             }
-            writeln!(
-                stdout,
-                "Installed skill {} for {agent} at {}",
-                installed.name,
-                installed.path.display()
-            )
-            .map_err(output_error)
+            let single = agent.is_some();
+            for (agent, target) in targets {
+                let files = bundled(BROWSER_SKILL).ok_or("the bundled browser skill is missing")?;
+                let installed = match openside_skills::install::write_skill(
+                    &target,
+                    BROWSER_SKILL,
+                    files,
+                    *force,
+                ) {
+                    Ok(installed) => installed,
+                    Err(openside_skills::Error::Exists(name)) if !single => {
+                        writeln!(
+                                stdout,
+                                "Skipped {agent}: {name} is already installed in {} (use --force to replace it)",
+                                target.display()
+                            )
+                            .map_err(output_error)?;
+                        continue;
+                    }
+                    Err(openside_skills::Error::Exists(name)) => {
+                        return Err(format!(
+                            "{name} is already installed in {}; use --force to replace it",
+                            target.display()
+                        ))
+                    }
+                    Err(other) => return Err(other.to_string()),
+                };
+                if json {
+                    emit(
+                        stdout,
+                        &json!({"agent": agent, "skill": installed.name, "path": installed.path, "files": installed.files}),
+                    )?;
+                } else {
+                    writeln!(
+                        stdout,
+                        "Installed skill {} for {agent} at {}",
+                        installed.name,
+                        installed.path.display()
+                    )
+                    .map_err(output_error)?;
+                }
+            }
+            Ok(())
         }
         SkillsCommand::Import {
             source,

@@ -1,5 +1,5 @@
 //! `openside mcp` driven over real stdio by an rmcp client against the real daemon and the
-//! scripted Python sidecar.
+//! scripted Bun sidecar.
 //!
 //! The MCP server reaches the daemon through a recording proxy, so every scenario also proves
 //! (G-5) that it uses nothing but documented public `/v1/*` routes.
@@ -233,6 +233,10 @@ async fn mcp_client_lists_tools_sends_a_message_and_reads_the_reply() {
     let tools = rig.mcp.list_all_tools().await.unwrap();
     let names = names(&tools);
     for expected in [
+        "exec",
+        "repl",
+        "browser_profiles",
+        "memory_search",
         "session_create",
         "session_list",
         "session_send",
@@ -240,8 +244,6 @@ async fn mcp_client_lists_tools_sends_a_message_and_reads_the_reply() {
         "session_wait",
         "ticket_list",
         "ticket_resolve",
-        "memory_search",
-        "agent_run",
         "agent_result",
         "agent_status",
         "agent_steer",
@@ -260,7 +262,6 @@ async fn mcp_client_lists_tools_sends_a_message_and_reads_the_reply() {
         "wait_for_approval",
         "request_otp",
         "request_human_step",
-        "browser_repl",
     ] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -365,8 +366,8 @@ async fn read_only_token_reads_but_gets_clean_errors_on_every_write_tool() {
             "browser_act",
             json!({"session_id":id,"tab_id":"t","action":"click","target":"e1"}),
         ),
-        ("agent_run", json!({"session_id":id,"goal":"hi"})),
-        ("browser_repl", json!({"session_id":id,"code":"1+1"})),
+        ("exec", json!({"session_id":id,"prompt":"hi"})),
+        ("repl", json!({"session_id":id,"code":"1+1"})),
     ] {
         let result = rig.call(tool, arguments).await;
         assert_eq!(
@@ -667,7 +668,7 @@ async fn browser_tools_and_a_repl_batch_drive_a_loopback_page() {
     // One REPL call runs a batch of steps in the tab the catalog tools opened.
     let batch = rig
         .ok(
-            "browser_repl",
+            "repl",
             json!({"session_id":id,"tab_id":tab,"code":
                 "await page.getByRole('button', { name: 'Continue' }).click();\n\
                  await page.waitForURL('**/next');\n\
@@ -717,7 +718,7 @@ async fn run_kinds(harness: &Harness, session: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn agent_run_records_the_same_events_as_an_in_app_run() {
+async fn exec_records_the_same_events_as_an_in_app_run() {
     let Some(rig) = Rig::start(
         json!({"responses":[text("the cheapest is 42")]}),
         false,
@@ -751,8 +752,8 @@ async fn agent_run_records_the_same_events_as_an_in_app_run() {
 
     let run = rig
         .ok(
-            "agent_run",
-            json!({"goal":"find the cheapest","mode":"full","wait":true,"timeout_secs":60}),
+            "exec",
+            json!({"prompt":"find the cheapest","permission":"full-access","wait":true,"timeout_secs":60}),
         )
         .await;
     assert_eq!(run["status"], "settled", "{run}");
@@ -857,7 +858,7 @@ async fn delegated_cli_and_mcp_tickets_appear_live_on_desktop_and_phone_and_wait
             tool("write", json!({"path":root.join("delegated.txt"),"content":"approved delegation"}), "external-write"),
             text("external delegation finished")
         ]})),
-    ).await.expect("scripted Python runtime is required");
+    ).await.expect("scripted Bun sidecar is required");
     let token = rig.harness.human_token().await;
     let port = std::fs::read_to_string(rig.harness.data_dir.join("opensided.port")).unwrap();
     let origin = format!("http://127.0.0.1:{}", port.trim());
@@ -886,7 +887,8 @@ async fn delegated_cli_and_mcp_tickets_appear_live_on_desktop_and_phone_and_wait
         }
 
         if caller == "cli" {
-            let args = ["run", "--session", id, "--wait", "--timeout", "25", "write the file"];
+            // `session resume ID PROMPT` runs the prompt like `exec` and waits through its ticket.
+            let args = ["session", "resume", id, "write the file"];
             let waiting = rig.harness.cli(CLI, &args, None);
             tokio::pin!(waiting);
             tokio::select! {
@@ -902,8 +904,8 @@ async fn delegated_cli_and_mcp_tickets_appear_live_on_desktop_and_phone_and_wait
             assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
             assert!(String::from_utf8_lossy(&output.stdout).contains("external delegation finished"), "stdout: {}\nstderr: {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
         } else {
-            let run = rig.ok("agent_run",
-                json!({"session_id":id,"goal":"write the file","wait":true,"timeout_secs":25})).await;
+            let run = rig.ok("exec",
+                json!({"session_id":id,"prompt":"write the file","wait":true,"timeout_secs":25})).await;
             assert_eq!(run["status"], "waiting_human", "{run}");
             let ticket = run["pending_tickets"][0]["id"].as_str().unwrap();
             ui_wait(&browser, &desktop, pending).await;

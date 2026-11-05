@@ -143,7 +143,7 @@ pub(crate) async fn pair<W: Write>(
             writeln!(stdout, "{code}").map_err(output_error)?;
         }
         writeln!(stdout, "Scan with the phone, or open: {target}").map_err(output_error)?;
-        writeln!(stdout, "From another computer: openside connect '{target}'")
+        writeln!(stdout, "From another computer: openside login '{target}'")
             .map_err(output_error)?;
     } else {
         writeln!(

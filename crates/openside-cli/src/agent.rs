@@ -1,24 +1,21 @@
-//! Delegating to the openside browser agent: `run`, `steer`, `cancel` and `tasks`.
+//! Delegating to the openside browser agent: `exec` starts a run, and `session steer`,
+//! `session queue`, `session stop` and `session tasks` manage it and its Tasks.
 //!
-//! `run` sends the goal as a message to a new or existing session, exactly as the web composer
-//! does; the daemon's agent (with `[agent] orchestration = "front"`, its front agent and the
-//! background Tasks it starts) does the work. Detached by default: it prints the session and
-//! message ids. `--follow` streams the run like `openside "task"`; `--wait` waits for the run's
-//! end, through any tickets a person answers meanwhile, and prints the agent's replies.
+//! A prompt is sent as a message to a session exactly as the web composer does; the daemon's
+//! agent (with `[agent] orchestration = "front"`, its front agent and the background Tasks it
+//! starts) does the work.
 
-use std::{io::Write, time::Duration};
+use std::io::Write;
 
 use openside_proto::{
     Event, EventKind, Message, MessageMode, Session, SteerSubagentRequest, Subagent, SubagentList,
     SubmitMessageRequest,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::{
     client::{self, Client},
-    emit, output_error,
-    wait::{self, Replay, Until},
-    Summary,
+    emit, output_error, Summary,
 };
 
 /// One stderr line of progress for a person watching a run: tasks, what the browser is doing,
@@ -78,15 +75,6 @@ fn plain(text: &str) -> String {
         .collect()
 }
 
-pub(crate) struct RunOptions<'a> {
-    pub(crate) goal: &'a str,
-    pub(crate) session: Option<&'a str>,
-    pub(crate) create: openside_proto::CreateSessionRequest,
-    pub(crate) wait: bool,
-    pub(crate) timeout: Option<Duration>,
-    pub(crate) json: bool,
-}
-
 /// The message a run starts with and where its events begin.
 pub(crate) struct Started {
     pub(crate) session: Session,
@@ -118,128 +106,20 @@ pub(crate) async fn start(
     Ok(Started { session, message })
 }
 
-/// `openside run` without `--follow`.
-pub(crate) async fn run<W: Write, E: Write>(
-    options: RunOptions<'_>,
-    client: &Client,
-    stdout: &mut W,
-    stderr: &mut E,
-    summary: &mut Summary,
-) -> Result<(), String> {
-    let Started { session, message } =
-        start(client, options.session, &options.create, options.goal).await?;
-    let id = session.id.to_string();
-    summary.session_id = Some(id.clone());
-    summary.last_seq = Some(session.last_seq);
-    if !options.wait {
-        if options.json {
-            emit(
-                stdout,
-                &json!({"type":"run","session_id":id,"message_id":message.id,"after_seq":session.last_seq}),
-            )?;
-        } else {
-            writeln!(stdout, "{id}\t{}", message.id).map_err(output_error)?;
-        }
-        return Ok(());
-    }
-    let json_output = options.json;
-    let mut write_error = None;
-    let web_origin = client.web_origin();
-    let card_context = crate::ui::cards::Context {
-        session_id: &id,
-        web_origin: web_origin.as_deref(),
-        client: Some(client),
-    };
-    let result = wait::settle(
-        client,
-        &id,
-        Replay {
-            last_seen: session.last_seq,
-            terminal_after: session.last_seq,
-            message_id: Some(message.id.to_string()),
-        },
-        Until {
-            timeout: options.timeout,
-            through_human: true,
-        },
-        |event| {
-            if write_error.is_some() {
-                return;
-            }
-            let written = if json_output {
-                emit(&mut *stdout, event)
-            } else if let Some(card) = crate::ui::cards::event_card(&event.kind) {
-                let ui = crate::ui::pretty()
-                    .copied()
-                    .unwrap_or_else(crate::ui::cards::plain_ui);
-                let rendered = crate::ui::cards::render(&ui, card, &card_context);
-                if card.ticket_id.is_some() {
-                    write!(stderr, "{rendered}")
-                        .and_then(|()| stderr.flush())
-                        .map_err(output_error)
-                } else {
-                    write!(stdout, "{rendered}").map_err(output_error)
-                }
-            } else if let Some(line) = progress_line(event) {
-                writeln!(stderr, "{line}")
-                    .and_then(|()| stderr.flush())
-                    .map_err(output_error)
-            } else {
-                Ok(())
-            };
-            write_error = written.err();
-        },
-    )
-    .await?;
-    if let Some(error) = write_error {
-        return Err(error);
-    }
-    finish(&result, json_output, stdout, summary)
-}
-
-fn finish<W: Write>(
-    result: &Value,
-    json_output: bool,
-    stdout: &mut W,
-    summary: &mut Summary,
-) -> Result<(), String> {
-    summary.last_seq = result["last_seq"].as_u64();
-    summary.status = match result["status"].as_str() {
-        Some("settled") => "settled",
-        Some("waiting_human") => "waiting_human",
-        Some("stopped") => "stopped",
-        Some("timeout") => "timeout",
-        _ => "error",
-    };
-    if json_output {
-        let mut object = result.clone();
-        object["type"] = json!("result");
-        emit(stdout, &object)?;
-    } else {
-        for reply in result["replies"].as_array().into_iter().flatten() {
-            writeln!(stdout, "{}", reply.as_str().unwrap_or_default()).map_err(output_error)?;
-        }
-    }
-    if let Some(error) = result["error"].as_str() {
-        return Err(format!("runtime error {error}"));
-    }
-    if summary.status == "timeout" {
-        summary.failed = true;
-    }
-    Ok(())
-}
-
-/// `openside steer`: a Task when `--task` names one, otherwise the session's agent.
-pub(crate) async fn steer<W: Write>(
+/// `session steer` and `session queue`: a Task when `--task` names one (steer only), otherwise
+/// a message to the session's agent delivered with `mode`. Prints `ok`.
+pub(crate) async fn deliver<W: Write>(
     client: &Client,
     session: &str,
     task: Option<&str>,
     text: &str,
+    mode: MessageMode,
     json_output: bool,
     stdout: &mut W,
-    summary: &mut Summary,
 ) -> Result<(), String> {
-    summary.session_id = Some(session.to_owned());
+    if text.trim().is_empty() {
+        return Err("the prompt is empty".into());
+    }
     match task {
         Some(task) => {
             let task: Subagent = client
@@ -252,7 +132,9 @@ pub(crate) async fn steer<W: Write>(
                     Some(&SteerSubagentRequest { text: text.into() }),
                 )
                 .await?;
-            print_task(json_output, stdout, &task)
+            if json_output {
+                return emit(stdout, &task);
+            }
         }
         None => {
             let message: Message = client
@@ -262,21 +144,20 @@ pub(crate) async fn steer<W: Write>(
                     Some(&SubmitMessageRequest {
                         message_id: None,
                         text: text.into(),
-                        mode: MessageMode::Steer,
+                        mode,
                         attachments: Vec::new(),
                     }),
                 )
                 .await?;
             if json_output {
-                emit(stdout, &message)
-            } else {
-                writeln!(stdout, "{}", message.id).map_err(output_error)
+                return emit(stdout, &message);
             }
         }
     }
+    writeln!(stdout, "ok").map_err(output_error)
 }
 
-/// `openside cancel`: one Task when `--task` names it, otherwise the whole run (session stop).
+/// `session stop`: one Task when `--task` names it, otherwise the whole run.
 pub(crate) async fn cancel<W: Write>(
     client: &Client,
     session: &str,
@@ -314,7 +195,7 @@ pub(crate) async fn cancel<W: Write>(
     }
 }
 
-/// `openside tasks`: the session's Tasks and delegated subagents.
+/// `session tasks`: the session's Tasks and delegated subagents.
 pub(crate) async fn tasks<W: Write>(
     client: &Client,
     session: &str,

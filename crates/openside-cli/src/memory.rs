@@ -16,14 +16,29 @@ const DEFAULT_ENDPOINT: &str = openside_model_fetch::DEFAULT_ENDPOINT;
 
 #[derive(Subcommand)]
 pub(crate) enum MemoryCommand {
-    /// Search memories; without a query, list the most recently updated ones.
+    /// Semantically search openside's memory
     Search {
-        query: Option<String>,
+        #[arg(value_name = "query", required = true, num_args = 1..)]
+        query: Vec<String>,
         #[arg(long, value_enum)]
         kind: Option<KindArg>,
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
     },
+    /// List memories, most recently updated first
+    List {
+        #[arg(long, value_enum)]
+        kind: Option<KindArg>,
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+    },
+    /// Print one memory, for example one id from `openside memory list`
+    Show {
+        #[arg(value_name = "id")]
+        id: String,
+    },
+    /// Print the path of the local memory database
+    Path,
     /// Remember a note. Secrets (keys, tokens, passwords, card numbers) are rejected.
     Add {
         content: String,
@@ -32,8 +47,6 @@ pub(crate) enum MemoryCommand {
         #[arg(long, value_enum)]
         retention: Option<RetentionArg>,
     },
-    /// Show one memory.
-    Show { id: String },
     /// Change a memory's content, tags or retention; each change adds a history version.
     Edit {
         id: String,
@@ -108,45 +121,13 @@ pub(crate) async fn execute<W: Write>(
 ) -> Result<(), String> {
     match command {
         MemoryCommand::Search { query, kind, limit } => {
-            let mut params = url::form_urlencoded::Serializer::new(String::new());
-            if let Some(query) = query {
-                params.append_pair("q", query);
-            }
-            if let Some(kind) = kind {
-                params.append_pair(
-                    "kind",
-                    match kind {
-                        KindArg::Note => MemoryKind::Note.as_str(),
-                        KindArg::History => MemoryKind::History.as_str(),
-                    },
-                );
-            }
-            if let Some(limit) = limit {
-                params.append_pair("limit", &limit.to_string());
-            }
-            let params = params.finish();
-            let path = if params.is_empty() {
-                "/v1/memory".to_owned()
-            } else {
-                format!("/v1/memory?{params}")
-            };
-            let found: MemorySearchResponse = client.get(&path).await?;
-            if json {
-                return emit(stdout, &found);
-            }
-            for hit in &found.hits {
-                writeln!(
-                    stdout,
-                    "{}\t{}\t{:.3}\t{}",
-                    hit.memory.id,
-                    hit.memory.kind.as_str(),
-                    hit.score,
-                    headline(&hit.memory)
-                )
-                .map_err(output_error)?;
-            }
-            Ok(())
+            let query = query.join(" ");
+            list(Some(&query), *kind, *limit, json, client, stdout).await
         }
+        MemoryCommand::List { kind, limit } => {
+            list(None, *kind, *limit, json, client, stdout).await
+        }
+        MemoryCommand::Path => unreachable!("memory path runs without an API client"),
         MemoryCommand::Add {
             content,
             tags,
@@ -220,6 +201,67 @@ pub(crate) async fn execute<W: Write>(
         }
         MemoryCommand::Model { .. } => unreachable!("model commands run without an API client"),
     }
+}
+
+/// `memory search` with a query, `memory list` without one.
+async fn list<W: Write>(
+    query: Option<&str>,
+    kind: Option<KindArg>,
+    limit: Option<usize>,
+    json: bool,
+    client: &Client,
+    stdout: &mut W,
+) -> Result<(), String> {
+    let path = {
+        let mut params = url::form_urlencoded::Serializer::new(String::new());
+        if let Some(query) = query {
+            params.append_pair("q", query);
+        }
+        if let Some(kind) = kind {
+            params.append_pair(
+                "kind",
+                match kind {
+                    KindArg::Note => MemoryKind::Note.as_str(),
+                    KindArg::History => MemoryKind::History.as_str(),
+                },
+            );
+        }
+        if let Some(limit) = limit {
+            params.append_pair("limit", &limit.to_string());
+        }
+        let params = params.finish();
+        if params.is_empty() {
+            "/v1/memory".to_owned()
+        } else {
+            format!("/v1/memory?{params}")
+        }
+    };
+    let found: MemorySearchResponse = client.get(&path).await?;
+    if json {
+        return emit(stdout, &found);
+    }
+    for hit in &found.hits {
+        writeln!(
+            stdout,
+            "{}\t{}\t{:.3}\t{}",
+            hit.memory.id,
+            hit.memory.kind.as_str(),
+            hit.score,
+            headline(&hit.memory)
+        )
+        .map_err(output_error)?;
+    }
+    Ok(())
+}
+
+/// `memory path`: the local memory database (`memory.db` in the data directory).
+pub(crate) fn path<W: Write>(json: bool, stdout: &mut W) -> Result<(), String> {
+    let loaded = openside_config::load(None).map_err(|error| error.to_string())?;
+    let path = loaded.paths.data_dir.join("memory.db");
+    if json {
+        return emit(stdout, &serde_json::json!({"path": path}));
+    }
+    writeln!(stdout, "{}", path.display()).map_err(output_error)
 }
 
 #[cfg(not(unix))]

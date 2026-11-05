@@ -52,7 +52,7 @@ fn section(out: &mut String, command: &Command, depth: usize, is_root: bool) {
         }
         out.push('\n');
         if is_root {
-            out.push_str("`--socket`, `--url`, `--token` and `--json` are global and apply to every subcommand.\n\n");
+            out.push_str("`--host`, `--socket`, `--url`, `--token`, `--json` and `--color` are global and apply to every subcommand.\n\n");
         }
     }
     for sub in command

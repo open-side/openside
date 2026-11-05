@@ -29,9 +29,9 @@ const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 // replay, queued database work, a loaded CI machine) can take far longer than the connect
 // budget, and a slow answer is not a dead daemon.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-// A REPL snippet may run for 30 s after waiting for the browser gate and a browser launch;
-// a direct browser tool call (navigate, login) can wait as long.
-const REPL_TIMEOUT: Duration = Duration::from_secs(90);
+// A persistent REPL snippet may run for 120 s after waiting for the browser gate and a browser
+// launch; a direct browser tool call (navigate, login) can wait as long.
+const REPL_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_BYTES: usize = 32 << 20;
 
 enum Endpoint {
@@ -68,15 +68,16 @@ fn bearer(token: &str) -> Result<HeaderValue, String> {
 }
 
 impl Client {
-    /// The connection every command uses: `--remote`/`OPENSIDE_REMOTE` (a profile saved by
-    /// `openside connect`), else `--url` (loopback HTTP with a token), else the local socket.
+    /// The connection every command uses: a host saved by `openside login` (`--host`,
+    /// `OPENSIDE_HOST` or `openside host use`), else `--url` (loopback HTTP with a token), else
+    /// the local socket.
     pub(crate) async fn from_flags(
         socket: Option<&Path>,
         url: Option<&str>,
         token: Option<&str>,
-        remote: Option<&str>,
+        host: Option<&str>,
     ) -> Result<Self, String> {
-        match remote {
+        match host {
             Some(name) => Self::remote(name),
             None => Self::new(socket, url, token),
         }
@@ -100,7 +101,7 @@ impl Client {
                         .and_then(openside_relay::noise::decode_key),
                 ) else {
                     return Err(format!(
-                        "remote {name} is a relay profile without a daemon key; run `openside connect` again"
+                        "host {name} is a relay profile without a daemon key; run `openside login` again"
                     ));
                 };
                 Endpoint::Relay {
@@ -121,7 +122,7 @@ impl Client {
         })
     }
 
-    /// An unauthenticated client for `POST /v1/pairing/exchange` during `openside connect`.
+    /// An unauthenticated client for `POST /v1/pairing/exchange` during `openside login`.
     pub(crate) fn pairing(link: &remotes::PairingLink) -> Result<Self, String> {
         let origin = Origin::parse(&link.origin).map_err(|error| error.to_string())?;
         let endpoint = match &link.relay {
@@ -163,15 +164,16 @@ impl Client {
             {
                 return Err("--url must be an HTTP loopback URL without credentials, path, query, or fragment".into());
             }
-            let ip = match url.host() {
-                Some(Host::Ipv4(ip)) if ip.is_loopback() => IpAddr::V4(ip),
-                Some(Host::Ipv6(ip)) if ip.is_loopback() => IpAddr::V6(ip),
-                Some(Host::Domain("localhost")) => IpAddr::V4(Ipv4Addr::LOCALHOST),
-                _ => return Err(
-                    "refusing non-loopback --url (pair with `openside connect` and use --remote)"
-                        .into(),
-                ),
-            };
+            let ip =
+                match url.host() {
+                    Some(Host::Ipv4(ip)) if ip.is_loopback() => IpAddr::V4(ip),
+                    Some(Host::Ipv6(ip)) if ip.is_loopback() => IpAddr::V6(ip),
+                    Some(Host::Domain("localhost")) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    _ => return Err(
+                        "refusing non-loopback --url (pair with `openside login` and use --host)"
+                            .into(),
+                    ),
+                };
             let address = SocketAddr::new(
                 ip,
                 url.port_or_known_default()
@@ -220,7 +222,7 @@ impl Client {
         &self.key
     }
 
-    /// Whether requests leave this machine (a `--remote` profile).
+    /// Whether requests leave this machine (a `--host` profile).
     pub(crate) fn is_remote(&self) -> bool {
         matches!(
             self.endpoint,
@@ -242,10 +244,21 @@ impl Client {
             Endpoint::Unix(path) => format!("--socket {}", shell_quote(&path.to_string_lossy())),
             Endpoint::Tcp(address) => format!("--url http://{address}"),
             Endpoint::Direct { name, .. } | Endpoint::Relay { name, .. } => {
-                format!("--remote {}", shell_quote(name))
+                format!("--host {}", shell_quote(name))
             }
         };
         format!("openside {connection}")
+    }
+
+    /// `openside`, plus `--host NAME` when the session lives on a saved remote host: the short
+    /// form for hints a person types back, where the local socket path is only noise.
+    pub(crate) fn short_prefix(&self) -> String {
+        match &self.endpoint {
+            Endpoint::Direct { name, .. } | Endpoint::Relay { name, .. } => {
+                format!("openside --host {}", shell_quote(name))
+            }
+            Endpoint::Unix(_) | Endpoint::Tcp(_) => "openside".to_owned(),
+        }
     }
 
     pub(crate) fn team_command(&self, action: &str, id: Option<&str>) -> String {
@@ -473,7 +486,14 @@ impl Client {
                     return Err(format!("{message}. This decision needs a person-device token, not an agent client or the local socket. Ask a person on a paired web/phone/extension/channel device, then use ticket_wait. The operator can issue a person token with openside token create --person."));
                 }
                 if error.code == "self_approval_forbidden" {
-                    Err(format!("{message}. This client cannot approve its own work. Ask a person to approve on another paired device, then wait with MCP ticket_wait (CLI browser/run commands wait for the ticket)."))
+                    Err(format!("{message}. This client cannot approve its own work. Ask a person to approve on another paired device, then wait with MCP ticket_wait (CLI browser/exec commands wait for the ticket)."))
+                } else if error.code == "local_socket_required"
+                    && method == "POST"
+                    && route.path == "/v1/sessions"
+                {
+                    Err(format!("{message}. A token client cannot start this session: a workspace or a permission above the daemon's default policy, and for agent-client tokens also -s fast or --effort xhigh, max or ultrabrowse, need the daemon host's local socket. Drop those options, or run the command on the daemon host without --url/--token/--host."))
+                } else if error.code == "repl_busy" {
+                    Err(format!("{message}. Too many REPL snippets are queued for this session (or the daemon has too many REPL contexts busy); wait for the running ones to finish, then send it again."))
                 } else {
                     Err(message)
                 }

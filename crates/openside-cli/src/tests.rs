@@ -125,6 +125,9 @@ struct MockState {
     runtime_error: bool,
     runtime_warning: bool,
     settle_on_events: bool,
+    /// The ticket is answered before the pause's `session.settled` reaches the client; the
+    /// resumed run arrives only on the next event stream.
+    answered_early: bool,
 }
 
 struct Fixture {
@@ -267,10 +270,23 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
             state.session = Some(session.clone());
             respond(201, session)
         }
-        ("GET", "/v1/sessions") => respond(
-            200,
-            json!({"sessions":state.session.iter().collect::<Vec<_>>()}),
-        ),
+        ("GET", "/v1/sessions") => {
+            let archived = query.as_deref() == Some("archived=true");
+            let sessions: Vec<_> = state
+                .session
+                .iter()
+                .filter(|session| (session["archived"] == json!(true)) == archived)
+                .collect();
+            respond(200, json!({ "sessions": sessions }))
+        }
+        ("PATCH", "/v1/sessions/s-1") => match state.session.as_mut() {
+            Some(session) => {
+                session["archived"] = body["archived"].clone();
+                let session = session.clone();
+                respond(200, session)
+            }
+            None => respond(404, json!({"code":"not_found","message":"unknown session"})),
+        },
         ("GET", "/v1/sessions/s-1") => match &state.session {
             Some(session) => respond(200, session.clone()),
             None => respond(404, json!({"code":"not_found","message":"unknown session"})),
@@ -278,6 +294,33 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
         ("POST", "/v1/sessions/s-1/messages") => {
             assert_eq!(body["mode"], "now");
             let seq = state.events.len() as u64 + 1;
+            if state.answered_early {
+                for (offset, (kind, payload)) in [
+                    ("ticket.opened", json!({"ticket":ticket()})),
+                    (
+                        "message.completed",
+                        json!({"message_id":"m-1","outcome":"deferred"}),
+                    ),
+                    (
+                        "ticket.resolved",
+                        json!({"ticket_id":"t-1","resolution":{"approved":true}}),
+                    ),
+                    ("session.settled", json!({})),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    state.events.push(event(seq + offset as u64, kind, payload));
+                }
+                let last = state.events.len() as u64;
+                let session = state.session.as_mut().unwrap();
+                session["status"] = json!("idle");
+                session["last_seq"] = json!(last);
+                return respond(
+                    202,
+                    json!({"id":"m-1","text":body["text"],"status":"delivered"}),
+                );
+            }
             if state.tickets {
                 let ticket = state.ticket.clone().unwrap_or_else(ticket);
                 state
@@ -299,6 +342,13 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
                         _ => json!({"ticket_id":"t-1"}),
                     };
                     state.events.push(event(seq, kind, payload));
+                    // The resumed run closes the deferred message, as the daemon does.
+                    let seq = state.events.len() as u64 + 1;
+                    state.events.push(event(
+                        seq,
+                        "message.completed",
+                        json!({"message_id":"m-1","outcome":"completed"}),
+                    ));
                 }
             }
             if state.runtime_warning {
@@ -369,6 +419,63 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
                 state.settle_on_events = false;
             }
             let last_seq: u64 = last_id.unwrap().parse().unwrap();
+            // A client that comes back for more while the run waits on its ticket stands in for a
+            // person answering it elsewhere: the run resumes and settles.
+            let caught_up = last_seq == state.events.len() as u64;
+            if state.answered_early && caught_up && last_seq > 1 {
+                state.answered_early = false;
+                let seq = state.events.len() as u64;
+                for (offset, (kind, payload)) in [
+                    ("turn.started", json!({})),
+                    ("assistant.final", json!({"text":"resumed"})),
+                    (
+                        "message.completed",
+                        json!({"message_id":"m-1","outcome":"completed"}),
+                    ),
+                    ("session.settled", json!({})),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    state
+                        .events
+                        .push(event(seq + 1 + offset as u64, kind, payload));
+                }
+                let last = state.events.len() as u64;
+                state.session.as_mut().unwrap()["last_seq"] = json!(last);
+            }
+            let waiting = state
+                .session
+                .as_ref()
+                .is_some_and(|session| session["status"] == "waiting_human");
+            if state.tickets && state.ticket_terminal.is_none() && waiting && caught_up {
+                let seq = state.events.len() as u64;
+                for (offset, (kind, payload)) in [
+                    (
+                        "ticket.resolved",
+                        json!({"ticket_id":"t-1","resolution":{"approved":true}}),
+                    ),
+                    ("turn.started", json!({})),
+                    ("assistant.delta", json!({"text":"done"})),
+                    ("assistant.final", json!({"text":"done"})),
+                    (
+                        "message.completed",
+                        json!({"message_id":"m-1","outcome":"completed"}),
+                    ),
+                    ("session.settled", json!({})),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    state
+                        .events
+                        .push(event(seq + 1 + offset as u64, kind, payload));
+                }
+                let last = state.events.len() as u64;
+                let session = state.session.as_mut().unwrap();
+                session["status"] = json!("idle");
+                session["last_seq"] = json!(last);
+            }
             let mut sse = String::from(": keepalive\r\n\r\n");
             for event in &state.events {
                 let seq = event["seq"].as_u64().unwrap();
@@ -500,7 +607,7 @@ async fn session_list_and_stop_use_public_api() {
     assert_eq!(fixture.run(&["task"]).await.0, 0);
     let (code, output, error) = fixture.run(&["session", "list"]).await;
     assert_eq!(code, 0, "{error}");
-    assert_eq!(output, "s-1\tidle\ttest\n");
+    assert_eq!(output, "s-1\tidle\tunsaved\ttest\n");
     let (code, output, error) = fixture.run(&["--json", "session", "stop", "s-1"]).await;
     assert_eq!(code, 0, "{error}");
     assert_eq!(json_lines(&output)[0]["status"], "stopped");
@@ -606,7 +713,7 @@ async fn resume_replays_post_terminal_metadata_without_waiting_for_another_settl
 }
 
 #[tokio::test]
-async fn ticket_prints_instructions_and_settlement_waits_for_human() {
+async fn exec_prints_ticket_instructions_and_waits_until_the_run_settles() {
     let fixture = Fixture::new().await;
     fixture.state.lock().tickets = true;
     let (code, output, error) = fixture.run(&["--json", "hello"]).await;
@@ -614,11 +721,78 @@ async fn ticket_prints_instructions_and_settlement_waits_for_human() {
     assert!(error.contains("Ticket t-1 (confirm): Run tool?"));
     assert!(error.contains("another paired web or phone device"));
     assert!(!error.contains("ticket resolve t-1 true"));
+    assert!(
+        error.contains("Waiting for a person to answer ticket t-1"),
+        "{error}"
+    );
+    let records = json_lines(&output);
+    assert!(records
+        .iter()
+        .any(|record| record["kind"] == "ticket.resolved"));
+    assert_eq!(records.last().unwrap()["status"], "settled");
+    assert_eq!(records.last().unwrap()["exit_code"], 0);
+    let (code, output, error) = fixture.run(&["hello"]).await;
+    assert_eq!(code, 0, "{error}");
+    assert_eq!(output, "hello\ndone\n");
+}
+
+#[tokio::test]
+async fn exec_keeps_following_when_the_ticket_is_answered_before_the_pause_settles() {
+    let fixture = Fixture::new().await;
+    fixture.state.lock().answered_early = true;
+    let (code, output, error) = fixture.run(&["--json", "hello"]).await;
+    assert_eq!(code, 0, "{error}");
+    let records = json_lines(&output);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "assistant.final" && record["text"] == "resumed"),
+        "{records:?}"
+    );
+    assert_eq!(records.last().unwrap()["status"], "settled");
+    assert!(!error.contains("Waiting for a person"), "{error}");
+}
+
+/// A session whose run settled at seq 6 while ticket t-1 (opened at seq 2) still waits.
+fn park_on_ticket(fixture: &Fixture) {
+    let mut state = fixture.state.lock();
+    state.tickets = true;
+    state.ticket = Some(ticket());
+    state.events = vec![
+        event(
+            1,
+            "session.created",
+            json!({"title":"test","model":"fake","mode":"guard","workspace":null}),
+        ),
+        event(2, "ticket.opened", json!({"ticket":ticket()})),
+        event(
+            3,
+            "message.completed",
+            json!({"message_id":"m-1","outcome":"deferred"}),
+        ),
+        event(4, "assistant.delta", json!({"text":"hello"})),
+        event(5, "assistant.final", json!({"text":"hello"})),
+        event(6, "session.settled", json!({})),
+    ];
+    state.session = Some(
+        json!({"id":"s-1","title":"test","model":"fake","mode":"guard",
+        "workspace":null,"status":"waiting_human","last_seq":6,"queue":[]}),
+    );
+}
+
+#[tokio::test]
+async fn resume_without_a_message_reports_a_session_waiting_for_a_human() {
+    let fixture = Fixture::new().await;
+    park_on_ticket(&fixture);
+    let (code, output, error) = fixture
+        .run(&["--json", "session", "resume", "s-1", "--last-event-id", "0"])
+        .await;
+    assert_eq!(code, 0, "{error}");
+    assert!(error.contains("Ticket t-1 (confirm): Run tool?"));
     assert_eq!(
         json_lines(&output).last().unwrap()["status"],
         "waiting_human"
     );
-    assert_eq!(json_lines(&output).last().unwrap()["exit_code"], 0);
     let (code, output, error) = fixture.run(&["session", "resume", "s-1"]).await;
     assert_eq!(code, 0, "{error}");
     assert_eq!(output, "Session s-1 is waiting on tickets.\n");
@@ -1120,7 +1294,7 @@ async fn api_errors_return_one_and_usage_errors_return_two() {
     assert_eq!(json_lines(&output)[0]["exit_code"], 1);
     assert_eq!(fixture.run(&["session", "stop"]).await.0, 2);
     assert_eq!(fixture.run(&["--json"]).await.0, 2);
-    assert_eq!(fixture.run(&["task", "session", "list"]).await.0, 2);
+    assert_eq!(fixture.run(&["--model", "m", "session", "list"]).await.0, 2);
     assert_eq!(
         fixture
             .run(&[
@@ -1409,6 +1583,47 @@ async fn token_create_over_tcp_explains_that_minting_needs_the_local_socket() {
 }
 
 #[tokio::test]
+async fn exec_with_a_cost_raising_option_explains_the_local_socket_refusal() {
+    let _environment = Environment::new().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let router = Router::new().fallback(|| async {
+        respond(
+            StatusCode::FORBIDDEN.as_u16(),
+            json!({"code":"local_socket_required","message":"local socket required"}),
+        )
+    });
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let (mut output, mut error) = (Vec::new(), Vec::new());
+    let code = run(
+        [
+            "openside",
+            "--url",
+            &url,
+            "--token",
+            "agent-fixture-token",
+            "exec",
+            "--effort",
+            "max",
+            "go",
+        ],
+        &mut output,
+        &mut error,
+    )
+    .await;
+    assert_eq!(code, 1);
+    let error = String::from_utf8(error).unwrap();
+    assert!(
+        error.contains("--effort xhigh, max or ultrabrowse"),
+        "{error}"
+    );
+    assert!(error.contains("without --url/--token/--host"), "{error}");
+    server.abort();
+}
+
+#[tokio::test]
 async fn resume_replays_all_unseen_turns_before_the_latest_settlement() {
     let fixture = Fixture::new().await;
     assert_eq!(fixture.run(&["hello"]).await.0, 0);
@@ -1498,13 +1713,17 @@ async fn task_creation_forwards_model_modes_and_canonical_workspace() {
         .to_string_lossy()
         .into_owned();
     let model = format!("{}:selected", module_path!());
-    for mode in ["read-only", "guard", "full"] {
+    for (permission, mode) in [
+        ("read-only", "read-only"),
+        ("guard", "guard"),
+        ("full-access", "full"),
+    ] {
         let (code, _, error) = fixture
             .run(&[
                 "--model",
                 &model,
-                "--mode",
-                mode,
+                "--permission",
+                permission,
                 "--workspace",
                 &workspace,
                 "task",
@@ -1525,7 +1744,7 @@ async fn task_creation_forwards_model_modes_and_canonical_workspace() {
             directory.canonicalize().unwrap().to_str().unwrap()
         );
     }
-    assert_eq!(fixture.run(&["--mode", "invalid", "task"]).await.0, 2);
+    assert_eq!(fixture.run(&["--permission", "invalid", "task"]).await.0, 2);
     assert_eq!(
         fixture.run(&["--model", &model, "session", "list"]).await.0,
         2
@@ -1556,25 +1775,17 @@ async fn ticket_hints_select_the_action_for_each_kind() {
         assert_eq!(code, 0, "{error}");
         assert!(error.contains(command), "{error}");
         assert!(!output.contains("Resolve in another process"));
-        assert_eq!(
-            json_lines(&output).last().unwrap()["status"],
-            "waiting_human"
-        );
+        assert_eq!(json_lines(&output).last().unwrap()["status"], "settled");
     }
     let (code, output, error) = fixture.run(&["task"]).await;
     assert_eq!(code, 0, "{error}");
-    assert_eq!(output, "hello\nSession s-1 is waiting on tickets.\n");
+    assert_eq!(output, "hello\ndone\n");
 }
 
 #[tokio::test]
 async fn resume_seeds_pending_tickets_when_the_open_event_precedes_the_cursor() {
     let fixture = Fixture::new().await;
-    {
-        let mut state = fixture.state.lock();
-        state.tickets = true;
-        state.ticket = Some(ticket());
-    }
-    assert_eq!(fixture.run(&["task"]).await.0, 0);
+    park_on_ticket(&fixture);
     {
         let mut state = fixture.state.lock();
         state.events.push(event(7, "turn.started", json!({})));
@@ -1601,7 +1812,7 @@ async fn doctor_runs_a_fake_agent_without_a_daemon_and_reports_fail_checks() {
     std::fs::write(&script, r#"#!/bin/sh
 [ "$1" = doctor ] && [ "$2" = --json ] || exit 2
 case "$OPENSIDE_DOCTOR_CONFIG" in *'"credentials":{}'*'"models":'* ) ;; *) exit 3 ;; esac
-printf '%s\n' '{"python":"test-python","packages":{"pydantic-ai":"test-version"},"credentials":[],"models":{"default":null,"fallback":[],"providers_ok":false}}'
+printf '%s\n' '{"runtime":"bun test-version","packages":{"@oh-my-pi/pi-agent-core":"test-version","openside-agent":"test-version"},"credentials":[],"models":{"default":null,"fallback":[],"providers_ok":false}}'
 "#).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     let config = environment.directory.path().join("config.toml");
@@ -1717,4 +1928,52 @@ async fn pairing_purpose_sets_the_role_on_the_operator_offer() {
         assert_eq!(sent.body["kind"], kind);
         assert_eq!(sent.body["scopes"], scopes);
     }
+}
+
+#[test]
+fn ctrl_c_detach_names_resume_and_stop_and_exits_130_with_an_interrupted_summary() {
+    assert_eq!(
+        super::detach_notice("openside --host lab", "s-1"),
+        "Session s-1 keeps running. Resume: openside --host lab session resume s-1 · Stop: openside --host lab session stop s-1"
+    );
+    use clap::Parser;
+    let args = super::Args::try_parse_from(["openside", "--json", "exec", "hi"]).unwrap();
+    let summary = super::Summary {
+        session_id: Some("s-1".into()),
+        interrupted: true,
+        ..Default::default()
+    };
+    let (mut output, mut error) = (Vec::new(), Vec::new());
+    assert_eq!(
+        super::finish(Ok(()), &args, summary, &mut output, &mut error),
+        130
+    );
+    let records = json_lines(&String::from_utf8(output).unwrap());
+    assert_eq!(records[0]["status"], "interrupted");
+    assert_eq!(records[0]["exit_code"], 130);
+}
+
+#[tokio::test]
+async fn the_removed_remote_flag_fails_as_usage_with_a_hint_naming_host() {
+    let (mut output, mut error) = (Vec::new(), Vec::new());
+    let code = run(
+        ["openside", "--remote", "lab", "session", "list"],
+        &mut output,
+        &mut error,
+    )
+    .await;
+    assert_eq!(code, 2);
+    let error = String::from_utf8(error).unwrap();
+    assert!(error.contains("--remote"), "{error}");
+    assert!(
+        error.ends_with(&format!("{}\n", super::LEGACY_REMOTE_HINT)),
+        "{error}"
+    );
+    // A prompt that merely mentions the word is not the flag.
+    assert!(!super::uses_legacy_remote_flag(&[
+        "openside".into(),
+        "exec".into(),
+        "--".into(),
+        "--remote".into()
+    ]));
 }
