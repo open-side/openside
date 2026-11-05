@@ -1,7 +1,8 @@
 import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema/json-schema-validator";
-// The canonical wire schema is hand-maintained next to the protocol spec; the Rust crate
-// validates against the same file, so both peers fail on a one-sided shape change.
-import schema from "../../../docs/specs/sidecar-wire.schema.json" with { type: "json" };
+// The canonical wire schema is hand-maintained inside this package, so an installed sidecar
+// carries it without a sibling docs/ tree; the Rust crate validates against the same file, so
+// both peers fail on a one-sided shape change.
+import schema from "./sidecar-wire.schema.json" with { type: "json" };
 import type { Inbound, Outbound, TeamContext } from "./types";
 
 export const WIRE_SCHEMA = schema;

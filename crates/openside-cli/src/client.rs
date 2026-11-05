@@ -494,6 +494,8 @@ impl Client {
                     Err(format!("{message}. A token client cannot start this session: a workspace or a permission above the daemon's default policy, and for agent-client tokens also -s fast or --effort xhigh, max or ultrabrowse, need the daemon host's local socket. Drop those options, or run the command on the daemon host without --url/--token/--host."))
                 } else if error.code == "repl_busy" {
                     Err(format!("{message}. Too many REPL snippets are queued for this session (or the daemon has too many REPL contexts busy); wait for the running ones to finish, then send it again."))
+                } else if error.code == "runtime_unavailable" {
+                    Err(format!("{message}. The daemon could not start the agent runtime (sidecar); the message stays queued and the next send starts a new process. Run `openside doctor` on the daemon host if it keeps failing."))
                 } else {
                     Err(message)
                 }

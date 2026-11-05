@@ -2099,6 +2099,17 @@ pub fn openapi() -> Value {
         if route.path == "/v1/browser/prewarm" {
             operation["description"] = json!("Launch the browser ahead of a new chat's first message. Idempotent; returns before the browser is up.");
         }
+        if matches!(
+            route.path,
+            "/v1/sessions/{id}/messages"
+                | "/v1/sessions/{id}/queue/{mid}/promote"
+                | "/v1/sessions/{id}/subagents/{sid}/cancel"
+                | "/v1/sessions/{id}/subagents/{sid}/steer"
+        ) {
+            operation["responses"]["503"] = json!({"description": "The agent runtime could not start or its connection is gone; a later request starts a new process",
+                "content": {"application/json": {"schema": reference("ApiError"),
+                "example": {"code": "runtime_unavailable", "message": "runtime unavailable"}}}});
+        }
         if route.path == "/v1/sessions/{id}/subagents/{sid}/cancel" {
             operation["description"] = json!("Cancel a running or waiting child; its pending tickets are rejected and the parent's delegate call returns a cancelled result. Cancelling a finished child returns 409.");
         }

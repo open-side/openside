@@ -2,7 +2,7 @@
 
 작성: 2026-10-11. 상태: **확정(v1)**. 근거: docs/08 §A, docs/09, docs/specs/human-step.md, 스파이크 S-8/S-9/S-15/S-16.
 구현: Rust `crates/openside-agent-sidecar`, Bun/TypeScript 사이드카 `agent/src/protocol/types.ts`(omp `@oh-my-pi/pi-agent-core` 기반). 이 문서와 구현이 다르면 이 문서를 먼저 고치고 양쪽을 맞춘다.
-메시지 모양의 기계 판독 계약은 [`sidecar-wire.schema.json`](sidecar-wire.schema.json)(JSON Schema 2020-12)이며, 별도 생성기 없이 직접 관리한다. Bun 사이드카는 `agent/src/protocol/validate.ts`에서 수신하는 모든 줄을 이 스키마로 검증한다. `agent/tests/wire-schema.test.ts`는 사이드카가 생성하는 모든 발신 메시지가 이 스키마를 통과하는지 확인하고, Rust `crates/openside-agent-sidecar/src/wire_contract_tests.rs`는 데몬이 주고받는 모든 메시지 종류(변형을 빠짐없이 match)가 이 스키마를 통과하는지 확인한다. 메시지 모양을 바꿀 때는 이 파일과 양쪽 구현을 한 번에 함께 수정한다.
+메시지 모양의 기계 판독 계약은 [`agent/src/protocol/sidecar-wire.schema.json`](../../agent/src/protocol/sidecar-wire.schema.json)(JSON Schema 2020-12)이며, 별도 생성기 없이 직접 관리한다. Bun 사이드카는 `agent/src/protocol/validate.ts`에서 수신하는 모든 줄을 이 스키마로 검증한다. `agent/tests/wire-schema.test.ts`는 사이드카가 생성하는 모든 발신 메시지가 이 스키마를 통과하는지 확인하고, Rust `crates/openside-agent-sidecar/src/wire_contract_tests.rs`는 데몬이 주고받는 모든 메시지 종류(변형을 빠짐없이 match)가 이 스키마를 통과하는지 확인한다. 메시지 모양을 바꿀 때는 이 파일과 양쪽 구현을 한 번에 함께 수정한다.
 
 ## 1. 원칙
 - 세션당 Bun 사이드카 프로세스 1개. 데몬이 띄우고, 데몬이 종료시키면 함께 종료된다(프로세스 그룹).

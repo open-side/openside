@@ -124,6 +124,7 @@ struct MockState {
     duplicate: bool,
     runtime_error: bool,
     runtime_warning: bool,
+    runtime_unavailable: bool,
     settle_on_events: bool,
     /// The ticket is answered before the pause's `session.settled` reaches the client; the
     /// resumed run arrives only on the next event stream.
@@ -293,6 +294,12 @@ async fn mock(State(state): State<Arc<Mutex<MockState>>>, request: Request<Body>
         },
         ("POST", "/v1/sessions/s-1/messages") => {
             assert_eq!(body["mode"], "now");
+            if state.runtime_unavailable {
+                return respond(
+                    503,
+                    json!({"code":"runtime_unavailable","message":"runtime unavailable"}),
+                );
+            }
             let seq = state.events.len() as u64 + 1;
             if state.answered_early {
                 for (offset, (kind, payload)) in [
@@ -873,6 +880,23 @@ async fn self_approval_refusal_tells_cli_to_wait_for_another_device() {
         error.contains("another paired device") && error.contains("ticket_wait"),
         "{error}"
     );
+}
+
+#[tokio::test]
+async fn exec_runtime_startup_failure_names_the_runtime_not_a_conflict() {
+    let fixture = Fixture::new().await;
+    fixture.state.lock().runtime_unavailable = true;
+    let (code, _, error) = fixture.run(&["exec", "Reply with exactly: pong"]).await;
+    assert_ne!(code, 0);
+    assert!(
+        error.contains("503") && error.contains("runtime_unavailable"),
+        "{error}"
+    );
+    assert!(
+        error.contains("agent runtime") && error.contains("openside doctor"),
+        "{error}"
+    );
+    assert!(!error.contains("invalid_transition"), "{error}");
 }
 
 #[tokio::test]
@@ -1810,6 +1834,7 @@ async fn doctor_runs_a_fake_agent_without_a_daemon_and_reports_fail_checks() {
     std::env::set_var("PATH", environment.directory.path());
     let script = environment.directory.path().join("fake-agent");
     std::fs::write(&script, r#"#!/bin/sh
+[ "$1" = probe ] && [ "$2" = --json ] && { printf '%s\n' '{"ok":true}'; exit 0; }
 [ "$1" = doctor ] && [ "$2" = --json ] || exit 2
 case "$OPENSIDE_DOCTOR_CONFIG" in *'"credentials":{}'*'"models":'* ) ;; *) exit 3 ;; esac
 printf '%s\n' '{"runtime":"bun test-version","packages":{"@oh-my-pi/pi-agent-core":"test-version","openside-agent":"test-version"},"credentials":[],"models":{"default":null,"fallback":[],"providers_ok":false}}'

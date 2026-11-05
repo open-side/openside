@@ -1060,8 +1060,14 @@ async fn handle(shared: &Shared, id: &SessionId, live: &mut Live, action: Action
                     {
                         return Err("subagent_finished".into());
                     }
-                    fail(shared, id, live, error).await?;
-                    return Err("subagent control failed".into());
+                    let unavailable = matches!(error, RuntimeError::Unavailable(_));
+                    fail(shared, id, live, error.clone()).await?;
+                    // A dead sidecar answers `runtime_unavailable`, like a send that cannot start one.
+                    return Err(if unavailable {
+                        error.into()
+                    } else {
+                        "subagent control failed".into()
+                    });
                 }
             }
             if cancel && !live.stopped && crate::tasks::report_updates(shared, id).await? {
@@ -1255,14 +1261,13 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
     let mut session = match opened {
         Ok(session) => session,
         Err(error) => {
-            let auth = matches!(error, RuntimeError::AuthUnavailable(_));
+            if let RuntimeError::Unavailable(reason) = &error {
+                // Daemon-authored launch/handshake text only; the sidecar's stderr stays private.
+                crate::diag!("opensided: session {id}: agent runtime did not start: {reason}");
+            }
             fail(shared, id, live, error.clone()).await?;
-            // The API turns this into an actionable `auth_unavailable` response.
-            return Err(if auth {
-                error.into()
-            } else {
-                "runtime startup failed".into()
-            });
+            // The API turns this into `auth_unavailable` or `runtime_unavailable`.
+            return Err(error.into());
         }
     };
     shared

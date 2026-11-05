@@ -13,7 +13,7 @@ pub const MIN_AGENT_VERSION: (u64, u64, u64) = (0, 2, 0);
 pub const MAX_AGENT_VERSION_EXCLUSIVE: (u64, u64, u64) = (0, 3, 0);
 
 /// Supported package range in Cargo / npm comparator syntax, as published in
-/// `docs/specs/sidecar-wire.schema.json` (`x-openside-agent-versions`).
+/// `agent/src/protocol/sidecar-wire.schema.json` (`x-openside-agent-versions`).
 pub fn supported_agent_versions() -> String {
     let (a, b, c) = MIN_AGENT_VERSION;
     let (x, y, z) = MAX_AGENT_VERSION_EXCLUSIVE;

@@ -1,7 +1,8 @@
 //! OP-2 contract: every message shape this crate puts on (or accepts from) the wire validates
-//! against docs/specs/sidecar-wire.schema.json, the hand-maintained canonical schema. The Bun
-//! sidecar validates inbound lines against the same file and agent/tests/wire-schema.test.ts
-//! checks its outbound shapes, so a one-sided change to a message shape fails on one side.
+//! against agent/src/protocol/sidecar-wire.schema.json, the hand-maintained canonical schema.
+//! The Bun sidecar validates inbound lines against the same file and
+//! agent/tests/wire-schema.test.ts checks its outbound shapes, so a one-sided change to a
+//! message shape fails on one side.
 
 use std::collections::BTreeSet;
 
@@ -18,7 +19,7 @@ use crate::protocol::{
     Resolution, RunOutcome, SidecarMessage, State, Tool, Versions,
 };
 
-const SCHEMA: &str = include_str!("../../../docs/specs/sidecar-wire.schema.json");
+const SCHEMA: &str = include_str!("../../../agent/src/protocol/sidecar-wire.schema.json");
 
 fn validator(root: &str) -> jsonschema::Validator {
     let schema: Value = serde_json::from_str(SCHEMA).unwrap();

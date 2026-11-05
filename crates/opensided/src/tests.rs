@@ -84,6 +84,8 @@ struct TestState {
     events: HashMap<SessionId, mpsc::UnboundedSender<RuntimeEvent>>,
     ready_deferred: Vec<DeferredCall>,
     auth_failure: bool,
+    startup_unavailable: bool,
+    control_unavailable: bool,
     delivery_store: Option<std::path::PathBuf>,
     discarded: usize,
     parts: Vec<(MessageId, Vec<openside_core::ContentPart>)>,
@@ -109,6 +111,11 @@ impl AgentRuntime for TestRuntime {
         if state.auth_failure {
             return Err(RuntimeError::AuthUnavailable(
                 "test sources unavailable".into(),
+            ));
+        }
+        if state.startup_unavailable {
+            return Err(RuntimeError::Unavailable(
+                "sidecar exited during startup".into(),
             ));
         }
         let (tx, rx) = mpsc::unbounded_channel();
@@ -191,7 +198,13 @@ impl AgentSession for TestSession {
         subagent: String,
         control: openside_core::SubagentControl,
     ) -> std::result::Result<(), RuntimeError> {
-        self.runtime.0.lock().controls.push((subagent, control));
+        let mut state = self.runtime.0.lock();
+        if state.control_unavailable {
+            return Err(RuntimeError::Unavailable(
+                "sidecar connection closed".into(),
+            ));
+        }
+        state.controls.push((subagent, control));
         Ok(())
     }
     async fn next_event(&mut self) -> Option<RuntimeEvent> {
@@ -2445,6 +2458,78 @@ async fn authentication_failure_is_fail_closed_until_a_send_finds_credentials_ag
     assert_eq!(send("fourth").await.0, StatusCode::ACCEPTED);
     assert!(!daemon.shared.auth_failed(&session).await.unwrap());
     assert_eq!(runtime.0.lock().opened.len(), 2);
+    daemon.shutdown().await;
+}
+
+#[test]
+fn runtime_errors_map_to_their_own_api_codes() {
+    let cases: [(RuntimeError, StatusCode, &str); 3] = [
+        (
+            RuntimeError::Unavailable("sidecar exited during startup".into()),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime_unavailable",
+        ),
+        (
+            RuntimeError::AuthUnavailable("pool exhausted".into()),
+            StatusCode::CONFLICT,
+            "auth_unavailable",
+        ),
+        (
+            RuntimeError::Rejected("tool_gate: mismatch".into()),
+            StatusCode::CONFLICT,
+            "invalid_transition",
+        ),
+    ];
+    for (error, status, code) in cases {
+        let error: crate::persistence::Error = error.into();
+        let api::HttpError(actual_status, actual_code) = api::HttpError::from(error);
+        assert_eq!((actual_status, actual_code), (status, code));
+    }
+}
+
+/// Live regression (release 7076c87): the installed sidecar exited before its handshake, and
+/// every send answered 409 `invalid_transition`, which reads like a client state bug.
+#[tokio::test]
+async fn runtime_startup_failure_answers_runtime_unavailable_and_a_later_send_recovers() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    runtime.0.lock().startup_unavailable = true;
+    let daemon = daemon(root.path(), &runtime).await;
+    let session = create_session(&daemon, "session", PolicyMode::Guard, None).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let send = |id: &'static str| {
+        let router = router.clone();
+        async move {
+            let response = router
+                .oneshot(request(
+                    "POST",
+                    "/v1/sessions/session/messages",
+                    json!({"message_id":id,"text":"Reply with exactly: pong","mode":"now"}),
+                    None,
+                ))
+                .await
+                .unwrap();
+            (response.status(), json_body(response).await)
+        }
+    };
+    let (status, body) = send("first").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "runtime_unavailable");
+    let state = daemon.shared.db.state(&session).await.unwrap();
+    assert!(state.queue.status(&MessageId::new("first")).is_some());
+    assert_ne!(state.status, SessionStatus::Stopped);
+    assert!(daemon
+        .shared
+        .db
+        .events(&session, 0)
+        .await
+        .unwrap()
+        .iter()
+        .any(|event| matches!(&event.kind,
+            EventKind::RuntimeError { code, .. } if code == "runtime_unavailable")));
+    runtime.0.lock().startup_unavailable = false;
+    assert_eq!(send("second").await.0, StatusCode::ACCEPTED);
+    assert_eq!(runtime.0.lock().opened.len(), 1);
     daemon.shutdown().await;
 }
 

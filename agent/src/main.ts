@@ -9,7 +9,7 @@ import type { JsonlConnection } from "./transport/jsonl";
 
 type Report = Record<string, unknown>;
 
-const USAGE = "usage: openside-agent [doctor|accounts|models] [--json]";
+const USAGE = "usage: openside-agent [doctor|accounts|models|probe] [--json]";
 const RLIMIT_CORE = 4;
 const PR_SET_DUMPABLE = 4;
 
@@ -128,6 +128,21 @@ export async function sidecar(deps?: Partial<SidecarDeps>): Promise<void> {
 	await serveSession(connection, new RpcRouter(connection));
 }
 
+/**
+ * `probe`: load the module graph `sidecar()` loads, without connecting, so doctor catches a
+ * package that cannot start a session (2026-11-05: a release copy missing a file `validate.ts`
+ * imported passed `doctor`, then every session exited before its hello). Imports stay dynamic
+ * because a failed load is the verdict; egress is guarded first, as in a session.
+ */
+async function probeSessionModules(): Promise<void> {
+	const { installEgress } = await import("./providers/egress");
+	installEgress([]);
+	await import("./transport/jsonl");
+	await import("./transport/rpc");
+	await import("./protocol/versions");
+	await import("./runtime/session");
+}
+
 export async function main(argv: string[]): Promise<number> {
 	const [command, ...rest] = argv;
 	const json = rest.length === 0 || (rest.length === 1 && rest[0] === "--json");
@@ -144,6 +159,16 @@ export async function main(argv: string[]): Promise<number> {
 			console.error("Account diagnostics unavailable");
 			return 1;
 		}
+	}
+	if (command === "probe" && json) {
+		try {
+			await probeSessionModules();
+		} catch {
+			// Module errors name paths and can quote source; doctor only needs the verdict.
+			return 1;
+		}
+		console.log(JSON.stringify({ ok: true }));
+		return 0;
 	}
 	if (command !== undefined) {
 		console.error(USAGE);

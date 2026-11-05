@@ -1,5 +1,5 @@
 // Versioned JSONL wire contract; semantics in docs/specs/sidecar-protocol.md, shape in
-// docs/specs/sidecar-wire.schema.json (the hand-maintained canonical schema).
+// agent/src/protocol/sidecar-wire.schema.json (the hand-maintained canonical schema).
 // Names mirror the former Python wire models so specs and tests stay greppable.
 
 export const MAX_LINE_BYTES = 4 * 1024 * 1024;

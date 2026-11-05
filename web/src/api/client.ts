@@ -132,6 +132,7 @@ export const MESSAGES: Record<string, string> = {
   empty_message: "Write a message or attach a file first.",
   model_not_configured: "No model is configured. Pick or type a model.",
   auth_unavailable: "No account is available for the configured models. Check Settings → Models & accounts, then retry.",
+  runtime_unavailable: "The agent could not start on the computer running openside. Your message is kept; send again to retry, and run openside doctor there if it keeps failing.",
   secret_input_unavailable: "Secret input is not available on this daemon right now.",
   origin_mismatch: "The page changed origin, so the secret was not filled.",
   needs_desktop: "This step must be completed on the desktop.",

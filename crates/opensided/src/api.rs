@@ -94,11 +94,15 @@ impl From<Error> for HttpError {
         if storage_full(error.as_ref()) {
             return Self(StatusCode::INSUFFICIENT_STORAGE, "storage_full");
         }
-        if matches!(
-            error.downcast_ref::<openside_core::RuntimeError>(),
-            Some(openside_core::RuntimeError::AuthUnavailable(_))
-        ) {
-            return Self(StatusCode::CONFLICT, "auth_unavailable");
+        match error.downcast_ref::<openside_core::RuntimeError>() {
+            Some(openside_core::RuntimeError::AuthUnavailable(_)) => {
+                return Self(StatusCode::CONFLICT, "auth_unavailable");
+            }
+            // The agent process could not start; a later send starts a new one.
+            Some(openside_core::RuntimeError::Unavailable(_)) => {
+                return Self(StatusCode::SERVICE_UNAVAILABLE, "runtime_unavailable");
+            }
+            _ => {}
         }
         Self::conflict()
     }

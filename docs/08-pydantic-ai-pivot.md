@@ -118,12 +118,12 @@ omp 런타임 대비 잃은 것: 검증된 steer/follow-up 큐와 RPC 계약 테
 
 Python 사이드카를 제거하고, `agent/`를 18.16.0(MIT)으로 고정한 `@oh-my-pi/pi-agent-core`, `@oh-my-pi/pi-ai`, `@oh-my-pi/pi-catalog`에 의존하는 Bun 패키지 `openside-agent` 0.2.0으로 교체했다. 데몬 쪽 구조(프로세스 모델, 소켓, 툴 게이트, 티켓, 자격 증명 소유권)는 바뀌지 않았다.
 
-- 구조: 진입점 `agent/src/main.ts`(서브커맨드 `doctor --json`, `accounts --json`, `models --json`), 와이어 `agent/src/protocol/`, 소켓/RPC `agent/src/transport/`, 세션 상태 기계 `agent/src/runtime/session.ts`, 프로바이더 및 자격 증명 리스 `agent/src/providers/`, capability `agent/src/capabilities/`, 순수 기능 모듈 `agent/src/features/`, 스크립트 모델 `agent/src/scripted.ts`.
+- 구조: 진입점 `agent/src/main.ts`(서브커맨드 `doctor --json`, `accounts --json`, `models --json`, `probe --json`), 와이어 `agent/src/protocol/`, 소켓/RPC `agent/src/transport/`, 세션 상태 기계 `agent/src/runtime/session.ts`, 프로바이더 및 자격 증명 리스 `agent/src/providers/`, capability `agent/src/capabilities/`, 순수 기능 모듈 `agent/src/features/`, 스크립트 모델 `agent/src/scripted.ts`.
 - 루프: 데몬 티켓이 열려 있는 동안에는 `Agent` 클래스의 steering 큐를 보류할 수 없고 요청마다 주입하는 항목(steer, 배치, 스킬, 압축)을 대화 기록에 남겨야 하므로, `Agent` 클래스 대신 `SessionAgent`(`agent/src/runtime/hooks.ts`)로 pi-agent-core의 `agentLoop`/`agentLoopContinue`를 직접 구동한다.
 - 보류 호출: pi-agent-core에는 보류 기능이 없으므로, 보류된 호출은 플레이스홀더 결과를 반환한 뒤 다음 모델 요청 직전에 런을 멈추고 해결 시 플레이스홀더를 실제 결과로 교체해 런을 이어 간다(`agent/src/runtime/deferred.ts`).
 - D1: `hello.versions` 키는 `runtime`, `pi_agent_core`, `pi_ai`, `openside_agent`로 바뀌었으며, 데몬이 `>=0.2.0,<0.3.0` 범위만 허용하므로 남아 있는 Python 사이드카는 거부된다.
 - D2: pi-ai의 `ApiKeyResolver`는 인증 실패 때만 실행되는 반면 데몬은 모든 호출 결과를 받아야 하므로, 커스텀 `streamFn`(`agent/src/providers/stream.ts`)이 리스 발급·요청·결과 보고의 시도 루프를 직접 관리한다.
-- D3: 와이어 스키마 `docs/specs/sidecar-wire.schema.json`은 직접 관리하며, 수신 줄은 `agent/src/protocol/validate.ts`가, 발신 메시지는 `agent/tests/wire-schema.test.ts`가, 데몬 쪽은 Rust `wire_contract_tests.rs`가 각각 검증한다.
+- D3: 와이어 스키마 `agent/src/protocol/sidecar-wire.schema.json`은 직접 관리하며, 수신 줄은 `agent/src/protocol/validate.ts`가, 발신 메시지는 `agent/tests/wire-schema.test.ts`가, 데몬 쪽은 Rust `wire_contract_tests.rs`가 각각 검증한다.
 - D4: 스냅샷 형식은 `openside-agent-state/2`다. `/1` 스냅샷이 들어오면 stderr에 경고를 남기고 빈 모델 컨텍스트로 시작하며, 데몬의 이벤트 로그는 그대로 유지한다.
 - D5: OAuth 모드에서는 pi-ai가 자체적으로 Claude Code 요청 형태를 적용하며, `agent/src/providers/anthropic.ts`는 데몬이 준 인증 종류(`claude_code`)에 따라 해당 모드를 선택하고 버전 재정의를 관리한다.
 - D6: 프로바이더 내부의 일시적 오류 재시도는 `maxRetryDelayMs` 한도 안에서 그대로 켜 두며, 데몬에는 최종 결과만 보고한다.

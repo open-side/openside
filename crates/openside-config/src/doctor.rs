@@ -624,47 +624,53 @@ async fn probe_sidecar(report: &mut DoctorReport, loaded: &Loaded, argv: &[Strin
         return;
     };
     let config = serde_json::json!({ "credentials": {}, "models": loaded.config.models });
-    let mut command = Command::new(program);
-    command
-        .args(&argv[1..])
-        .args(["doctor", "--json"])
-        .env_clear()
-        .envs(crate::runtime_environment(&loaded.config.credentials))
-        .env("OPENSIDE_DOCTOR_CONFIG", config.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    let output = match tokio::time::timeout(Duration::from_secs(60), command.output()).await {
-        Ok(Ok(output)) if output.status.success() => output,
-        Ok(Ok(_)) => {
-            report.add(
-                "agent.sidecar",
-                Status::Fail,
-                "Sidecar doctor exited unsuccessfully (stderr intentionally not displayed)",
-                next(),
-            );
-            return;
-        }
-        Ok(Err(_)) => {
-            report.add(
-                "agent.sidecar",
-                Status::Fail,
-                "Sidecar doctor could not be started",
-                next(),
-            );
-            return;
-        }
-        Err(_) => {
-            report.add(
-                "agent.sidecar",
-                Status::Fail,
-                "Sidecar doctor exceeded its 60-second deadline",
-                next(),
-            );
-            return;
-        }
+    let sidecar_command = |subcommand: &str| {
+        let mut command = Command::new(program);
+        command
+            .args(&argv[1..])
+            .args([subcommand, "--json"])
+            .env_clear()
+            .envs(crate::runtime_environment(&loaded.config.credentials))
+            .env("OPENSIDE_DOCTOR_CONFIG", config.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        command
     };
+    let output =
+        match tokio::time::timeout(Duration::from_secs(60), sidecar_command("doctor").output())
+            .await
+        {
+            Ok(Ok(output)) if output.status.success() => output,
+            Ok(Ok(_)) => {
+                report.add(
+                    "agent.sidecar",
+                    Status::Fail,
+                    "Sidecar doctor exited unsuccessfully (stderr intentionally not displayed)",
+                    next(),
+                );
+                return;
+            }
+            Ok(Err(_)) => {
+                report.add(
+                    "agent.sidecar",
+                    Status::Fail,
+                    "Sidecar doctor could not be started",
+                    next(),
+                );
+                return;
+            }
+            Err(_) => {
+                report.add(
+                    "agent.sidecar",
+                    Status::Fail,
+                    "Sidecar doctor exceeded its 60-second deadline",
+                    next(),
+                );
+                return;
+            }
+        };
     let sidecar: SidecarDoctor = match serde_json::from_slice(&output.stdout) {
         Ok(value) => value,
         Err(_) => {
@@ -677,12 +683,31 @@ async fn probe_sidecar(report: &mut DoctorReport, loaded: &Loaded, argv: &[Strin
             return;
         }
     };
-    report.add(
-        "agent.sidecar",
-        Status::Ok,
-        format!("Sidecar doctor is available ({})", sidecar.runtime),
-        None,
-    );
+    // `doctor` deliberately skips the session runtime; `probe` loads its module graph the way a
+    // session start does, so a package that cannot start a session is not reported healthy.
+    let modules =
+        tokio::time::timeout(Duration::from_secs(60), sidecar_command("probe").output()).await;
+    if matches!(&modules, Ok(Ok(output)) if output.status.success()
+        && serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            .is_ok_and(|value| value == serde_json::json!({"ok": true})))
+    {
+        report.add(
+            "agent.sidecar",
+            Status::Ok,
+            format!("Sidecar doctor is available ({})", sidecar.runtime),
+            None,
+        );
+    } else {
+        report.add(
+            "agent.sidecar",
+            Status::Fail,
+            format!(
+                "Sidecar session modules failed to load ({}); sessions cannot start (stderr intentionally not displayed)",
+                sidecar.runtime
+            ),
+            next(),
+        );
+    }
     if sidecar.packages.is_empty() {
         report.add(
             "agent.packages",
@@ -758,6 +783,7 @@ mod tests {
             root.path(),
             "doctor-ok",
             r#"#!/bin/sh
+[ "$1" = probe ] && [ "$2" = --json ] && { printf '%s\n' '{"ok":true}'; exit 0; }
 [ "$1" = doctor ] && [ "$2" = --json ] || exit 2
 case "$OPENSIDE_DOCTOR_CONFIG" in *'"credentials":{}'*'"models":'* ) ;; *) exit 3 ;; esac
 printf '%s\n' '{"runtime":"bun test-version","packages":{"@oh-my-pi/pi-agent-core":"test-version","openside-agent":"test-version"},"credentials":[{"provider":"test-provider","source":"env","available":false,"reason":"not set","next_step":"configure source"}],"models":{"default":null,"fallback":[],"providers_ok":false}}'
@@ -831,6 +857,45 @@ printf '%s\n' '{"runtime":"bun test-version","packages":{"@oh-my-pi/pi-agent-cor
                 .map(|check| check.status),
             Some(Status::Fail)
         );
+    }
+
+    /// Live regression: a release copy whose session modules could not load passed `doctor`
+    /// (which skips the session runtime), so agent.sidecar read ok while no session started.
+    #[tokio::test]
+    async fn sidecar_whose_session_modules_fail_to_load_is_not_reported_ok() {
+        let (root, mut loaded) = fixture();
+        let env = env_lookup(&[("PATH", root.path().as_os_str())]);
+        let fake = script(
+            root.path(),
+            "doctor-probe-fails",
+            r#"#!/bin/sh
+if [ "$1" = probe ]; then printf 'secret-output'; printf 'secret-stderr' >&2; exit 1; fi
+printf '%s\n' '{"runtime":"bun test-version","packages":{"openside-agent":"test-version"},"credentials":[],"models":{"default":null,"fallback":[],"providers_ok":false}}'
+"#,
+        );
+        loaded.config.agent.command = Some(vec![fake.to_string_lossy().into_owned()]);
+        let report = run_with(&loaded, &env, None, &[], DoctorOptions::default()).await;
+        let sidecar = report
+            .checks
+            .iter()
+            .find(|check| check.id == "agent.sidecar")
+            .unwrap_or_else(|| panic!("agent.sidecar check missing"));
+        assert_eq!(sidecar.status, Status::Fail);
+        assert!(
+            sidecar.summary.contains("session modules"),
+            "{}",
+            sidecar.summary
+        );
+        assert!(sidecar.next_step.is_some());
+        assert_eq!(
+            report
+                .checks
+                .iter()
+                .find(|check| check.id == "agent.packages")
+                .map(|check| check.status),
+            Some(Status::Ok)
+        );
+        assert!(!report.render_text().contains("secret-"));
     }
 
     #[tokio::test]

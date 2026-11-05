@@ -41,10 +41,9 @@ share/openside/
     bun.lock
     src/
     node_modules/                  # bun install --frozen-lockfile --production
-  docs/specs/sidecar-wire.schema.json
 ```
 
-`share/openside/agent` 안에서 `bun install --frozen-lockfile --production`을 실행해 `node_modules`를 만든다. `agent/src/protocol/validate.ts`가 `../../../docs/specs/sidecar-wire.schema.json` 경로에서 와이어 스키마를 불러오므로, 스키마 파일은 `agent/` 옆인 `share/openside/docs/specs/`에 두어야 한다. 설치 용량은 약 300 MB 늘어나며, 그중 대부분은 pi-natives 애드온(약 245 MB)이다.
+`share/openside/agent` 안에서 `bun install --frozen-lockfile --production`을 실행해 `node_modules`를 만든다. 와이어 스키마(`agent/src/protocol/sidecar-wire.schema.json`)가 에이전트 패키지에 들어 있으므로 `agent/` 디렉터리만 복사하면 충분하며, 사이드카에는 디렉터리 밖의 파일이 필요하지 않다. 설치 용량은 약 300 MB 늘어나며, 그중 대부분은 pi-natives 애드온(약 245 MB)이다.
 
 ### 바이너리 빌드
 
@@ -112,7 +111,7 @@ target/release/openside doctor --json     # 기계용 JSON
 target/release/openside doctor --config ./config.toml
 ```
 
-doctor는 데몬 없이 동작하며 디렉터리를 만들거나 자격 증명 값을 출력하지 않는다. 점검 항목: `config`, `paths.data|state|runtime`, `vault`(passphrase 명령은 실행하지 않음), `executable.bun`(`agent.bun`/`OPENSIDE_BUN` 또는 PATH에서 `bun`을 찾고 `bun --version`이 1.4.4 이상인지 확인하며, `agent.command`가 설정되어 있으면 건너뜀), `agent.discovery.*`, `agent.dependencies`(`node_modules/@oh-my-pi/pi-agent-core`와 현재 플랫폼의 `@oh-my-pi/pi-natives-<os>-<arch>`가 있는지 확인하며, 없으면 에이전트 디렉터리에서 `bun install --frozen-lockfile --production`을 실행), `agent.sidecar`/`agent.packages`(사이드카 `doctor --json`을 60초 제한으로 실행해 Bun과 패키지 버전을 보고), 프로바이더별 자격 증명, `models`, `browser`, `sandbox.bwrap`, `network.allow`. `fail` 항목이 하나라도 있으면 종료 코드는 1이다.
+doctor는 데몬 없이 동작하며 디렉터리를 만들거나 자격 증명 값을 출력하지 않는다. 점검 항목: `config`, `paths.data|state|runtime`, `vault`(passphrase 명령은 실행하지 않음), `executable.bun`(`agent.bun`/`OPENSIDE_BUN` 또는 PATH에서 `bun`을 찾고 `bun --version`이 1.4.4 이상인지 확인하며, `agent.command`가 설정되어 있으면 건너뜀), `agent.discovery.*`, `agent.dependencies`(`node_modules/@oh-my-pi/pi-agent-core`와 현재 플랫폼의 `@oh-my-pi/pi-natives-<os>-<arch>`가 있는지 확인하며, 없으면 에이전트 디렉터리에서 `bun install --frozen-lockfile --production`을 실행), `agent.sidecar`/`agent.packages`(사이드카 `doctor --json`에 이어 `probe --json`을 각각 60초 제한으로 실행해 Bun과 패키지 버전을 보고하며, 세션을 시작할 때 로드하는 모듈을 `probe`가 불러오지 못하면 `agent.sidecar`는 `fail`이 됨. 사이드카 출력과 stderr는 표시하지 않음), 프로바이더별 자격 증명, `models`, `browser`, `sandbox.bwrap`, `network.allow`. `fail` 항목이 하나라도 있으면 종료 코드는 1이다.
 
 ## 6. 실행
 

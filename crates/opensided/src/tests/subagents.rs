@@ -507,3 +507,54 @@ async fn restore_still_resumes_a_continuation_without_a_durable_final() {
     assert_eq!(runtime.0.lock().resolved.len(), 1);
     daemon.shutdown().await;
 }
+
+/// A steer that cannot reach a live sidecar answers 503 `runtime_unavailable`, both when the
+/// runtime cannot start and when the running sidecar's connection is gone, never a 409 conflict.
+#[tokio::test]
+async fn steer_without_a_reachable_runtime_answers_runtime_unavailable() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let call = |method: &'static str, path: String, body: Value| {
+        let router = router.clone();
+        async move {
+            let response = router
+                .oneshot(super::request(method, &path, body, None))
+                .await
+                .unwrap();
+            (response.status(), json_body(response).await)
+        }
+    };
+    let steer = |session: &'static str| {
+        call(
+            "POST",
+            format!("/v1/sessions/{session}/subagents/child/steer"),
+            json!({"text":"look again"}),
+        )
+    };
+
+    let idle = create_session(&daemon, "idle", PolicyMode::Guard, None).await;
+    start_child(&daemon, &idle, "child").await;
+    runtime.0.lock().startup_unavailable = true;
+    let (status, body) = steer("idle").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "runtime_unavailable");
+    runtime.0.lock().startup_unavailable = false;
+
+    let running = create_session(&daemon, "running", PolicyMode::Guard, None).await;
+    let (status, _) = call(
+        "POST",
+        "/v1/sessions/running/messages".into(),
+        json!({"message_id":"first","text":"task","mode":"queue"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    start_child(&daemon, &running, "child").await;
+    runtime.0.lock().control_unavailable = true;
+    let (status, body) = steer("running").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "runtime_unavailable");
+    assert!(runtime.0.lock().controls.is_empty());
+    daemon.shutdown().await;
+}

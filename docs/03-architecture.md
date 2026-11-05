@@ -49,7 +49,7 @@
 ### Bun/TypeScript 사이드카 (`agent/`, 패키지 `openside-agent`)
 | 모듈 | 책임 |
 | --- | --- |
-| `src/main.ts` | 진입점: 사이드카 모드, `doctor --json`, `accounts --json`, `models --json`, stderr 복제(tee) 및 테스트 프리로드 |
+| `src/main.ts` | 진입점: 사이드카 모드, `doctor --json`, `accounts --json`, `models --json`, `probe --json`, stderr 복제(tee) 및 테스트 프리로드 |
 | `src/protocol/` | v1 메시지 타입, 수신 줄 스키마 검증, 버전 정보, `openside-agent-state/2` |
 | `src/transport/` | Unix 소켓 위 4 MiB JSONL, nonce `hello`, reverse RPC 상관관계 매칭 |
 | `src/runtime/` | pi-agent-core 루프를 감싼 세션 런타임: 런, steer 버퍼(S-8), 보류/재개, `stale_ticket`, abort, 상태 스냅샷(`state.ts`), 압축(compaction), 서브에이전트, 팀 |

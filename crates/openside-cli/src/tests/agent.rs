@@ -173,8 +173,8 @@ async fn exec_follows_the_run_and_archives_unsaved_sessions() {
     );
     let created = requests(&seen, "POST", "/v1/sessions");
     assert_eq!(created.len(), 1);
-    assert!(created[0].get("browser_space").is_none_or(Value::is_null));
-    assert!(created[0].get("agent_id").is_none_or(Value::is_null));
+    assert!(created[0].get("browser_space").map_or(true, Value::is_null));
+    assert!(created[0].get("agent_id").map_or(true, Value::is_null));
     assert_eq!(
         requests(&seen, "POST", "/v1/sessions/s-1/messages")[0]["text"],
         "find it"

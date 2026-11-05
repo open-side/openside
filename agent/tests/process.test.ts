@@ -1,11 +1,22 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeDaemon, hermeticEnv, installScript, textResponse } from "./helpers/fake-daemon";
 
-const MAIN = join(import.meta.dir, "../src/main.ts");
+const AGENT = join(import.meta.dir, "..");
+const MAIN = join(AGENT, "src/main.ts");
 
+/** The agent package alone, laid out like an installed release (`releases/<sha>/agent`). */
+function releaseCopy(): { root: string; agent: string } {
+	const root = mkdtempSync(join(tmpdir(), "osrel-"));
+	const agent = join(root, "releases/test/agent");
+	mkdirSync(agent, { recursive: true });
+	cpSync(join(AGENT, "package.json"), join(agent, "package.json"));
+	cpSync(join(AGENT, "src"), join(agent, "src"), { recursive: true });
+	symlinkSync(join(AGENT, "node_modules"), join(agent, "node_modules"));
+	return { root, agent };
+}
 beforeEach(hermeticEnv);
 
 describe("sidecar process", () => {
@@ -111,4 +122,71 @@ describe("sidecar process", () => {
 		},
 		30_000,
 	);
+
+	// Live regression (release 7076c87): an installed release carries only the agent package,
+	// so an import that reached outside it exited every session before its hello.
+	it.if(process.platform !== "win32")(
+		"test_release_copy_of_the_agent_package_alone_reaches_hello",
+		async () => {
+			const { root, agent } = releaseCopy();
+			const path = join(root, "rpc.sock");
+			const daemon = new FakeDaemon();
+			const listener = Bun.listen({
+				unix: path,
+				socket: {
+					binaryType: "uint8array",
+					open: socket => daemon.attach(socket),
+					data: (_socket, chunk) => daemon.onData(chunk),
+					drain: () => daemon.flush(),
+					end: () => daemon.onEnd(),
+					close: () => daemon.onEnd(),
+				},
+			});
+			const child = Bun.spawn([process.execPath, "run", join(agent, "src/main.ts")], {
+				env: { ...process.env, OPENSIDE_SIDECAR_SOCKET: path, OPENSIDE_SIDECAR_NONCE: "release-nonce" },
+				stdin: "ignore",
+				stdout: "ignore",
+				stderr: "pipe",
+			});
+			try {
+				const hello = await Promise.race([
+					daemon.connected().then(() => daemon.receive(15_000)),
+					child.exited.then(async code => {
+						throw new Error(`sidecar exited ${code}: ${await new Response(child.stderr).text()}`);
+					}),
+				]);
+				expect(hello).toMatchObject({ type: "hello", nonce: "release-nonce", pid: child.pid, protocol: 1 });
+			} finally {
+				child.kill();
+				daemon.close();
+				listener.stop(true);
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+		30_000,
+	);
+
+	it.if(process.platform !== "win32")("test_probe_fails_quietly_when_the_session_graph_cannot_load", () => {
+		const { root, agent } = releaseCopy();
+		try {
+			const probe = () =>
+				Bun.spawnSync([process.execPath, "run", join(agent, "src/main.ts"), "probe", "--json"], {
+					env: { ...process.env },
+					stdout: "pipe",
+					stderr: "pipe",
+					timeout: 15_000,
+				});
+			const intact = probe();
+			expect(intact.exitCode, intact.stderr.toString()).toBe(0);
+			expect(JSON.parse(intact.stdout.toString())).toEqual({ ok: true });
+			// The live breakage: the copy lacks a file the protocol validator imports.
+			rmSync(join(agent, "src/protocol/sidecar-wire.schema.json"));
+			const broken = probe();
+			expect(broken.exitCode).toBe(1);
+			expect(broken.stdout.toString()).toBe("");
+			expect(broken.stderr.toString()).toBe("");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
