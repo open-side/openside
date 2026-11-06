@@ -464,6 +464,85 @@ pub(crate) async fn initialize(s: &Shared) -> Result<(), HttpError> {
     pools(s, &inventory).await.map(|_| ())
 }
 
+/// The accounts of the first source in `provider`'s source order that has a ready account,
+/// or `None` when no source qualifies. A configured broker that cannot be listed still wins
+/// (with no accounts), so a broker outage never silently moves routing to another source.
+fn default_accounts(
+    provider: &str,
+    credentials: &Value,
+    inventory: &Inventory,
+) -> Option<Vec<ModelAccountRef>> {
+    let selected = source_order(provider, credentials)
+        .into_iter()
+        .find(|source| {
+            (*source == "omp-broker" && inventory.broker_present && inventory.broker_failed)
+                || inventory.accounts.iter().any(|account| {
+                    account.provider == provider
+                        && account.reference.source == *source
+                        && account.ready
+                })
+        })?;
+    Some(
+        inventory
+            .accounts
+            .iter()
+            .filter(|account| account.provider == provider && account.reference.source == selected)
+            .map(|account| account.reference.clone())
+            .collect(),
+    )
+}
+
+/// Pool members no source reports for `provider` any more, as `source:id`. Broker members
+/// are unknowable, not stale, while the broker cannot be listed.
+fn unreported(pool: &ProviderPool, inventory: &Inventory) -> Vec<String> {
+    pool.accounts
+        .iter()
+        .filter(|reference| !(reference.source == "omp-broker" && inventory.broker_failed))
+        .filter(|reference| {
+            !inventory.accounts.iter().any(|account| {
+                account.provider == pool.provider && &account.reference == *reference
+            })
+        })
+        .map(|reference| format!("{}:{}", reference.source, reference.account_id))
+        .collect()
+}
+
+/// `configured`, or — when it is non-empty and every member is unreported (a broker that
+/// re-created its logins under new ids) — the accounts the default source order picks. The
+/// substitute is never persisted: the pin stays for the person to replace, and a member that
+/// reappears takes over again. An explicitly empty pool still disables routing.
+fn substituted(
+    s: &Shared,
+    configured: Option<&ProviderPool>,
+    inventory: &Inventory,
+    provider: &str,
+) -> Option<ProviderPool> {
+    let mut pool = configured.cloned()?;
+    if !pool.accounts.is_empty() && unreported(&pool, inventory).len() == pool.accounts.len() {
+        if let Some(accounts) =
+            default_accounts(provider, &s.models.credentials_config(), inventory)
+                .filter(|accounts| !accounts.is_empty())
+        {
+            pool.accounts = accounts;
+        }
+    }
+    Some(pool)
+}
+
+/// The pool a request routes through: `substituted` plus the reachable plugin accounts.
+fn routing_pool(
+    s: &Shared,
+    configured: Option<&ProviderPool>,
+    inventory: &Inventory,
+    provider: &str,
+) -> Option<ProviderPool> {
+    crate::model_plugins::effective(
+        substituted(s, configured, inventory, provider).as_ref(),
+        inventory,
+        provider,
+    )
+}
+
 pub(crate) async fn pools(
     s: &Shared,
     inventory: &Inventory,
@@ -505,27 +584,9 @@ pub(crate) async fn pools(
         if result.contains_key(&provider) {
             continue;
         }
-        let selected = source_order(&provider, &credentials)
-            .into_iter()
-            .find(|source| {
-                (*source == "omp-broker" && inventory.broker_present && inventory.broker_failed)
-                    || inventory.accounts.iter().any(|account| {
-                        account.provider == provider
-                            && account.reference.source == *source
-                            && account.ready
-                    })
-            });
-        if selected.is_none() {
+        let Some(accounts) = default_accounts(&provider, &credentials, inventory) else {
             continue;
-        }
-        let accounts = inventory
-            .accounts
-            .iter()
-            .filter(|account| {
-                account.provider == provider && Some(&account.reference.source) == selected.as_ref()
-            })
-            .map(|account| account.reference.clone())
-            .collect();
+        };
         result.insert(provider.clone(), ProviderPool { provider, accounts });
         changed = true;
     }
@@ -804,9 +865,19 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                 provider: provider.provider.clone(),
                 accounts: vec![],
             });
+        // A pool whose members are all unreported routes through the default source's
+        // accounts instead; rows and availability follow that routing.
+        let routed = substituted(
+            s,
+            pools.get(&provider.provider),
+            &inventory,
+            &provider.provider,
+        )
+        .unwrap_or_else(|| pool.clone());
         // Plugin accounts route quietly: they never appear as rows or in the public pool,
         // but they make a model available when the person's own accounts cannot serve it.
-        let plugin_pool = crate::model_plugins::effective(
+        let plugin_pool = routing_pool(
+            s,
             pools.get(&provider.provider),
             &inventory,
             &provider.provider,
@@ -847,18 +918,10 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
             }
         }
         // A source can stop reporting a pinned account (broker credential ids change when the
-        // broker re-creates a login); the pool fails closed until a person picks current ones.
-        let unreported: Vec<String> = pool
-            .accounts
-            .iter()
-            .filter(|reference| {
-                !inventory.accounts.iter().any(|account| {
-                    account.provider == provider.provider && &account.reference == *reference
-                })
-            })
-            .map(|reference| format!("{}:{}", reference.source, reference.account_id))
-            .collect();
+        // broker re-creates a login); the catalog names those members either way.
+        let unreported = unreported(&pool, &inventory);
         let only_unreported = !pool.accounts.is_empty() && unreported.len() == pool.accounts.len();
+        let standing_in = only_unreported && routed.accounts != pool.accounts;
         let models = candidates
             .into_iter()
             .map(|(id, metadata)| {
@@ -878,8 +941,11 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                             && account.reference.source != crate::model_plugins::SOURCE
                     })
                     .map(|account| {
-                        let mut row =
-                            policy.status(account, &id, pool.accounts.contains(&account.reference));
+                        let mut row = policy.status(
+                            account,
+                            &id,
+                            routed.accounts.contains(&account.reference),
+                        );
                         if !account.models.is_empty()
                             && !account.models.iter().any(|candidate| {
                                 candidate == &id
@@ -895,7 +961,8 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                     })
                     .collect();
                 rows.sort_by_key(|row| {
-                    pool.accounts
+                    routed
+                        .accounts
                         .iter()
                         .position(|reference| {
                             reference.source == row.source && reference.account_id == row.account_id
@@ -911,7 +978,17 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                     id,
                     label: metadata.label,
                     available: selected.is_some() || plugin_ok,
-                    reason: selected.map(|row| row.reason.clone()).unwrap_or_else(|| {
+                    reason: selected.map(|row| {
+                        if standing_in {
+                            format!(
+                                "Pool accounts {} are no longer reported by their source; using current {} accounts",
+                                unreported.join(", "),
+                                row.source
+                            )
+                        } else {
+                            row.reason.clone()
+                        }
+                    }).unwrap_or_else(|| {
                         if plugin_ok {
                             "Ready".into()
                         } else if inventory.broker_failed
@@ -953,7 +1030,13 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
 
 pub(crate) async fn diagnostics(s: &Shared) -> Result<AccountsResponse, HttpError> {
     let inventory = inventory(s).await;
-    let pools = pools(s, &inventory).await?;
+    let pools: BTreeMap<_, _> = pools(s, &inventory)
+        .await?
+        .into_iter()
+        .filter_map(|(provider, pool)| {
+            substituted(s, Some(&pool), &inventory, &provider).map(|pool| (provider, pool))
+        })
+        .collect();
     let mut policy = s.models.policy.lock().await;
     let mut sources = Vec::with_capacity(SOURCES.len());
     for source in SOURCES {
@@ -1274,7 +1357,8 @@ pub(crate) async fn credentials(
                 None,
             )
         })?;
-        let pool = crate::model_plugins::effective(
+        let pool = routing_pool(
+            s,
             pools.get(&request.provider),
             &inventory,
             &request.provider,
@@ -1576,10 +1660,12 @@ pub(crate) async fn report(
             provider: preview.provider.clone(),
             accounts,
         });
-    let pool = crate::model_plugins::effective(configured.as_ref(), &inventory, &preview.provider)
-        .unwrap_or_else(|| ProviderPool {
-            provider: preview.provider.clone(),
-            accounts: vec![],
+    let pool =
+        routing_pool(s, configured.as_ref(), &inventory, &preview.provider).unwrap_or_else(|| {
+            ProviderPool {
+                provider: preview.provider.clone(),
+                accounts: vec![],
+            }
         });
     let allowed = permitted(
         s,
@@ -2015,7 +2101,8 @@ pub(crate) async fn set_preference(
         .ok_or_else(HttpError::invalid_value)?;
     let inventory = inventory(&s).await;
     let pools = pools(&s, &inventory).await?;
-    let pool = pools.get(&provider).ok_or_else(HttpError::invalid_value)?;
+    let pool = substituted(&s, pools.get(&provider), &inventory, &provider)
+        .ok_or_else(HttpError::invalid_value)?;
     let allowed = permitted(
         &s,
         &session,
@@ -2026,7 +2113,7 @@ pub(crate) async fn set_preference(
             attempt: 0,
             subagent: None,
         },
-        pool,
+        &pool,
     )
     .await
     .map_err(|_| HttpError::invalid_value())?;

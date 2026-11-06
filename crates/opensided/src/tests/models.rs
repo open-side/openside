@@ -1093,25 +1093,44 @@ async fn broker_credentials_never_reach_diagnostics_events_or_sidecar_options() 
     daemon.shutdown().await;
 }
 
-/// Live regression: the pool pinned broker ids 25/24 that the broker no longer reports (its
-/// current credentials carry other ids). Selection must stay fail-closed, but the reason has to
-/// name the pinned accounts instead of a generic "no eligible account".
-#[tokio::test]
-async fn pool_pinning_only_unreported_broker_ids_fails_closed_and_names_them() {
-    use crate::model_broker::tests::{snapshot, FakeBroker, ACCESS, TOKEN};
-    let root = tempfile::tempdir().unwrap();
+fn broker_pool_credentials(url: &str, token: &Path, pool: &[&str]) -> Value {
+    let pool: Vec<_> = pool
+        .iter()
+        .map(|id| json!({"source":"omp-broker","account_id":id}))
+        .collect();
+    json!({"omp_broker":{"url":url,"token_file":token},
+        "order":{"anthropic":["omp-broker"]},
+        "pools":{"anthropic":pool},
+        "env":{"anthropic":[],"openai":[],"google":[],"openai-codex":[],"github-copilot":[]}})
+}
+
+fn anthropic_broker_snapshot() -> Value {
+    use crate::model_broker::tests::snapshot;
     let mut data = snapshot();
     data["credentials"][0]["provider"] = json!("anthropic");
     data["credentials"][0]["id"] = json!(137);
     data["credentials"][0]["models"] = json!(["anthropic:test-ready"]);
     data["credentials"][0]["blocks"] = json!([]);
-    let server = FakeBroker::start(data, json!({"reports":[]}), json!({"ok":true})).await;
+    data
+}
+
+/// Live regression: the pool pinned broker ids 25/24 that the broker no longer reports (its
+/// current credentials carry other ids), and every chat failed with `auth_unavailable`. The
+/// pool now routes through the current accounts of its default source, names the stale pin,
+/// and leaves the stored pool for the person to replace.
+#[tokio::test]
+async fn pool_pinning_only_unreported_broker_ids_routes_through_current_accounts() {
+    use crate::model_broker::tests::{FakeBroker, ACCESS, TOKEN};
+    let root = tempfile::tempdir().unwrap();
+    let server = FakeBroker::start(
+        anthropic_broker_snapshot(),
+        json!({"reports":[]}),
+        json!({"ok":true}),
+    )
+    .await;
     let token = root.path().join("broker.token");
     std::fs::write(&token, TOKEN).unwrap();
-    let credentials = json!({"omp_broker":{"url":server.url,"token_file":token},
-        "order":{"anthropic":["omp-broker"]},
-        "pools":{"anthropic":[{"source":"omp-broker","account_id":"25"}]},
-        "env":{"anthropic":[],"openai":[],"google":[],"openai-codex":[],"github-copilot":[]}});
+    let credentials = broker_pool_credentials(&server.url, &token, &["25"]);
     let (daemon, _) = fixture_sources(root.path(), Some(credentials)).await;
     let local = api::router(daemon.shared.clone(), true);
     let (status, catalog) = call(&local, "GET", "/v1/settings/models", json!({}), None).await;
@@ -1121,7 +1140,8 @@ async fn pool_pinning_only_unreported_broker_ids_fails_closed_and_names_them() {
     assert_eq!(anthropic["pool"]["accounts"][0]["account_id"], "25");
     let model = &anthropic["models"][0];
     assert_eq!(model["id"], "anthropic:test-ready");
-    assert_eq!(model["available"], false);
+    assert_eq!(model["available"], true);
+    assert_eq!(model["account_id"], "137");
     let reason = model["reason"].as_str().unwrap();
     assert!(
         reason.contains("omp-broker:25") && reason.contains("no longer reported"),
@@ -1133,9 +1153,93 @@ async fn pool_pinning_only_unreported_broker_ids_fails_closed_and_names_them() {
         .iter()
         .find(|row| row["account_id"] == "137")
         .unwrap();
-    assert_eq!(current["in_pool"], false);
-    assert_eq!(current["available"], false);
+    assert_eq!(current["in_pool"], true);
+    assert_eq!(current["available"], true);
     assert!(!catalog.to_string().contains(ACCESS));
+
+    let session = model_session(&daemon, "stale-pool").await;
+    let handler = host(&daemon, &session).await;
+    let lease = handler.credentials(acquire("stale-pool", 0)).await.unwrap();
+    assert_eq!(lease.account.account_id, "137");
+    assert!(lease.auth.value == ACCESS);
+    handler
+        .credential_report(report(&lease, CredentialOutcome::Success, false))
+        .await
+        .unwrap();
+    assert_eq!(
+        daemon.shared.models.credentials_config()["pools"]["anthropic"],
+        json!([{"source":"omp-broker","account_id":"25"}])
+    );
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_pool_member_is_skipped_for_the_next_listed_account() {
+    use crate::model_broker::tests::{FakeBroker, ACCESS, TOKEN};
+    let root = tempfile::tempdir().unwrap();
+    let server = FakeBroker::start(
+        anthropic_broker_snapshot(),
+        json!({"reports":[]}),
+        json!({"ok":true}),
+    )
+    .await;
+    let token = root.path().join("broker.token");
+    std::fs::write(&token, TOKEN).unwrap();
+    let credentials = broker_pool_credentials(&server.url, &token, &["25", "137"]);
+    let (daemon, _) = fixture_sources(root.path(), Some(credentials)).await;
+    let local = api::router(daemon.shared.clone(), true);
+    let (_, catalog) = call(&local, "GET", "/v1/settings/models", json!({}), None).await;
+    let model = &catalog["providers"][0]["models"][0];
+    assert_eq!(model["available"], true);
+    assert_eq!(model["account_id"], "137");
+    assert!(!model["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no longer reported"));
+    let session = model_session(&daemon, "unknown-member").await;
+    let handler = host(&daemon, &session).await;
+    let lease = handler
+        .credentials(acquire("unknown-member", 0))
+        .await
+        .unwrap();
+    assert_eq!(lease.account.account_id, "137");
+    assert!(lease.auth.value == ACCESS);
+    daemon.shutdown().await;
+}
+
+/// An unreachable broker makes its pinned members unknowable, not stale: routing stays
+/// closed instead of moving to another source the person never listed.
+#[tokio::test]
+async fn broker_outage_keeps_a_pinned_pool_closed() {
+    use crate::model_broker::tests::TOKEN;
+    let root = tempfile::tempdir().unwrap();
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let token = root.path().join("broker.token");
+    std::fs::write(&token, TOKEN).unwrap();
+    let mut credentials = broker_pool_credentials(&url, &token, &["25"]);
+    credentials["order"]["anthropic"] = json!(["omp-broker", "vault"]);
+    let (daemon, _) = fixture_sources(root.path(), Some(credentials)).await;
+    let local = api::router(daemon.shared.clone(), true);
+    add(&local, KEY, "Work").await;
+    let (_, catalog) = call(&local, "GET", "/v1/settings/models", json!({}), None).await;
+    let model = &catalog["providers"][0]["models"][0];
+    assert_eq!(model["available"], false);
+    assert!(
+        model["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Configured broker unavailable"),
+        "{model}"
+    );
+    let session = model_session(&daemon, "broker-outage").await;
+    let handler = host(&daemon, &session).await;
+    let error = handler
+        .credentials(acquire("broker-outage", 0))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, CredentialErrorCode::ProviderUnavailable);
     daemon.shutdown().await;
 }
 
