@@ -13573,7 +13573,7 @@ export interface components {
         } | {
             /** @constant */
             type: "navigate";
-            /** @description Absolute http(s) URL without embedded credentials. */
+            /** @description Absolute URL as the person typed it. */
             url: string;
         } | {
             /** @constant */
@@ -13633,8 +13633,8 @@ export interface components {
         } | {
             /**
              * @description Stable code: `invalid_input`, `out_of_bounds` or `input_failed`; on control streams
-             *     also `invalid_url`, `policy_denied`, `approval_required`, `connection_denied`,
-             *     `navigation_failed` or `no_history`.
+             *     also `invalid_url` (an address that does not parse or is too long), `policy_denied`,
+             *     `approval_required`, `connection_denied`, `navigation_failed` or `no_history`.
              */
             code: string;
             /** @constant */
@@ -13649,9 +13649,9 @@ export interface components {
             /** @constant */
             type: "page";
             /**
-             * @description Top-frame URL without embedded credentials, query or fragment. A page that moved
-             *     itself to a non-network document reports only its scheme (`data:`, `about:`, …);
-             *     `about:blank` is reported as is.
+             * @description Top-frame URL without embedded credentials, query or fragment. A document that is
+             *     not http(s) (`data:`, `about:`, `file:`, …), typed or reached by the page, reports
+             *     only its scheme; `about:blank` is reported as is.
              */
             url: string;
         } | {

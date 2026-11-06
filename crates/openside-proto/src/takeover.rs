@@ -31,16 +31,16 @@ pub enum TakeoverServerMessage {
     /// The daemon refused one input message; the stream continues.
     InputError {
         /// Stable code: `invalid_input`, `out_of_bounds` or `input_failed`; on control streams
-        /// also `invalid_url`, `policy_denied`, `approval_required`, `connection_denied`,
-        /// `navigation_failed` or `no_history`.
+        /// also `invalid_url` (an address that does not parse or is too long), `policy_denied`,
+        /// `approval_required`, `connection_denied`, `navigation_failed` or `no_history`.
         code: String,
     },
     /// The page the controlled tab shows now. Control streams only: sent when the stream
     /// opens and whenever the address, title or history position changes.
     Page {
-        /// Top-frame URL without embedded credentials, query or fragment. A page that moved
-        /// itself to a non-network document reports only its scheme (`data:`, `about:`, …);
-        /// `about:blank` is reported as is.
+        /// Top-frame URL without embedded credentials, query or fragment. A document that is
+        /// not http(s) (`data:`, `about:`, `file:`, …), typed or reached by the page, reports
+        /// only its scheme; `about:blank` is reported as is.
         url: String,
         /// Document title, at most 200 characters.
         title: String,
@@ -169,19 +169,20 @@ pub enum TakeoverInput {
         /// Text to insert.
         text: String,
     },
-    /// Load a typed address in the tab. Only http(s) URLs without embedded credentials are
-    /// accepted (`invalid_url` otherwise, `about:blank` included), and the session's browse
-    /// policy judges the origin as it does for the agent: `deny` is `policy_denied`, and an
-    /// `ask` origin loads because the typed address is the person's approval, for this
-    /// navigation and its same-origin redirects only. Redirects to other http(s) origins and
-    /// later link or script navigations follow the owner policy without that approval;
-    /// page-initiated moves to non-network documents are not filtered.
+    /// Load a typed address in the tab. Any absolute URL is accepted, whatever its scheme and
+    /// with or without embedded credentials (`invalid_url` only for one that does not parse or
+    /// is longer than 8192 bytes); a `javascript:` address runs in the current page. The
+    /// session's browse policy judges an http(s) origin as it does for the agent: `deny` is
+    /// `policy_denied`, and an `ask` origin loads because the typed address is the person's
+    /// approval, for this navigation and its same-origin redirects only. Redirects to other
+    /// http(s) origins and later link or script navigations follow the owner policy without
+    /// that approval.
     Navigate {
-        /// Absolute http(s) URL without embedded credentials.
+        /// Absolute URL as the person typed it.
         url: String,
     },
-    /// Go one entry back in the tab's history. An entry on an `ask` origin is refused with
-    /// `approval_required`, and one that is not http(s) or `about:blank` with `invalid_url`.
+    /// Go one entry back in the tab's history, whatever its scheme. An entry on an `ask`
+    /// origin is refused with `approval_required`.
     Back,
     /// Go one entry forward in the tab's history, under the same rules as `Back`.
     Forward,

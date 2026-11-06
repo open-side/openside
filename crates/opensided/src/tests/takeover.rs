@@ -65,16 +65,30 @@ async fn fixture(takeover_ttl_secs: u32) -> Option<Fixture> {
     }
     config.loaded.config.tickets.takeover_ttl_secs = takeover_ttl_secs;
     let site = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let origin = format!("http://localhost:{}", site.local_addr().unwrap().port());
+    let port = site.local_addr().unwrap().port();
+    let origin = format!("http://localhost:{port}");
     let site_origin = origin.clone();
     let site_task = tokio::spawn(async move {
+        // `/hop` redirects within its origin, then `/hop2` leaves it for `127.0.0.1`.
+        let cross = format!("http://127.0.0.1:{port}/clean");
         let site_routes = Router::new()
             .route("/", get(|| async { Html(PAGE) }))
             .route(
                 "/clean",
                 get(|| async { Html("<!doctype html><title>Clean</title><p>Clean page</p>") }),
             )
-            .route("/noise", get(|| async { Html(NOISE) }));
+            .route("/noise", get(|| async { Html(NOISE) }))
+            .route(
+                "/hop",
+                get(|| async { axum::response::Redirect::temporary("/hop2") }),
+            )
+            .route(
+                "/hop2",
+                get(move || {
+                    let cross = cross.clone();
+                    async move { axum::response::Redirect::temporary(&cross) }
+                }),
+            );
         axum::serve(site, site_routes).await.unwrap();
     });
     let runtime = TestRuntime::default();
@@ -1394,20 +1408,62 @@ async fn person_control_refuses_non_persons_and_locks_the_agent_out_until_releas
         assert!(refused(&outcome), "{name}: {outcome:?}");
     }
 
-    // Typed addresses are http(s) only, without credentials, and never an origin the policy
-    // denies. `about:blank` is refused too: it is no address a person needs to type.
-    for url in [
-        "file:///etc/passwd",
-        "chrome://settings",
-        "javascript:alert(1)",
-        "data:text/html,<p>typed</p>",
-        "about:blank",
-        "about:srcdoc",
-        "http://user:pw@localhost/",
+    // A typed address may use any scheme the person chooses, credentials included; only an
+    // http(s) origin meets the browse policy. History moves into such entries load as well,
+    // and the stream reports only the scheme of a document that is not http(s).
+    let file = f._root.path().join("typed.html");
+    std::fs::write(&file, "<title>File</title><p>file-canary</p>").unwrap();
+    let file = url::Url::from_file_path(&file).unwrap().to_string();
+    let port = f.origin.rsplit(':').next().unwrap();
+    let credentials = format!("http://user:pw-canary@localhost:{port}/clean");
+    for (url, shown) in [
+        (
+            "data:text/html,<title>Typed</title><p>data-canary</p>",
+            "data:",
+        ),
+        ("about:blank", "about:blank"),
+        (
+            "javascript:void(document.title='Script typed')",
+            "about:blank",
+        ),
+        (file.as_str(), "file:"),
+        ("chrome://version", "chrome:"),
+        (credentials.as_str(), "/clean"),
     ] {
         send(&mut socket, json!({"type":"navigate","url":url})).await;
-        assert_eq!(input_error(&mut socket).await, "invalid_url", "{url}");
+        if shown == "about:blank" && url.starts_with("javascript:") {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while page(&f, "document.title").await != "Script typed" {
+                assert!(std::time::Instant::now() < deadline, "{url} never ran");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            continue;
+        }
+        loop {
+            match message(&mut socket).await {
+                TakeoverServerMessage::Page { url: page, .. } if page.ends_with(shown) => break,
+                TakeoverServerMessage::InputError { code } => panic!("{url}: {code}"),
+                _ => {}
+            }
+        }
     }
+    assert_eq!(page(&f, "location.pathname").await, "/clean");
+    for (step, shown) in [("back", "chrome:"), ("back", "file:"), ("reload", "file:")] {
+        send(&mut socket, json!({"type":step})).await;
+        if step != "reload" {
+            page_update(&mut socket, |url| url == shown).await;
+        }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while page(&f, "document.body.textContent").await != "file-canary" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "back never reached the file"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    send(&mut socket, json!({"type":"navigate","url":f.origin})).await;
+    page_update(&mut socket, |url| url.trim_end_matches('/') == f.origin).await;
     // A page may still move itself to a non-network document; only its scheme is reported.
     page(&f, "location.href = 'about:blank?leak=page-canary'; true").await;
     page_update(&mut socket, |url| url == "about:").await;
@@ -1540,8 +1596,29 @@ async fn person_control_refuses_non_persons_and_locks_the_agent_out_until_releas
     assert!(control.iter().any(|record| record["decision"] == "navigate"
         && record["outcome"] == "ok"
         && record["person_approved"] == true));
-    assert!(!audit.contains("page-canary"));
-    assert!(!audit.contains("control-typed-canary"));
+    // Typed non-network addresses are audited by scheme only, typed credentials never.
+    for scheme in ["data", "about", "javascript", "file", "chrome"] {
+        assert!(
+            control.iter().any(|record| record["decision"] == "navigate"
+                && record["scheme"] == scheme
+                && record["origin"].is_null()
+                && record["outcome"] == "ok"),
+            "{scheme}"
+        );
+    }
+    assert!(control.iter().any(|record| record["decision"] == "navigate"
+        && record["origin"] == f.origin
+        && record.get("scheme").is_none()));
+    for canary in [
+        "page-canary",
+        "control-typed-canary",
+        "data-canary",
+        "file-canary",
+        "pw-canary",
+        "Script typed",
+    ] {
+        assert!(!audit.contains(canary), "{canary}");
+    }
     f.daemon.shutdown().await;
 }
 
@@ -1607,6 +1684,136 @@ async fn person_control_excludes_takeover_ends_on_idle_and_on_tab_close() {
     )
     .to_string()
     .contains(&f.tab));
+    f.daemon.shutdown().await;
+}
+
+/// Opening a non-network document does not open the policy: a page-initiated move out of a
+/// typed `data:` or `about:blank` document to a denied origin is stopped, and a typed `ask`
+/// address approves only its own origin, so a later redirect hop to another `ask` origin is
+/// refused.
+#[tokio::test]
+async fn page_moves_out_of_typed_documents_and_cross_origin_redirect_hops_meet_the_policy() {
+    let Some(f) = fixture(1800).await else {
+        return;
+    };
+    let steer = f
+        .daemon
+        .shared
+        .db
+        .pair(vec![CapabilityScope::Steer])
+        .await
+        .unwrap()
+        .1;
+    let port = f.origin.rsplit(':').next().unwrap();
+    let cross = format!("http://127.0.0.1:{port}");
+    let policy = |effect: &str, rules: Value| {
+        let deny = if effect == "deny" {
+            json!([cross])
+        } else {
+            json!([])
+        };
+        serde_json::from_value::<openside_proto::PolicySettings>(json!({"default_mode":"full",
+            "allow_origins":[],"deny_origins":deny,"rules":rules}))
+        .unwrap()
+    };
+    /// Wait until `expression` holds in the tab; a typed navigation sends no acknowledgement,
+    /// and one queued behind a load the page abandoned waits out its 20 s limit.
+    async fn until(f: &Fixture, expression: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while page(f, expression).await != true {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{expression}: at {}",
+                page(f, "location.href").await
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    let mut socket = connect_control(&f, &f.tab, &steer, None).await.unwrap();
+    page_update(&mut socket, |_| true).await;
+    // The stream is read throughout: a controller that stops reading is dropped.
+    let (mut sink, mut source) = socket.split();
+    let (errors_tx, mut errors) = tokio::sync::mpsc::unbounded_channel();
+    let reader = tokio::spawn(async move {
+        while let Some(Ok(message)) = source.next().await {
+            if let Message::Text(text) = message {
+                if let Ok(TakeoverServerMessage::InputError { code }) =
+                    serde_json::from_str(text.as_str())
+                {
+                    let _ = errors_tx.send(code);
+                }
+            }
+        }
+    });
+    let navigate =
+        |url: &str| Message::Text(json!({"type":"navigate","url":url}).to_string().into());
+    let moved = format!("location.href.startsWith('{cross}')");
+    let script = format!("location.href = '{cross}/clean'");
+    let mut step = 0;
+    // With the origin allowed the same moves land, so the denied runs prove the block.
+    for allowed in [false, true] {
+        let effect = if allowed { "allow" } else { "deny" };
+        crate::policy_api::replace_locked(&f.daemon.shared.policy, policy(effect, json!([])))
+            .await
+            .unwrap();
+        for from in ["about:blank", "data:"] {
+            // A fresh document first, so each move starts from a page that just committed.
+            step += 1;
+            let reset = format!("data:text/html,<title>reset-{step}</title>");
+            sink.send(navigate(&reset)).await.unwrap();
+            until(&f, &format!("document.title === 'reset-{step}'")).await;
+            if from == "data:" {
+                // Moving after load lets the typed navigation finish before the page leaves.
+                let data = format!(
+                    "data:text/html,<script>onload=()=>setTimeout(()=>{{{script}}})</script>"
+                );
+                sink.send(navigate(&data)).await.unwrap();
+            } else {
+                sink.send(navigate("about:blank")).await.unwrap();
+                until(&f, "location.href === 'about:blank'").await;
+                page(&f, &format!("{script}; true")).await;
+            }
+            if allowed {
+                until(&f, &moved).await;
+            } else {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                assert_eq!(page(&f, &moved).await, false, "{from} {effect}");
+            }
+        }
+    }
+
+    // Typing an `ask` origin approves it alone: its same-origin hop loads, and the hop that
+    // leaves it is judged afresh. With only the typed origin on `ask` the chain lands (so the
+    // hops work); with the next origin on `ask` too, that hop is refused.
+    for cross_asks in [false, true] {
+        let mut rules = vec![json!({"effect":"ask","capability":"browse","pattern":f.origin})];
+        if cross_asks {
+            rules.push(json!({"effect":"ask","capability":"browse","pattern":cross}));
+        }
+        crate::policy_api::replace_locked(&f.daemon.shared.policy, policy("ask", json!(rules)))
+            .await
+            .unwrap();
+        sink.send(navigate("about:blank")).await.unwrap();
+        until(&f, "location.href === 'about:blank'").await;
+        while errors.try_recv().is_ok() {}
+        sink.send(navigate(&format!("{}/hop", f.origin)))
+            .await
+            .unwrap();
+        if !cross_asks {
+            until(&f, &moved).await;
+            continue;
+        }
+        let code = tokio::time::timeout(Duration::from_secs(30), errors.recv())
+            .await
+            .expect("the cross-origin hop is refused")
+            .unwrap();
+        assert!(
+            ["navigation_failed", "connection_denied"].contains(&code.as_str()),
+            "{code}"
+        );
+        assert_eq!(page(&f, &moved).await, false);
+    }
+    reader.abort();
     f.daemon.shutdown().await;
 }
 

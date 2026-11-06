@@ -341,7 +341,21 @@ pub(crate) async fn done_result(shared: &Shared, ticket: &Ticket) -> Value {
         }
     }
     // URLs and titles can echo values the person typed; stored results pass the redactor.
-    shared.registry.redact(result.clone()).unwrap_or(result)
+    scrubbed(result.clone(), shared.registry.redact(result))
+}
+
+/// A result the redactor could not scrub keeps only the fields the daemon wrote itself: the
+/// page's address and title may echo typed values, so they are dropped rather than passed on.
+fn scrubbed(result: Value, redacted: crate::persistence::Result<Value>) -> Value {
+    redacted.unwrap_or_else(|_| {
+        let mut result = result;
+        if let Some(fields) = result.as_object_mut() {
+            fields.remove("url");
+            fields.remove("title");
+        }
+        result["redaction_failed"] = json!(true);
+        result
+    })
 }
 
 /// An `Origin` header, which browsers always send on WebSocket handshakes, must name this
@@ -636,18 +650,18 @@ async fn open_control(
         .into_response())
 }
 
-/// Refuses a navigation target the agent could not navigate to either: anything but http(s)
-/// without credentials, or an origin the effective policy denies. Returns the origin and the
-/// policy's effect for it; an `ask` origin is the caller's to approve.
+/// How the session's browse policy judges an address the person opens. Only an http(s) URL has
+/// an origin (credentials dropped) for the policy to judge, exactly as it judges the agent's
+/// navigation; any other scheme is the person's own choice and carries none. Returns the origin
+/// and the policy's effect for it; an `ask` origin is the caller's to approve.
 pub(crate) async fn navigable(
     s: &Shared,
     session: &SessionId,
     url: &str,
-) -> Result<(String, Effect), &'static str> {
-    if url.len() > MAX_URL {
-        return Err("invalid_url");
-    }
-    let origin = crate::tools::browser::url_origin(url).map_err(|_| "invalid_url")?;
+) -> Result<(Option<String>, Effect), &'static str> {
+    let Address::Web(origin) = address(url)? else {
+        return Ok((None, Effect::Allow));
+    };
     let state = s.db.state(session).await.map_err(|_| "navigation_failed")?;
     let policy =
         crate::policy_api::effective(s, &crate::tools::ToolEnv::new(s.clone(), &state).policy);
@@ -656,8 +670,25 @@ pub(crate) async fn navigable(
         .effect
     {
         Effect::Deny => Err("policy_denied"),
-        effect => Ok((origin, effect)),
+        effect => Ok((Some(origin), effect)),
     }
+}
+
+/// What may be recorded of an address: the origin of an http(s) URL, or only the scheme of any
+/// other URL, whose remainder is page content rather than an address.
+enum Address {
+    Web(String),
+    Other(String),
+}
+
+fn address(url: &str) -> Result<Address, &'static str> {
+    let parsed = url::Url::parse(url).map_err(|_| "invalid_url")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Ok(Address::Other(parsed.scheme().to_owned()));
+    }
+    openside_policy::Origin::from_url(&parsed)
+        .map(|origin| Address::Web(origin.to_string()))
+        .ok_or("invalid_url")
 }
 
 /// What one stream message asks for.
@@ -959,18 +990,22 @@ impl Live {
             step => step,
         };
         let name = step.audit_name();
-        let origin = match &step {
-            Step::Navigate(url) => crate::tools::browser::url_origin(url).ok(),
-            _ => None,
+        let (origin, scheme) = match &step {
+            Step::Navigate(url) => match address(url) {
+                Ok(Address::Web(origin)) => (Some(origin), None),
+                Ok(Address::Other(scheme)) => (None, Some(scheme)),
+                Err(_) => (None, None),
+            },
+            _ => (None, None),
         };
         let mut approved = false;
         let result = self.navigate(step, &mut approved).await;
         let outcome = result.as_ref().err().copied().unwrap_or("ok");
-        self.audit(
-            name,
-            json!({"origin":origin,"outcome":outcome,"person_approved":approved}),
-        )
-        .await;
+        let mut fields = json!({"origin":origin,"outcome":outcome,"person_approved":approved});
+        if let Some(scheme) = scheme {
+            fields["scheme"] = json!(scheme);
+        }
+        self.audit(name, fields).await;
         result.map_err(Refused::Input)
     }
 
@@ -983,28 +1018,48 @@ impl Live {
         match step {
             Step::Cdp(..) => return Err("invalid_input"),
             Step::Navigate(url) => {
+                if url.len() > MAX_URL {
+                    return Err("invalid_url");
+                }
                 let (origin, effect) = navigable(&self.s, &self.session, &url).await?;
                 *approved = effect == Effect::Ask;
                 // Typing the address is the person's approval of that origin, for this
                 // navigation and its same-origin redirects only: the grant ends with the load.
-                let _grant = self
-                    .s
-                    .registry
-                    .browser
-                    .grant_navigation(&self.session, vec![origin]);
-                self.browser
-                    .navigate_cancellable(
+                let _grant = origin.map(|origin| {
+                    self.s
+                        .registry
+                        .browser
+                        .grant_navigation(&self.session, vec![origin])
+                });
+                // A `javascript:` address runs in the current document and starts no load, so
+                // Chromium answers `net::ERR_ABORTED` even though the script ran. A script that
+                // never yields is bounded like any other navigation.
+                if matches!(address(&url), Ok(Address::Other(scheme)) if scheme == "javascript") {
+                    let command = self.browser.page_command(
                         owner,
                         &self.tab,
-                        &url,
-                        tokio::time::sleep(NAVIGATE_LIMIT),
-                    )
-                    .await
-                    .map_err(|error| match error {
-                        BrowserError::ConnectionDenied
-                        | BrowserError::ConnectionGrantRequired { .. } => "connection_denied",
-                        _ => "navigation_failed",
-                    })?;
+                        "Page.navigate",
+                        json!({"url":url}),
+                    );
+                    tokio::time::timeout(NAVIGATE_LIMIT, command)
+                        .await
+                        .map_err(|_| "navigation_failed")?
+                        .map_err(|_| "navigation_failed")?;
+                } else {
+                    self.browser
+                        .navigate_cancellable(
+                            owner,
+                            &self.tab,
+                            &url,
+                            tokio::time::sleep(NAVIGATE_LIMIT),
+                        )
+                        .await
+                        .map_err(|error| match error {
+                            BrowserError::ConnectionDenied
+                            | BrowserError::ConnectionGrantRequired { .. } => "connection_denied",
+                            _ => "navigation_failed",
+                        })?;
+                }
             }
             Step::History(delta) => {
                 let id = self.history_entry(delta).await?;
@@ -1059,17 +1114,16 @@ impl Live {
             .and_then(|index| history["entries"].get(index))
             .ok_or("no_history")?;
         let url = entry["url"].as_str().unwrap_or_default();
-        // The blank start page has no origin to check; every other entry does.
-        if url != "about:blank" && navigable(&self.s, &self.session, url).await?.1 == Effect::Ask {
+        if navigable(&self.s, &self.session, url).await?.1 == Effect::Ask {
             return Err("approval_required");
         }
         entry["id"].as_i64().ok_or("input_failed")
     }
 }
 
-/// The address a control stream shows for a page. Page script and links may still move the tab
-/// to `data:`, `blob:` or `about:` documents, which are not filtered; for those only the scheme
-/// is reported, since the rest of such a URL is page content, not an address.
+/// The address a control stream shows for a page. For a document that is not http(s)
+/// (`data:`, `blob:`, `about:`, `file:`, …), whether typed or reached by the page itself, only
+/// the scheme is reported, since the rest of such a URL is page content, not an address.
 fn page_address(url: &str) -> String {
     if url == "about:blank" {
         return url.to_owned();
@@ -1350,6 +1404,17 @@ mod tests {
         ] {
             assert_eq!(page_address(url), shown, "{url}");
         }
+    }
+
+    #[test]
+    fn a_done_result_the_redactor_cannot_scrub_drops_the_page_fields() {
+        let result = json!({"status":"done","tab_id":"t1","url":"https://x.test/typed",
+            "title":"typed title","page_changed":true});
+        assert_eq!(scrubbed(result.clone(), Ok(result.clone())), result);
+        assert_eq!(
+            scrubbed(result, Err("redactor unavailable".into())),
+            json!({"status":"done","tab_id":"t1","page_changed":true,"redaction_failed":true})
+        );
     }
 
     #[test]

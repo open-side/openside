@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "../api/client";
 import { ClientContext } from "../context";
 import { json } from "../test/fakeDaemon";
-import { useSessionTabs, type SessionTabs } from "./BrowserSheet";
+import { addressOf, useSessionTabs, type SessionTabs } from "./BrowserSheet";
 
 const tab = (id: string, owner: string) => ({ tab_id: id, url: `https://${id}.test/`, title: id, opened_by: "agent", owner_session_id: owner });
 
@@ -95,5 +95,16 @@ describe("useSessionTabs", () => {
     // Only the current loop rescheduled.
     await act(() => vi.advanceTimersByTimeAsync(2000));
     expect(requests).toHaveLength(3);
+  });
+});
+
+describe("addressOf", () => {
+  it("prefixes https to a bare host and sends every explicit scheme as typed", () => {
+    expect(addressOf("  ")).toBeNull();
+    expect(addressOf(" example.com/path ")).toBe("https://example.com/path");
+    expect(addressOf("localhost:3000")).toBe("https://localhost:3000");
+    expect(addressOf("example.com:8443/a?b#c")).toBe("https://example.com:8443/a?b#c");
+    for (const typed of ["http://a.test/", "https://a.test/", "javascript:void(0)", "data:text/html,hi", "file:///etc/hosts", "about:blank", "chrome://version"])
+      expect(addressOf(typed)).toBe(typed);
   });
 });

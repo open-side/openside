@@ -398,6 +398,21 @@ async fn phone_controls_an_agent_tab_while_the_agent_is_locked_out_then_the_agen
         .await
         .expect("the phone takes control");
 
+    // A typed file URL opens like any other address the person chooses; the stream reports
+    // only its scheme.
+    let file = harness.data_dir.join("phone-file.html");
+    std::fs::write(&file, "<title>Local file</title><p>phone-file-canary</p>").unwrap();
+    let file = url::Url::from_file_path(&file).unwrap().to_string();
+    let open = json!({"type":"navigate","url":file}).to_string();
+    socket.send(Message::Text(open.into())).await.unwrap();
+    loop {
+        match message(&mut socket).await {
+            TakeoverServerMessage::Page { url, .. } if url == "file:" => break,
+            TakeoverServerMessage::InputError { code } => panic!("file URL refused: {code}"),
+            _ => {}
+        }
+    }
+
     // The phone navigates from the address bar and taps the page.
     let target = format!("{}/takeover", site.origin);
     let send = json!({"type":"navigate","url":target}).to_string();
@@ -425,15 +440,6 @@ async fn phone_controls_an_agent_tab_while_the_agent_is_locked_out_then_the_agen
             .await
             .unwrap();
     }
-    // A file URL never leaves the daemon's URL policy.
-    let file = json!({"type":"navigate","url":"file:///etc/passwd"}).to_string();
-    socket.send(Message::Text(file.into())).await.unwrap();
-    loop {
-        if let TakeoverServerMessage::InputError { code } = message(&mut socket).await {
-            assert_eq!(code, "invalid_url");
-            break;
-        }
-    }
 
     // Handing back: the agent's next call on the tab runs and sees the phone's work.
     socket.close(None).await.unwrap();
@@ -456,6 +462,11 @@ async fn phone_controls_an_agent_tab_while_the_agent_is_locked_out_then_the_agen
     assert_eq!(seen, json!(format!("{target} Clicked by human")));
     let audit = std::fs::read_to_string(harness.data_dir.join("audit.jsonl")).unwrap_or_default();
     assert!(audit.contains("\"browser_control\""), "control is audited");
+    assert!(
+        audit.contains("\"scheme\":\"file\""),
+        "the file URL is audited by scheme"
+    );
+    assert!(!audit.contains("phone-file"), "never by its path");
     harness.kill().await;
 }
 

@@ -449,12 +449,23 @@ describe("BrowserPreview", () => {
         { type: "key", event: "down", key: "Enter", code: "Enter", modifiers: 0 },
         { type: "key", event: "up", key: "Enter", code: "Enter", modifiers: 0 },
       ]);
-      // Only http(s) leaves the sheet; the daemon's refusals are explained.
+      // Any scheme the person types is sent as typed; a bare host with a port still gets https.
       control.sent = [];
-      await user.clear(address);
-      await user.type(address, "file:///etc/passwd{Enter}");
-      expect(control.sent).toEqual([]);
-      expect(within(sheet).getByRole("alert")).toHaveTextContent("Only http and https addresses can be opened here.");
+      for (const typedAddress of ["file:///etc/passwd", "about:blank", "data:text/html,hi", "javascript:void(0)", "localhost:3000/app"]) {
+        await user.clear(address);
+        await user.type(address, `${typedAddress}{Enter}`);
+      }
+      expect(sent(control)).toEqual([
+        { type: "navigate", url: "file:///etc/passwd" },
+        { type: "navigate", url: "about:blank" },
+        { type: "navigate", url: "data:text/html,hi" },
+        { type: "navigate", url: "javascript:void(0)" },
+        { type: "navigate", url: "https://localhost:3000/app" },
+      ]);
+      expect(within(sheet).queryByRole("alert")).toBeNull();
+      // The daemon's refusals are explained.
+      act(() => control.receive({ type: "input_error", code: "invalid_url" }));
+      expect(within(sheet).getByRole("alert")).toHaveTextContent("That address isn't valid.");
       act(() => control.receive({ type: "input_error", code: "policy_denied" }));
       await user.clear(address);
       await user.type(address, "https://ok.test{Enter}");
