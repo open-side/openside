@@ -147,6 +147,10 @@ pub enum EventKind {
         /// default to the model; absent when the request carried none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<crate::ThinkingEffort>,
+        /// The model's context window, 0 when unknown; present only on requests by the
+        /// session's own agent, so subagent usage never moves the chat's context meter.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_window: Option<u64>,
     },
     /// Tool call began.
     #[serde(rename = "tool.started")]
@@ -369,6 +373,49 @@ pub enum EventKind {
         /// New archived flag.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         archived: Option<bool>,
+    },
+    /// The person changed a chat's own options after creation; omitted fields are unchanged.
+    /// Applies from the chat's next model request (a running turn finishes as it started).
+    #[serde(rename = "session.options_updated")]
+    SessionOptionsUpdated {
+        /// Replacement provider-qualified model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// Replacement thinking effort.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<crate::ThinkingEffort>,
+        /// Replacement permission ceiling.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<PolicyMode>,
+        /// Replacement confirmation behaviour.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confirmation: Option<crate::ChatConfirmation>,
+    },
+    /// The person marked the chat read (every reply so far seen) or unread.
+    #[serde(rename = "session.read")]
+    SessionRead {
+        /// `true` marks every reply so far as seen.
+        read: bool,
+    },
+    /// This chat was branched from another chat's reply. Every event before this one is the
+    /// copied conversation, which the agent receives as context on each start.
+    #[serde(rename = "session.branched")]
+    SessionBranched {
+        /// The chat it was branched from.
+        from_session: SessionId,
+        /// The message whose reply ends the copied conversation.
+        from_message: MessageId,
+    },
+    /// The chat moved into a project (its folder becomes the workspace), got a folder of its
+    /// own, or lost both.
+    #[serde(rename = "session.folder_changed")]
+    SessionFolderChanged {
+        /// The project the chat now belongs to; `None` for none.
+        #[serde(default)]
+        project_id: Option<String>,
+        /// Canonical absolute workspace the chat now works in; `None` for none.
+        #[serde(default)]
+        workspace: Option<String>,
     },
     /// A model-written conversation title; explicit titles and later user renames win.
     #[serde(rename = "session.title_proposed")]

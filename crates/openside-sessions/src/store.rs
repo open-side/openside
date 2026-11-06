@@ -146,6 +146,61 @@ impl Store {
         )
     }
 
+    /// Creates a session from `kinds` in one transaction; the first must be `session.created`.
+    ///
+    /// Used to branch a chat: copied messages are queued, injected and completed in the same
+    /// commit, so a crash can never leave one queued for delivery to the new chat's runtime.
+    /// Also starts a chat in a project, so it never exists in the project's folder without
+    /// belonging to the project.
+    /// Every event is validated exactly like [`Self::append`]; any invalid event commits none.
+    pub fn create_with_history(
+        &mut self,
+        id: &SessionId,
+        kinds: Vec<EventKind>,
+    ) -> Result<Vec<Event>> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE session_id=?1)",
+            [id.as_str()],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Err(Error::SessionExists(id.clone()));
+        }
+        let ts = Utc::now();
+        let mut state: Option<SessionState> = None;
+        let mut events = Vec::with_capacity(kinds.len());
+        for (index, kind) in kinds.into_iter().enumerate() {
+            let event = Event {
+                session_id: id.clone(),
+                seq: index as u64 + 1,
+                ts,
+                run_id: None,
+                kind,
+            };
+            match state.as_mut() {
+                None => state = Some(SessionState::created(&event)?),
+                Some(state) => state.apply(&event)?,
+            }
+            let submission_id = match &event.kind {
+                EventKind::MessageQueued { message_id, .. } => Some(message_id.as_str()),
+                _ => None,
+            };
+            transaction.execute(
+                "INSERT INTO events(session_id,seq,ts,run_id,payload,submission_id) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![id.as_str(), event.seq as i64, event.ts.to_rfc3339(), event.run_id, serde_json::to_string(&event.kind)?, submission_id],
+            )?;
+            events.push(event);
+        }
+        let state = state
+            .ok_or_else(|| Error::InvalidEvent("first event must be session.created".into()))?;
+        transaction.commit()?;
+        self.states.insert(id.clone(), state);
+        Ok(events)
+    }
+
     /// Validates and atomically appends an event, assigning the next sequence and UTC time.
     ///
     /// Retrying `message.queued` with an already submitted MessageId returns its original
@@ -239,6 +294,70 @@ impl Store {
                 .apply(&event)?;
         }
         Ok(event)
+    }
+
+    /// Appends each `(session, event)` pair in one `IMMEDIATE` transaction: all commit or
+    /// none does. Each event is validated like [`Self::append`] against the state the
+    /// earlier pairs leave behind. Sessions are created through [`Self::create_with_history`]
+    /// and messages queued through [`Self::append`] (it owns their idempotency), so neither
+    /// kind is accepted here.
+    pub fn append_batch(&mut self, events: Vec<(SessionId, EventKind)>) -> Result<Vec<Event>> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let ts = Utc::now();
+        let mut staged: BTreeMap<SessionId, SessionState> = BTreeMap::new();
+        let mut appended = Vec::with_capacity(events.len());
+        for (session_id, kind) in events {
+            if matches!(
+                kind,
+                EventKind::SessionCreated { .. } | EventKind::MessageQueued { .. }
+            ) {
+                return Err(Error::InvalidEvent(
+                    "batches append to existing sessions and queue no messages".into(),
+                ));
+            }
+            if !staged.contains_key(&session_id) {
+                let last_seq: Option<i64> = transaction
+                    .query_row(
+                        "SELECT seq FROM events WHERE session_id=?1 ORDER BY seq DESC LIMIT 1",
+                        [session_id.as_str()],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let last_seq = last_seq.ok_or_else(|| Error::UnknownSession(session_id.clone()))?;
+                let state = match self.states.get(&session_id) {
+                    Some(state) if state.last_seq == last_seq as u64 => state.clone(),
+                    _ => replay_session(&transaction, &session_id)?
+                        .ok_or_else(|| Error::UnknownSession(session_id.clone()))?,
+                };
+                staged.insert(session_id.clone(), state);
+            }
+            let state = staged
+                .get_mut(&session_id)
+                .ok_or_else(|| Error::UnknownSession(session_id.clone()))?;
+            state.validate(&kind)?;
+            let seq = i64::try_from(state.last_seq)
+                .ok()
+                .and_then(|seq| seq.checked_add(1))
+                .ok_or(Error::SequenceExhausted)?;
+            let event = Event {
+                session_id,
+                seq: seq as u64,
+                ts,
+                run_id: None,
+                kind,
+            };
+            transaction.execute(
+                "INSERT INTO events(session_id,seq,ts,run_id,payload,submission_id) VALUES(?1,?2,?3,?4,?5,NULL)",
+                params![event.session_id.as_str(), seq, event.ts.to_rfc3339(), event.run_id, serde_json::to_string(&event.kind)?],
+            )?;
+            state.apply(&event)?;
+            appended.push(event);
+        }
+        transaction.commit()?;
+        self.states.extend(staged);
+        Ok(appended)
     }
 
     /// Reads events strictly after `after_seq`, ordered by sequence and bounded by `limit`.

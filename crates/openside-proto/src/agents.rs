@@ -191,7 +191,7 @@ pub struct HireDraft {
 pub type CreateAgentRequest = HireDraft;
 
 // The outer option distinguishes an absent patch from an explicit null override.
-fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+pub(crate) fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     d: D,
 ) -> Result<Option<Option<T>>, D::Error> {
     Option::<T>::deserialize(d).map(Some)

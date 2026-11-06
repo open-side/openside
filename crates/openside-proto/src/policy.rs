@@ -66,8 +66,14 @@ pub enum PolicyCapability {
     VaultUse,
     /// Payment, purchase, posting or sending a message.
     Sensitive,
-    /// Access private imported records subject to an explicit session person grant.
+    /// Access private imported records or the person's open tabs, subject to an explicit
+    /// session person grant or tab attachment.
     PrivacyRead,
+    /// Act in a tab of the person's own browser (target: origin); Guard asks.
+    PersonBrowser,
+    /// Click, type or scroll in the connected desktop app (target: `app:<app>/<connection>`);
+    /// Guard asks.
+    ComputerUse,
 }
 
 /// `POST /v1/policy/test`: evaluate one action against the live policy without running it.
@@ -127,6 +133,8 @@ impl From<PolicyCapability> for openside_policy::Capability {
             PolicyCapability::VaultUse => Self::VaultUse,
             PolicyCapability::Sensitive => Self::Sensitive,
             PolicyCapability::PrivacyRead => Self::PrivacyRead,
+            PolicyCapability::PersonBrowser => Self::PersonBrowser,
+            PolicyCapability::ComputerUse => Self::ComputerUse,
         }
     }
 }

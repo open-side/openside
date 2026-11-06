@@ -176,6 +176,7 @@ fn every_event_kind_round_trips() {
             input_tokens: 10,
             output_tokens: 5,
             effort: Some(crate::ThinkingEffort::Low),
+            context_window: Some(200_000),
         },
         EventKind::ToolStarted {
             tool_call_id: "t1".into(),
@@ -293,6 +294,17 @@ fn every_event_kind_round_trips() {
             title: Some("Renamed".into()),
             pinned: Some(true),
             archived: None,
+        },
+        EventKind::SessionOptionsUpdated {
+            model: Some("anthropic:claude-sonnet-5-5".into()),
+            effort: Some(ThinkingEffort::High),
+            mode: Some(PolicyMode::ReadOnly),
+            confirmation: Some(crate::ChatConfirmation::AskFirst),
+        },
+        EventKind::SessionRead { read: true },
+        EventKind::SessionBranched {
+            from_session: SessionId::new("source"),
+            from_message: id(),
         },
         EventKind::RuntimeStarted {
             tools: vec!["mock".into()],
@@ -609,11 +621,13 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             model: None,
             mode: Some(mode),
             workspace: Some("/tmp/workspace".into()),
+            project_id: Some("p1".into()),
             incognito: mode == PolicyMode::Full,
             browser_space: space,
             effort: None,
             speed: None,
             profile: Some(SessionProfile::Ultrabrowse),
+            confirmation: Some(crate::ChatConfirmation::AskFirst),
         };
         assert_eq!(
             serde_json::from_value::<CreateSessionRequest>(serde_json::to_value(&request).unwrap())
@@ -643,6 +657,7 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             model: "model".into(),
             mode,
             workspace: Some("/tmp/workspace".into()),
+            project_id: Some("p1".into()),
             status: SessionStatus::WaitingHuman,
             activity: "Waiting for you".into(),
             last_seq: 1,
@@ -654,6 +669,13 @@ fn session_modes_waiting_status_and_deferred_outcome_round_trip() {
             effort: Some(ThinkingEffort::Off),
             speed: Some(SessionSpeed::Fast),
             profile: Some(SessionProfile::Ultrabrowse),
+            confirmation: crate::ChatConfirmation::AskFirst,
+            unread: true,
+            context: Some(crate::ContextUsage {
+                used_tokens: 1200,
+                window_tokens: Some(200_000),
+            }),
+            last_activity_at: Some("2026-11-06T09:00:00Z".parse().unwrap()),
         };
         assert_eq!(
             serde_json::from_value::<Session>(serde_json::to_value(&session).unwrap()).unwrap(),

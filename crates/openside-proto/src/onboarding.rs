@@ -25,12 +25,27 @@ pub struct OnboardingStatus {
 }
 
 /// `PUT /v1/onboarding`: record how the guide ended. Only `completed` and `skipped` are
-/// accepted; reopening the guide from Settings does not reset the flag.
+/// accepted, and only while the state is `pending`; reopening the guide from Settings does not
+/// reset the flag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateOnboardingRequest {
     /// `completed` or `skipped`.
     pub state: OnboardingState,
+}
+
+/// `PUT /v1/onboarding` 409 body when the guide already ended: the `{code, message}` of
+/// `ApiError` plus the stored outcome, so a client that lost the race can adopt it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OnboardingAlreadySet {
+    /// Always `onboarding_already_set`.
+    pub code: String,
+    /// Sanitized human-facing detail.
+    pub message: String,
+    /// The outcome already recorded: `completed` or `skipped`.
+    pub state: OnboardingState,
+    /// When that outcome was recorded.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// An agent CLI openside can install its browser skill for (`openside skills install`).

@@ -55,9 +55,11 @@ pub fn normalize_model_title(raw: &str) -> Option<String> {
     Some(title)
 }
 
-/// Partial session metadata update; omitted fields keep their current value.
+/// Partial session update; omitted fields keep their current value.
 ///
-/// Applied as one durable `session.updated` event, so list state replays from the log.
+/// Title, pinned and archived are applied as one durable `session.updated` event; model,
+/// effort, mode and confirmation as one `session.options_updated` event; `read` as
+/// `session.read`. Every change replays from the log.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateSessionRequest {
@@ -70,13 +72,39 @@ pub struct UpdateSessionRequest {
     /// Archived sessions are hidden from the default session list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
+    /// Provider-qualified model for the chat's next requests. Not for agent homes, which use
+    /// their agent's model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Thinking effort for the chat's next requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<crate::ThinkingEffort>,
+    /// Permission ceiling. A paired device may not raise it above the daemon default
+    /// (`local_socket_required`); not for agent homes, whose agent sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::PolicyMode>,
+    /// Whether writing files and running commands ask first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<crate::ChatConfirmation>,
+    /// `true` marks every reply so far as seen; `false` marks the chat unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<bool>,
 }
 
 impl UpdateSessionRequest {
     /// True when no field would change anything.
     pub fn is_empty(&self) -> bool {
-        self.title.is_none() && self.pinned.is_none() && self.archived.is_none()
+        self == &Self::default()
     }
+}
+
+/// Branch a chat at one of its replies: a new chat with the conversation up to and including
+/// the reply to `from_message`, which then continues on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForkSessionRequest {
+    /// The message whose finished reply ends the copied conversation.
+    pub from_message: crate::MessageId,
 }
 
 #[cfg(test)]

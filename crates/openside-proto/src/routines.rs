@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use openside_core::{MessageId, SessionId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,17 @@ pub enum RoutineSchedule {
     Interval {
         /// Seconds; >=1.
         secs: u64,
+    },
+    /// RFC 5545 RRULE.
+    Rrule {
+        /// e.g. `FREQ=DAILY;BYHOUR=9;BYMINUTE=0`.
+        rule: String,
+        /// IANA; UTC when omitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timezone: Option<String>,
+        /// Local DTSTART; default: anchor.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<NaiveDateTime>,
     },
 }
 
@@ -229,4 +240,53 @@ pub struct RoutineDraft {
 pub struct RoutineSuggestionList {
     /// Draft routines, most frequent first; none of them exists yet.
     pub suggestions: Vec<RoutineDraft>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn routine_schedule_rrule_round_trips_with_and_without_optional_fields() {
+        let full = json!({"type":"rrule","rule":"FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+            "timezone":"Asia/Seoul","start":"2026-11-06T09:00:00"});
+        let schedule: RoutineSchedule = serde_json::from_value(full.clone()).unwrap();
+        assert_eq!(
+            schedule,
+            RoutineSchedule::Rrule {
+                rule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0".into(),
+                timezone: Some("Asia/Seoul".into()),
+                start: Some(
+                    chrono::NaiveDate::from_ymd_opt(2026, 11, 6)
+                        .unwrap()
+                        .and_hms_opt(9, 0, 0)
+                        .unwrap()
+                ),
+            }
+        );
+        assert_eq!(serde_json::to_value(&schedule).unwrap(), full);
+
+        let bare = json!({"type":"rrule","rule":"FREQ=WEEKLY;BYDAY=MO,FR"});
+        let schedule: RoutineSchedule = serde_json::from_value(bare.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&schedule).unwrap(), bare);
+
+        let request: UpdateRoutineRequest = serde_json::from_value(json!({
+            "schedule": {"type":"rrule","rule":"FREQ=DAILY;COUNT=1","start":"2026-11-06T09:30:00"}
+        }))
+        .unwrap();
+        assert!(matches!(
+            request.schedule,
+            Some(RoutineSchedule::Rrule {
+                start: Some(_),
+                timezone: None,
+                ..
+            })
+        ));
+        assert!(serde_json::from_value::<RoutineSchedule>(
+            json!({"type":"rrule","rule":"FREQ=DAILY","start":"tomorrow"})
+        )
+        .is_err());
+    }
 }

@@ -138,6 +138,11 @@ pub struct Artifact {
     /// Time-limited, unauthenticated URL path for sandboxed rendering, when previewable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_url: Option<String>,
+    /// A browser download offered for download only: its bytes are unrecognised or its name
+    /// runs code or renders active content when opened. Clients never open or preview it, and
+    /// the daemon lists no `preview_url` for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quarantined: bool,
 }
 
 /// `GET /v1/sessions/{id}/artifacts` response, oldest first.

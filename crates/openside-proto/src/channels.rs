@@ -71,7 +71,8 @@ pub struct ChannelAccount {
     pub restart_required: bool,
     /// Actual loopback webhook listener, null for polling or inactive accounts.
     pub receiver_address: Option<String>,
-    /// Exact signed callback URL to paste into the platform; null for Telegram or legacy.
+    /// Exact signed callback URL to paste into the platform; null for Telegram or legacy, and
+    /// while Remote Control is off (the platform could not reach this computer).
     #[serde(default)]
     pub webhook_url: Option<String>,
 }

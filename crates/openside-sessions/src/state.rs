@@ -24,12 +24,15 @@ pub struct SessionState {
     pub title_locked: bool,
     /// Only the first valid model proposal can name a conversation.
     pub title_proposed: bool,
-    /// Provider-qualified model supplied by the creation event.
+    /// Provider-qualified model from creation or the latest `session.options_updated`.
     pub model: String,
-    /// Permission ceiling supplied by the creation event.
+    /// Permission ceiling from creation or the latest mode-carrying update.
     pub mode: PolicyMode,
-    /// Canonical absolute workspace path used by daemon policy and file tools.
+    /// Canonical absolute workspace path used by daemon policy and file tools; from creation
+    /// or the latest `session.folder_changed`.
     pub workspace: Option<String>,
+    /// The project the chat belongs to, from the latest `session.folder_changed`.
+    pub project_id: Option<String>,
     /// User-task lifecycle state, independent of individual model requests.
     pub status: SessionStatus,
     /// Latest short activity outside a human-waiting state.
@@ -62,12 +65,25 @@ pub struct SessionState {
     pub incognito: bool,
     /// Fixed by `session.created`; isolated sessions browse in their own browser context.
     pub browser_space: BrowserSpace,
-    /// Fixed by `session.created`; `None` keeps the model's default reasoning effort.
+    /// From creation or the latest `session.options_updated`; `None` keeps the model's default.
     pub effort: Option<openside_proto::ThinkingEffort>,
     /// Fixed by `session.created`; `None` is the default service tier.
     pub speed: Option<openside_proto::SessionSpeed>,
     /// Fixed by `session.created`; `None` uses the daemon-wide `[agent] profile`.
     pub profile: Option<openside_proto::SessionProfile>,
+    /// Latest `session.options_updated` confirmation; historical sessions skip it.
+    pub confirmation: openside_proto::ChatConfirmation,
+    /// Sequence of the latest final reply.
+    pub reply_seq: u64,
+    /// Replies up to this sequence were seen by the person.
+    pub read_seq: u64,
+    /// Set by an explicit "mark unread" until the chat is read again.
+    pub marked_unread: bool,
+    /// Context fill reported with the session's own agent's latest model request.
+    pub context: Option<openside_proto::ContextUsage>,
+    /// Sequence of `session.branched`; every earlier event is the conversation copied from
+    /// the chat it was branched from.
+    pub branched_at: Option<u64>,
     /// Original text of the first queued message, used for list search.
     pub first_message: Option<String>,
     /// Bounded latest message preview, rebuilt during replay instead of rescanning each list.
@@ -92,6 +108,7 @@ impl SessionState {
             model: self.model.clone(),
             mode: self.mode,
             workspace: self.workspace.clone(),
+            project_id: self.project_id.clone(),
             activity: if self
                 .tickets
                 .values()
@@ -132,6 +149,10 @@ impl SessionState {
             effort: self.effort,
             speed: self.speed,
             profile: self.profile,
+            confirmation: self.confirmation,
+            unread: self.marked_unread || self.reply_seq > self.read_seq,
+            context: self.context,
+            last_activity_at: Some(self.last_activity),
         }
     }
 
@@ -165,6 +186,7 @@ impl SessionState {
             model: model.clone(),
             mode: *mode,
             workspace: workspace.clone(),
+            project_id: None,
             status: SessionStatus::Idle,
             activity: String::new(),
             active_subagents: BTreeSet::new(),
@@ -185,6 +207,12 @@ impl SessionState {
             effort: *effort,
             speed: *speed,
             profile: *profile,
+            confirmation: openside_proto::ChatConfirmation::default(),
+            reply_seq: 0,
+            read_seq: 0,
+            marked_unread: false,
+            context: None,
+            branched_at: None,
             first_message: None,
             last_message_preview: String::new(),
             attachments: BTreeMap::new(),
@@ -282,6 +310,57 @@ impl SessionState {
             &event.kind
         {
             self.last_message_preview = text.chars().take(160).collect();
+        }
+        match &event.kind {
+            EventKind::AssistantFinal { .. } => self.reply_seq = event.seq,
+            // Writing in the chat means its replies so far were seen.
+            EventKind::MessageQueued {
+                author_kind: openside_proto::MessageAuthorKind::Person,
+                ..
+            } => self.mark_read(),
+            EventKind::SessionRead { read: true } => self.mark_read(),
+            EventKind::SessionRead { read: false } => self.marked_unread = true,
+            EventKind::SessionBranched { .. } => self.branched_at = Some(event.seq),
+            EventKind::SessionFolderChanged {
+                project_id,
+                workspace,
+            } => {
+                self.project_id.clone_from(project_id);
+                self.workspace.clone_from(workspace);
+            }
+            // Only the session's own agent sends `context_window` (0 when the model's window is
+            // unknown); subagents and title naming omit it. Every own-agent request updates the
+            // fill, so an earlier one never lingers.
+            EventKind::Usage {
+                input_tokens,
+                context_window: Some(window),
+                ..
+            } => {
+                self.context = Some(openside_proto::ContextUsage {
+                    used_tokens: *input_tokens,
+                    window_tokens: (*window > 0).then_some(*window),
+                })
+            }
+            EventKind::SessionOptionsUpdated {
+                model,
+                effort,
+                mode,
+                confirmation,
+            } => {
+                if let Some(model) = model {
+                    self.model.clone_from(model);
+                }
+                if effort.is_some() {
+                    self.effort = *effort;
+                }
+                if let Some(mode) = mode {
+                    self.mode = *mode;
+                }
+                if let Some(confirmation) = confirmation {
+                    self.confirmation = *confirmation;
+                }
+            }
+            _ => {}
         }
         match &event.kind {
             EventKind::MessageQueued {
@@ -605,12 +684,21 @@ impl SessionState {
         }
         if !matches!(
             event.kind,
-            EventKind::SessionUpdated { .. } | EventKind::SessionTitleProposed { .. }
+            EventKind::SessionUpdated { .. }
+                | EventKind::SessionTitleProposed { .. }
+                | EventKind::SessionOptionsUpdated { .. }
+                | EventKind::SessionFolderChanged { .. }
+                | EventKind::SessionRead { .. }
         ) {
             self.last_activity = event.ts;
         }
         self.last_seq = event.seq;
         Ok(())
+    }
+
+    fn mark_read(&mut self) {
+        self.read_seq = self.reply_seq;
+        self.marked_unread = false;
     }
 }
 

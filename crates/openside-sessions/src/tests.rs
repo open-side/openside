@@ -1710,6 +1710,54 @@ fn conversation_titles_are_short_non_url_and_user_renames_win_on_replay() {
 }
 
 #[test]
+fn last_activity_ignores_list_metadata_options_and_read_markers() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("events.db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .create_session(sid(), "Activity", "mock/model", PolicyMode::Guard, None)
+        .unwrap();
+    let created = store.session(&sid()).unwrap().last_activity;
+    for kind in [
+        EventKind::SessionUpdated {
+            mode: None,
+            title: Some("Renamed".into()),
+            pinned: Some(true),
+            archived: Some(true),
+        },
+        EventKind::SessionTitleProposed {
+            title: "Proposed title".into(),
+        },
+        EventKind::SessionOptionsUpdated {
+            model: Some("mock/other".into()),
+            effort: None,
+            mode: None,
+            confirmation: None,
+        },
+        EventKind::SessionRead { read: false },
+    ] {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let event = store.append(&sid(), None, kind).unwrap();
+        assert!(event.ts > created);
+        assert_eq!(store.session(&sid()).unwrap().last_activity, created);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let message = store
+        .append(
+            &sid(),
+            None,
+            submit(mid(1), "new work".into(), QueueMode::Queue),
+        )
+        .unwrap();
+    let state = store.session(&sid()).unwrap();
+    assert_eq!(state.last_activity, message.ts);
+    assert_eq!(state.session().last_activity_at, Some(message.ts));
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.session(&sid()).unwrap().last_activity, message.ts);
+}
+
+#[test]
 fn conversation_activity_tracks_work_browsing_and_terminal_states() {
     let root = tempfile::tempdir().unwrap();
     let mut store = Store::open(root.path().join("events.db")).unwrap();
@@ -2159,4 +2207,195 @@ fn ending_a_waiting_child_replaces_waiting_activity_and_replays_the_terminal_res
             assert_eq!(session.activity, activity);
         }
     }
+}
+
+fn created(title: &str) -> EventKind {
+    EventKind::SessionCreated {
+        agent_id: None,
+        title: title.into(),
+        model: "mock".into(),
+        mode: PolicyMode::Guard,
+        workspace: None,
+        incognito: false,
+        browser_space: openside_proto::BrowserSpace::Shared,
+        effort: None,
+        speed: None,
+        profile: None,
+    }
+}
+
+#[test]
+fn history_creation_is_one_commit_that_replays_to_the_same_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.db");
+    let mut store = Store::open(&path).unwrap();
+    let kinds = vec![
+        created("Plans (branch)"),
+        submit(mid(1), "compare plans".into(), QueueMode::Queue),
+        EventKind::MessageInjected { message_id: mid(1) },
+        EventKind::MessageCompleted {
+            message_id: mid(1),
+            outcome: openside_proto::MessageOutcome::Completed,
+            reason: None,
+        },
+        EventKind::AssistantFinal {
+            text: "Plan B is cheaper.".into(),
+            attachments: Vec::new(),
+        },
+        EventKind::SessionBranched {
+            from_session: SessionId::new("source"),
+            from_message: mid(1),
+        },
+    ];
+    let events = store.create_with_history(&sid(), kinds).unwrap();
+    assert_eq!(
+        events.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5, 6]
+    );
+    let state = store.session(&sid()).unwrap().clone();
+    assert_eq!(state.branched_at, Some(6));
+    assert_eq!(state.status, SessionStatus::Idle);
+    assert!(state.queue.pending_ids().next().is_none());
+    assert_eq!(state.title, "Plans (branch)");
+    assert!(store
+        .create_with_history(&sid(), vec![created("again")])
+        .is_err());
+    drop(store);
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(reopened.session(&sid()).unwrap(), &state);
+}
+
+#[test]
+fn invalid_history_commits_nothing() {
+    let mut store = Store::open(":memory:").unwrap();
+    let kinds = vec![
+        created("Broken"),
+        submit(mid(1), "first".into(), QueueMode::Queue),
+        // Never injected, so it cannot complete.
+        EventKind::MessageCompleted {
+            message_id: mid(1),
+            outcome: openside_proto::MessageOutcome::Completed,
+            reason: None,
+        },
+    ];
+    assert!(store.create_with_history(&sid(), kinds).is_err());
+    assert!(store.session(&sid()).is_none());
+    assert!(store.events_after(&sid(), 0, 10).is_err());
+    assert!(store
+        .create_with_history(&sid(), vec![submit(mid(2), "x".into(), QueueMode::Queue)])
+        .is_err());
+    assert!(store.session(&sid()).is_none());
+}
+
+fn folder(project_id: Option<&str>, workspace: Option<&str>) -> EventKind {
+    EventKind::SessionFolderChanged {
+        project_id: project_id.map(str::to_owned),
+        workspace: workspace.map(str::to_owned),
+    }
+}
+
+#[test]
+fn a_chat_starts_in_a_project_with_both_events_or_neither() {
+    let mut store = Store::open(":memory:").unwrap();
+    let mut start = created("In project");
+    if let EventKind::SessionCreated { workspace, .. } = &mut start {
+        *workspace = Some("/work/site".into());
+    }
+    let events = store
+        .create_with_history(
+            &sid(),
+            vec![start.clone(), folder(Some("p1"), Some("/work/site"))],
+        )
+        .unwrap();
+    assert_eq!(events.len(), 2);
+    let state = store.session(&sid()).unwrap();
+    assert_eq!(
+        (state.project_id.as_deref(), state.workspace.as_deref()),
+        (Some("p1"), Some("/work/site"))
+    );
+
+    let other = SessionId::new("other");
+    let broken = vec![
+        start,
+        folder(Some("p1"), Some("/work/site")),
+        submit(mid(1), "first".into(), QueueMode::Queue),
+        // Never injected, so it cannot complete.
+        EventKind::MessageCompleted {
+            message_id: mid(1),
+            outcome: openside_proto::MessageOutcome::Completed,
+            reason: None,
+        },
+    ];
+    assert!(store.create_with_history(&other, broken).is_err());
+    assert!(store.session(&other).is_none());
+    assert!(store.events_after(&other, 0, 10).is_err());
+}
+
+#[test]
+fn a_batch_across_sessions_commits_every_event_or_none() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.db");
+    let mut store = Store::open(&path).unwrap();
+    let (a, b) = (SessionId::new("a"), SessionId::new("b"));
+    for id in [&a, &b] {
+        store
+            .create_with_history(
+                id,
+                vec![created("Member"), folder(Some("p1"), Some("/work"))],
+            )
+            .unwrap();
+    }
+
+    // One unknown session spoils the whole batch: nothing lands.
+    let spoiled = vec![
+        (a.clone(), folder(None, None)),
+        (b.clone(), folder(None, None)),
+        (SessionId::new("missing"), folder(None, None)),
+    ];
+    assert!(store.append_batch(spoiled).is_err());
+    for id in [&a, &b] {
+        let state = store.session(id).unwrap();
+        assert_eq!(
+            (state.last_seq, state.project_id.as_deref()),
+            (2, Some("p1"))
+        );
+        assert_eq!(store.events_after(id, 0, 10).unwrap().len(), 2);
+    }
+    // Creation and queued messages keep their own paths.
+    assert!(store
+        .append_batch(vec![(SessionId::new("c"), created("New"))])
+        .is_err());
+    assert!(store
+        .append_batch(vec![(
+            a.clone(),
+            submit(mid(1), "x".into(), QueueMode::Queue)
+        )])
+        .is_err());
+
+    // Two events for one session follow each other.
+    let events = store
+        .append_batch(vec![
+            (a.clone(), folder(None, Some("/elsewhere"))),
+            (b.clone(), folder(None, None)),
+            (a.clone(), folder(None, None)),
+        ])
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| (event.session_id.as_str(), event.seq))
+            .collect::<Vec<_>>(),
+        [("a", 3), ("b", 3), ("a", 4)]
+    );
+    let states = [&a, &b].map(|id| store.session(id).unwrap().clone());
+    for state in &states {
+        assert_eq!(
+            (state.project_id.as_deref(), state.workspace.as_deref()),
+            (None, None)
+        );
+    }
+    drop(store);
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(reopened.session(&a).unwrap(), &states[0]);
+    assert_eq!(reopened.session(&b).unwrap(), &states[1]);
 }

@@ -206,12 +206,17 @@ pub struct Session {
     pub id: SessionId,
     /// User-visible conversation title.
     pub title: String,
-    /// Provider-qualified model selected when the session was created, not its effective current model.
+    /// Provider-qualified model the chat uses for its next request: the creation choice or a
+    /// later per-chat change. An agent home uses its agent's model instead.
     pub model: String,
-    /// Permission ceiling selected when the session was created.
+    /// Permission ceiling: the creation choice or a later per-chat change.
     pub mode: PolicyMode,
-    /// Canonical absolute workspace path used as the Guard root and file-tool cwd.
+    /// Canonical absolute workspace path used as the Guard root and file-tool cwd: the
+    /// project's folder for a chat in a project.
     pub workspace: Option<String>,
+    /// Project the chat belongs to; null for none.
+    #[serde(default)]
+    pub project_id: Option<String>,
     /// Rebuilt from turn and session events.
     pub status: SessionStatus,
     /// Short, redacted description of the current work, rebuilt from session events.
@@ -233,7 +238,7 @@ pub struct Session {
     /// Browser space fixed at creation; historical sessions are shared.
     #[serde(default)]
     pub browser_space: BrowserSpace,
-    /// Thinking effort fixed at creation; absent keeps the model's default.
+    /// Thinking effort, chosen at creation or changed later; absent keeps the model's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<ThinkingEffort>,
     /// Service speed fixed at creation; absent means `default`.
@@ -242,6 +247,18 @@ pub struct Session {
     /// Agent profile fixed at creation; absent means the daemon-wide profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<SessionProfile>,
+    /// Whether writing files and running commands ask first; changeable per chat.
+    #[serde(default)]
+    pub confirmation: crate::ChatConfirmation,
+    /// A reply arrived after the person last marked the chat read.
+    #[serde(default)]
+    pub unread: bool,
+    /// How full the context window was at the chat's latest model request; absent before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<crate::ContextUsage>,
+    /// Latest activity other than a metadata change; the list's "most recent" order uses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<DateTime<Utc>>,
 }
 
 /// Health response without environment or credential details.
@@ -266,8 +283,13 @@ pub struct CreateSessionRequest {
     pub model: Option<String>,
     /// Permission override, or settings default when omitted.
     pub mode: Option<PolicyMode>,
-    /// Absolute workspace path, canonicalized by the daemon before session creation.
+    /// Absolute workspace path, canonicalized by the daemon before session creation. A paired
+    /// device needs local access (the computer running openside) to name one.
     pub workspace: Option<String>,
+    /// Start the chat in this project; its folder becomes the workspace. Cannot be combined
+    /// with `workspace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     /// Create a private session; immutable afterwards. Browsing history is not indexed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub incognito: bool,
@@ -275,7 +297,7 @@ pub struct CreateSessionRequest {
     /// afterwards. Incognito sessions already have their own browser and refuse `isolated`.
     #[serde(default, skip_serializing_if = "BrowserSpace::is_shared")]
     pub browser_space: BrowserSpace,
-    /// Thinking effort, immutable afterwards; omission keeps the model's default.
+    /// Thinking effort; omission keeps the model's default. Changeable later per chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<ThinkingEffort>,
     /// Service speed, immutable afterwards; omission means `default`.
@@ -284,6 +306,9 @@ pub struct CreateSessionRequest {
     /// Agent profile, immutable afterwards; omission means the daemon-wide profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<SessionProfile>,
+    /// Confirmation behaviour; omission uses `preferences.confirmation`. Changeable later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<crate::ChatConfirmation>,
 }
 
 /// Session listing response.

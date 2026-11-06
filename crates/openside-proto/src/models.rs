@@ -11,9 +11,26 @@ pub struct ModelCatalog {
     pub providers: Vec<ModelProvider>,
     /// Current default for new sessions and unoverridden Team homes on their next idle turn.
     pub default_model: Option<String>,
-    /// Fast chief front-agent model; null uses the reasoning model.
+    /// Fast role (front agent, titles, summaries, memory extraction); null uses the session model.
     pub fast_model: Option<String>,
-    /// Running model fallback chain, independent of credential-source order.
+    /// Standard role (subagents and Tasks); null uses the session model.
+    #[serde(default)]
+    pub standard_model: Option<String>,
+    /// Deep role (hard reasoning, planning, judging, synthesis Tasks); null uses the session model.
+    #[serde(default)]
+    pub deep_model: Option<String>,
+    /// Visual role (requests carrying an image); null uses the requesting agent's model.
+    #[serde(default)]
+    pub visual_model: Option<String>,
+    /// Stored image generation choice: null picks the best available image model
+    /// automatically, "off" hides `generate_image`, otherwise a `provider:model` id.
+    #[serde(default)]
+    pub image_model: Option<String>,
+    /// The image model `generate_image` uses right now; null when image generation is off or,
+    /// on automatic, no image model is available.
+    #[serde(default)]
+    pub effective_image_model: Option<String>,
+    /// CLI-only running fallback chain, independent of credential-source order.
     pub fallback_models: Vec<String>,
     /// Maximum metadata cache lifetime; managed writes invalidate it immediately.
     pub cached_for_ms: u32,
@@ -27,9 +44,12 @@ pub struct ModelCatalog {
 pub struct ModelProvider {
     /// SDK provider namespace, not an upstream account identifier.
     pub provider: String,
+    /// Product name for the UI, e.g. "Claude" or "ChatGPT".
+    #[serde(default)]
+    pub display_name: String,
     /// Configured, curated and account-reported candidates, deduplicated by id.
     pub models: Vec<CatalogModel>,
-    /// Person-built ordered account membership; empty explicitly disables routing.
+    /// CLI-only: person-built ordered account membership; empty explicitly disables routing.
     pub pool: ProviderPool,
 }
 
@@ -56,14 +76,31 @@ pub enum ModelTier {
     Frontier,
 }
 
+/// What a catalog model produces; only chat models serve conversation roles.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    /// Chat/tool-capable model for the Default, Fast, Standard, Deep and Visual roles.
+    #[default]
+    Chat,
+    /// Image generation model, valid only for the Image generation role.
+    Image,
+}
+
 /// One candidate and the credential source that would serve a new sidecar.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogModel {
-    /// Explicit provider:model selector; image-only models are not chat defaults.
+    /// Explicit provider:model selector; image models are never chat role choices.
     pub id: String,
     /// Model-name portion, never an account label or private identity.
     pub label: String,
+    /// Curated product name for the UI, e.g. "Claude Sonnet 5.5".
+    #[serde(default)]
+    pub display_name: String,
+    /// Chat or image generation.
+    #[serde(default)]
+    pub kind: ModelKind,
     /// Curated family recommendation, not a routing restriction.
     pub recommended_for: Option<ModelRole>,
     /// False for an explicitly configured id outside the current curated generations.
@@ -75,9 +112,13 @@ pub struct CatalogModel {
     /// Short curated guidance; unknown configured models have no capability claim.
     #[serde(default)]
     pub strengths: String,
+    /// Effort a chat's visible agent runs at on this model when the person picks none: the
+    /// front agent's request clamped to the model's ladder. Null for image models and where
+    /// the runtime sends no effort, leaving the level to the provider's own default.
+    pub default_effort: Option<crate::ThinkingEffort>,
     /// Local credential readiness under source priority and broker fail-close.
     pub available: bool,
-    /// Credential-value-free readiness or refusal explanation.
+    /// CLI diagnostic: credential-value-free readiness or refusal explanation.
     pub reason: String,
     /// First usable source, or null when unavailable.
     pub source: Option<String>,
@@ -123,13 +164,42 @@ pub struct ModelAccount {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateModelsRequest {
-    /// Available provider-qualified catalog id; must not be a fallback duplicate.
+    /// Available provider-qualified chat model id; must not be a fallback duplicate.
     pub default_model: String,
-    /// Fast chief front-agent model; null uses the reasoning model.
+    /// Fast role chat model; null or omitted uses the session model.
     #[serde(default)]
     pub fast_model: Option<String>,
     /// At most 16 distinct available catalog ids in fallback order.
     pub fallback_models: Vec<String>,
+    /// Standard role chat model; null clears it, omission keeps the current value.
+    #[serde(
+        default,
+        deserialize_with = "crate::agents::nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub standard_model: Option<Option<String>>,
+    /// Deep role chat model; null clears it, omission keeps the current value.
+    #[serde(
+        default,
+        deserialize_with = "crate::agents::nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub deep_model: Option<Option<String>>,
+    /// Visual role chat model; null clears it, omission keeps the current value.
+    #[serde(
+        default,
+        deserialize_with = "crate::agents::nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub visual_model: Option<Option<String>>,
+    /// Image generation: a `provider:model` id (kind image), "off" to hide `generate_image`, or
+    /// null for automatic (the best available image model); omission keeps the current value.
+    #[serde(
+        default,
+        deserialize_with = "crate::agents::nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub image_model: Option<Option<String>>,
 }
 
 /// Result of a dedicated model-selection write, not raw config PUT semantics.
@@ -138,8 +208,20 @@ pub struct UpdateModelsRequest {
 pub struct ModelSelection {
     /// The newly running default, after successful private-file persistence.
     pub default_model: String,
-    /// Persisted fast model; null uses the reasoning model.
+    /// Persisted fast model; null uses the session model.
     pub fast_model: Option<String>,
+    /// Persisted standard model; null uses the session model.
+    #[serde(default)]
+    pub standard_model: Option<String>,
+    /// Persisted deep model; null uses the session model.
+    #[serde(default)]
+    pub deep_model: Option<String>,
+    /// Persisted visual model; null uses the requesting agent's model.
+    #[serde(default)]
+    pub visual_model: Option<String>,
+    /// Persisted image generation choice: null for automatic, "off", or a `provider:model` id.
+    #[serde(default)]
+    pub image_model: Option<String>,
     /// The newly running ordered fallback chain.
     pub fallback_models: Vec<String>,
     /// Always false: dedicated selection applies without restarting the daemon.
@@ -330,4 +412,50 @@ pub struct SessionAccountSelection {
     pub explicit: bool,
     /// Always next_request; no daemon or sidecar restart required.
     pub effective: String,
+}
+
+/// How a connected provider authenticates.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderConnectionKind {
+    /// A signed-in subscription (Claude, ChatGPT, GitHub Copilot, Gemini, Antigravity).
+    Subscription,
+    /// A person-supplied API key.
+    ApiKey,
+}
+
+/// Whether a connected provider can serve requests now.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderConnectionStatus {
+    /// At least one enabled account is ready.
+    Connected,
+    /// Accounts exist but none is ready; Reconnect usually fixes it.
+    NeedsAttention,
+}
+
+/// One Providers row: every account of one provider and connection kind, collapsed.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderConnection {
+    /// Stable row id, `<provider>/<kind>`.
+    pub id: String,
+    /// SDK provider namespace.
+    pub provider: String,
+    /// Subscription or API key.
+    pub kind: ProviderConnectionKind,
+    /// Product name for the UI, e.g. "Claude", "ChatGPT", "OpenAI API key".
+    pub display_name: String,
+    /// Connected or needs attention.
+    pub status: ProviderConnectionStatus,
+    /// Internal account references behind the row, for Reconnect/Disconnect; never shown.
+    pub accounts: Vec<ModelAccountRef>,
+}
+
+/// Connected providers in display order.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderConnectionList {
+    /// One row per provider and connection kind with at least one account.
+    pub providers: Vec<ProviderConnection>,
 }

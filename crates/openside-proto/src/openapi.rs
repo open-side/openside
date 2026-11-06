@@ -252,6 +252,15 @@ pub const ROUTES: &[Route] = &[
     },
     Route {
         method: HttpMethod::Get,
+        path: "/v1/settings/models/providers",
+        request_schema: None,
+        response_schema: Some("ProviderConnectionList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
         path: "/v1/settings/keys",
         request_schema: None,
         response_schema: Some("ProviderKeyList"),
@@ -467,6 +476,168 @@ pub const ROUTES: &[Route] = &[
         sse: false,
     },
     Route {
+        method: HttpMethod::Get,
+        path: "/v1/browser/prefs",
+        request_schema: None,
+        response_schema: Some("BrowserPrefs"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/browser/prefs",
+        request_schema: Some("UpdateBrowserPrefsRequest"),
+        response_schema: Some("BrowserPrefs"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/browser/person/tabs",
+        request_schema: None,
+        response_schema: Some("PersonTabList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/browser/person/tabs/command",
+        request_schema: Some("PersonTabCommand"),
+        response_schema: Some("PersonTabCommandResult"),
+        scope: CapabilityScope::Steer,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/browser/person/native-tools",
+        request_schema: Some("OpenPersonNativeToolRequest"),
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/browser/person/recently-closed",
+        request_schema: None,
+        response_schema: Some("PersonRecentlyClosedList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/browser/person/recently-closed/{session_id}/restore",
+        request_schema: None,
+        response_schema: Some("PersonTabCommandResult"),
+        scope: CapabilityScope::Steer,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/browser/person/history",
+        request_schema: None,
+        response_schema: Some("PersonHistoryList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/browser/person/bookmarks",
+        request_schema: None,
+        response_schema: Some("PersonBookmarkTree"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/browser/person/bookmarks",
+        request_schema: Some("CreatePersonBookmarkRequest"),
+        response_schema: Some("PersonBookmark"),
+        scope: CapabilityScope::Steer,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/browser/person/bookmarks/{id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/browser/person/clear-data",
+        request_schema: Some("ClearBrowsingDataRequest"),
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/browser/person/downloads",
+        request_schema: None,
+        response_schema: Some("PersonDownloadList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/browser/person/extensions",
+        request_schema: None,
+        response_schema: Some("PersonExtensionList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/browser/person/bridge",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 101,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/sessions/{id}/attached-tabs",
+        request_schema: None,
+        response_schema: Some("AttachedTabList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/sessions/{id}/attached-tabs",
+        request_schema: Some("AttachTabRequest"),
+        response_schema: Some("AttachedTab"),
+        scope: CapabilityScope::Steer,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/sessions/{id}/attached-tabs/{tab_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
         method: HttpMethod::Post,
         path: "/v1/sessions",
         request_schema: Some("CreateSessionRequest"),
@@ -503,11 +674,182 @@ pub const ROUTES: &[Route] = &[
         sse: false,
     },
     Route {
+        method: HttpMethod::Post,
+        path: "/v1/sessions/{id}/fork",
+        request_schema: Some("ForkSessionRequest"),
+        response_schema: Some("Session"),
+        scope: CapabilityScope::Steer,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/sessions/{id}/folder",
+        request_schema: Some("SetSessionFolderRequest"),
+        response_schema: Some("Session"),
+        scope: CapabilityScope::Steer,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/projects",
+        request_schema: None,
+        response_schema: Some("ProjectList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/projects",
+        request_schema: Some("CreateProjectRequest"),
+        response_schema: Some("Project"),
+        scope: CapabilityScope::Admin,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/projects/{id}",
+        request_schema: None,
+        response_schema: Some("Project"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/projects/{id}",
+        request_schema: Some("UpdateProjectRequest"),
+        response_schema: Some("Project"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/projects/{id}",
+        request_schema: None,
+        response_schema: Some("ProjectList"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
         method: HttpMethod::Get,
         path: "/v1/settings",
         request_schema: None,
         response_schema: Some("Settings"),
         scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/preferences",
+        request_schema: None,
+        response_schema: Some("Preferences"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/settings/preferences",
+        request_schema: Some("UpdatePreferencesRequest"),
+        response_schema: Some("Preferences"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/settings/cli",
+        request_schema: None,
+        response_schema: Some("CliDefaults"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/settings/cli",
+        request_schema: Some("UpdateCliDefaultsRequest"),
+        response_schema: Some("CliDefaults"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/computer-use",
+        request_schema: None,
+        response_schema: Some("ComputerUseStatus"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/sessions/{id}/computer-use",
+        request_schema: None,
+        response_schema: Some("ComputerUseSessionState"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/sessions/{id}/computer-use/frames",
+        request_schema: None,
+        response_schema: Some("ComputerUseStreamEvent"),
+        scope: CapabilityScope::Browse,
+        success_status: 200,
+        sse: true,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/sessions/{id}/computer-use/stop",
+        request_schema: None,
+        response_schema: Some("ComputerUseStopResult"),
+        scope: CapabilityScope::Steer,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/about",
+        request_schema: None,
+        response_schema: Some("About"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/about/update-check",
+        request_schema: None,
+        response_schema: Some("UpdateCheck"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/stt",
+        request_schema: None,
+        response_schema: Some("SttStatus"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/stt",
+        request_schema: Some("TranscribeRequest"),
+        response_schema: Some("Transcript"),
+        scope: CapabilityScope::Steer,
         success_status: 200,
         sse: false,
     },
@@ -701,6 +1043,15 @@ pub const ROUTES: &[Route] = &[
         sse: false,
     },
     Route {
+        method: HttpMethod::Patch,
+        path: "/v1/devices/{id}",
+        request_schema: Some("RenameDeviceRequest"),
+        response_schema: Some("Device"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
         method: HttpMethod::Delete,
         path: "/v1/sessions/{id}",
         request_schema: None,
@@ -812,6 +1163,69 @@ pub const ROUTES: &[Route] = &[
     },
     Route {
         method: HttpMethod::Get,
+        path: "/v1/memory/history",
+        request_schema: None,
+        response_schema: Some("MemoryChangeList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/memory/rebuild",
+        request_schema: None,
+        response_schema: Some("MemoryRebuild"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/memory/reveal",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/folders/pick",
+        request_schema: None,
+        response_schema: Some("PickedFolder"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/memory/files",
+        request_schema: None,
+        response_schema: Some("MemoryFileList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/memory/files/{name}",
+        request_schema: None,
+        response_schema: Some("MemoryFile"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Put,
+        path: "/v1/memory/files/{name}",
+        request_schema: Some("UpdateMemoryFileRequest"),
+        response_schema: Some("MemoryFileSaved"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
         path: "/v1/memory/{id}",
         request_schema: None,
         response_schema: Some("Memory"),
@@ -843,6 +1257,60 @@ pub const ROUTES: &[Route] = &[
         request_schema: None,
         response_schema: Some("MemoryHistory"),
         scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/mcp/servers",
+        request_schema: None,
+        response_schema: Some("McpServerList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/mcp/servers",
+        request_schema: Some("CreateMcpServerRequest"),
+        response_schema: Some("McpServer"),
+        scope: CapabilityScope::Admin,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/mcp/servers/{id}",
+        request_schema: None,
+        response_schema: Some("McpServer"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/mcp/servers/{id}",
+        request_schema: Some("UpdateMcpServerRequest"),
+        response_schema: Some("McpServer"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/mcp/servers/{id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Admin,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/mcp/servers/{id}/refresh",
+        request_schema: None,
+        response_schema: Some("McpServer"),
+        scope: CapabilityScope::Admin,
         success_status: 200,
         sse: false,
     },
@@ -887,6 +1355,51 @@ pub const ROUTES: &[Route] = &[
         path: "/v1/sessions/{id}/visuals",
         request_schema: None,
         response_schema: Some("VisualList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/sessions/{id}/shares",
+        request_schema: None,
+        response_schema: Some("ShareLinkList"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/sessions/{id}/shares",
+        request_schema: Some("CreateShareRequest"),
+        response_schema: Some("ShareLink"),
+        scope: CapabilityScope::Steer,
+        success_status: 201,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Delete,
+        path: "/v1/sessions/{id}/shares/{share_id}",
+        request_schema: None,
+        response_schema: None,
+        scope: CapabilityScope::Steer,
+        success_status: 204,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/shares/{share_id}",
+        request_schema: None,
+        response_schema: Some("SharedChat"),
+        scope: CapabilityScope::Read,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/shares/{share_id}/artifacts/{artifact}",
+        request_schema: None,
+        response_schema: None,
         scope: CapabilityScope::Read,
         success_status: 200,
         sse: false,
@@ -1307,6 +1820,69 @@ pub const ROUTES: &[Route] = &[
     },
     Route {
         method: HttpMethod::Get,
+        path: "/v1/vault/settings",
+        request_schema: None,
+        response_schema: Some("VaultSettings"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Patch,
+        path: "/v1/vault/settings",
+        request_schema: Some("UpdateVaultSettingsRequest"),
+        response_schema: Some("VaultSettings"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
+        path: "/v1/vault/biometrics",
+        request_schema: None,
+        response_schema: Some("VaultBiometrics"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/vault/export",
+        request_schema: Some("VaultConfirmRequest"),
+        response_schema: Some("VaultExport"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/vault/clear",
+        request_schema: Some("VaultConfirmRequest"),
+        response_schema: Some("VaultClearResult"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/vault/recovery-key",
+        request_schema: Some("VaultConfirmRequest"),
+        response_schema: Some("VaultRecoveryKey"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/vault/recover",
+        request_schema: Some("VaultRecoverRequest"),
+        response_schema: Some("VaultStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Get,
         path: "/v1/pinned-tabs",
         request_schema: None,
         response_schema: Some("PinnedTabList"),
@@ -1603,6 +2179,24 @@ pub const ROUTES: &[Route] = &[
         sse: false,
     },
     Route {
+        method: HttpMethod::Post,
+        path: "/v1/remote/disable",
+        request_schema: None,
+        response_schema: Some("RemoteDisabled"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
+        method: HttpMethod::Post,
+        path: "/v1/remote/enable",
+        request_schema: None,
+        response_schema: Some("RemoteStatus"),
+        scope: CapabilityScope::Admin,
+        success_status: 200,
+        sse: false,
+    },
+    Route {
         method: HttpMethod::Get,
         path: "/v1/push/vapid",
         request_schema: None,
@@ -1727,6 +2321,15 @@ pub fn schemas() -> Map<String, Value> {
         ($($ty:ty),+ $(,)?) => { $(add_schema::<$ty>(&mut schemas, stringify!($ty));)+ };
     }
     add!(
+        ComputerUseFeature,
+        ComputerUseStatus,
+        ComputerUsePhase,
+        ComputerUseCursor,
+        ComputerUseConnection,
+        ComputerUseSessionState,
+        ComputerUseFrame,
+        ComputerUseStreamEvent,
+        ComputerUseStopResult,
         Health,
         Agent,
         AgentSummary,
@@ -1764,9 +2367,65 @@ pub fn schemas() -> Map<String, Value> {
         BrowserTab,
         BrowserTabOwnership,
         BrowserTabList,
+        BrowserPrefs,
+        BrowserPrefsStatus,
+        BrowserPrefValues,
+        ThirdPartyCookies,
+        BrowserSearchEngines,
+        BrowserSearchEngine,
+        UpdateBrowserPrefsRequest,
+        PersonTab,
+        PersonTabGroup,
+        PersonTabGroupColor,
+        PersonTabList,
+        PersonTabCommand,
+        PersonTabCommandResult,
+        PersonNativeTool,
+        OpenPersonNativeToolRequest,
+        PersonRecentlyClosed,
+        PersonRecentlyClosedKind,
+        PersonRecentlyClosedList,
+        PersonHistoryItem,
+        PersonHistoryList,
+        PersonBookmark,
+        PersonBookmarkTree,
+        CreatePersonBookmarkRequest,
+        BrowsingDataType,
+        ClearBrowsingDataRequest,
+        PersonDownload,
+        PersonDownloadState,
+        PersonDownloadList,
+        PersonExtension,
+        PersonExtensionKind,
+        PersonExtensionList,
+        AttachedBy,
+        AttachedTab,
+        AttachedTabList,
+        AttachTabRequest,
+        Preferences,
+        UpdatePreferencesRequest,
+        NotificationKind,
+        FollowUpMode,
+        ChatConfirmation,
+        CliProfile,
+        CliDefaults,
+        UpdateCliDefaultsRequest,
+        ContextUsage,
+        About,
+        UpdateCheck,
+        SttStatus,
+        SttUnavailable,
+        TranscribeRequest,
+        Transcript,
         Session,
         SessionList,
         CreateSessionRequest,
+        Project,
+        ProjectList,
+        CreateProjectRequest,
+        UpdateProjectRequest,
+        PickedFolder,
+        SetSessionFolderRequest,
         Message,
         SubmitMessageRequest,
         EditMessageRequest,
@@ -1848,6 +2507,14 @@ pub fn schemas() -> Map<String, Value> {
         RoutineDraft,
         RoutineSuggestionList,
         UpdateSessionRequest,
+        ForkSessionRequest,
+        CreateShareRequest,
+        ShareLink,
+        ShareLinkList,
+        SharedChat,
+        SharedItem,
+        SharedStep,
+        SharedArtifact,
         Memory,
         MemoryKind,
         Retention,
@@ -1898,6 +2565,18 @@ pub fn schemas() -> Map<String, Value> {
         VaultUnlockRequest,
         VaultAuditRecord,
         VaultAuditList,
+        VaultAutoLock,
+        VaultAutofillSettings,
+        UpdateVaultAutofillSettings,
+        VaultBiometrics,
+        VaultRecoveryStatus,
+        VaultSettings,
+        UpdateVaultSettingsRequest,
+        VaultConfirmRequest,
+        VaultExport,
+        VaultRecoveryKey,
+        VaultRecoverRequest,
+        VaultClearResult,
         Connection,
         ConnectionList,
         ConnectionListQuery,
@@ -1932,12 +2611,14 @@ pub fn schemas() -> Map<String, Value> {
         Device,
         DeviceKind,
         DeviceList,
+        RenameDeviceRequest,
         MyDevice,
         AccessRequest,
         AccessRequestList,
         RequestAccessRequest,
         PairingTransport,
         RemoteStatus,
+        RemoteDisabled,
         CloudflareStatus,
         RelayStatus,
         TailscaleStatus,
@@ -1965,6 +2646,8 @@ pub fn schemas() -> Map<String, Value> {
         ModelAccount,
         UpdateModelsRequest,
         ModelSelection,
+        ProviderConnectionList,
+        ProviderConnection,
         ProviderKeyInfo,
         ProviderKeyList,
         SetProviderKeyRequest,
@@ -2018,6 +2701,7 @@ pub fn schemas() -> Map<String, Value> {
         OnboardingState,
         OnboardingStatus,
         UpdateOnboardingRequest,
+        OnboardingAlreadySet,
         ExternalAgent,
         ExternalAgentList,
         InstallAgentSkillRequest,
@@ -2076,13 +2760,178 @@ pub fn schemas() -> Map<String, Value> {
         UpdateNetworkPolicyRequest,
         SyncSecretSource,
         SyncSecrets,
-        UpdateSyncConfigRequest
+        UpdateSyncConfigRequest,
+        MemoryView,
+        MemoryFileInfo,
+        MemoryFileList,
+        MemoryFile,
+        UpdateMemoryFileRequest,
+        MemoryFileSaved,
+        MemoryChange,
+        MemoryChangeList,
+        MemoryRebuild,
+        McpServerTransport,
+        McpServerStatus,
+        McpServerTool,
+        McpServer,
+        McpServerList,
+        CreateMcpServerRequest,
+        UpdateMcpServerRequest
     );
     schemas
 }
 
 fn reference(name: &str) -> Value {
     json!({"$ref": format!("#/components/schemas/{name}")})
+}
+
+/// Descriptions, query parameters and error responses of the person-browser routes.
+fn person_browser_operation(route: &Route, operation: &mut Value, parameters: &mut Vec<Value>) {
+    let error = |description: &str, code: &str| {
+        json!({"description": description, "content": {"application/json": {
+            "schema": reference("ApiError"),
+            "example": {"code": code, "message": code.replace('_', " ")}}}})
+    };
+    operation["responses"]["403"] = error(
+        "Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser",
+        "person_device_required",
+    );
+    let reads = route.method == HttpMethod::Get;
+    let session = route.path.starts_with("/v1/sessions/");
+    if route.path == "/v1/browser/person/bridge" {
+        operation["description"] = json!("WebSocket the openside extension in the person's own browser keeps open so the daemon can read and drive that browser. Only the extension may connect: a person_device token and Origin chrome-extension://jneddlbpgmlheplolfonafkbkbkjhcfj; the bearer travels as on the takeover stream (`Sec-WebSocket-Protocol: openside.v1, openside.bearer.<token>`). The extension first sends {kind:\"hello\",protocol:\"openside.person-browser\",version:1,run}; the daemon then sends requests {id,method,params} and the extension answers {id,result} or {id,error:{code}}. A newer connection replaces the older one; a new run id (browser restart) drops every chat's tab attachments.");
+        operation["responses"]["101"]["description"] = json!("Switching to WebSocket");
+        operation["responses"]["403"] = error(
+            "Not the openside extension of a person's device",
+            "person_device_required",
+        );
+        return;
+    }
+    if route.path == "/v1/browser/person/native-tools" {
+        operation["description"] = json!("Open the Task manager, or developer tools for the selected tab of the most recently active window, in the person's own browser. The daemon reaches it through the person-role gateway that `openside-browser` starts a patched browser with; that gateway serves only the person's settings and these tools, never their tabs.");
+        operation["responses"]["409"] = error(
+            "The person's browser is not open (browser_not_running), or cannot open the tool: a stock browser, no window of the person's profile, or a policy turns developer tools off (native_tools_unsupported)",
+            "browser_not_running",
+        );
+        operation["responses"]["503"] = error(
+            "The person's browser closed the connection or did not answer in time",
+            "browser_disconnected",
+        );
+        operation["responses"]["400"] = error("Unknown tool", "invalid_value");
+        return;
+    }
+    if session {
+        operation["description"] = json!(match route.method {
+            HttpMethod::Get => "Person tabs attached to this chat: the agent may snapshot them and act on them under the chat's permission mode. Attachments last for the browser run.",
+            HttpMethod::Post => "Attach one of the person's tabs (or, without tab_id, the selected tab of the focused window) to this chat, as an @ mention or Ask on this tab does. The person's own action needs no approval; incognito tabs, browser pages and the openside UI cannot be attached (400 invalid_value).",
+            _ => "Detach a person tab from this chat; the agent can no longer read or act on it.",
+        });
+    } else if reads {
+        operation["description"] = json!(format!("Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. {}",
+            match route.path {
+                "/v1/browser/person/history" => "q searches titles and URLs; without q the most recent pages are listed.",
+                "/v1/browser/person/downloads" => "Only file base names are returned, never folders.",
+                _ => "",
+            }));
+    } else {
+        operation["description"] = json!(match route.path {
+            "/v1/browser/person/tabs/command" => "Run one tab operation in the person's own browser through the openside extension (switch, open, close, duplicate, reload, pin, mute, group, move, new incognito window). create accepts http(s) URLs and a fixed set of browser pages only.",
+            "/v1/browser/person/recently-closed/{session_id}/restore" => "Reopen a recently closed tab or window in the person's own browser.",
+            "/v1/browser/person/bookmarks" => "Bookmark an http(s) page in the person's own browser.",
+            "/v1/browser/person/clear-data" => "Delete the chosen kinds of data from the person's own browser profile, as the browser's own Delete browsing data dialog does. Only the person can do this; it is audited without the data itself.",
+            _ => "Remove a bookmark or an empty bookmark folder from the person's own browser.",
+        });
+    }
+    match route.path {
+        "/v1/browser/person/recently-closed" => parameters
+            .push(json!({"name": "limit", "in": "query", "required": false,
+            "schema": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10}})),
+        "/v1/browser/person/history" => {
+            parameters.push(json!({"name": "q", "in": "query", "required": false,
+                "schema": {"type": "string", "maxLength": 200}}));
+            parameters.push(json!({"name": "limit", "in": "query", "required": false,
+                "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}}));
+        }
+        "/v1/browser/person/downloads" => parameters
+            .push(json!({"name": "limit", "in": "query", "required": false,
+            "schema": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}})),
+        "/v1/browser/person/recently-closed/{session_id}/restore" => parameters
+            .push(json!({"name": "session_id", "in": "path", "required": true,
+            "schema": {"type": "string"}})),
+        _ => {}
+    }
+    // Listing and detaching read only the daemon's own memory: they never reach the browser.
+    if session && route.method != HttpMethod::Post {
+        operation["responses"]["404"] = if route.method == HttpMethod::Get {
+            error("No such chat", "not_found")
+        } else {
+            error(
+                "No such chat, or that tab is not attached to it",
+                "tab_not_found",
+            )
+        };
+        return;
+    }
+    if !reads || session {
+        operation["responses"]["409"] = error(
+            "No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required)",
+            "person_browser_not_connected",
+        );
+        operation["responses"]["404"] = error("No such tab, bookmark or session", "tab_not_found");
+        operation["responses"]["400"] =
+            error("A value the daemon or the browser refuses", "invalid_value");
+    }
+    operation["responses"]["504"] = error(
+        "The person's browser did not answer in time",
+        "person_browser_timeout",
+    );
+    operation["responses"]["502"] = error(
+        "The person's browser reported a failure",
+        "person_browser_failed",
+    );
+}
+
+/// Descriptions and error responses of the person-facing speech-to-text routes.
+fn stt_operation(route: &Route, operation: &mut Value) {
+    let error = |description: &str, code: &str| {
+        json!({"description": description, "content": {"application/json": {
+            "schema": reference("ApiError"),
+            "example": {"code": code, "message": code.replace('_', " ")}}}})
+    };
+    if route.method == HttpMethod::Get {
+        operation["description"] = json!("Whether this caller can dictate right now. A caller that POST would refuse (agent clients: MCP/CLI agent tokens and marked socket clients) gets available false with reason person_device_required, without any transcriber lookup. Otherwise available is true when channels.stt_cmd is set or the openai account pool holds a first-party OpenAI API key (ChatGPT-plan sign-ins, relays and plugin accounts are never used), and false with reason stt_unavailable when neither is; nothing leaves the computer to answer. max_bytes is the largest decoded clip (8 MiB, or channels.max_audio_bytes when smaller); max_seconds is the longest clip a client should record (120).");
+        return;
+    }
+    operation["responses"]["403"] = error(
+        "Only the person's own device or the local socket dictates; agent clients (MCP/CLI agent tokens and marked socket clients) are refused",
+        "person_device_required",
+    );
+    operation["description"] = json!("Transcribe one recorded clip (base64) for the person's composer. channels.stt_cmd runs locally first with the clip in a private temporary file that is deleted when the command ends; otherwise the clip goes to OpenAI's transcription API (gpt-4o-mini-transcribe) with the first usable OpenAI API key of the openai account pool. language only reaches OpenAI, as its primary subtag. The clip and the text are never stored, logged or added to a chat. At most two clips are transcribed at once and four more wait for a slot; beyond that the request is refused with 429 stt_busy before its clip is decoded. The request body may be at most the base64 size of max_bytes plus 64 KiB and must arrive within 30 seconds.");
+    operation["responses"]["400"] = error(
+        "A body that is not a TranscribeRequest, bad base64, an empty clip, a mime that is not audio/*, or a language that is not a short BCP-47 tag",
+        "invalid_audio",
+    );
+    operation["responses"]["408"] = error(
+        "The request body did not arrive within 30 seconds; its place is freed for others",
+        "audio_timeout",
+    );
+    operation["responses"]["409"] = error(
+        "No transcriber: set channels.stt_cmd or add an OpenAI API key",
+        "stt_unavailable",
+    );
+    operation["responses"]["413"] = error(
+        "The clip is larger than max_bytes from GET /v1/stt, or the body is larger than its base64 size plus 64 KiB",
+        "audio_too_large",
+    );
+    operation["responses"]["422"] = error("The transcriber heard no speech", "no_speech");
+    operation["responses"]["502"] = error(
+        "The transcriber failed or timed out; its output is never returned",
+        "stt_failed",
+    );
+    operation["responses"]["429"] = error(
+        "Two clips are being transcribed and four more are waiting; try again shortly",
+        "stt_busy",
+    );
 }
 
 /// Generate the OpenAPI 3.1 document from [`ROUTES`] and the derived JSON Schemas.
@@ -2115,6 +2964,28 @@ pub fn openapi() -> Value {
             operation["responses"]["503"] = json!({"description": "The previously started browser controller is disconnected",
                 "content": {"application/json": {"schema": reference("ApiError"),
                 "example": {"code": "browser_disconnected", "message": "browser disconnected"}}}});
+        }
+        if route.path == "/v1/browser/prefs" {
+            let error = |description: &str, code: &str| {
+                json!({"description": description, "content": {"application/json": {
+                    "schema": reference("ApiError"),
+                    "example": {"code": code, "message": code.replace('_', " ")}}}})
+            };
+            operation["responses"]["503"] = error(
+                "The person's browser closed the connection or did not answer in time (browser_disconnected), or could not load its search engines in time or has too many such requests waiting (browser_busy)",
+                "browser_disconnected",
+            );
+            if route.method == HttpMethod::Get {
+                operation["description"] = json!("Reads the settings of the person's own browser (the patched browser `openside-browser` opens, through its person-role gateway), from its startup profile; the agent browser's profile is never read. status is not_running when that browser is closed (the daemon never launches it) and unsupported for stock Chromium/Chrome; prefs is then null.");
+            } else {
+                operation["description"] = json!("Writes settings of the person's own browser through its person-role gateway, one allowlisted preference at a time in field order, and returns the values read back. Never launches a browser and never writes the agent browser's profile.");
+                operation["responses"]["400"] =
+                    error("A value the browser refuses", "invalid_value");
+                operation["responses"]["409"] = error(
+                    "The person's browser is not open (browser_not_running), cannot change settings (browser_prefs_unsupported), or a policy manages the setting (browser_pref_managed)",
+                    "browser_not_running",
+                );
+            }
         }
         if let Some(name) = route.request_schema {
             operation["requestBody"] = json!({"required": true, "content": {
@@ -2151,9 +3022,23 @@ pub fn openapi() -> Value {
                 json!({"image/jpeg": {"schema": {"type":"string","format":"binary"}}});
         }
         if route.path.contains("{tab_id}") {
-            parameters.push(json!({"name": "tab_id", "in": "path", "required": true,
-                "description": "Agent tab of this session, from GET /v1/browser/tabs.",
-                "schema": {"type": "string"}}));
+            if route.path.starts_with("/v1/sessions/{id}/attached-tabs/") {
+                parameters.push(json!({"name": "tab_id", "in": "path", "required": true,
+                    "description": "Chrome tab id of an attached person tab.",
+                    "schema": {"type": "integer", "format": "int64"}}));
+            } else {
+                parameters.push(json!({"name": "tab_id", "in": "path", "required": true,
+                    "description": "Agent tab of this session, from GET /v1/browser/tabs.",
+                    "schema": {"type": "string"}}));
+            }
+        }
+        if route.path.starts_with("/v1/browser/person/")
+            || route.path.starts_with("/v1/sessions/{id}/attached-tabs")
+        {
+            person_browser_operation(route, &mut operation, &mut parameters);
+        }
+        if route.path == "/v1/stt" {
+            stt_operation(route, &mut operation);
         }
         if route.path.starts_with("/v1/settings/channels") {
             operation["description"] = json!("Manage independent labelled channel identities. Read lists are metadata only. Mutations require admin and a person device or the local socket. Credentials are encrypted in the Vault, never returned, synced or exposed to browser fill. Account changes affect only that account; failed credentials never select another identity.");
@@ -2163,6 +3048,24 @@ pub fn openapi() -> Value {
                         json!({"name":name,"in":"path","required":true,"schema":{"type":"string"}}),
                     );
                 }
+            }
+        }
+        if route.path.contains("/computer-use") {
+            operation["description"] = json!(match (route.method, route.path) {
+                (HttpMethod::Get, "/v1/computer-use") => "Whether computer use is turned on (preferences.computer_use, changeable only with local access) and what works on this computer: window frames, pointer and keyboard, each with the mechanism in use or the reason it does not work. Probes the desktop at most every 30 seconds.",
+                (HttpMethod::Get, "/v1/sessions/{id}/computer-use/frames") => "Server-sent events for the chat's connected app: a `state` event now and on every change (connect, phase, cursor, stop), and a `frame` event with each frame the agent sees. Private chats are refused (409 private_session). The stream ends when the chat is deleted.",
+                (HttpMethod::Post, _) => "End the chat's computer use now: an action in progress is cancelled, the virtual input device is removed, and later approvals for that connection no longer act. Audited.",
+                _ => "The chat's connected desktop app, if any, with the cursor in pixels of the latest frame.",
+            });
+            if route.path.starts_with("/v1/sessions/") {
+                operation["responses"]["404"] = json!({"description": "No such chat",
+                    "content": {"application/json": {"schema": reference("ApiError"),
+                    "example": {"code": "not_found", "message": "not found"}}}});
+            }
+            if route.path.ends_with("/frames") {
+                operation["responses"]["409"] = json!({"description": "Private chats never stream frames",
+                    "content": {"application/json": {"schema": reference("ApiError"),
+                    "example": {"code": "private_session", "message": "private session"}}}});
             }
         }
         if route.path == "/v1/hooks/{kind}/{account_id}" {
@@ -2243,16 +3146,36 @@ pub fn openapi() -> Value {
             parameters.push(json!({"name": "archived", "in": "query", "required": false,
                 "description": "List archived (true) or unarchived (false, default) sessions; pinned sessions come first.",
                 "schema": {"type": "boolean", "default": false}}));
+            parameters.push(json!({"name": "project", "in": "query", "required": false,
+                "description": "Filter by project: none selects chats outside every project; a project id selects that project's chats.",
+                "schema": {"type": "string"}}));
         }
         if route.path == "/v1/sessions" && route.method == HttpMethod::Post {
-            operation["description"] = json!("Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). Paired devices get 403 local_socket_required for a mode looser than the daemon default or any workspace; agent_client devices also get it for speed \"fast\", effort \"xhigh\"/\"max\" or profile \"ultrabrowse\".");
+            operation["description"] = json!("Create a session. browser_space \"isolated\" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). project_id starts the chat in a project: its folder becomes the workspace and `session.created` is followed by `session.folder_changed` in the same commit (404 project_not_found; 409 project_root_changed when the project's folder was moved or replaced since the project was made, or still needs confirming (needs_confirmation); 400 invalid_workspace together with workspace). Any person device or the local socket may start a chat in an existing project; agent_client devices get 403 person_device_required. Paired devices get 403 local_socket_required for a mode looser than the daemon default, and for a workspace unless they have local access (an admin person device on the computer running openside); agent_client devices also get it for speed \"fast\", effort \"xhigh\"/\"max\" or profile \"ultrabrowse\". A model a person picks for a chat without an agent becomes the default for new chats; agent clients and `openside mcp` never change it.");
+        }
+        if route.path == "/v1/sessions/{id}/folder" {
+            operation["description"] = json!("Choose where the chat works: project_id moves it into that project (its folder becomes the workspace), workspace attaches an absolute folder outside any project, and both null leaves the project and drops the folder. Recorded as one `session.folder_changed` event (none when nothing changes); the agent switches folders from its next start. 400 invalid_value when both are set; 404 project_not_found; 409 project_root_changed when the project's folder was moved or replaced since the project was made, or still needs confirming (needs_confirmation); 409 agent_home for an agent's home chat; 400 invalid_project_root for a workspace that is missing, not a folder, the file system root, the home folder or above it, inside openside's data, inside an operating-system folder or another person's home, or a credential folder such as ~/.ssh or above one. Attaching a workspace needs local access (403 local_access_required on other devices); moving into an existing project needs a person device or the local socket (403 person_device_required for agent_client devices); leaving needs neither.");
+        }
+        if route.path == "/v1/projects" && route.method == HttpMethod::Get {
+            operation["description"] = json!("List every project, sorted by name.");
+        }
+        if route.path == "/v1/projects" && route.method == HttpMethod::Post {
+            operation["description"] = json!("Create a project from an existing folder (root) or, without root, from scratch in a new empty folder under openside's data. Only the computer running openside creates projects (403 local_access_required elsewhere). 400 invalid_project_name for a blank name or one longer than 80 characters; 400 instructions_too_large over 16 KiB; 400 invalid_project_root for a folder that is missing, not a folder, the file system root, the home folder or above it, inside openside's data, inside an operating-system folder (such as /etc or /usr) or another person's home, or a credential folder such as ~/.ssh or above one; 409 project_exists when another project already uses the folder.");
+        }
+        if route.path == "/v1/projects/{id}" && route.method == HttpMethod::Get {
+            operation["description"] = json!("One project; 404 project_not_found.");
+        }
+        if route.path == "/v1/projects/{id}" && route.method == HttpMethod::Patch {
+            operation["description"] = json!("Rename a project, replace its instructions, or confirm its folder; the folder is fixed. Chats in the project receive the new instructions from their agent's next start. confirm_root checks the project's folder again as at creation and records it, clearing needs_confirmation; only the computer running openside may confirm (403 local_access_required elsewhere; 400 invalid_project_root when the folder no longer passes). Any other change from the computer running openside to a project that needs confirming also records its folder when it still passes. 400 invalid_value for an empty body, invalid_project_name or instructions_too_large; 404 project_not_found; 403 person_device_required for agent_client devices (the instructions become part of every project chat's system prompt).");
+        }
+        if route.path == "/v1/projects/{id}" && route.method == HttpMethod::Delete {
+            operation["description"] = json!("Delete a project and return the remaining ones. Its chats stay and leave the project first, in one commit (each gets `session.folder_changed` with no project and no folder); the folder and its files are never deleted. 404 project_not_found; 403 person_device_required for agent_client devices.");
         }
         if route.path == "/v1/agents/{id}" && route.method == HttpMethod::Patch {
             operation["description"] = json!("Edit the profile for the next turn. Omitted nullable overrides are unchanged; explicit null inherits defaults. Permission widening and skills/model/account-pool/channel changes additionally require Admin and a person device (local socket exempt). Immutable identity and home fields cannot be patched.");
         }
         if route.path == "/v1/sessions/{id}" && route.method == HttpMethod::Patch {
-            operation["description"] =
-                json!("Update title/pinned/archived as a durable session.updated event. Archiving an isolated-space session disposes its browser space.");
+            operation["description"] = json!("Change a chat. title, pinned and archived are recorded as one session.updated event; archiving an isolated-space session disposes its browser space. model, effort, mode and confirmation are recorded as one session.options_updated event and apply from the chat's next model request. Paired devices get 403 local_socket_required for a mode looser than the daemon default, and agent_client devices also for effort \"xhigh\"/\"max\". A model a person picks becomes the default for new chats; agent clients and `openside mcp` change only this chat. read marks the chat read or unread as a session.read event. Fields equal to the current value record nothing; 409 agent_home for a model or mode change of an agent's home chat.");
         }
         if route.path == "/v1/tickets" {
             parameters.push(json!({"name": "status", "in": "query", "required": false,
@@ -2334,10 +3257,19 @@ pub fn openapi() -> Value {
             operation["x-public"] = json!(true);
         }
         if route.path == "/v1/pairing" {
-            operation["description"] = json!("Issue a one-time pairing code valid for 180 monotonic seconds. Requires the local socket, or verified loopback TCP with a socket-issued person_device admin token and current X-Openside-Local-Secret. Proxied/relay traffic is refused with 403 local_access_required; loopback alone never proves locality. Requested scopes cannot exceed caller grants (403 scope_ceiling_exceeded). The local operator fixes person_device or agent_client in the offer; redemption cannot change kind. Codes and local secrets are never audited.");
+            operation["description"] = json!("Issue a one-time pairing code valid for 180 monotonic seconds. Requires the local socket, or verified loopback TCP with a socket-issued person_device admin token and current X-Openside-Local-Secret. Proxied/relay traffic is refused with 403 local_access_required; loopback alone never proves locality. Requested scopes cannot exceed caller grants (403 scope_ceiling_exceeded). The local operator fixes person_device or agent_client in the offer; redemption cannot change kind. Codes and local secrets are never audited. While Remote Control is off the offer carries no link (url and transport are null) and naming a transport in via is refused with 409 remote_disabled.");
         }
         if route.path == "/v1/remote/local-access" {
-            operation["description"] = json!("Local socket only: every call atomically replaces the one managed owner-bootstrap device/token, closes the predecessor's streams/polls, clears its push subscriptions, and audits rotation. A distinct persistent bootstrap marker survives boots; intentional CLI devices are never revoked by display name. Returns the per-boot locality secret and fresh person/admin token plus a loopback launch URL with credentials in its fragment. TCP/relay callers get 403 local_socket_required. Keep the proof only in sessionStorage; strip the fragment immediately and clear proof on sign-out, rejection or identity change.");
+            operation["description"] = json!("Local socket only: every call atomically replaces the one managed owner-bootstrap device/token, closes the predecessor's streams/polls, clears its push subscriptions, and audits rotation. A distinct persistent bootstrap marker survives boots; intentional CLI devices are never revoked by display name. Returns the per-boot locality secret and fresh person/admin token plus a loopback launch URL with credentials in its fragment. TCP/relay callers get 403 local_socket_required. Keep the proof only in sessionStorage; strip the fragment immediately and clear proof on sign-out, rejection or identity change. With a listener it also returns extension_code: a one-time pairing code only the openside extension's own origin may redeem, for a person device (read, steer, approve, human_step) that replaces the extension device of the previous launch. person_browser_runtime_dir is the private directory `openside-browser` gives the person's browser for its person-role gateway and launch record; the daemon looks for that browser nowhere else.");
+        }
+        if route.path == "/v1/remote/disable" {
+            operation["description"] = json!("Turn Remote Control off. Needs local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret; 403 local_access_required otherwise) and a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required. Saves remote.enabled = false and, from that moment, refuses every TCP request that does not come directly from this computer with 403 remote_disabled: other addresses, the relay, and loopback requests carrying proxy or tunnel headers (Forwarded, Via, X-Forwarded-*, Cf-*, Tailscale-*) or a non-loopback Host. The Unix socket and the local web UI keep working. Then stops every transport (Tailscale Serve handler, cloudflared, relay registration), keeping each one's saved settings, and goes on past failures: still_on lists the transports that could not be stopped. Audited as remote/disabled.");
+        }
+        if route.path == "/v1/remote/enable" {
+            operation["description"] = json!("Turn Remote Control back on with the saved transports: saves remote.enabled = true, then restarts each configured transport (Tailscale Serve handler, cloudflared, relay registration). A transport that fails to start shows its error in the returned status. Same access rules as /v1/remote/disable (403 local_access_required, 403 person_access_required). Audited as remote/enabled.");
+        }
+        if route.method == HttpMethod::Put && route.path.starts_with("/v1/remote/") {
+            operation["description"] = json!("Turn one transport on or off and save its settings. Turning one on while Remote Control is off is refused with 409 remote_disabled and changes nothing; turn Remote Control on first (POST /v1/remote/enable). Turning one off works either way.");
         }
         if route.path == "/v1/pairing"
             || route.path == "/v1/access-requests/{id}/approve"
@@ -2366,13 +3298,23 @@ pub fn openapi() -> Value {
             operation["description"] = json!("State of the first-run guide, kept on the daemon so every device agrees: `pending` until someone finishes or skips it once.");
         }
         if route.path == "/v1/onboarding" && route.method == HttpMethod::Put {
-            operation["description"] = json!("Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). Reopening the guide from Settings does not reset the flag.");
+            operation["description"] = json!("Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). A compare-and-set: it writes only while the stored state is `pending`, so of two devices finishing the guide at once exactly one outcome is kept. Reopening the guide from Settings does not reset the flag.");
+            operation["responses"]["400"] = json!({"description": "`pending` was sent",
+                "content": {"application/json": {"schema": reference("ApiError"),
+                "example": {"code": "invalid_value", "message": "invalid value"}}}});
+            operation["responses"]["409"] = json!({"description": "The guide already ended; nothing was written. The body carries the outcome already recorded",
+                "content": {"application/json": {"schema": reference("OnboardingAlreadySet"),
+                "example": {"code": "onboarding_already_set", "message": "onboarding already set",
+                    "state": "completed", "updated_at": "2026-01-01T00:00:00Z"}}}});
         }
         if route.path == "/v1/external-agents" {
             operation["description"] = json!("The agent CLIs openside can install its browser skill for: the `claude`, `codex` and `omp` presets, then any agent whose skills folder was added with `PUT /v1/external-agents/{id}` (stored as a `[skills.agents]` entry). `detected` means the executable is on the daemon's PATH or the agent's configuration directory exists; the skills directory follows the same rules as `openside skills install`.");
         }
         if route.path == "/v1/external-agents/{id}/browser-skill" {
-            operation["description"] = json!("Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown (add the folder with `PUT /v1/external-agents/{id}`).");
+            operation["description"] = json!("Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. The agent trusts what lands there, so this needs local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret; 403 local_access_required otherwise) and a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required. Right before writing, the directory, presets included even when it comes from CLAUDE_CONFIG_DIR, CODEX_HOME, OMP_CODING_AGENT_DIR or PI_CODING_AGENT_DIR, must be absolute, inside the user's home, reached without any symbolic link below home and outside openside's data directory (400 invalid_skills_dir; nothing is written). 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown (add the folder with `PUT /v1/external-agents/{id}`). Audited.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
         }
         if route.path == "/v1/external-agents/{id}" && route.method == HttpMethod::Put {
             operation["description"] = json!("Add or change the skills folder of an agent that is not a preset. Requires local access (the computer's own user, or its launcher with X-Openside-Local-Secret): 403 local_access_required otherwise. The id is lowercase letters, digits and hyphens and not a preset name (400 invalid_agent); the folder must be absolute or `~/…`, without `..`, and resolve inside the user's home, config or data folders (400 invalid_skills_dir). Persisted as `[skills.agents]` in config.toml and effective at once; audited.");
@@ -2391,6 +3333,43 @@ pub fn openapi() -> Value {
         }
         if route.path == "/v1/memory/model/cancel" {
             operation["description"] = json!("Stop the running download; the installed model and the staged files are left untouched. A no-op when nothing is running.");
+        }
+        if route.path == "/v1/memory/files" {
+            operation["description"] = json!("The memory store shown as three files: MEMORY.md (notes not tagged profile), USER.md (notes tagged profile) and TAXONOMY.md (tags and kinds, read-only). Visited-page history is not part of these files.");
+        }
+        if route.path.starts_with("/v1/memory/files/") {
+            parameters.push(json!({"name":"name","in":"path","required":true,
+                "schema":{"type":"string","enum":["MEMORY.md","USER.md","TAXONOMY.md"]}}));
+        }
+        if route.path == "/v1/memory/files/{name}" && route.method == HttpMethod::Put {
+            operation["description"] = json!("Save an edited MEMORY.md or USER.md in one transaction: blocks under a `<!-- memory id=… -->` marker update that note, removed blocks delete their note, and text before the first marker or under a bare `<!-- memory -->` marker adds notes (USER.md adds the profile tag; dropping or adding the profile tag moves a note between the two files). A note changed, added or removed elsewhere after `revision` fails the whole save with 409 memory_conflict. A note whose text contains a hidden Vault value cannot be edited here (400 redacted_memory); secrets are 400 secret_detected; TAXONOMY.md is 400 read_only_view.");
+        }
+        if route.path == "/v1/memory/history" {
+            operation["description"] = json!("Every memory change (create, update, delete, purge), newest first, across all memories. Deleted and purged entries keep only operation, actor and time.");
+            parameters.push(json!({"name":"limit","in":"query","required":false,"schema":{"type":"integer","minimum":1,"maximum":200,"default":50}}));
+            parameters.push(json!({"name":"before","in":"query","required":false,"description":"next_before of the previous page.","schema":{"type":"integer"}}));
+        }
+        if route.path == "/v1/memory/rebuild" {
+            operation["description"] = json!("Rebuild the full-text index of every live memory and recompute embeddings with the loaded local model. Expired memories are purged first.");
+        }
+        if route.path == "/v1/memory/reveal" {
+            operation["description"] = json!("Write a copy of MEMORY.md, USER.md and TAXONOMY.md, as GET /v1/memory/files/{name} serves them, into `<data_dir>/memory/files` (0700 folder, 0600 files, replaced on every call) and open that folder in the file manager of the computer running openside. Edits made to the copy are not read back. Requires local access (403 local_access_required). 503 file_manager_unavailable when no file manager could be started.");
+        }
+        if route.path == "/v1/folders/pick" {
+            operation["description"] = json!("Open the native folder picker on the screen of the computer running openside and wait until the person chooses a folder or closes it. Returns the canonical path, or `path: null` when the picker was closed without a choice. The folder must be usable as a project folder: not the file system root, the home folder or a folder above it, nor openside's data folder, a folder above it or anything inside it, nor inside an operating-system folder or another person's home, nor a credential folder such as ~/.ssh or a folder above one (400 invalid_project_root). Requires local access (403 local_access_required). 409 folder_picker_busy while another picker is open; 503 folder_picker_unavailable when no folder picker could be started.");
+        }
+        if route.path.starts_with("/v1/mcp/servers") {
+            operation["description"] = json!(match (route.method, route.path) {
+                (HttpMethod::Get, "/v1/mcp/servers") => "External MCP servers whose tools agents can call, with connection state and tool lists. Secret values are never returned; secrets lists their names.",
+                (HttpMethod::Post, _) if route.path.ends_with("/refresh") => "Reconnect the server and list its tools again; returns the state after the attempt. Requires local access (403 local_access_required): reconnecting a stdio server runs its program.",
+                (HttpMethod::Post, _) => "Connect a stdio (command) or http (URL) MCP server. Secret values go to the Vault, which must be set up and unlocked (409 vault_unavailable; 403 biometric_required when a new keyring vault would be needed but biometric unlock is on, so a person sets it up first). Requires local access (403 local_access_required): a stdio server runs a program on this computer. 409 mcp_server_exists, 409 mcp_server_limit, 400 invalid_value. The response reflects the first connection attempt.",
+                (HttpMethod::Patch, _) => "Change a server; secrets set to null are removed from the Vault. Requires local access. The server reconnects with the new settings.",
+                (HttpMethod::Delete, _) => "Stop the server, delete its Vault secrets and remove it from config.toml. Requires local access.",
+                _ => "One configured MCP server.",
+            });
+        }
+        if route.path == "/v1/sessions/{id}/fork" {
+            operation["description"] = json!("Branch the chat at a reply: a new chat titled `<title> (branch)` holding the messages and replies up to and including the finished reply to `from_message`, with the same agent, model, effort, permission, confirmation, project, workspace and browser space (a branch of an agent's home chat is an ordinary chat of that agent). The agent receives that conversation as context; tool steps and attachments are not copied (attachments are named in the copied text). The copied events end with `session.branched`. 404 message_not_found; 409 message_not_finished while that message has no finished reply; 409 agent_retired; 409 project_root_changed when the project's folder was moved or replaced, or still needs confirming; 403 local_socket_required when a paired device could not create such a chat itself (a project's folder never counts against a person device; for an agent_client device, or when the project no longer exists, the branch keeps the folder as a plain workspace without the project).");
         }
         if route.path == "/v1/doctor" {
             operation["description"] = json!("Run the diagnostics of `openside doctor` inside the daemon and return them grouped by area, with a web fix for findings that have one. The vault probe reads only the file header and the keyring state. One report at a time; callers wait for the run in progress.");
@@ -2466,8 +3445,11 @@ pub fn openapi() -> Value {
             operation["description"] = json!("Paired device-token fetch of its one-use native delivery ticket. HMAC-SHA256 authenticates ticket || batch_id || hex(SHA256(exact UTF-8 payload)) with the32-byte secret established only at locally authorized, pinned-extension-origin redemption. Payload never goes through a web page; owned cookie/payload buffers are zeroized where feasible, with JS/HTTP/WebSocket/library residuals. The extension verifies before native writes.");
             operation["responses"]["200"]["headers"]["Cache-Control"] = json!({"schema":{"type":"string"},"description":"Always no-store; payload contains cookie values."});
         }
-        if route.path == "/v1/devices/{id}" {
+        if route.path == "/v1/devices/{id}" && matches!(route.method, HttpMethod::Delete) {
             operation["description"] = json!("Revoke a device token. The next request with it gets 401, its open SSE streams end, and its push subscriptions are deleted.");
+        }
+        if route.path == "/v1/devices/{id}" && matches!(route.method, HttpMethod::Patch) {
+            operation["description"] = json!("Rename a paired device. The name is trimmed and must be 1-100 characters (400 invalid_value); 404 not_found for an unknown device. An agent client may rename only itself (403 person_approval_required). Audited as `device` `renamed`.");
         }
         if route.path == "/v1/push/presence" {
             operation["description"] = json!("focused=true suppresses pushes to that subscription for 60 seconds unless renewed; focused=false ends it. 404 unknown_subscription for another device's subscription.");
@@ -2476,17 +3458,38 @@ pub fn openapi() -> Value {
             operation["description"] = json!("Forwarded SMS. 403 sender_not_allowed unless the sender is in otp.senders. A code extracted by an otp.sites pattern fills pending secret_input tickets of that exact origin, or is kept in memory for otp.ttl_secs for a step that opens later. Codes are never returned, logged or persisted.");
         }
         if route.path == "/v1/settings/config" {
-            operation["description"] = json!("The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable.");
+            operation["description"] = json!("The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key, except that preferences.mcp_server and preferences.computer_use change only for a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required, audited as `refused_agent`. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable.");
             parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
                 "description":"Per-boot launcher proof that makes a loopback TCP caller local; paired devices elsewhere omit it.",
                 "schema":{"type":"string","minLength":64,"maxLength":64}}));
         }
+        if route.path == "/v1/settings/cli" {
+            operation["description"] = json!(if route.method == HttpMethod::Get {
+                "The browser profile new CLI and MCP sessions on this computer use: the `profile` key of `cli.toml` beside config.toml, which `openside settings set-default-profile` also writes. profile_is_default is true when none is saved (new sessions use the account's first profile, `shared`). 500 cli_settings_invalid when the file is not valid TOML or names an unknown profile; the file is left as it is."
+            } else {
+                "Save the default profile (`null` removes the key, back to the account's first profile). Only `profile` is rewritten; every other key and comment of cli.toml stays, and the file is created when missing. Requires local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret): 403 local_access_required otherwise. 500 cli_settings_invalid leaves an unreadable file untouched. Audited."
+            });
+            if route.method == HttpMethod::Patch {
+                parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                    "description":"Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket.",
+                    "schema":{"type":"string","minLength":64,"maxLength":64}}));
+            }
+        }
+        if route.path == "/v1/settings/preferences" && route.method == HttpMethod::Patch {
+            operation["description"] = json!("Change some of the person's preferences; omitted fields keep their value and they apply at once. mcp_server and computer_use need local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret): 403 local_access_required otherwise, audited as `refused_remote`. They also need a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required even on the socket, audited as `refused_agent`. Agent clients without local access get 403 forbidden for every field. 400 invalid_preferences for a value the file would refuse, 400 invalid_value for an empty body.");
+            parameters.push(json!({"name":"X-Openside-Local-Secret","in":"header","required":false,
+                "description":"Per-boot launcher proof that makes a loopback TCP caller local; only needed for mcp_server and computer_use.",
+                "schema":{"type":"string","minLength":64,"maxLength":64}}));
+        }
         if route.path == "/v1/settings/models" {
             operation["description"] = if route.method == HttpMethod::Get {
-                json!("Local model readiness grouped by provider, from configured ids, source accounts and curated chat/tool-capable models. Credential values, email and upstream account identities are never included. Metadata is cached for at most five seconds; key/source/Vault lifecycle writes invalidate it. Readiness is not an upstream entitlement guarantee.")
+                json!("Local model readiness grouped by provider, from configured ids, source accounts and curated chat/tool-capable models. Credential values, email and upstream account identities are never included. Metadata is cached for at most five seconds; key/source/Vault lifecycle writes invalidate it. Readiness is not an upstream entitlement guarantee. Each model's default_effort is the effort a chat runs at on it when no effort is picked (null: the provider's own default, or an image model); a create or PATCH without effort keeps it unset.")
             } else {
-                json!("Set the default and ordered fallback ids without raw TOML editing. Requires admin; every id must be available in the current catalog (400 model_unavailable), at most16 distinct fallbacks and no default duplicate (400 invalid_models). Atomically persists selection without daemon restart. Ordinary sessions retain stored models; Team homes use their Agent override or the current default and reopen on the next idle/real turn when effective selection changes. Running requests finish their captured model. Response effective:new_sessions_and_home_next_turn.")
+                json!("Set the role models without raw TOML editing: default, fast, ordered fallbacks, and optional standard, deep, visual and image (omitted keeps, null clears; unset roles use the session model). Requires admin; every id must be available in the current catalog (400 model_unavailable), chat roles need kind chat and image needs kind image (400 invalid_model_kind), at most16 distinct fallbacks and no default duplicate (400 invalid_models). Atomically persists selection without daemon restart. Ordinary sessions retain stored models; Team homes use their Agent override or the current default and reopen on the next idle/real turn when effective selection changes. Running requests finish their captured model. Response effective:new_sessions_and_home_next_turn.")
             };
+        }
+        if route.path == "/v1/settings/models/providers" {
+            operation["description"] = json!("Connected providers for the Providers list: one row per provider and connection kind (subscription or api_key) with a product display name and connected/needs_attention status. `accounts` carries the internal account references behind a row for Reconnect and Disconnect; it is not display text. Credential values and upstream identities are never included.");
         }
         if route.path == "/v1/settings/keys" {
             operation["description"] = json!("Administrator-only labelled account metadata: provider, key_id, label, last_four, created_at, enabled and reserve_percent. No API path returns key material; read-scoped devices receive403.");
@@ -2501,7 +3504,7 @@ pub fn openapi() -> Value {
                     json!({"name":"key_id","in":"path","required":true,"schema":{"type":"string"}}),
                 );
             }
-            operation["description"] = json!("Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409.");
+            operation["description"] = json!("Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on.");
             operation["responses"]["403"] = json!({"description":"Missing admin scope or person-device authority",
                 "content":{"application/json":{"schema":reference("ApiError")}}});
             operation["responses"]["409"] = json!({"description":"Vault unavailable, or an ordinary legacy item conflicts with the provider id",
@@ -2557,6 +3560,32 @@ pub fn openapi() -> Value {
         if route.path == "/v1/sessions/{id}/visuals" {
             operation["description"] = json!("Visual blocks (fenced ```html visual or ```svg visual) from assistant.final events, each with its source text and a sandboxed preview_url.");
         }
+        if route.path.contains("{share_id}") {
+            parameters.push(json!({"name": "share_id", "in": "path", "required": true,
+                "description": "Share id from ShareLink.id.",
+                "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}}));
+        }
+        if route.path == "/v1/sessions/{id}/shares" && route.method == HttpMethod::Get {
+            operation["description"] = json!("Live share links of the chat, newest first. Expired links are removed when listed.");
+        }
+        if route.path == "/v1/sessions/{id}/shares" && route.method == HttpMethod::Post {
+            operation["description"] = json!("Publish a read-only snapshot of the chat as it is now. Only a person may share: agent-client and channel callers get 403 person_required. The snapshot holds delivered messages and replies, optionally one line per step (tool name and failure only, never arguments or results), and copies of the chosen artifacts; tickets, thinking, queued messages and tool data are never included. Live vault and session secrets are masked, a line that still looks like a credential is replaced whole, and a chosen text artifact that still looks like one is refused (400 sensitive_artifact). Only UTF-8 text and PNG, JPEG, GIF or WebP images can be shared (400 unsupported_share_artifact otherwise); images are re-encoded without metadata. 409 private_session for private chats, 409 vault_locked while a set-up vault is locked (its values could not be masked), 409 too_many_shares beyond 50 live links per chat, 400 invalid_share_artifact for an unknown, working or transcript path, more than 20 artifacts or a duplicate, 400 invalid_expiry outside 60 s..365 days, 413 share_too_large beyond 4 MiB of conversation, 10 MiB per artifact or 25 MiB of artifacts.");
+        }
+        if route.path == "/v1/sessions/{id}/shares/{share_id}" {
+            operation["description"] = json!("Revoke a link: the snapshot and its artifact copies are deleted and the link answers 404 at once. Deleting the chat revokes all of its links.");
+        }
+        if route.path == "/v1/shares/{share_id}" {
+            operation["description"] = json!("Public read-only snapshot behind a share link. No bearer token: the unguessable id is the credential. Unknown, revoked, expired and deleted-chat links all answer 404 share_not_found. Each link admits 120 requests per rolling minute and the daemon 60 failed lookups per rolling minute; beyond that 429 share_rate_limited with Retry-After 60. Responses are never cached and carry Referrer-Policy no-referrer and X-Robots-Tag noindex.");
+            operation["responses"]["404"] = json!({"description":"share_not_found","content":{"application/json":{"schema":reference("ApiError")}}});
+            operation["responses"]["429"] = json!({"description":"share_rate_limited","headers":{"Retry-After":{"schema":{"type":"string"},"description":"60 seconds"}},"content":{"application/json":{"schema":reference("ApiError")}}});
+        }
+        if route.path == "/v1/shares/{share_id}/artifacts/{artifact}" {
+            parameters.push(json!({"name": "artifact", "in": "path", "required": true,
+                "description": "SharedArtifact.index.",
+                "schema": {"type": "integer", "minimum": 0}}));
+            operation["description"] = json!("Public bytes of an artifact copied into a share, under the same id credential, 404 and rate limit as GET /v1/shares/{share_id}. PNG, JPEG, GIF and WebP images are inline; anything else is an attachment. Every response has X-Content-Type-Options nosniff and a sandbox CSP with default-src 'none', so nothing renders in the daemon origin.");
+            operation["responses"]["200"]["content"] = json!({"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}});
+        }
         if route.path == "/v1/sessions/{id}/repl" {
             operation["x-capability-also-granted-by"] = json!([CapabilityScope::Steer]);
         }
@@ -2604,7 +3633,7 @@ pub fn openapi() -> Value {
             operation["description"] = json!("Value-free item metadata (ids, allowed origins, policy, TOTP/passkey presence). Usernames, passwords, seeds and private keys are never returned.");
         }
         if route.path == "/v1/vault/items" && route.method == HttpMethod::Post {
-            operation["description"] = json!("Add a login (password, optional username and authenticator) or an authenticator alone (`totp`: otpauth:// URI or base32 key). Values only travel to the daemon, are masked in every later output before the save, are saved encrypted and audited (`item_add`, attributed to the caller: `device:<id>` or `local`); the response is value-free metadata. With a keyring backend the first item creates the vault. 400 invalid_item, invalid_origin, invalid_totp, empty_item; 409 item_exists, vault_unavailable; 500 item_added_audit_incomplete (saved).");
+            operation["description"] = json!("Add a login (password, optional username and authenticator) or an authenticator alone (`totp`: otpauth:// URI or base32 key). Values only travel to the daemon, are masked in every later output before the save, are saved encrypted and audited (`item_add`, attributed to the caller: `device:<id>` or `local`); the response is value-free metadata. With a keyring backend the first item creates the vault, unless biometric unlock is on (then a person sets it up first: 403 biometric_required). 400 invalid_item, invalid_origin, invalid_totp, empty_item; 403 biometric_required; 409 item_exists, vault_unavailable; 500 item_added_audit_incomplete (saved).");
         }
         if route.path == "/v1/vault/items/{id}" && route.method == HttpMethod::Patch {
             operation["description"] = json!("Set or clear (`default`) the item's access-policy override; the change is saved encrypted and audited, attributed to the caller (`device:<id>` or `local`). 404 unknown_item, 409 vault_unavailable; 500 policy_applied_audit_incomplete (saved).");
@@ -2616,7 +3645,7 @@ pub fn openapi() -> Value {
             operation["description"] = json!("Vault state (`uninitialized`, `locked`, `unlocked`, `unavailable`), the unlock method in effect (`vault.unlock = auto`: an existing file keeps its method; a new vault uses this OS's keyring when reachable, else a passphrase) and why it is locked or unavailable. Never values.");
         }
         if route.path == "/v1/vault/setup" {
-            operation["description"] = json!("Create the vault file. Keyring backends take no body passphrase and keep a random wrapping key in the OS keyring; a passphrase vault needs `passphrase` (8+ characters), which is never stored or returned. Every attempt that reaches the vault is audited (`setup`: `completed` or `failed` with the code), attributed to the caller (`device:<id>` or `local`). 400 passphrase_required, passphrase_not_used, weak_passphrase; 409 vault_already_set_up; 500 vault_set_up_audit_incomplete (set up and unlocked); 503 keyring_unavailable, vault_unsupported.");
+            operation["description"] = json!("Create the vault file. Keyring backends take no body passphrase and keep a random wrapping key in the OS keyring; a passphrase vault needs `passphrase` (8+ characters), which is never stored or returned. With biometric unlock on, a keyring vault is created only from the local socket with `biometric: true` and a passing check. Every attempt that reaches the vault is audited (`setup`: `completed` or `failed` with the code), attributed to the caller (`device:<id>` or `local`). 400 passphrase_required, passphrase_not_used, weak_passphrase; 403 biometric_required, biometric_failed; 409 vault_already_set_up; 500 vault_set_up_audit_incomplete (set up and unlocked); 503 keyring_unavailable, vault_unsupported.");
         }
         if route.path == "/v1/vault/unlock" {
             operation["description"] = json!("Decrypt the vault: a keyring vault re-reads its key from the OS keyring; a passphrase vault needs `passphrase`. Already unlocked is a no-op. Audited (`unlock`: `unlocked`, `denied` with wrong_passphrase, or `failed` with the code), attributed to the caller; an unlock whose record cannot be written does not happen (500 audit_unavailable). Each caller gets 5 wrong passphrases, then waits 30 s, doubling per further wrong one up to 15 min; a success resets it. Paired devices together get 20 wrong passphrases per 15 minutes; the Unix socket is exempt from that shared limit. At most one attempt per caller, and two across paired devices, run at once. Throttled attempts get 429 too_many_attempts with `Retry-After` seconds, before any key derivation, and are not audited. 400 passphrase_required, passphrase_not_used, wrong_passphrase; 409 vault_not_set_up; 503 keyring_unavailable, vault_unsupported.");
@@ -2624,6 +3653,27 @@ pub fn openapi() -> Value {
         }
         if route.path == "/v1/vault/lock" {
             operation["description"] = json!("Drop the decrypted vault from daemon memory; vault tools stop working until it is unlocked again. Audited (`lock`) after locking, attributed to the caller; 500 vault_locked_audit_incomplete means it is locked but unrecorded. Output masking of values seen while unlocked stays in place until the daemon restarts.");
+        }
+        if route.path == "/v1/vault/settings" && route.method == HttpMethod::Get {
+            operation["description"] = json!("Password settings: auto-lock idle time, biometric unlock (with whether this computer supports it), autofill rules, default access policy, the fixed incognito exclusion and recovery-key state. Never values.");
+        }
+        if route.path == "/v1/vault/settings" && route.method == HttpMethod::Patch {
+            operation["description"] = json!("Change password settings; absent fields keep their value. Saved to the config file and applied at once; every change is audited (`settings_update`, with the changed key names only). Tightening is open to every vault caller; loosening (longer auto-lock, biometric unlock off, autofill or auto-submit on, insecure pages allowed, fewer excluded domains, a less strict default policy) needs the local socket or a person's device. Turning biometric unlock on needs the local socket, a keyring vault and a passing biometric check. 400 invalid_value, invalid_domain, incognito_always_disabled; 403 local_access_required, person_access_required, biometric_failed; 409 biometric_unavailable; 500 settings_saved_audit_incomplete (saved).");
+        }
+        if route.path == "/v1/vault/biometrics" {
+            operation["description"] = json!("Whether this computer can verify a person biometrically (fprintd on Linux, Touch ID on macOS) without prompting; `reason` says why not.");
+        }
+        if route.path == "/v1/vault/export" {
+            operation["description"] = json!("Every saved sign-in and authenticator as CSV (`name,url,username,password,otpauth`, one row per allowed origin; passkeys cannot be exported and are counted in `skipped`; model keys, channel and MCP secrets are never included). Local socket only, `confirm: true`, and fresh authentication: the passphrase in the body (passphrase vaults), `biometric: true`, or a person's unlock in the last 5 minutes; a keyring vault without biometric unlock needs only the confirmation. Wrong passphrases are throttled like unlock. Refusals are audited (`export`: `denied`); an export is audited `allowed`, then `exported`. Served with Cache-Control: no-store. 400 confirmation_required, wrong_passphrase, passphrase_not_used; 403 local_access_required, biometric_failed; 409 vault_unavailable, reauth_required, biometric_unavailable; 429 too_many_attempts; 500 audit_unavailable.");
+        }
+        if route.path == "/v1/vault/clear" {
+            operation["description"] = json!("Delete every saved sign-in, authenticator and passkey; model keys, channel and MCP secrets stay. Same gate and codes as export (local socket, `confirm: true`, fresh authentication). Audited (`clear`: `allowed`, then `cleared` with the count; refusals `denied`). 500 vault_cleared_audit_incomplete (cleared).");
+        }
+        if route.path == "/v1/vault/recovery-key" {
+            operation["description"] = json!("Generate a recovery key and return it once; any earlier key stops working. It is stored nowhere: only the vault key sealed with it is kept next to the vault file, and it is masked in later output. Same gate and codes as export (local socket, `confirm: true`, fresh authentication). Audited (`recovery_key`: `allowed`, then `generated`, both before the old key is replaced). Served with Cache-Control: no-store.");
+        }
+        if route.path == "/v1/vault/recover" {
+            operation["description"] = json!("Open a locked vault with its recovery key and give it a new unlock key: `passphrase` (8+ characters) for a passphrase vault, the OS keyring's key (created when missing) for a keyring vault. The saved recovery key keeps working. Local socket only; wrong keys are throttled like passphrases. Audited (`recover`: `recovered`, `denied` with wrong_recovery_key, or `failed` with the code). 400 passphrase_required, passphrase_not_used, weak_passphrase; 403 local_access_required, wrong_recovery_key; 409 vault_already_unlocked, vault_not_set_up, recovery_not_configured; 429 too_many_attempts; 503 vault_unsupported, keyring_unavailable; 500 vault_recovered_audit_incomplete (recovered).");
         }
         if route.path == "/v1/sync/setup" {
             operation["description"] = json!("Create a sync account for this device: derive the key from the passphrase in the body (typed in the app, memory only, needs local access) or from sync.passphrase_cmd, create the account collection on the WebDAV share or directory and return the pairing code for the second device. The body may be empty. 409 sync_not_configured, sync_already_set_up, sync_passphrase_unavailable, sync_password_unavailable; 403 local_access_required when a secret is sent without local access; 502 sync_backend_unavailable, sync_unauthorized.");
@@ -2712,7 +3762,8 @@ pub fn openapi() -> Value {
     json!({
         "openapi": "3.1.0",
         "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
-        "info": {"title": "openside API", "version": "v1"},
+        "info": {"title": "openside API", "version": "v1",
+            "description": "While Remote Control is off (remote.enabled = false; POST /v1/remote/disable), every TCP request that does not come directly from this computer, public routes and the web UI included, is refused with 403 remote_disabled. The Unix socket and loopback requests without proxy or tunnel headers are served as usual."},
         "paths": paths,
         "components": {
             "schemas": schemas(),

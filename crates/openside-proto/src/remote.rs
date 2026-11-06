@@ -10,11 +10,14 @@ use crate::CapabilityScope;
 
 /// Routes callable without a bearer token: `(method, path)`. The one-time pairing code in
 /// the body is the credential; an artifact preview is authorized by its signed query.
-/// Platform hooks carry their per-account cryptographic signature in headers.
+/// Platform hooks carry their per-account cryptographic signature in headers. A share link's
+/// unguessable id in the path is its own credential.
 pub const PUBLIC_ROUTES: &[(&str, &str)] = &[
     ("POST", "/v1/pairing/exchange"),
     ("GET", "/v1/sessions/{id}/artifacts/{path}/preview"),
     ("POST", "/v1/hooks/{kind}/{account_id}"),
+    ("GET", "/v1/shares/{share_id}"),
+    ("GET", "/v1/shares/{share_id}/artifacts/{artifact}"),
 ];
 
 /// Seconds a pairing offer stays valid.
@@ -80,9 +83,13 @@ pub struct PairingOffer {
 /// Remote transports the daemon runs (`GET /v1/remote/status`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteStatus {
+    /// Remote Control is on (`remote.enabled`; unset counts as on only when a transport or
+    /// `public_url` is configured). While off no transport runs, `modes` is empty,
+    /// `public_url` is null and only requests made directly on this computer are served.
+    pub enabled: bool,
     /// Enabled transports in pairing preference order.
     pub modes: Vec<PairingTransport>,
-    /// `remote.public_url`.
+    /// `remote.public_url`; null while Remote Control is off.
     pub public_url: Option<String>,
     /// The supervised `cloudflared`, when enabled.
     pub cloudflare: Option<CloudflareStatus>,
@@ -98,6 +105,17 @@ pub struct RemoteStatus {
     pub configure_allowed: bool,
     /// A missing listener prevents a persisted transport from applying live.
     pub restart_required: bool,
+}
+
+/// `POST /v1/remote/disable`: Remote Control is off; transports that could not be stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteDisabled {
+    /// The status after turning Remote Control off.
+    pub status: RemoteStatus,
+    /// Transports still running because stopping them failed (today only a Tailscale Serve
+    /// handler the `tailscale` command could not turn off). The daemon refuses their traffic
+    /// anyway; stop them by hand or try again.
+    pub still_on: Vec<PairingTransport>,
 }
 
 /// Supervised `cloudflared` state.
@@ -214,6 +232,15 @@ pub struct LocalAccess {
     pub scopes: Vec<CapabilityScope>,
     /// Fixed person-device identity.
     pub kind: DeviceKind,
+    /// One-time pairing code (valid [`crate::PAIRING_TTL_SECS`] seconds) for the openside
+    /// extension in the launcher's browser profile. Only the extension's origin may redeem it,
+    /// and redeeming replaces the extension device the launcher paired before. Null without a
+    /// listener.
+    pub extension_code: Option<String>,
+    /// Private directory (under the daemon's runtime directory) the launcher passes to the
+    /// person's browser as its gateway runtime directory, where the daemon looks for its
+    /// person-role gateway and launch record.
+    pub person_browser_runtime_dir: String,
 }
 
 /// A bounded durable event page for transports that buffer server-sent events.
@@ -265,6 +292,14 @@ pub struct Device {
 pub struct DeviceList {
     /// Devices in pairing order.
     pub devices: Vec<Device>,
+}
+
+/// New label for a paired device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenameDeviceRequest {
+    /// Trimmed before saving; 1-100 characters.
+    pub name: String,
 }
 
 /// Seconds a pending access request stays open.
