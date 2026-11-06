@@ -1,0 +1,68 @@
+diff --git a/chrome/app/chrome_command_ids.h b/chrome/app/chrome_command_ids.h
+--- a/chrome/app/chrome_command_ids.h
++++ b/chrome/app/chrome_command_ids.h
+@@ -103,6 +103,9 @@
+ #define IDC_VERTICAL_TABS_SEND_FEEDBACK 34059
+ #define IDC_TOGGLE_VERTICAL_TABS_EXPAND_ON_HOVER 34060
+ #define IDC_TOGGLE_VERTICAL_TABS_COLLAPSE 34061
++// openside: the stacked split layout gets its own command so it can carry a
++// keyboard shortcut next to IDC_NEW_SPLIT_TAB (side by side).
++#define IDC_OPENSIDE_NEW_SPLIT_TAB_STACKED 34064
+ 
+ // Web app window commands
+ #define IDC_COPY_URL                    34071
+diff --git a/chrome/browser/ui/accelerator_table.cc b/chrome/browser/ui/accelerator_table.cc
+--- a/chrome/browser/ui/accelerator_table.cc
++++ b/chrome/browser/ui/accelerator_table.cc
+@@ -257,8 +257,8 @@
+     {ui::VKEY_H, ui::EF_CONTROL_DOWN, IDC_SHOW_HISTORY},
+ #if !BUILDFLAG(IS_CHROMEOS)
+     // On Chrome OS, these keys are assigned to change UI scale.
+-    {ui::VKEY_OEM_MINUS, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
+-     IDC_ZOOM_MINUS},
++    // openside: Shift+Ctrl+minus opens a stacked split (see
++    // GetAcceleratorList); plain Ctrl+minus still zooms out.
+     {ui::VKEY_OEM_PLUS, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_ZOOM_PLUS},
+ #endif  // !BUILDFLAG(IS_CHROMEOS)
+ #endif  // !BUILDFLAG(IS_MAC)
+@@ -327,6 +327,14 @@
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+     accelerators->emplace_back(AcceleratorMapping(
+         {ui::VKEY_N, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN, IDC_NEW_SPLIT_TAB}));
++    // openside: Shift+Ctrl+\ splits side by side and Shift+Ctrl+minus splits
++    // stacked, the same keys the openside UI documents for split view.
++    accelerators->emplace_back(AcceleratorMapping(
++        {ui::VKEY_OEM_5, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
++         IDC_NEW_SPLIT_TAB}));
++    accelerators->emplace_back(AcceleratorMapping(
++        {ui::VKEY_OEM_MINUS, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
++         IDC_OPENSIDE_NEW_SPLIT_TAB_STACKED}));
+ #elif BUILDFLAG(IS_CHROMEOS)
+     accelerators->emplace_back(
+         AcceleratorMapping({ui::VKEY_N, ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN,
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -859,6 +859,12 @@
+                     split_tabs::SplitTabCreatedSource::kKeyboardShortcut);
+       }
+       break;
++    case IDC_OPENSIDE_NEW_SPLIT_TAB_STACKED:
++      if (!browser_->tab_strip_model()->GetActiveTab()->IsSplit()) {
++        NewSplitTab(browser_, split_tabs::SplitTabLayout::kStacked,
++                    split_tabs::SplitTabCreatedSource::kKeyboardShortcut);
++      }
++      break;
+     case IDC_NAME_WINDOW:
+       PromptToNameWindow(browser_);
+       break;
+@@ -2730,6 +2736,9 @@
+   command_updater_->UpdateCommandEnabled(
+       IDC_NEW_SPLIT_TAB,
+       browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL);
++  command_updater_->UpdateCommandEnabled(
++      IDC_OPENSIDE_NEW_SPLIT_TAB_STACKED,
++      browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL);
+   command_updater_->UpdateCommandEnabled(IDC_GROUP_UNGROUPED_TABS,
+                                          CanGroupAllUngroupedTabs(browser_));
+ 

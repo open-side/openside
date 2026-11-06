@@ -251,3 +251,110 @@ mark/redact secret-bearing documents. Stock Chromium keeps the existing CDP
 fallback; a connected gateway that refuses native fill fails closed rather than
 silently sending its value through CDP.
 
+
+## 12. Person role: browser preferences and native tools
+
+`--openside-gateway-role=person` starts the gateway in the person role, for the
+person's own browser (`tools/openside-browser` passes it together with
+`--profile-directory=Default` and the runtime directory the daemon names in
+`person_browser_runtime_dir` of `GET /v1/remote/local-access`, which is
+`<daemon runtime dir>/person-browser`; the launcher never derives it itself
+and starts the browser without a gateway when none is named). The role is the only accepted value;
+an unknown role, or the person role together with an agent session or
+subagent switch, refuses to start the gateway. `gateway.json` carries
+`"role":"person"` or `"role":"agent"`, and the daemon connects only to an
+instance whose discovery says `person`.
+
+Authentication is the v1 handshake of §3. Requests carry the fixed session
+scope `"person"` and no subagent; any other scope is `scope_not_found`.
+
+The browser itself enforces the role:
+
+- A person gateway advertises exactly `browser_prefs` and `native_tools` and
+  serves only `prefs.get`, `prefs.set` and `native.open`. Every other method,
+  tab and agent methods included, is `role_denied`.
+- A person gateway sends no events. It never adopts, classifies or reports the
+  person's tabs, and protocol activation, window changes and dialogs behave as
+  in a browser without a gateway.
+- An agent gateway no longer advertises `browser_prefs`; `prefs.*` and
+  `native.open` are `role_denied` there, so the agent profile is never read or
+  written as if it were the person's.
+
+The daemon's Settings API (`GET`/`PATCH /v1/browser/prefs`) and
+`POST /v1/browser/person/native-tools` are the only callers. Both check the
+capability before sending. A stock browser publishes no gateway, so
+`openside-browser` also writes `launch.json` (`{pid, patched}`, mode `0600`)
+into the same runtime directory before it execs the browser (skipped when it
+only hands a URL to an already running one); `patched` says whether the
+executable knows the person-role switch. Without a gateway, a live `pid`
+whose command line carries `--openside-gateway-role=person` and
+`patched:false` is a running stock browser: prefs report `unsupported` and
+native tools answer `native_tools_unsupported`. Otherwise the person's browser
+is not running: prefs report `not_running` and native tools answer
+`browser_not_running`. The daemon never launches the person's browser and
+never falls back to the agent browser.
+
+| Method | Request payload | Result payload |
+| --- | --- | --- |
+| `prefs.get` | `{}` | `Prefs` |
+| `prefs.set` | `{name, value}` | `Prefs`, read back after the write |
+| `native.open` | `{tool:"task_manager"\|"devtools"}` | `{opened:true}` |
+
+`Prefs` is `{spell_check:bool, accept_languages:[string], third_party_cookies:"allow"|"block", auto_picture_in_picture:bool|null, default_zoom_percent:integer|null, search_engine:{current:integer|null, options:[{id,name}]}, mini_popup:bool|null}`.
+
+| `name` | `value` | Chromium state |
+| --- | --- | --- |
+| `spell_check` | bool | `browser.enable_spellchecking` |
+| `accept_languages` | 1-32 distinct (case-insensitive) BCP 47-shaped tags | written comma-joined to `intl.selected_languages`; read from `intl.accept_languages`, which Chromium derives from policy-forced plus selected languages (a direct write to it is overwritten) |
+| `third_party_cookies` | `allow`, `block` | `profile.cookie_controls_mode`: `block` writes `kBlockThirdParty`; `allow` writes `kIncognitoOnly`, as chrome://settings does |
+| `auto_picture_in_picture` | bool | default `AUTO_PICTURE_IN_PICTURE` content setting: `ASK` (on) or `BLOCK` (off) |
+| `default_zoom_percent` | 25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500 | `ChromeZoomLevelPrefs` default zoom level |
+| `search_engine` | prepopulated engine id | `TemplateURLService::SetUserSelectedDefaultSearchProvider` |
+| `mini_popup` | bool | the openside extension's global `mini-popup` command (`extensions.commands`): on assigns Alt+Space through `CommandService::AddKeybindingPref` with `allow_overrides=false` unless a global shortcut is already active, so it never takes a binding another extension holds (a browser-only Alt+Space binding of the command itself is made global); off calls `RemoveKeybindingPrefs`. Reads `true` while the command has an active global shortcut, `null` when the extension is not enabled |
+
+A `prefs.set` payload holds exactly `name` and `value`; any other key, any
+other name, or a value outside the table is `invalid_request`, and nothing
+outside this allowlist is reachable. The name and value are validated in full
+before the profile is looked up, before anything waits and before policy is
+consulted, so a malformed request is `invalid_request` at once, even without
+a usable profile or for a managed setting. A setting something
+other than the person controls is then `policy_denied`: a preference whose
+`IsUserModifiablePreference` is false (policy, supervision or an extension),
+an auto picture-in-picture default set by the policy, supervised or extension
+provider, or a search engine `CanMakeDefault` refuses.
+
+A `mini_popup` write answers `unsupported` when the openside extension is not
+enabled in the startup profile or, for `true`, when another extension holds
+Alt+Space (the setting stays off and that binding is untouched), and
+`policy_denied` when `extensions.commands` is not user-modifiable.
+
+The target is the startup profile only: `<user data dir>/<--profile-directory>`
+(`Default` without the switch), loaded and not off the record. Any other
+profile open in the same browser and every incognito profile is never read or
+written; without the startup profile both methods answer `unsupported`.
+
+`prefs.get`, and a valid `prefs.set`, wait for the profile's search engines
+to load: the result lists them. A `search_engine` value is checked only for
+shape (a positive integer) before the wait; whether that engine id exists is
+checked after the search service loads, so a request naming an unknown id can
+still end in `timeout` or `resource_exhausted` instead of `invalid_request`
+when the engines do not load in time. The wait is bounded: after 5 s the
+request is answered `timeout` and its subscription dropped, and at most 8
+requests wait at once; more are `resource_exhausted`. The test-only switch
+`--openside-test-search-engines-never-load` makes every wait expire.
+
+Only prepopulated search engines (`prepopulate_id > 0` and
+`ShowInDefaultList`) are listed, by id and display name. Engines the person
+added, their keywords and every search URL stay in the browser, as in §11.
+`current` is `null` when the default is not one of them.
+
+`native.open` uses the most recently active normal window of the startup
+profile. `task_manager` calls `chrome::OpenTaskManager` for it; `devtools`
+opens DevTools for that window's active tab, as the main menu does, and
+answers `policy_denied` when no DevTools window results (DeveloperToolsAvailability
+policy). No such window, or an active tab that is itself DevTools, is
+`unsupported`.
+
+These are profile-wide actions, not tab operations: no tab ownership applies.
+Authority comes from the daemon route (prefs: `read` to view, `admin` to
+change; native tools: `steer`, person devices only).

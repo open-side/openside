@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -29,6 +30,7 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/callback_list.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/file_descriptor_watcher_posix.h"
@@ -45,6 +47,8 @@
 #include "base/numerics/byte_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
@@ -56,16 +60,41 @@
 #include "chrome/browser/openside/focus_arbiter.h"
 #include "chrome/browser/openside/tab_ownership.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/extensions/commands/command_service.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
+#include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/tab_ui_helper.h"
+#include "chrome/browser/ui/tabs/tab_data.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
+#include "chrome/browser/ui/tabs/tab_menu_model.h"
+#include "chrome/browser/ui/tabs/tab_menu_model_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+#include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+#include "chrome/browser/ui/views/tabs/tab/openside_tab_rename_bubble.h"
+#include "chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/common/referrer.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/widget/widget.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
@@ -73,8 +102,15 @@
 #include "components/download/public/common/download_item.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
+#include "components/content_settings/core/browser/cookie_settings.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/pref_names.h"
+#include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/javascript_dialogs/openside_dialog_hook.h"
+#include "components/spellcheck/browser/pref_names.h"
 #include "components/sessions/core/session_id.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/search_engines/template_url.h"
@@ -86,6 +122,7 @@
 #include "components/tabs/public/tab_group.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "extensions/browser/extension_registry.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_client.h"
@@ -100,10 +137,15 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/command.h"
 #include "ui/base/base_window.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/events/event_constants.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/size.h"
+#include "third_party/blink/public/common/page/page_zoom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -213,8 +255,183 @@ std::optional<std::string> ToJson(base::ValueView value) {
   return json;
 }
 
+// The only browser preferences the gateway reads or writes, by wire name.
+constexpr char kPrefSpellCheck[] = "spell_check";
+constexpr char kPrefAcceptLanguages[] = "accept_languages";
+constexpr char kPrefThirdPartyCookies[] = "third_party_cookies";
+constexpr char kPrefAutoPictureInPicture[] = "auto_picture_in_picture";
+constexpr char kPrefDefaultZoom[] = "default_zoom_percent";
+constexpr char kPrefSearchEngine[] = "search_engine";
+constexpr char kPrefMiniPopup[] = "mini_popup";
+// The openside extension, pinned by its manifest key
+// (web/src/desktopNotifyProtocol.ts EXTENSION_ID), and its global command that
+// toggles the mini popup window.
+constexpr char kOpensideExtensionId[] = "jneddlbpgmlheplolfonafkbkbkjhcfj";
+constexpr char kMiniPopupCommand[] = "mini-popup";
+// The zoom levels chrome://settings offers.
+constexpr int kZoomPercents[] = {25,  33,  50,  67,  75,  80,  90,  100, 110,
+                                 125, 150, 175, 200, 250, 300, 400, 500};
+constexpr size_t kMaxAcceptLanguages = 32;
+// Below the client's 12 s request timeout, so the gateway's answer arrives.
+constexpr base::TimeDelta kSearchEngineLoadTimeout = base::Seconds(5);
+constexpr size_t kMaxSearchEngineWaits = 8;
+// Test-only: treat the search engine service as never loading, so the bounded
+// wait can be exercised.
+constexpr char kTestSearchEnginesNeverLoad[] =
+    "openside-test-search-engines-never-load";
+// Test-only: serves `test.tab_rename`, which names, resets and reads a tab the
+// way the tab context menu does. Neither the native menu nor the tab strip's
+// title is reachable over CDP, and the gateway's own tab records report the
+// page title on purpose.
+constexpr char kTestTabRename[] = "openside-test-tab-rename";
+
+struct SearchEngineWait {
+  base::CallbackListSubscription loaded;
+  base::OneShotTimer deadline;
+};
+
+// A BCP 47-shaped tag (2-3 letter language, then 1-8 character alphanumeric
+// subtags). It keeps the comma-joined pref unambiguous; whether Chromium knows
+// the language is not checked here.
+bool IsLanguageTag(std::string_view tag) {
+  if (tag.empty() || tag.size() > 35) {
+    return false;
+  }
+  bool primary = true;
+  for (std::string_view part : base::SplitStringPiece(
+           tag, "-", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL)) {
+    if (part.empty() || part.size() > 8 ||
+        (primary && (part.size() < 2 || part.size() > 3))) {
+      return false;
+    }
+    for (char c : part) {
+      if (primary ? !base::IsAsciiAlpha(c) : !base::IsAsciiAlphaNumeric(c)) {
+        return false;
+      }
+    }
+    primary = false;
+  }
+  return true;
+}
+
+// The comma-joined `intl.selected_languages` value for a list of distinct tags.
+std::optional<std::string> AcceptLanguagesValue(const base::Value& value) {
+  const base::ListValue* list = value.GetIfList();
+  if (!list || list->empty() || list->size() > kMaxAcceptLanguages) {
+    return std::nullopt;
+  }
+  std::vector<std::string> tags;
+  std::set<std::string> seen;
+  for (const base::Value& item : *list) {
+    const std::string* tag = item.GetIfString();
+    if (!tag || !IsLanguageTag(*tag) ||
+        !seen.insert(base::ToLowerASCII(*tag)).second) {
+      return std::nullopt;
+    }
+    tags.push_back(*tag);
+  }
+  return base::JoinString(tags, ",");
+}
+
+// Prepopulated engines only: names of engines the person typed in themselves
+// and every template URL stay inside the browser.
+base::DictValue SearchEngines(Profile* profile) {
+  base::DictValue engines;
+  base::ListValue options;
+  base::Value current;
+  auto* service = TemplateURLServiceFactory::GetForProfile(profile);
+  if (service && service->loaded()) {
+    const TemplateURL* selected = service->GetDefaultSearchProvider();
+    std::set<int> listed;
+    for (TemplateURL* engine : service->GetTemplateURLs()) {
+      const int prepopulated = engine->prepopulate_id();
+      if (prepopulated <= 0 || !service->ShowInDefaultList(engine) ||
+          !listed.insert(prepopulated).second) {
+        continue;
+      }
+      base::DictValue option;
+      option.Set("id", prepopulated);
+      option.Set("name", base::UTF16ToUTF8(engine->short_name()));
+      options.Append(std::move(option));
+      if (engine == selected) {
+        current = base::Value(prepopulated);
+      }
+    }
+  }
+  engines.Set("current", std::move(current));
+  engines.Set("options", std::move(options));
+  return engines;
+}
+
+// Whether the openside extension's mini popup command holds an active global
+// shortcut; nullopt when the extension is not enabled in `profile`.
+std::optional<bool> MiniPopupEnabled(Profile* profile) {
+  if (!extensions::ExtensionRegistry::Get(profile)->enabled_extensions().Contains(
+          kOpensideExtensionId)) {
+    return std::nullopt;
+  }
+  ui::CommandMap commands;
+  extensions::CommandService::Get(profile)->GetNamedCommands(
+      kOpensideExtensionId, extensions::CommandService::ACTIVE,
+      extensions::CommandService::GLOBAL, &commands);
+  return commands.contains(kMiniPopupCommand);
+}
+
+base::DictValue BrowserPrefsSnapshot(Profile* profile) {
+  PrefService* prefs = profile->GetPrefs();
+  base::DictValue snapshot;
+  snapshot.Set(kPrefSpellCheck,
+               prefs->GetBoolean(spellcheck::prefs::kSpellCheckEnable));
+  base::ListValue languages;
+  for (const std::string& language :
+       base::SplitString(prefs->GetString(language::prefs::kAcceptLanguages),
+                         ",", base::TRIM_WHITESPACE,
+                         base::SPLIT_WANT_NONEMPTY)) {
+    languages.Append(language);
+  }
+  snapshot.Set(kPrefAcceptLanguages, std::move(languages));
+  snapshot.Set(kPrefThirdPartyCookies,
+               prefs->GetInteger(prefs::kCookieControlsMode) ==
+                       static_cast<int>(content_settings::CookieControlsMode::
+                                            kBlockThirdParty)
+                   ? "block"
+                   : "allow");
+  auto* map = HostContentSettingsMapFactory::GetForProfile(profile);
+  snapshot.Set(kPrefAutoPictureInPicture,
+               map ? base::Value(map->GetDefaultContentSetting(
+                                     ContentSettingsType::
+                                         AUTO_PICTURE_IN_PICTURE) !=
+                                 CONTENT_SETTING_BLOCK)
+                   : base::Value());
+  ChromeZoomLevelPrefs* zoom = profile->GetZoomLevelPrefs();
+  snapshot.Set(kPrefDefaultZoom,
+               zoom ? base::Value(static_cast<int>(std::lround(
+                          blink::ZoomLevelToZoomFactor(
+                              zoom->GetDefaultZoomLevelPref()) *
+                          100)))
+                    : base::Value());
+  snapshot.Set(kPrefSearchEngine, SearchEngines(profile));
+  const std::optional<bool> mini_popup = MiniPopupEnabled(profile);
+  snapshot.Set(kPrefMiniPopup,
+               mini_popup ? base::Value(*mini_popup) : base::Value());
+  return snapshot;
+}
+
 std::string LaunchSwitch(const char* name) {
   return base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(name);
+}
+
+// The person's own browser: its gateway answers only the person methods (see
+// Connection::HandleRequest) for the startup profile and never tracks,
+// classifies or reports tabs.
+bool PersonRole() {
+  return LaunchSwitch(kGatewayRoleSwitch) == kPersonRole;
+}
+
+bool AgentGatewayEnabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+             kGatewayInstanceSwitch) &&
+         !PersonRole();
 }
 
 void RegisterUiKeywords(TemplateURLService* service, const GURL& ui) {
@@ -1375,10 +1592,16 @@ class Connection {
     welcome.Set("v", 1);
     welcome.Set("instance_id", gateway_->instance_id());
     base::ListValue capabilities;
-    for (const char* capability : {"tab_lifecycle", "focus", "hidden_screenshot",
-                                   "popup", "dialog", "download",
-                                   "browser_status", "native_autofill"}) {
-      capabilities.Append(capability);
+    if (PersonRole()) {
+      for (const char* capability : {"browser_prefs", "native_tools"}) {
+        capabilities.Append(capability);
+      }
+    } else {
+      for (const char* capability :
+           {"tab_lifecycle", "focus", "hidden_screenshot", "popup", "dialog",
+            "download", "browser_status", "native_autofill"}) {
+        capabilities.Append(capability);
+      }
     }
     welcome.Set("capabilities", std::move(capabilities));
     Send(std::move(welcome));
@@ -1428,6 +1651,21 @@ class Connection {
       Error(*id, *type, "scope_not_found", "unknown session scope");
       return;
     }
+    // Each role serves only its own methods; the other role's are refused
+    // here, in the browser, whatever the client asks.
+    if (PersonRole()) {
+      if (*type == "prefs.get") {
+        PrefsGet(*id);
+      } else if (*type == "prefs.set") {
+        PrefsSet(*id, *payload);
+      } else if (*type == "native.open") {
+        NativeOpen(*id, *payload);
+      } else {
+        Error(*id, *type, "role_denied",
+              "the person's browser serves only settings and native tools");
+      }
+      return;
+    }
     if (*type == "tabs.list") {
       TabsList(*id);
     } else if (*type == "browser.status") {
@@ -1442,9 +1680,17 @@ class Connection {
       Screenshot(*id, *payload);
     } else if (*type == "tab.set_label") {
       SetLabel(*id, *payload);
+    } else if (*type == "test.tab_rename" &&
+               base::CommandLine::ForCurrentProcess()->HasSwitch(
+                   kTestTabRename)) {
+      TestTabRename(*id, *payload);
     } else if (*type == "tab.open" || *type == "tab.close" ||
                *type == "dialog.respond" || *type == "download.cancel") {
       Error(*id, *type, "unsupported", "request not implemented by this build");
+    } else if (*type == "prefs.get" || *type == "prefs.set" ||
+               *type == "native.open") {
+      Error(*id, *type, "role_denied",
+            "the agent browser's profile is not the person's");
     } else {
       Error(*id, *type, "invalid_request", "unknown request type");
     }
@@ -1685,6 +1931,354 @@ class Connection {
     Result(id, "browser.status", std::move(payload));
   }
 
+  // The person's own profile: the startup profile this person-role browser
+  // was launched for (user data dir + --profile-directory, default
+  // "Default"). Any other profile open in the browser, and every incognito
+  // profile, is never read or written.
+  Profile* PrefsProfile() {
+    ProfileManager* manager = g_browser_process->profile_manager();
+    if (!manager) {
+      return nullptr;
+    }
+    std::string directory = LaunchSwitch(switches::kProfileDirectory);
+    if (directory.empty()) {
+      directory = chrome::kInitialProfile;
+    }
+    const base::FilePath path =
+        manager->user_data_dir().AppendASCII(directory);
+    // A directory that tries to leave the user data dir is never a profile.
+    if (path.DirName() != manager->user_data_dir()) {
+      return nullptr;
+    }
+    Profile* profile = manager->GetProfileByPath(path);
+    return profile && !profile->IsOffTheRecord() ? profile : nullptr;
+  }
+
+  void NativeOpen(const std::string& id, const base::DictValue& payload) {
+    constexpr char kType[] = "native.open";
+    const std::string* tool = payload.FindString("tool");
+    if (!tool || payload.size() != 1 ||
+        (*tool != "task_manager" && *tool != "devtools")) {
+      Error(id, kType, "invalid_request", "tool must be task_manager or devtools");
+      return;
+    }
+    Profile* profile = PrefsProfile();
+    BrowserWindowInterface* window = nullptr;
+    if (profile) {
+      // The person's most recently active normal window of their profile.
+      ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+          [&](BrowserWindowInterface* candidate) {
+            if (candidate->GetProfile() == profile &&
+                candidate->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
+              window = candidate;
+              return false;
+            }
+            return true;
+          });
+    }
+    if (!window) {
+      Error(id, kType, "unsupported", "no window of the person's profile");
+      return;
+    }
+    base::DictValue result;
+    if (*tool == "task_manager") {
+      chrome::OpenTaskManager(window);
+      result.Set("opened", true);
+      Result(id, kType, std::move(result));
+      return;
+    }
+    TabStripModel* strip = window->GetTabStripModel();
+    content::WebContents* contents =
+        strip ? strip->GetActiveWebContents() : nullptr;
+    if (!contents || DevToolsWindow::IsDevToolsWindow(contents)) {
+      Error(id, kType, "unsupported", "no tab to inspect");
+      return;
+    }
+    // A DeveloperToolsAvailability policy makes this a no-op, reported as
+    // policy_denied.
+    DevToolsWindow::OpenDevToolsWindow(
+        contents, DevToolsOpenedByAction::kMainMenuOrMainShortcut);
+    if (!DevToolsWindow::GetInstanceForInspectedWebContents(contents)) {
+      Error(id, kType, "policy_denied", "developer tools are not allowed");
+      return;
+    }
+    result.Set("opened", true);
+    Result(id, kType, std::move(result));
+  }
+
+  // True when the profile's search engines are loaded. Otherwise the request
+  // waits (bounded) and `retry` runs once they load, or the request is
+  // answered with an error; either way the caller returns. Nothing else may
+  // have loaded them yet, and an empty option list would then read as "no
+  // engines" rather than "not loaded".
+  bool SearchEnginesReady(Profile* profile,
+                          const std::string& id,
+                          const char* type,
+                          base::OnceClosure retry) {
+    auto* service = TemplateURLServiceFactory::GetForProfile(profile);
+    const bool never_load = base::CommandLine::ForCurrentProcess()->HasSwitch(
+        kTestSearchEnginesNeverLoad);
+    if (!service || (service->loaded() && !never_load)) {
+      return true;
+    }
+    if (search_engine_waits_.size() >= kMaxSearchEngineWaits) {
+      Error(id, type, "resource_exhausted",
+            "too many requests waiting for search engines");
+      return false;
+    }
+    const uint64_t key = next_search_engine_wait_++;
+    auto wait = std::make_unique<SearchEngineWait>();
+    wait->loaded = service->RegisterOnLoadedCallback(
+        base::BindOnce(&Connection::SearchEnginesLoaded,
+                       weak_factory_.GetWeakPtr(), key, std::move(retry)));
+    // The timer is owned through `search_engine_waits_`, so it never outlives
+    // this connection.
+    wait->deadline.Start(
+        FROM_HERE, kSearchEngineLoadTimeout,
+        base::BindOnce(&Connection::SearchEnginesTimedOut,
+                       base::Unretained(this), key, id, std::string(type)));
+    search_engine_waits_.emplace(key, std::move(wait));
+    if (!never_load) {
+      service->Load();
+    }
+    return false;
+  }
+
+  void SearchEnginesLoaded(uint64_t key, base::OnceClosure retry) {
+    if (search_engine_waits_.erase(key)) {
+      std::move(retry).Run();
+    }
+  }
+
+  // Dropping the wait cancels its load subscription; OneShotTimer allows its
+  // own destruction from the user task.
+  void SearchEnginesTimedOut(uint64_t key,
+                             const std::string& id,
+                             const std::string& type) {
+    search_engine_waits_.erase(key);
+    Error(id, type, "timeout", "search engines did not load");
+  }
+
+  void PrefsGet(const std::string& id) {
+    Profile* profile = PrefsProfile();
+    if (!profile) {
+      Error(id, "prefs.get", "unsupported", "browser profile unavailable");
+      return;
+    }
+    if (!SearchEnginesReady(profile, id, "prefs.get",
+                            base::BindOnce(&Connection::PrefsGet,
+                                           weak_factory_.GetWeakPtr(), id))) {
+      return;
+    }
+    Result(id, "prefs.get", BrowserPrefsSnapshot(profile));
+  }
+
+  // The mini popup is the openside extension's global "mini-popup" command:
+  // on assigns Alt+Space, off clears its shortcut. Chromium never auto-assigns
+  // a global key other than Ctrl+Shift+digit, and a launcher-seeded binding
+  // would grab Alt+Space system-wide while the setting reads off.
+  void SetMiniPopup(const std::string& id, Profile* profile, bool enabled) {
+    constexpr char kType[] = "prefs.set";
+    const std::optional<bool> current = MiniPopupEnabled(profile);
+    if (!current) {
+      Error(id, kType, "unsupported", "openside extension not enabled");
+      return;
+    }
+    if (!profile->GetPrefs()->IsUserModifiablePreference(
+            prefs::kExtensionCommands)) {
+      Error(id, kType, "policy_denied", "preference is managed");
+      return;
+    }
+    extensions::CommandService* commands =
+        extensions::CommandService::Get(profile);
+    if (!enabled) {
+      commands->RemoveKeybindingPrefs(kOpensideExtensionId, kMiniPopupCommand);
+    } else if (!*current) {
+      const ui::Accelerator alt_space(ui::VKEY_SPACE, ui::EF_ALT_DOWN);
+      // The command may already hold Alt+Space as a browser-only shortcut;
+      // that binding is ours to make global.
+      if (commands->FindCommandByName(kOpensideExtensionId, kMiniPopupCommand)
+              .accelerator() == alt_space) {
+        commands->RemoveKeybindingPrefs(kOpensideExtensionId,
+                                        kMiniPopupCommand);
+      }
+      // Never take Alt+Space from another extension (allow_overrides would
+      // silently drop its binding). A conflict outside the browser, such as a
+      // desktop shortcut, is the system's to resolve and not visible here.
+      if (!commands->AddKeybindingPref(alt_space, kOpensideExtensionId,
+                                       kMiniPopupCommand,
+                                       /*allow_overrides=*/false,
+                                       /*global=*/true)) {
+        Error(id, kType, "unsupported", "shortcut held by another extension");
+        return;
+      }
+    }
+    Result(id, kType, BrowserPrefsSnapshot(profile));
+  }
+
+  // One allowlisted preference per request; the result is the snapshot read
+  // back after the write. The name and value are validated in full before
+  // policy is consulted, so a malformed request is invalid_request whatever
+  // controls the preference.
+  void PrefsSet(const std::string& id, const base::DictValue& payload) {
+    constexpr char kType[] = "prefs.set";
+    const std::string* name = payload.FindString("name");
+    const base::Value* value = payload.Find("value");
+    if (!name || !value || payload.size() != 2) {
+      Error(id, kType, "invalid_request", "exactly name and value required");
+      return;
+    }
+    // Exactly one of these describes the write once validation passes.
+    const char* pref = nullptr;
+    base::Value pref_value;
+    std::optional<ContentSetting> auto_pip;
+    std::optional<int> zoom_percent;
+    std::optional<int> engine_id;
+    std::optional<bool> mini_popup;
+    if (*name == kPrefSpellCheck) {
+      if (!value->is_bool()) {
+        Error(id, kType, "invalid_request", "boolean required");
+        return;
+      }
+      pref = spellcheck::prefs::kSpellCheckEnable;
+      pref_value = base::Value(value->GetBool());
+    } else if (*name == kPrefAcceptLanguages) {
+      std::optional<std::string> joined = AcceptLanguagesValue(*value);
+      if (!joined) {
+        Error(id, kType, "invalid_request", "language tags required");
+        return;
+      }
+      // LanguagePrefs derives accept_languages from forced + selected
+      // languages and overwrites a direct write; the person's list is this.
+      pref = language::prefs::kSelectedLanguages;
+      pref_value = base::Value(std::move(*joined));
+    } else if (*name == kPrefThirdPartyCookies) {
+      const std::string* mode = value->GetIfString();
+      if (!mode || (*mode != "allow" && *mode != "block")) {
+        Error(id, kType, "invalid_request", "allow or block required");
+        return;
+      }
+      // chrome://settings writes kIncognitoOnly for "Allow"; kOff behaves
+      // the same and would read back as a different value there.
+      pref = prefs::kCookieControlsMode;
+      pref_value = base::Value(static_cast<int>(
+          *mode == "block"
+              ? content_settings::CookieControlsMode::kBlockThirdParty
+              : content_settings::CookieControlsMode::kIncognitoOnly));
+    } else if (*name == kPrefAutoPictureInPicture) {
+      if (!value->is_bool()) {
+        Error(id, kType, "invalid_request", "boolean required");
+        return;
+      }
+      // "Can enter picture-in-picture automatically" is the registered ASK.
+      auto_pip = value->GetBool() ? CONTENT_SETTING_ASK : CONTENT_SETTING_BLOCK;
+    } else if (*name == kPrefDefaultZoom) {
+      zoom_percent = value->GetIfInt();
+      if (!zoom_percent || !std::ranges::contains(kZoomPercents, *zoom_percent)) {
+        Error(id, kType, "invalid_request", "unsupported zoom level");
+        return;
+      }
+    } else if (*name == kPrefSearchEngine) {
+      const std::optional<int> wanted = value->GetIfInt();
+      if (!wanted || *wanted <= 0) {
+        Error(id, kType, "invalid_request", "search engine id required");
+        return;
+      }
+      engine_id = wanted;
+    } else if (*name == kPrefMiniPopup) {
+      if (!value->is_bool()) {
+        Error(id, kType, "invalid_request", "boolean required");
+        return;
+      }
+      mini_popup = value->GetBool();
+    } else {
+      Error(id, kType, "invalid_request", "unknown preference");
+      return;
+    }
+    Profile* profile = PrefsProfile();
+    if (!profile) {
+      Error(id, kType, "unsupported", "browser profile unavailable");
+      return;
+    }
+    PrefService* prefs = profile->GetPrefs();
+    // Only now wait for the search engines: the result snapshot lists them
+    // and an engine id resolves against them. A malformed request never
+    // waits.
+    if (!SearchEnginesReady(
+            profile, id, kType,
+            base::BindOnce(&Connection::PrefsSet, weak_factory_.GetWeakPtr(),
+                           id, payload.Clone()))) {
+      return;
+    }
+    if (mini_popup) {
+      SetMiniPopup(id, profile, *mini_popup);
+      return;
+    }
+    TemplateURLService* engines = nullptr;
+    TemplateURL* engine = nullptr;
+    if (engine_id) {
+      engines = TemplateURLServiceFactory::GetForProfile(profile);
+      if (!engines || !engines->loaded()) {
+        Error(id, kType, "unsupported", "search engines unavailable");
+        return;
+      }
+      for (TemplateURL* candidate : engines->GetTemplateURLs()) {
+        if (candidate->prepopulate_id() == *engine_id &&
+            engines->ShowInDefaultList(candidate)) {
+          engine = candidate;
+          break;
+        }
+      }
+      if (!engine) {
+        Error(id, kType, "invalid_request", "unknown search engine");
+        return;
+      }
+    }
+
+    HostContentSettingsMap* map =
+        auto_pip ? HostContentSettingsMapFactory::GetForProfile(profile)
+                 : nullptr;
+    ChromeZoomLevelPrefs* zoom =
+        zoom_percent ? profile->GetZoomLevelPrefs() : nullptr;
+    if ((auto_pip && !map) || (zoom_percent && !zoom)) {
+      Error(id, kType, "unsupported", "preference store unavailable");
+      return;
+    }
+    bool managed = false;
+    if (pref) {
+      managed = !prefs->IsUserModifiablePreference(pref);
+    } else if (auto_pip) {
+      content_settings::ProviderType provider;
+      map->GetDefaultContentSetting(ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
+                                    &provider);
+      managed =
+          provider == content_settings::ProviderType::kPolicyProvider ||
+          provider == content_settings::ProviderType::kSupervisedProvider ||
+          provider == content_settings::ProviderType::kCustomExtensionProvider;
+    } else if (zoom_percent) {
+      managed = !prefs->IsUserModifiablePreference(prefs::kPartitionDefaultZoomLevel);
+    } else {
+      managed = !engines->CanMakeDefault(engine);
+    }
+    if (managed) {
+      Error(id, kType, "policy_denied", "preference is managed");
+      return;
+    }
+
+    if (pref) {
+      prefs->Set(pref, pref_value);
+    } else if (auto_pip) {
+      map->SetDefaultContentSetting(ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
+                                    *auto_pip);
+    } else if (zoom_percent) {
+      zoom->SetDefaultZoomLevelPref(
+          blink::ZoomFactorToZoomLevel(*zoom_percent / 100.0));
+    } else {
+      engines->SetUserSelectedDefaultSearchProvider(engine);
+    }
+    Result(id, kType, BrowserPrefsSnapshot(profile));
+  }
+
   void FocusRequest(const std::string& id, const base::DictValue& payload) {
     const std::string* tab_id = payload.FindString("tab_id");
     const base::Value* grant = payload.Find("grant_id");
@@ -1741,6 +2335,143 @@ class Connection {
     base::DictValue result;
     result.Set("tab", tab->Record());
     Result(id, "tab.set_label", std::move(result));
+  }
+
+  // Test-only, see kTestTabRename. Drives renaming the way a person does:
+  //  - `open_editor` and `reset` activate the item in the tab's real context
+  //    menu: a TabMenuModel run by TabContextMenuController over the window's
+  //    tab strip controller, as a right-click builds it;
+  //  - `edit` replaces the open bubble's text as typing over its selection
+  //    does, then presses `key` ("enter" or "escape") on the field, or
+  //    ("blur") closes the bubble the way losing focus does;
+  //  - `navigate` loads `url` in the tab (also for tabs session restore
+  //    brought back, which are not agent tabs); `get` changes nothing.
+  // Every answer carries the title the tab strip renders, whether the tab has
+  // a name, the menu's command ids (separators left out), whether Reset is
+  // enabled, and the open editor's text (null without one).
+  void TestTabRename(const std::string& id, const base::DictValue& payload) {
+    constexpr char kType[] = "test.tab_rename";
+    const std::string* tab_id = payload.FindString("tab_id");
+    const std::string* action = payload.FindString("action");
+    GatewayTab* tab = tab_id ? FindTab(*tab_id) : nullptr;
+    tabs::TabInterface* strip_tab =
+        tab ? tabs::TabInterface::MaybeGetFromContents(tab->web_contents())
+            : nullptr;
+    BrowserWindowInterface* window =
+        strip_tab ? strip_tab->GetBrowserWindowInterface() : nullptr;
+    BrowserView* browser_view =
+        window ? BrowserView::GetBrowserViewForBrowser(window) : nullptr;
+    VerticalTabStripRegionView* region =
+        browser_view ? browser_view->vertical_tab_strip_region_view_for_testing()
+                     : nullptr;
+    TabContextMenuController::Delegate* strip_controller =
+        region ? region->GetTabStripCollectionController() : nullptr;
+    if (!action || !strip_controller) {
+      Error(id, kType, "invalid_request",
+            "action and a tab in a vertical tab strip required");
+      return;
+    }
+    TabStripModel* model = window->GetTabStripModel();
+    auto run_menu_item = [&](int command_id) {
+      TabContextMenuController controller(strip_tab->GetHandle(),
+                                          strip_controller);
+      auto owned = std::make_unique<TabMenuModel>(
+          &controller, TabMenuModelDelegate::From(window), model,
+          model->GetIndexOfTab(strip_tab));
+      TabMenuModel* menu = owned.get();
+      controller.LoadModel(std::move(owned), menu);
+      std::optional<size_t> item = menu->GetIndexOfCommandId(command_id);
+      if (!item || !menu->IsEnabledAt(*item)) {
+        return false;
+      }
+      menu->ActivatedAt(*item);
+      return true;
+    };
+    OpensideTabRenameBubble* bubble =
+        OpensideTabRenameBubble::GetOpenForTesting();
+    if (*action == "open_editor") {
+      if (!run_menu_item(TabStripModel::CommandOpensideRenameTab)) {
+        Error(id, kType, "unavailable", "no Rename item");
+        return;
+      }
+    } else if (*action == "reset") {
+      if (!run_menu_item(TabStripModel::CommandOpensideResetTabName)) {
+        Error(id, kType, "unavailable", "no enabled Reset item");
+        return;
+      }
+    } else if (*action == "edit") {
+      const std::string* text = payload.FindString("text");
+      const std::string* key = payload.FindString("key");
+      if (!bubble || !key ||
+          (*key != "enter" && *key != "escape" && *key != "blur")) {
+        Error(id, kType, "invalid_request", "an open editor and key required");
+        return;
+      }
+      views::Textfield* field = bubble->field_for_testing();
+      if (text) {
+        field->SelectAll(/*reversed=*/false);
+        field->InsertOrReplaceText(base::UTF8ToUTF16(*text));
+      }
+      if (*key == "blur") {
+        bubble->widget_for_testing()->CloseWithReason(
+            views::Widget::ClosedReason::kLostFocus);
+      } else {
+        ui::KeyEvent press(ui::EventType::kKeyPressed,
+                           *key == "enter" ? ui::VKEY_RETURN : ui::VKEY_ESCAPE,
+                           ui::EF_NONE);
+        field->OnKeyEvent(&press);
+      }
+    } else if (*action == "restore") {
+      // `extra_hex` carries bytes JSON cannot, such as invalid UTF-8.
+      const std::string* extra_hex = payload.FindString("extra_hex");
+      std::string extra;
+      if (!extra_hex || !base::HexStringToString(*extra_hex, &extra)) {
+        Error(id, kType, "invalid_request", "extra_hex required");
+        return;
+      }
+      TabUIHelper::From(strip_tab)->RestoreCustomTitleForTesting(extra);
+    } else if (*action == "navigate") {
+      const std::string* url = payload.FindString("url");
+      if (!url) {
+        Error(id, kType, "invalid_request", "url required");
+        return;
+      }
+      tab->web_contents()->GetController().LoadURL(
+          GURL(*url), content::Referrer(), ui::PAGE_TRANSITION_TYPED,
+          std::string());
+    } else if (*action != "get") {
+      Error(id, kType, "invalid_request", "unknown action");
+      return;
+    }
+    // TabData is what the horizontal and vertical tab views render.
+    const tabs::TabData data = tabs::TabData::FromTabInterface(strip_tab);
+    base::DictValue result;
+    result.Set("title", base::UTF16ToUTF8(data.title));
+    result.Set("custom", TabUIHelper::From(strip_tab)->HasCustomTitle());
+    // Whether the name would be written to the session (and so restored).
+    result.Set("saved", TabUIHelper::From(strip_tab)
+                            ->GetCustomTitleSessionData()
+                            .has_value());
+    TabMenuModel menu(/*delegate=*/nullptr, TabMenuModelDelegate::From(window),
+                      model, model->GetIndexOfTab(strip_tab));
+    base::ListValue commands;
+    for (size_t i = 0; i < menu.GetItemCount(); ++i) {
+      if (menu.GetTypeAt(i) != ui::MenuModel::TYPE_SEPARATOR) {
+        commands.Append(menu.GetCommandIdAt(i));
+      }
+    }
+    result.Set("menu", std::move(commands));
+    result.Set("reset_enabled",
+               strip_controller->IsContextMenuCommandEnabled(
+                   strip_tab, TabStripModel::CommandOpensideResetTabName));
+    bubble = OpensideTabRenameBubble::GetOpenForTesting();
+    if (bubble) {
+      result.Set("editor",
+                 base::UTF16ToUTF8(bubble->field_for_testing()->GetText()));
+    } else {
+      result.Set("editor", base::Value());
+    }
+    Result(id, kType, std::move(result));
   }
 
   // Captures through the compositor surface; never selects the tab, raises
@@ -2051,6 +2782,8 @@ class Connection {
   base::OneShotTimer stalled_;
   std::unique_ptr<base::FileDescriptorWatcher::Controller> read_watch_;
   std::unique_ptr<base::FileDescriptorWatcher::Controller> write_watch_;
+  std::map<uint64_t, std::unique_ptr<SearchEngineWait>> search_engine_waits_;
+  uint64_t next_search_engine_wait_ = 0;
   base::WeakPtrFactory<Connection> weak_factory_{this};
 };
 
@@ -2064,8 +2797,10 @@ Gateway::Gateway(std::string instance_id,
       instance_dir_(std::move(instance_dir)),
       token_(std::move(token)),
       listen_fd_(listen_fd),
-      session_id_(LaunchSwitch(kAgentSessionSwitch)),
-      subagent_id_(LaunchSwitch(kAgentSubagentSwitch)) {
+      session_id_(PersonRole() ? std::string(kPersonSession)
+                               : LaunchSwitch(kAgentSessionSwitch)),
+      subagent_id_(PersonRole() ? std::string()
+                                : LaunchSwitch(kAgentSubagentSwitch)) {
   accept_watch_ = base::FileDescriptorWatcher::WatchReadable(
       listen_fd_,
       base::BindRepeating(&Gateway::OnAcceptable, base::Unretained(this)));
@@ -2086,7 +2821,8 @@ Gateway::~Gateway() {
 void Gateway::Emit(std::string_view type,
                    GatewayTab* tab,
                    base::DictValue payload) {
-  if (connection_ && connection_->authenticated()) {
+  // A person-role gateway reports nothing about the person's tabs.
+  if (connection_ && connection_->authenticated() && !PersonRole()) {
     connection_->SendEvent(type, tab, std::move(payload));
   }
 }
@@ -2180,6 +2916,13 @@ std::unique_ptr<Gateway> CreateGateway() {
                   "runtime directory and a valid instance id";
     return nullptr;
   }
+  if (command_line->HasSwitch(kGatewayRoleSwitch) &&
+      (!PersonRole() || command_line->HasSwitch(kAgentSessionSwitch) ||
+       command_line->HasSwitch(kAgentSubagentSwitch))) {
+    LOG(ERROR) << "openside gateway: the only role is person, and it takes "
+                  "no agent session";
+    return nullptr;
+  }
   const std::string directory = runtime + "/openside/browser/" + instance_id;
   const std::string socket_path = directory + "/gateway.sock";
   struct sockaddr_un address = {};
@@ -2257,6 +3000,7 @@ std::unique_ptr<Gateway> CreateGateway() {
   discovery.Set("pid", static_cast<int>(getpid()));
   discovery.Set("socket", "gateway.sock");
   discovery.Set("token_file", "gateway.token");
+  discovery.Set("role", PersonRole() ? kPersonRole : "agent");
   std::string json;
   base::JSONWriter::Write(discovery, &json);
   if (!WriteExclusive(instance_fd, "gateway.json.tmp", json) ||
@@ -2293,6 +3037,9 @@ void StartAgentGateway() {
   if (!g_gateway) {
     return;
   }
+  if (PersonRole()) {
+    return;
+  }
   javascript_dialogs::OpensideDialogObserver observer;
   observer.opened = &OnDialogOpened;
   observer.closed = &OnDialogClosed;
@@ -2309,7 +3056,7 @@ void ShutdownAgentGateway() {
 }
 
 void OnTabCreated(content::WebContents* contents) {
-  if (!GatewayEnabled() || GatewayTab::FromWebContents(contents)) {
+  if (!AgentGatewayEnabled() || GatewayTab::FromWebContents(contents)) {
     return;
   }
   GatewayTab::CreateForWebContents(contents);
@@ -2352,7 +3099,7 @@ void OnDevToolsClientDetached(content::DevToolsAgentHost* host) {
 }
 
 bool MayActivateTab(content::WebContents* contents) {
-  const bool protocol = GatewayEnabled() && content::IsProtocolActivation();
+  const bool protocol = AgentGatewayEnabled() && content::IsProtocolActivation();
   if (!protocol && !IsAgentOriginated(contents)) {
     return true;
   }
@@ -2382,7 +3129,7 @@ bool MayActivateTab(content::WebContents* contents) {
 }
 
 bool MayChangeWindowsOverProtocol() {
-  return !GatewayEnabled();
+  return !AgentGatewayEnabled();
 }
 
 bool MayActivateBrowserWindow(BrowserWindowInterface* window) {

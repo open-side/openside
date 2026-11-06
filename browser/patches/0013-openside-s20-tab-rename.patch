@@ -1,0 +1,627 @@
+diff --git a/components/tabs/public/tab_context_menu_command.h b/components/tabs/public/tab_context_menu_command.h
+--- a/components/tabs/public/tab_context_menu_command.h
++++ b/components/tabs/public/tab_context_menu_command.h
+@@ -39,6 +39,10 @@
+   CommandGlicSwitchToRecentConversation,
+   CommandGlicUnshare,
+   CommandToggleFocusGroup,
++  // openside: appended so the upstream values recorded in histograms keep
++  // their meaning.
++  CommandOpensideRenameTab,
++  CommandOpensideResetTabName,
+ };
+ // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/histograms.xml:TabContextMenuCommand)
+ 
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -144,6 +144,8 @@
+       "//ui/base/unowned_user_data",
+     ]
+     deps = [
++      "//base:i18n",
++      "//components/sessions",
+       "//chrome/app:generated_resources",
+       "//chrome/browser/favicon",
+       "//chrome/browser/resource_coordinator:mojo_bindings",
+diff --git a/chrome/browser/ui/tab_ui_helper.h b/chrome/browser/ui/tab_ui_helper.h
+--- a/chrome/browser/ui/tab_ui_helper.h
++++ b/chrome/browser/ui/tab_ui_helper.h
+@@ -5,8 +5,10 @@
+ #ifndef CHROME_BROWSER_UI_TAB_UI_HELPER_H_
+ #define CHROME_BROWSER_UI_TAB_UI_HELPER_H_
+ 
++#include <map>
+ #include <optional>
+ #include <string>
++#include <string_view>
+ #include <vector>
+ 
+ #include "base/byte_size.h"
+@@ -18,6 +20,7 @@
+ #include "content/public/browser/web_contents_observer.h"
+ #include "ui/base/models/image_model.h"
+ #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++#include "url/origin.h"
+ 
+ class BrowserUiController;
+ 
+@@ -51,6 +54,40 @@
+   // a customized title is used.
+   std::u16string GetTitle() const;
+ 
++  // openside: a name the person gave the tab. While set, GetTitle() returns it
++  // instead of the page title, so the tab strip, hover card, tooltip and tab
++  // search all show it; WebContents::GetTitle() (and with it the agent
++  // gateway and extension tab lists) keeps the page's own title. Whitespace is
++  // trimmed and the name is capped at kMaxCustomTitleLength grapheme clusters; an
++  // empty name clears it. It survives same-origin navigations and title
++  // changes and is cleared when the primary main frame commits a document
++  // from another origin.
++  static constexpr size_t kMaxCustomTitleLength = 256;
++  void SetCustomTitle(std::u16string_view title);
++  void ClearCustomTitle();
++  bool HasCustomTitle() const { return custom_title_.has_value(); }
++
++  // The name is saved with the session as tab extra data under this key:
++  // "<origin>\n<name>", or empty once cleared. Saving the origin keeps the
++  // cross-origin rule working for a restored tab, which has committed nothing
++  // yet when it gets its name back.
++  static constexpr char kCustomTitleSessionKey[] = "openside_custom_title";
++  // Session data for the current name; nullopt without one, or when the page
++  // it was given on has no tuple origin (nothing to hold it to on restore).
++  std::optional<std::string> GetCustomTitleSessionData() const;
++  // Called by session restore before the restored contents become a tab; the
++  // tab's TabUIHelper takes the name over when it is created. The record is
++  // dropped unless it is well formed and its origin is that of
++  // `restored_url`, the page restore is about to load, so a stale record
++  // never names a different site before the first commit.
++  static void StashRestoredCustomTitle(
++      content::WebContents* contents,
++      const std::map<std::string, std::string>& extra_data,
++      const GURL& restored_url);
++  // Runs `value` through the restore path above against the tab's current
++  // page, replacing any name; for the agent gateway's test hook.
++  void RestoreCustomTitleForTesting(const std::string& value);
++
+   bool ShouldRenderLoadingTitle();
+ 
+   bool ShouldThemifyFavicon();
+@@ -114,12 +151,22 @@
+  private:
+   void OnTabPinnedStatusChange(tabs::TabInterface* tab_interface,
+                                bool new_pinned_state);
++  // Writes the current name (or its removal) to the session.
++  void PersistCustomTitle();
++  // Takes over a name StashRestoredCustomTitle() left on the contents.
++  void TakeRestoredCustomTitle();
+ 
+   bool was_active_at_least_once_ = false;
+   bool created_by_session_restore_ = false;
+   bool needs_attention_ = false;
+   base::CallbackListSubscription pin_tab_subscription_;
+ 
++  // openside: see SetCustomTitle(). `custom_title_origin_` is the origin the
++  // tab showed when it was named; a committed navigation away from it drops
++  // the name.
++  std::optional<std::u16string> custom_title_;
++  url::Origin custom_title_origin_;
++
+   // Cached tab-background-aware default globe favicon, returned for tabs with
+   // no page-provided favicon. Created once (bound to this tab) so repeated
+   // GetFavicon() calls return an equal model -- TabData compares favicons by
+diff --git a/chrome/browser/ui/tab_ui_helper.cc b/chrome/browser/ui/tab_ui_helper.cc
+--- a/chrome/browser/ui/tab_ui_helper.cc
++++ b/chrome/browser/ui/tab_ui_helper.cc
+@@ -12,11 +12,18 @@
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_forward.h"
++#include "base/i18n/break_iterator.h"
+ #include "base/process/kill.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/supports_user_data.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/favicon/favicon_utils.h"
+ #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_restore.h"
++#include "chrome/browser/sessions/session_service.h"
++#include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/performance_controls/memory_saver_utils.h"
+@@ -31,10 +38,13 @@
+ #include "chrome/grit/generated_resources.h"
+ #include "components/favicon/content/content_favicon_util.h"
+ #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
++#include "components/sessions/content/session_tab_helper.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/tabs/public/tab_network_state.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/url_constants.h"
+ #include "ui/base/l10n/l10n_util.h"
+@@ -42,6 +52,9 @@
+ #include "ui/gfx/image/image_skia.h"
+ #include "ui/resources/grit/ui_resources.h"
+ #include "url/gurl.h"
++#include "url/origin.h"
++#include "url/scheme_host_port.h"
++#include "url/url_constants.h"
+ 
+ namespace {
+ 
+@@ -94,6 +107,52 @@
+       tab_interface);
+   return app_controller->ShouldShowAppIconOnTab(index);
+ }
++
++// openside: a restored tab's name, held on its WebContents from session
++// restore until the tab's TabUIHelper exists.
++const int kRestoredCustomTitleKey = 0;
++struct RestoredCustomTitle : public base::SupportsUserData::Data {
++  RestoredCustomTitle(url::Origin origin, std::u16string title)
++      : origin(std::move(origin)), title(std::move(title)) {}
++  url::Origin origin;
++  std::u16string title;
++};
++
++// The one normalization a name goes through, whether typed or restored: a tab
++// title is one line, so pasted line breaks and runs of spaces collapse the way
++// the page title's own whitespace does in the tab strip; the cap counts
++// grapheme clusters so a cut never splits a surrogate pair, a combining
++// sequence or an emoji sequence; and the cut never leaves trailing whitespace.
++// Empty means "no name".
++std::u16string NormalizeCustomTitle(std::u16string_view title) {
++  std::u16string name =
++      base::CollapseWhitespace(title, /*trim_sequences_with_line_breaks=*/false);
++  size_t cut = name.size();
++  {
++    base::i18n::BreakIterator graphemes(
++        name, base::i18n::BreakIterator::BREAK_CHARACTER);
++    if (!graphemes.Init()) {
++      return std::u16string();
++    }
++    size_t count = 0;
++    while (graphemes.Advance()) {
++      if (++count == TabUIHelper::kMaxCustomTitleLength) {
++        cut = graphemes.pos();
++        break;
++      }
++    }
++  }
++  name.resize(cut);
++  base::TrimWhitespace(name, base::TRIM_TRAILING, &name);
++  return name;
++}
++
++// Which origins a tab name is saved with the session for and restored on.
++bool IsSavedCustomTitleOrigin(const url::SchemeHostPort& tuple) {
++  return tuple.IsValid() && (tuple.scheme() == url::kHttpScheme ||
++                             tuple.scheme() == url::kHttpsScheme);
++}
++
+ }  // namespace
+ 
+ DEFINE_USER_DATA(TabUIHelper);
+@@ -105,6 +164,30 @@
+   // favicon should show or not.
+   pin_tab_subscription_ = tab().RegisterPinnedStateChanged(base::BindRepeating(
+       &TabUIHelper::OnTabPinnedStatusChange, base::Unretained(this)));
++  // openside: take over a name session restore saved for this tab.
++  TakeRestoredCustomTitle();
++}
++
++void TabUIHelper::TakeRestoredCustomTitle() {
++  content::WebContents* contents = tab().GetContents();
++  if (!contents) {
++    return;
++  }
++  if (auto* restored = static_cast<RestoredCustomTitle*>(
++          contents->GetUserData(&kRestoredCustomTitleKey))) {
++    custom_title_ = restored->title;
++    custom_title_origin_ = restored->origin;
++    contents->RemoveUserData(&kRestoredCustomTitleKey);
++  }
++}
++
++void TabUIHelper::RestoreCustomTitleForTesting(const std::string& value) {
++  ClearCustomTitle();
++  StashRestoredCustomTitle(tab().GetContents(),
++                           {{kCustomTitleSessionKey, value}},
++                           web_contents()->GetVisibleURL());
++  TakeRestoredCustomTitle();
++  tab_ui_change_callbacks_.Notify();
+ }
+ 
+ TabUIHelper::~TabUIHelper() = default;
+@@ -124,7 +207,118 @@
+   return tab_ui_change_callbacks_.Add(std::move(callback));
+ }
+ 
++void TabUIHelper::SetCustomTitle(std::u16string_view title) {
++  std::u16string name = NormalizeCustomTitle(title);
++  if (name.empty()) {
++    ClearCustomTitle();
++    return;
++  }
++  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
++  // The name belongs to the committed document's origin (its tuple, or its
++  // precursor's for an inherited about:blank or a sandboxed page). A tab with
++  // no tuple origin yet (a new blank tab, a restored tab that has not loaded)
++  // shows the name but does not save it, and its next commit clears it. An
++  // error page is named for the URL it failed to load, as
++  // DidFinishNavigation() compares it.
++  custom_title_origin_ = frame->IsErrorDocument()
++                             ? url::Origin::Create(frame->GetLastCommittedURL())
++                             : frame->GetLastCommittedOrigin();
++  if (custom_title_ == name) {
++    // Same name, but the origin it belongs to may have moved on.
++    PersistCustomTitle();
++    return;
++  }
++  custom_title_ = std::move(name);
++  PersistCustomTitle();
++  tab_ui_change_callbacks_.Notify();
++}
++
++void TabUIHelper::ClearCustomTitle() {
++  if (!custom_title_) {
++    return;
++  }
++  custom_title_.reset();
++  PersistCustomTitle();
++  tab_ui_change_callbacks_.Notify();
++}
++
++std::optional<std::string> TabUIHelper::GetCustomTitleSessionData() const {
++  // Only names on http and https sites are saved, the same rule restore
++  // applies; a name anywhere else (a file: or data: page, a new blank tab)
++  // still shows and follows the origin rules, it just does not come back.
++  const url::SchemeHostPort tuple =
++      custom_title_origin_.GetTupleOrPrecursorTupleIfOpaque();
++  if (!custom_title_ || !IsSavedCustomTitleOrigin(tuple)) {
++    return std::nullopt;
++  }
++  return tuple.Serialize() + "\n" + base::UTF16ToUTF8(*custom_title_);
++}
++
++// static
++void TabUIHelper::StashRestoredCustomTitle(
++    content::WebContents* contents,
++    const std::map<std::string, std::string>& extra_data,
++    const GURL& restored_url) {
++  auto it = extra_data.find(kCustomTitleSessionKey);
++  if (it == extra_data.end()) {
++    return;
++  }
++  // The session file is outside the browser's control: anything but exactly
++  // "<tuple origin>\n<one-line UTF-8 name>" restores no name.
++  const std::string_view value = it->second;
++  const size_t split = value.find('\n');
++  if (split == std::string_view::npos || split == 0) {
++    return;
++  }
++  const std::string_view origin_text = value.substr(0, split);
++  const std::string_view name_text = value.substr(split + 1);
++  if (name_text.empty() || name_text.find('\n') != std::string_view::npos ||
++      !base::IsStringUTF8(name_text)) {
++    return;
++  }
++  const GURL origin_url(origin_text);
++  if (!origin_url.is_valid() ||
++      !IsSavedCustomTitleOrigin(url::SchemeHostPort(origin_url))) {
++    return;
++  }
++  url::Origin origin = url::Origin::Create(origin_url);
++  if (origin.opaque() || origin.Serialize() != origin_text ||
++      !origin.IsSameOriginWith(restored_url)) {
++    return;
++  }
++  std::u16string name = NormalizeCustomTitle(base::UTF8ToUTF16(name_text));
++  if (name.empty()) {
++    return;
++  }
++  contents->SetUserData(&kRestoredCustomTitleKey,
++                        std::make_unique<RestoredCustomTitle>(
++                            std::move(origin), std::move(name)));
++}
++
++void TabUIHelper::PersistCustomTitle() {
++  content::WebContents* contents = web_contents();
++  if (!contents) {
++    return;
++  }
++  SessionService* service = SessionServiceFactory::GetForProfile(
++      Profile::FromBrowserContext(contents->GetBrowserContext()));
++  if (!service) {
++    return;
++  }
++  const SessionID window_id =
++      sessions::SessionTabHelper::IdForWindowContainingTab(contents);
++  const SessionID tab_id = sessions::SessionTabHelper::IdForTab(contents);
++  if (window_id.is_valid() && tab_id.is_valid()) {
++    service->AddTabExtraData(window_id, tab_id, kCustomTitleSessionKey,
++                             GetCustomTitleSessionData().value_or(""));
++  }
++}
++
+ std::u16string TabUIHelper::GetTitle() const {
++  if (custom_title_) {
++    return *custom_title_;
++  }
++
+   if (auto* tab_features = tab().GetTabFeatures()) {
+     const tab_groups::SavedTabGroupWebContentsListener* wc_listener =
+         tab_features->saved_tab_group_web_contents_listener();
+@@ -333,6 +527,27 @@
+ 
+ void TabUIHelper::DidFinishNavigation(
+     content::NavigationHandle* navigation_handle) {
++  // openside: a tab name belongs to the site it was given on. Sandboxed
++  // documents commit opaque origins, so compare the origin's tuple (or its
++  // precursor's); an opaque origin with no precursor (about:blank opened by
++  // the browser, a data: URL) never matches. An error page's origin is opaque
++  // with no precursor too, so it counts as the URL it failed to load: a failed
++  // same-site load keeps the name.
++  if (custom_title_ && navigation_handle->IsInPrimaryMainFrame() &&
++      navigation_handle->HasCommitted() &&
++      !navigation_handle->IsSameDocument()) {
++    const url::SchemeHostPort now =
++        navigation_handle->IsErrorPage()
++            ? url::SchemeHostPort(navigation_handle->GetURL())
++            : navigation_handle->GetRenderFrameHost()
++                  ->GetLastCommittedOrigin()
++                  .GetTupleOrPrecursorTupleIfOpaque();
++    if (!now.IsValid() ||
++        now != custom_title_origin_.GetTupleOrPrecursorTupleIfOpaque()) {
++      custom_title_.reset();
++      PersistCustomTitle();
++    }
++  }
+   // Navigation committed so the visible URL might have changed.
+   tab_ui_change_callbacks_.Notify();
+ }
+diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
+--- a/chrome/browser/ui/tabs/BUILD.gn
++++ b/chrome/browser/ui/tabs/BUILD.gn
+@@ -98,6 +98,7 @@
+   source_set("tab_menu") {
+     sources = [
+       "glic_tab_sub_menu_model.h",
++      "openside_tab_rename_strings.h",
+       "tab_menu_model.h",
+       "tab_menu_model_delegate.cc",
+       "tab_menu_model_delegate.h",
+@@ -105,6 +106,7 @@
+ 
+     public_deps = [
+       "//base",
++      "//base:i18n",
+       "//chrome/browser/glic",
+       "//ui/base/interaction",
+       "//ui/base/unowned_user_data",
+@@ -168,6 +170,7 @@
+       "//chrome/browser/glic/browser_ui",
+       "//chrome/browser/profiles:profile",
+       "//chrome/browser/send_tab_to_self",
++      "//chrome/browser/ui:tab_ui_helper",
+       "//chrome/browser/ui:ui_features",
+       "//chrome/browser/ui/immersive:immersive_mode_controller",
+       "//chrome/browser/ui/send_tab_to_self",
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.cc b/chrome/browser/ui/tabs/tab_menu_model.cc
+--- a/chrome/browser/ui/tabs/tab_menu_model.cc
++++ b/chrome/browser/ui/tabs/tab_menu_model.cc
+@@ -30,10 +30,12 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_context_menu_delegate.h"
++#include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/existing_tab_group_sub_menu_model.h"
+ #include "chrome/browser/ui/tabs/existing_window_sub_menu_model.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/tabs/glic_tab_sub_menu_model.h"
++#include "chrome/browser/ui/tabs/openside_tab_rename_strings.h"
+ #include "chrome/browser/ui/tabs/split_tab_menu_model.h"
+ #include "chrome/browser/ui/tabs/split_tab_swap_menu_model.h"
+ #include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
+@@ -501,6 +503,20 @@
+                       IDS_TAB_CXMENU_DUPLICATE);
+   SetElementIdentifierAt(GetItemCount() - 1, kDuplicateMenuItem);
+ 
++  // openside: a name belongs to one tab, so both items need a single-tab
++  // selection. They sit between Duplicate and Pin, where Aside puts Rename.
++  if (num_tabs == 1) {
++    AddItem(TabStripModel::CommandOpensideRenameTab,
++            openside::GetTabRenameString(
++                openside::TabRenameString::kRenameMenuItem));
++    if (TabUIHelper::From(tab_strip_->GetTabAtIndex(index))
++            ->HasCustomTitle()) {
++      AddItem(TabStripModel::CommandOpensideResetTabName,
++              openside::GetTabRenameString(
++                  openside::TabRenameString::kResetMenuItem));
++    }
++  }
++
+   bool will_pin = tab_strip_->WillContextMenuPin(index);
+   AddItemWithStringId(
+       TabStripModel::CommandTogglePinned,
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -2691,6 +2691,12 @@
+ 
+     case CommandToggleVertical:
+       return true;
++
++    case CommandOpensideRenameTab:
++      return true;
++
++    case CommandOpensideResetTabName:
++      return TabUIHelper::From(GetTabAtIndex(context_index))->HasCustomTitle();
+   }
+   SCOPED_CRASH_KEY_NUMBER("TabStripModel", "command_id", command_id);
+   NOTREACHED() << "Unsupported command: " << command_id;
+@@ -3121,6 +3127,15 @@
+       AddToNewGroupFromContextIndex(context_index);
+       break;
+     }
++
++    case CommandOpensideRenameTab:
++      // The editor is a bubble anchored on the tab's view, so the views tab
++      // strip controllers open it before the command reaches the model.
++      break;
++
++    case CommandOpensideResetTabName:
++      TabUIHelper::From(GetTabAtIndex(context_index))->ClearCustomTitle();
++      break;
+   }
+ }
+ 
+diff --git a/chrome/browser/sessions/session_service_base.cc b/chrome/browser/sessions/session_service_base.cc
+--- a/chrome/browser/sessions/session_service_base.cc
++++ b/chrome/browser/sessions/session_service_base.cc
+@@ -32,6 +32,8 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+ #include "chrome/browser/ui/startup/startup_browser_creator.h"
++#include "chrome/browser/ui/tab_ui_helper.h"
++#include "components/tabs/public/tab_interface.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+@@ -632,6 +634,20 @@
+       sessions::CreateLastActiveTimeCommand(session_id,
+                                             tab->GetLastActiveTime()));
+ 
++  // openside: a rebuilt session file keeps the tab's custom name; the
++  // incremental AddTabExtraData() commands are dropped by a rebuild.
++  if (tabs::TabInterface* tab_interface =
++          tabs::TabInterface::MaybeGetFromContents(tab)) {
++    if (const TabUIHelper* helper = TabUIHelper::From(tab_interface)) {
++      if (std::optional<std::string> data =
++              helper->GetCustomTitleSessionData()) {
++        command_storage_manager()->AppendRebuildCommand(
++            sessions::CreateAddTabExtraDataCommand(
++                session_id, TabUIHelper::kCustomTitleSessionKey, *data));
++      }
++    }
++  }
++
+   // TODO(stahon@m1cr050ft.qjz9zk) This might be movable to SessionService
+   // when Chrome OS uses AppSessionService for app restores.
+   // For now it needs to stay to support SessionService restoring apps.
+diff --git a/chrome/browser/ui/browser_tabrestore.cc b/chrome/browser/ui/browser_tabrestore.cc
+--- a/chrome/browser/ui/browser_tabrestore.cc
++++ b/chrome/browser/ui/browser_tabrestore.cc
+@@ -85,6 +85,14 @@
+   glic::RestoreGlicStateFromExtraData(web_contents.get(), extra_data);
+   send_tab_to_self::SendTabToSelfActivationTracker::RestoreFromExtraData(
+       web_contents.get(), extra_data);
++  // openside: the tab's name comes back once the contents become a tab, if
++  // its record belongs to the page this tab is about to load.
++  if (selected_navigation >= 0 &&
++      static_cast<size_t>(selected_navigation) < navigations.size()) {
++    TabUIHelper::StashRestoredCustomTitle(
++        web_contents.get(), extra_data,
++        navigations[selected_navigation].virtual_url());
++  }
+ 
+   std::vector<std::unique_ptr<NavigationEntry>> entries =
+       ContentSerializedNavigationBuilder::ToNavigationEntries(
+diff --git a/chrome/browser/ui/views/tabs/browser_tab_strip_controller.cc b/chrome/browser/ui/views/tabs/browser_tab_strip_controller.cc
+--- a/chrome/browser/ui/views/tabs/browser_tab_strip_controller.cc
++++ b/chrome/browser/ui/views/tabs/browser_tab_strip_controller.cc
+@@ -55,6 +55,7 @@
+ #include "chrome/browser/ui/views/tabs/groups/tab_group_accessibility.h"
+ #include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
+ #include "chrome/browser/ui/views/tabs/tab.h"
++#include "chrome/browser/ui/views/tabs/tab/openside_tab_rename_bubble.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_accessibility.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.h"
+ #include "chrome/browser/ui/views/tabs/tab_strip.h"
+@@ -895,7 +896,17 @@
+     tabs::TabInterface* tab,
+     TabStripModel::ContextMenuCommand command_id,
+     int event_flags) {
+-  model_->ExecuteContextMenuCommand(model_->GetIndexOfTab(tab), command_id);
++  const int index = model_->GetIndexOfTab(tab);
++  if (command_id == TabStripModel::CommandOpensideRenameTab) {
++    // openside: the editor anchors below the tab's view, which only the views
++    // layer knows; the model leaves this command to it.
++    if (index != TabStripModel::kNoTab) {
++      OpensideTabRenameBubble::Show(tab, tabstrip_->tab_at(index),
++                                    views::BubbleBorder::TOP_LEFT);
++    }
++    return;
++  }
++  model_->ExecuteContextMenuCommand(index, command_id);
+ }
+ 
+ bool BrowserTabStripController::GetContextMenuAccelerator(
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
+@@ -40,6 +40,7 @@
+ #include "chrome/browser/ui/views/tabs/groups/tab_group_accessibility.h"
+ #include "chrome/browser/ui/views/tabs/groups/tab_group_editor_bubble_view.h"
+ #include "chrome/browser/ui/views/tabs/horizontal/horizontal_tab_closing_helper.h"
++#include "chrome/browser/ui/views/tabs/tab/openside_tab_rename_bubble.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/tab_groups/tab_group_id.h"
+@@ -533,6 +534,22 @@
+     tabs::TabInterface* tab,
+     TabStripModel::ContextMenuCommand command_id,
+     int event_flags) {
++  if (command_id == TabStripModel::CommandOpensideRenameTab) {
++    // openside: the editor anchors on the tab's view, which only the views
++    // layer knows; the model leaves this command to it. Beside a vertical tab
++    // it opens to the side so the tabs below stay visible.
++    TabCollectionNode* node = root_node_->GetNodeForHandle(tab->GetHandle());
++    if (node && node->view()) {
++      const tabs::VerticalTabStripStateController* state =
++          GetStateController();
++      OpensideTabRenameBubble::Show(
++          tab, node->view(),
++          state && state->ShouldDisplayVerticalTabs()
++              ? views::BubbleBorder::LEFT_TOP
++              : views::BubbleBorder::TOP_LEFT);
++    }
++    return;
++  }
+   model_->ExecuteContextMenuCommand(model_->GetIndexOfTab(tab), command_id);
+ }
+ 
+diff --git a/chrome/browser/ui/views/tabs/tab/BUILD.gn b/chrome/browser/ui/views/tabs/tab/BUILD.gn
+--- a/chrome/browser/ui/views/tabs/tab/BUILD.gn
++++ b/chrome/browser/ui/views/tabs/tab/BUILD.gn
+@@ -11,6 +11,7 @@
+   public = [
+     "alert_indicator_button.h",
+     "glow_hover_controller.h",
++    "openside_tab_rename_bubble.h",
+     "tab_accessibility.h",
+     "tab_close_button.h",
+     "tab_context_menu_controller.h",
+@@ -40,6 +41,7 @@
+   sources = [
+     "alert_indicator_button.cc",
+     "glow_hover_controller.cc",
++    "openside_tab_rename_bubble.cc",
+     "tab_accessibility.cc",
+     "tab_close_button.cc",
+     "tab_context_menu_controller.cc",
+@@ -55,6 +57,7 @@
+     "//chrome/browser/actor/resources:grit",
+     "//chrome/browser/favicon",
+     "//chrome/browser/ui:browser_element_identifiers",
++    "//chrome/browser/ui:tab_ui_helper",
+     "//chrome/browser/ui:ui_features",
+     "//chrome/browser/ui/interaction",
+     "//chrome/browser/ui/location_bar",

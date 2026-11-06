@@ -23,10 +23,20 @@ source_set("openside") {
     # The gateway reads tab strips and windows owned by //chrome/browser/ui,
     # which depends on this target; the browser_public_dependencies group is
     # Chromium's documented way to keep that circular include graph complete.
+    # The same holds for //chrome/browser/extensions (CommandService) and
+    # //chrome/browser/devtools: both depend on this target, so they are
+    # included but cannot be listed as deps.
     public_deps += [ "//chrome/browser:browser_public_dependencies" ]
     deps += [
+      "//chrome/browser/content_settings:content_settings_factory",
       "//chrome/browser/tab_group_sync:factories",
+      "//chrome/browser/ui/zoom",
+      "//components/content_settings/core/browser",
+      "//components/content_settings/core/common",
+      "//components/language/core/browser",
       "//components/password_manager/content/browser",
+      "//components/spellcheck/browser",
+      "//third_party/blink/public/common",
       "//components/download/content/public",
       "//components/download/public/common:public",
       "//components/infobars/content",
@@ -44,6 +54,8 @@ source_set("openside") {
       "//ui/gfx",
       "//ui/gfx/codec",
       "//url",
+      "//extensions/browser",
+      "//ui/events:events_base",
     ]
   }
 }

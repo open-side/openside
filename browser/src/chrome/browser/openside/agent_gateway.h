@@ -14,8 +14,16 @@ class WebContents;
 
 namespace openside {
 
-// The gateway exists only in a daemon-launched browser that passes this switch.
+// The gateway exists only in a browser that passes this switch: the daemon's
+// agent browser, or the person's own browser in the person role.
 inline constexpr char kGatewayInstanceSwitch[] = "openside-gateway-instance-id";
+// `person` serves only the person's browser settings and native tools for the
+// startup profile; without it the gateway is the agent gateway. The person
+// role refuses to start together with kAgentSessionSwitch.
+inline constexpr char kGatewayRoleSwitch[] = "openside-gateway-role";
+inline constexpr char kPersonRole[] = "person";
+// The fixed session scope requests to a person-role gateway carry.
+inline constexpr char kPersonSession[] = "person";
 inline constexpr char kAgentSessionSwitch[] = "openside-agent-session-id";
 inline constexpr char kAgentSubagentSwitch[] = "openside-agent-subagent-id";
 // Absolute path of a real directory (not a symlink), owned by the user with
