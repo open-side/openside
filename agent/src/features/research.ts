@@ -24,16 +24,18 @@ import { PY_SPACE, splitlines, strip } from "./pytext";
 export const ULTRABROWSE = "ultrabrowse";
 // Thinking effort per profile; other profiles keep the provider's default behavior.
 export const THINKING: Record<string, "high"> = { [ULTRABROWSE]: "high" };
-// Results whose `url` field is the page the browser tool loaded or acted on.
+// Results whose `url` field is the page the tool loaded or acted on. `websearch` is not one:
+// a result snippet is not a page the model read.
 export const VISITING_TOOLS: ReadonlySet<string> = new Set([
 	"browser_open_tab",
 	"browser_navigate",
 	"browser_act",
 	"browser_repl",
+	"webfetch",
 ]);
 export const CITATION_RETRIES = 2;
 export const PLAN_REQUIRED =
-	"Before using browser tools, write a line `Plan:` followed by numbered research steps, then browse.";
+	"Before using web or browser tools, write a line `Plan:` followed by numbered research steps, then browse.";
 const WS = `[${PY_SPACE}]`;
 const PLAN_HEADING = new RegExp(`^${WS}*(?:#{1,6}${WS}*)?\\**plan\\**${WS}*:?\\**${WS}*(.*)$`, "iu");
 const PLAN_ITEM = new RegExp(`^${WS}*(?:\\d+[.)]|[-*+])${WS}+(.+)$`, "u");
@@ -118,7 +120,7 @@ export function retryMessage(report: citations.Report, visited: Set<string>): st
 			.map(url => `- ${url}`)
 			.join("\n") || "- (none yet)";
 	return (
-		"These factual sentences have no titled link to a page you opened with a browser tool:\n" +
+		"These factual sentences have no titled link to a page you opened with webfetch or a browser tool:\n" +
 		`${claims}\n` +
 		"Pages opened in this session:\n" +
 		`${pages}\n` +
@@ -146,9 +148,10 @@ export function citationGuard(
 	return { action: "replace", text: citations.annotate(output, report) };
 }
 
-/** Refusal text for a browser tool called before the current turn states a plan. */
+/** Refusal text for a web or browser tool called before the current turn states a plan. */
 export function planGate(toolName: string, messages: readonly AgentMessage[]): string | undefined {
-	return toolName.startsWith("browser_") && !planSteps(messages).length ? PLAN_REQUIRED : undefined;
+	const gated = toolName.startsWith("browser_") || toolName === "websearch" || toolName === "webfetch";
+	return gated && !planSteps(messages).length ? PLAN_REQUIRED : undefined;
 }
 
 /**

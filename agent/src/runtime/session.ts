@@ -1,6 +1,8 @@
 // One session per connection; Rust owns execution, tickets and durable storage.
+import { randomUUID } from "node:crypto";
 import type { AgentMessage, AgentTool, StreamFn } from "@oh-my-pi/pi-agent-core";
 import type { Effort, Model, ServiceTier, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { ImageGenerationResult } from "@oh-my-pi/pi-ai/images";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { CacheBustWarning } from "../capabilities/cache-busts";
 import { redactUserPrompts } from "../capabilities/redact";
@@ -27,9 +29,12 @@ import type {
 } from "../protocol/types";
 import { MAX_REASON_CHARS, MAX_USER_TEXT_BYTES } from "../protocol/types";
 import { claudeCodeVersion } from "../providers/anthropic";
-import { EffortUnsupported, findAuthUnavailable } from "../providers/errors";
+import { FRONT_EFFORT } from "../providers/effort";
+import { AuthUnavailable, EffortUnsupported, findAuthUnavailable } from "../providers/errors";
+import { type GenerateImage, generateImages } from "../providers/images";
 import { resolveModel, splitModelId } from "../providers/models";
 import { makeStreamFn } from "../providers/stream";
+import { routeVisual } from "../providers/visual";
 import { loadScript, type Script, type ScriptCursor, SteerSignal, scriptedModel, scriptedTitle } from "../scripted";
 import type { JsonlConnection } from "../transport/jsonl";
 import type { RpcRouter } from "../transport/rpc";
@@ -57,7 +62,15 @@ import {
 } from "./state";
 import { type Child, Subagents } from "./subagents";
 import { CHIEF_INSTRUCTIONS, FRONT_INSTRUCTIONS, TEAMMATE_INSTRUCTIONS, teamToolsAllowed } from "./team";
-import { doneResult, FRONT_OUTPUTS, frontOutputTool, proxyTool, STAY_SILENT, type ToolInvoker } from "./tools";
+import {
+	type Continuation,
+	doneResult,
+	FRONT_OUTPUTS,
+	frontOutputTool,
+	proxyTool,
+	STAY_SILENT,
+	type ToolInvoker,
+} from "./tools";
 
 const AUTH_UNAVAILABLE = "Model account pool unavailable; check Models & accounts";
 const TITLE_INSTRUCTIONS =
@@ -105,6 +118,8 @@ export interface SessionOptions {
 	onModelRequest?: (info: ModelRequestInfo) => void;
 	/** One tool-free completion for titles, summaries and memory extraction (tests). */
 	complete?: Complete;
+	/** Test seam for the provider image call; the credential lease loop around it still runs. */
+	generateImage?: GenerateImage;
 }
 
 export interface CompleteRequest {
@@ -287,6 +302,69 @@ export class Session implements SubagentHost {
 		return (toolCallId, name, args) => invoke({ name, arguments: args, toolCallId }, new AbortController().signal);
 	}
 
+	/**
+	 * `generate_image` after daemon admission: the provider call runs here on a lease for the
+	 * admitted model, and each image goes back through `__image_store`, which saves it as an
+	 * Output artifact of this tool call.
+	 */
+	#imageContinuation(subagent?: string): Continuation {
+		const store = this.#featureCall(subagent);
+		return async (ctx, args, admitted) => {
+			if (!isObject(admitted) || admitted.status !== "admitted" || typeof admitted.model !== "string") {
+				return admitted;
+			}
+			const model = admitted.model;
+			const count = typeof admitted.count === "number" ? admitted.count : 1;
+			const end = () =>
+				store(randomUUID(), "__image_store", { tool_call_id: ctx.toolCallId, last: true }).catch(() => undefined);
+			let result: ImageGenerationResult;
+			try {
+				result = await generateImages(
+					this.rpc,
+					{
+						model,
+						prompt: String(args.prompt ?? ""),
+						count,
+						...(typeof admitted.aspect_ratio === "string" ? { aspectRatio: admitted.aspect_ratio } : {}),
+						...(subagent !== undefined ? { subagent } : {}),
+						networkAllow: (this.spec.config.agent.network_allow ?? []) as string[],
+						sessionId: this.spec.session,
+						signal: ctx.signal,
+					},
+					this.options.generateImage,
+				);
+			} catch (error) {
+				await end();
+				const reason =
+					error instanceof AuthUnavailable
+						? "No connected account could run the image model"
+						: "Image generation failed";
+				return { status: "failed", model, reason };
+			}
+			const images = result.images.slice(0, count);
+			const paths: string[] = [];
+			for (const [index, image] of images.entries()) {
+				const outcome = await store(randomUUID(), "__image_store", {
+					tool_call_id: ctx.toolCallId,
+					index,
+					data_base64: image.data,
+					last: index === images.length - 1,
+				});
+				if (outcome.status === "done" && isObject(outcome.for_model) && typeof outcome.for_model.path === "string") {
+					paths.push(outcome.for_model.path);
+				}
+			}
+			if (images.length === 0) await end();
+			if (paths.length === 0) return { status: "failed", model, reason: "The image model returned no usable image" };
+			return {
+				status: "generated",
+				model: result.model ?? model,
+				images: paths,
+				...(result.text ? { text: result.text } : {}),
+			};
+		};
+	}
+
 	#streamFor(
 		model: Model,
 		modelId: string | undefined,
@@ -299,18 +377,35 @@ export class Session implements SubagentHost {
 		const id = modelId ?? `${model.provider}:${model.id}`;
 		const delay = agent.provider_retry_delay_ms;
 		const version = claudeCodeVersion(this.spec.config.credentials);
-		return (this.options.makeStreamFn ?? makeStreamFn)(this.rpc, {
-			provider: splitModelId(id).provider || model.provider,
-			model: id,
-			...(subagent !== undefined ? { subagent } : {}),
-			networkAllow: (agent.network_allow ?? []) as string[],
-			...(version !== undefined ? { claudeCodeVersion: version } : {}),
-			fallback,
-			...(typeof delay === "number" ? { maxRetryDelayMs: delay } : {}),
-			// `agent.effort` is the person's per-session choice; every other effort is the runtime's.
-			...(this.#modelOverrides().reasoning !== undefined ? { effortFixed: true } : {}),
-			...(onServedEffort !== undefined ? { onServedEffort } : {}),
-		});
+		const build = (target: string, chain: string[]): StreamFn =>
+			(this.options.makeStreamFn ?? makeStreamFn)(this.rpc, {
+				provider: splitModelId(target).provider || model.provider,
+				model: target,
+				...(subagent !== undefined ? { subagent } : {}),
+				networkAllow: (agent.network_allow ?? []) as string[],
+				...(version !== undefined ? { claudeCodeVersion: version } : {}),
+				fallback: chain,
+				...(typeof delay === "number" ? { maxRetryDelayMs: delay } : {}),
+				// `agent.effort` is the person's per-session choice; every other effort is the runtime's.
+				...(this.#modelOverrides().reasoning !== undefined ? { effortFixed: true } : {}),
+				...(onServedEffort !== undefined ? { onServedEffort } : {}),
+			});
+		const primary = build(id, fallback);
+		const roles = agent.model_roles;
+		const visualId =
+			roles !== null && typeof roles === "object" && !Array.isArray(roles) && typeof roles.visual === "string"
+				? roles.visual
+				: undefined;
+		if (visualId === undefined || visualId === id || this.script !== undefined) return primary;
+		let visualModel: Model;
+		try {
+			visualModel = this.options.model ?? resolveModel(visualId);
+		} catch {
+			return primary;
+		}
+		// The requesting model and its chain stay behind the Visual model when it cannot serve.
+		const visual = build(visualId, [id, ...fallback.filter(candidate => candidate !== visualId)]);
+		return routeVisual(primary, visual, visualModel);
 	}
 
 	#summarizer(model: Model, streamFn: StreamFn): (messages: AgentMessage[], signal?: AbortSignal) => Promise<string> {
@@ -375,7 +470,10 @@ export class Session implements SubagentHost {
 		const invoke = this.#invoker(subagent);
 		let agent: SessionAgent | undefined;
 		const run = () => (agent as SessionAgent).toolRun;
-		const tools = epoch.tools.map(tool => proxyTool(tool, invoke, run));
+		const image = this.#imageContinuation(subagent);
+		const tools = epoch.tools.map(tool =>
+			proxyTool(tool, invoke, run, tool.name === "generate_image" ? image : undefined),
+		);
 		const config = this.compaction;
 		const featureCall = this.#featureCall(subagent);
 		const cache = new CacheBustWarning();
@@ -458,7 +556,10 @@ export class Session implements SubagentHost {
 		const agentConfig = spec.config.agent;
 		const profile = this.front ? undefined : agentConfig.profile;
 		const invoke = this.#invoker();
-		const continuations = this.subs.continuations();
+		const continuations: Record<string, Continuation> = {
+			...this.subs.continuations(),
+			generate_image: this.#imageContinuation(),
+		};
 		let agent: SessionAgent | undefined;
 		const run = () => (agent as SessionAgent).toolRun;
 		const tools: AgentTool[] = [];
@@ -483,6 +584,7 @@ export class Session implements SubagentHost {
 			holdFinalText: research.holdsFinalText(profile),
 			fallbackModel: model.id,
 			servedEffort: () => this.#servedEffort,
+			contextWindow: model.contextWindow ?? 0,
 		});
 		this.#turns = turns;
 		const featureCall = this.#featureCall();
@@ -491,7 +593,7 @@ export class Session implements SubagentHost {
 		let reasoning: Effort | undefined;
 		let maxTokens: number | undefined;
 		if (this.front) {
-			reasoning = "minimal" as Effort;
+			reasoning = FRONT_EFFORT;
 			maxTokens = 1024;
 		} else if (research.modelSettings(profile) !== undefined) {
 			reasoning = "high" as Effort;

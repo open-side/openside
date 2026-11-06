@@ -2389,6 +2389,11 @@
             "max"
           ],
           "type": "string"
+        },
+        "context_window": {
+          "description": "Context window of the requesting model, in tokens, 0 when unknown; sent on every request of the session's own agent, never for subagents.",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [

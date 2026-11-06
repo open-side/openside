@@ -28,14 +28,16 @@ describe("egress guard", () => {
 			httpRebind: "EgressRefused",
 			webSocketRebind: "EgressRefused",
 			fetchPinned: expect.stringMatching(/^host=lan\.test:\d+$/),
-			anthropicPinned: expect.not.stringMatching(/^(EgressRefused|allowed)$/),
-			anthropicPinnedV6: expect.not.stringMatching(/^(EgressRefused|allowed)$/),
+			anthropicPinned: "DialRecorded",
+			anthropicPinnedV6: "DialRecorded",
 			anthropicMappedPrivate: "EgressRefused",
 			httpsLiteral: "EgressRefused",
 			httpsLiteralV6: "EgressRefused",
 			httpsMapped: "EgressRefused",
 			httpsMappedPrivate: "EgressRefused",
 			fetchAdmitted: "allowed",
+			// Exactly the two checked, pinned addresses reached the dial; no refused case did.
+			dials: "192.0.2.1:443 [2001:db8::1]:443",
 		});
 		expect(stderr).toContain("outbound connection to https://collector.invalid:443 is not in network.allow");
 		expect(stderr).toContain("outbound connection to rebind.example (10.0.0.7):443 is not in network.allow");

@@ -81,6 +81,7 @@ async function modelsCatalog(): Promise<Report> {
 	return catalogReport(
 		objectField(config, "models"),
 		Array.isArray(names) ? names.filter((name): name is string => typeof name === "string") : [],
+		config.orchestration,
 	);
 }
 

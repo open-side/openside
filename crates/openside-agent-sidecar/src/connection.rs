@@ -108,7 +108,7 @@ impl Connection {
         let (read, write) = tokio::io::split(stream);
         let writer: Writer = Arc::new(Mutex::new(Box::new(write)));
         let mut lines = Lines::new(read, MAX_LINE_BYTES);
-        loop {
+        let agent_version = loop {
             match read_message(&mut lines, &writer).await? {
                 Some(SidecarMessage::Hello {
                     protocol,
@@ -118,7 +118,7 @@ impl Connection {
                 }) if received == nonce => {
                     crate::version::check_protocol(protocol)?;
                     crate::version::check_agent_version(&versions.openside_agent)?;
-                    break;
+                    break versions.openside_agent;
                 }
                 Some(SidecarMessage::Hello { .. }) => {
                     return Err(RuntimeError::Unavailable(
@@ -138,7 +138,7 @@ impl Connection {
                 Some(_) => protocol_error(&writer, "expected hello").await?,
                 None => return Err(disconnected()),
             }
-        }
+        };
         write_message(&writer, open).await?;
         let (events_tx, events) = mpsc::channel(EVENT_CAPACITY);
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -166,6 +166,7 @@ impl Connection {
                 tools: Vec::new(),
                 pending_deferred: Vec::new(),
                 startup_ms: 0,
+                agent_version: String::new(),
             },
             writer: Some(writer),
             events,
@@ -176,6 +177,7 @@ impl Connection {
             next_control_id: 0,
         };
         connection.info = ready_rx.await.map_err(|_| disconnected())??;
+        connection.info.agent_version = agent_version;
         Ok(connection)
     }
 
@@ -680,6 +682,8 @@ async fn drive<R: AsyncRead + Unpin>(
                         tools,
                         pending_deferred: pending_deferred.into_iter().map(deferred_call).collect(),
                         startup_ms,
+                        // Known only to `open`, which fills it in.
+                        agent_version: String::new(),
                     }));
                 }
             }
@@ -785,7 +789,9 @@ async fn drive<R: AsyncRead + Unpin>(
                     subagent,
                     approval_ticket,
                 };
-                let exposed = expected.contains(&call.name);
+                // Internal runtime operations are never model tools, so open.tools never lists
+                // them; the daemon's host gates each one by caller and session itself.
+                let exposed = expected.contains(&call.name) || call.name.starts_with("__");
                 let handler = tools.clone();
                 let response_writer = writer.clone();
                 calls.spawn(async move {
@@ -955,11 +961,13 @@ fn runtime_event(message: SidecarMessage) -> Option<RuntimeEvent> {
                 input_tokens,
                 output_tokens,
                 effort,
+                context_window,
             } => RuntimeEvent::Usage {
                 model,
                 input_tokens,
                 output_tokens,
                 effort,
+                context_window,
             },
         },
         SidecarMessage::MessageAccepted { message_id } => {

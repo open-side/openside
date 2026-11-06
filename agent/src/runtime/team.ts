@@ -5,25 +5,12 @@ import type { TeamContext } from "../protocol/types.ts";
 
 export const FRONT_APP_HELP =
 	"# openside app help\n" +
-	"- Sidebar: people, History (/history), Workspace (/workspace), Settings (/settings). No " +
-	"New chat.\n" +
-	"- / opens chief; /agents/:id opens a person's home/profile; /sessions/:id opens History " +
-	"threads. Home threads offer neither Delete conversation nor Clear.\n" +
-	"- History: Earlier/Archived tabs, search. Ordinary thread ⋯: Pin conversation/Unpin " +
-	"conversation, Rename, Archive/Unarchive, Model account…, Copy link, Copy session ID, " +
-	"Delete conversation (confirm; irreversible). Archive is reversible, not deletion. " +
-	"Retired teammates: Restore.\n" +
-	"- Settings: Models & accounts (/models: providers, keys/subscriptions, fast/reasoning " +
-	"models, fallbacks, rotations/usage); Channels (/channels: Telegram/Slack/Discord); " +
-	"Remote access (/remote: Connect your phone via QR/link on the host computer; " +
-	"Tailscale/Cloudflare/relay; /pair receives link); Workspace; Setup guide (/welcome: " +
-	"models, agents, import, Vault, phone); Connection, Notifications, Appearance, Sign out.\n" +
-	"- Workspace: Team (/team: add/retire/restore); Skills (/skills); Routines (/routines: " +
-	"schedules/runs); Memory (/memory: saved context); Vault (/vault: " +
-	"logins/authenticators); Connections (/connections: Check now, Sign in again, agent " +
-	"access, sign out/forget; Possibly signed in is unverified); Devices (/devices: " +
-	"pair/revoke); Agents (/agents: coding agents, not Team); Sync (/sync); Policy " +
-	"(/policy); Diagnostics (/diagnostics); Configuration (/config).\n";
+	"- Sidebar: Chats (New Chat, recent chats, Show all), Tabs, account menu with Settings (Mod+,). No Team or Workspace.\n" +
+	"- / opens Home (Search or Ask; Ask starts a new chat); /sessions/:id opens a chat (⋯ Rename, Send feedback, Copy session ID, Archive, Delete conversation; Share beside it). Home threads offer neither Delete conversation nor Clear.\n" +
+	"- /chats: search, filter (All chats, Unread, Pinned, Archived).\n" +
+	"- Settings is a tab (/settings/<page>), searchable. Personal: General (Connection, language, Sign out, Run setup again opens /welcome), Appearance, Account (devices, sync), Security & Privacy (sites agents are signed in to: Check now, Sign in again, agent access; Possibly signed in is unverified).\n" +
+	"- Agent: Agents (Notifications, policy), Projects, Models (Providers: one row per provider listing its sign-ins and API key, ⋯ signs in again, replaces or removes each, + Connect opens the ChatGPT/Claude picker with more options and your own API key; Task models: Default, Fast, Standard, Deep, Visual, Image generation), Plugins & MCPs (skills), Memory (Overview, History, Context Awareness, Configure).\n" +
+	"- Features: Passwords (vault logins/authenticators), Routines, Channels (Telegram/Slack/Discord), Developers (CLI skill, MCP, coding agents; Connect your phone via QR; Tailscale/Cloudflare/relay; /pair receives link), Mini popup (Alt+Space opens the small /mini window), Lasso. Archived: Archived chats.\n";
 
 const FRONT_POLICY =
 	"You are the front agent: reply to the person quickly and briefly using send_message " +

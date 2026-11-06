@@ -1,13 +1,23 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { CURATED, catalogReport, type ModelRole, metadata, providerSupport } from "../../src/providers/catalog";
+import {
+	CURATED,
+	catalogReport,
+	displayName,
+	type ModelRole,
+	metadata,
+	providerSupport,
+} from "../../src/providers/catalog";
 
 interface CatalogModel {
+	display_name: string;
+	kind: string;
 	id: string;
 	label: string;
 	recommended_for: string | null;
 	in_catalog: boolean;
 	tier: string;
 	strengths: string;
+	default_effort: string | null;
 }
 
 interface CatalogRow {
@@ -44,8 +54,19 @@ describe("catalog", () => {
 			expect(Object.keys(provider).sort()).toEqual(["models", "provider"]);
 			for (const model of provider.models) {
 				expect(Object.keys(model).sort()).toEqual(
-					["id", "in_catalog", "label", "recommended_for", "strengths", "tier"].sort(),
+					[
+						"default_effort",
+						"display_name",
+						"id",
+						"in_catalog",
+						"kind",
+						"label",
+						"recommended_for",
+						"strengths",
+						"tier",
+					].sort(),
 				);
+				expect(model.display_name).toBe(displayName(model.label));
 				expect(model.in_catalog).toBe(true);
 				expect(["fast", "reasoning", "frontier"]).toContain(model.tier);
 				expect(model.strengths).toBeTruthy();
@@ -88,10 +109,13 @@ describe("catalog", () => {
 			{
 				id: "openrouter:test/model",
 				label: "test/model",
+				display_name: "Test/model",
+				kind: "chat",
 				recommended_for: null,
 				in_catalog: false,
 				tier: "reasoning",
 				strengths: "Explicitly configured model; capabilities not curated",
+				default_effort: null,
 			},
 		]);
 	});
@@ -130,5 +154,26 @@ describe("catalog", () => {
 		expect(models["openai:gpt-5.4-mini"]?.in_catalog).toBe(false);
 		expect(models["openai:gpt-6-luna"]?.in_catalog).toBe(true);
 		expect(models["openai:gpt-6-astra"]?.tier).toBe("frontier");
+	});
+
+	it("test_display_names_read_as_product_names", () => {
+		expect(displayName("claude-sonnet-5-5")).toBe("Claude Sonnet 5.5");
+		expect(displayName("openai:gpt-6.1-sol")).toBe("GPT-6.1 Sol");
+		expect(displayName("gpt-image-2")).toBe("GPT Image 2");
+		expect(displayName("gemini-3.1-pro-preview")).toBe("Gemini 3.1 Pro");
+		expect(displayName("gemini-3.1-flash-image")).toBe("Gemini 3.1 Flash Image");
+	});
+
+	it("test_image_models_are_listed_with_image_kind", async () => {
+		const models = Object.fromEntries(
+			rows(await catalogReport({ image: "google-antigravity:gemini-3.1-flash-image" }, ["openai-codex"])).flatMap(row =>
+				row.models.map(model => [model.id, model as unknown as Record<string, unknown>]),
+			),
+		);
+		expect(models["openai-codex:gpt-image-2"]?.kind).toBe("image");
+		expect(models["google:gemini-3.1-flash-image"]?.kind).toBe("image");
+		expect(models["google-antigravity:gemini-3.1-flash-image"]?.kind).toBe("image");
+		expect(models["openai-codex:gpt-image-2"]?.recommended_for).toBeNull();
+		expect(models["anthropic:claude-sonnet-5-5"]?.kind).toBe("chat");
 	});
 });

@@ -188,8 +188,21 @@ describe("citations", () => {
 			returned("browser_snapshot", `[snapshot_id 1]\nlink ${other}`),
 			returned("browser_tabs", [{ tab_id: "u", url: other }]),
 			returned("bash", { url: other }),
+			// A page read with webfetch is a source; a search result list is not.
+			returned("webfetch", { url: `${A}/read`, title: "Read", text: `see ${other}` }),
+			returned("websearch", { query: "q", results: [{ url: other }] }),
 		];
-		expect(research.visitedSources(messages)).toEqual(new Set([A, B]));
+		expect(research.visitedSources(messages)).toEqual(new Set([A, B, `${A}/read`]));
+	});
+
+	it("test_web_tools_wait_for_a_plan_like_browser_tools", () => {
+		const history: AgentMessage[] = [user("research rivers")];
+		expect(research.planGate("websearch", history)).toBe(research.PLAN_REQUIRED);
+		expect(research.planGate("webfetch", history)).toBe(research.PLAN_REQUIRED);
+		expect(research.planGate("read", history)).toBeUndefined();
+		history.push(assistant(PLAN, [A]));
+		expect(research.planGate("websearch", history)).toBeUndefined();
+		expect(research.planGate("webfetch", history)).toBeUndefined();
 	});
 
 	it("test_plan_parsing_takes_the_last_plan_block", () => {

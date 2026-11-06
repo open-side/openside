@@ -21,12 +21,13 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { clampThinkingLevelForModel, type Effort, getSupportedEfforts } from "@oh-my-pi/pi-catalog";
+import type { Effort } from "@oh-my-pi/pi-catalog";
 import { DEFAULT_ANTIGRAVITY_VERSION } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { logRequestIdentity } from "../features/prompt-epoch";
 import type { CredentialUsage } from "../protocol/types";
 import { applyClaudeCodeVersion } from "./anthropic";
 import { type CredentialLease, type CredentialRpcPort, credentialRpcFor } from "./credential-rpc";
+import { servedEffort } from "./effort";
 import { activeEgress, anthropicDirectFetch, directFetch, Egress, EgressRefused, makeEgressFetch } from "./egress";
 import { AuthUnavailable, EffortUnsupported } from "./errors";
 import { resolveModel, sanitizedErrorMessage, splitModelId } from "./models";
@@ -53,23 +54,6 @@ export interface LeaseContext {
 	effortFixed?: boolean;
 	/** Effort each visible request was sent with, after per-candidate resolution. */
 	onServedEffort?: (effort: Effort | undefined) => void;
-}
-
-/**
- * The effort a candidate is asked for. Runtime defaults are provider-neutral (the front
- * asks for `minimal`) and pi-ai throws before any request when the candidate's ladder
- * lacks the tier (Claude has no `minimal`), so they move to the nearest served tier.
- */
-export function servedEffort(
-	candidate: { id: string; model: Model<Api> },
-	requested: Effort | undefined,
-	fixed: boolean,
-): Effort | undefined {
-	if (requested === undefined) return undefined;
-	const supported = getSupportedEfforts(candidate.model);
-	if (supported.includes(requested)) return requested;
-	if (fixed) throw new EffortUnsupported(requested, candidate.id, supported);
-	return clampThinkingLevelForModel(candidate.model, requested);
 }
 
 const MAX_ATTEMPTS = 64;

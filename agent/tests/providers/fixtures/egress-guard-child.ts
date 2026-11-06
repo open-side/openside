@@ -2,6 +2,7 @@
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import tls from "node:tls";
 import { anthropicDirectFetch, egressResolver, installEgress, makeEgressFetch } from "../../../src/providers/egress";
 
 const outcome = async (run: () => unknown): Promise<string> => {
@@ -31,10 +32,9 @@ const server = Bun.serve({
 	port: 0,
 	fetch: request => new Response(`host=${request.headers.get("host")}`),
 });
-// anthropic.test answers with a TEST-NET address nothing listens on: reaching the dial at all
-// (a timeout, not a refusal) is what proves the guard let the pinned address through.
-// anthropic6.test does the same over IPv6 (documentation prefix); mapped.example answers an
-// IPv4-mapped form of a private address through a wildcard entry.
+// anthropic.test answers with a TEST-NET address and anthropic6.test with an IPv6
+// documentation address; mapped.example answers an IPv4-mapped form of a private address
+// through a wildcard entry.
 const answers: Record<string, { address: string; family: 4 | 6 }> = {
 	"rebind.example": { address: "10.0.0.7", family: 4 },
 	"lan.test": { address: "127.0.0.1", family: 4 },
@@ -56,8 +56,17 @@ const pinnedAnthropic = (origin: string, url = `${origin}/v1/messages`, allow: s
 		method: "POST",
 		headers: {},
 		body: "{}",
-		signal: AbortSignal.timeout(300),
 	});
+// The TLS dial beneath the guard (`coworkFetch` reaches it through `https.request`'s agent):
+// installed before `installEgress` wraps it, it sees only what the guard let through. It
+// records the exact target and throws instead of opening a socket, so a pinned case proves it
+// reached the checked address and nothing else.
+const dials: string[] = [];
+Reflect.set(tls, "connect", (target: { host?: string; hostname?: string; port?: number | string }) => {
+	dials.push(`${target.host ?? target.hostname}:${target.port}`);
+	throw Object.assign(new Error("dial recorded"), { name: "DialRecorded" });
+});
+
 // Only a wildcard admits rebind.example, so its internal answers are refused;
 // lan.test is listed exactly, so the guard dials its loopback answer.
 const guard = installEgress(["allowed.invalid", "*.example", "lan.test"]);
@@ -103,4 +112,5 @@ results.fetchAdmitted = await outcome(async () => {
 	}
 });
 server.stop(true);
+results.dials = dials.join(" ");
 console.log(JSON.stringify(results));

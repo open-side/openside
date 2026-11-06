@@ -470,6 +470,7 @@ fn sidecar_samples() -> Vec<SidecarMessage> {
             input_tokens: 1,
             output_tokens: 2,
             effort: Some("low".into()),
+            context_window: Some(200_000),
         },
     ] {
         samples.push(SidecarMessage::Event { event });

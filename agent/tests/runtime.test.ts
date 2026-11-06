@@ -506,6 +506,8 @@ describe("runtime", () => {
 				expect(seen[0]).toEqual({ fixed, reasoning });
 				const usage = of(daemon, "event").find(item => item.event.kind === "usage");
 				expect(usage?.event.effort).toBe("low");
+				// The parent agent's usage carries its model's window for the chat's context meter.
+				expect(usage?.event.context_window).toBeGreaterThan(0);
 			});
 		});
 	}

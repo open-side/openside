@@ -403,6 +403,9 @@ pub enum RuntimeEvent {
         output_tokens: u64,
         /// Thinking effort the request was sent with after per-model resolution.
         effort: Option<String>,
+        /// Context window of the model; reported only for the session's own agent, never
+        /// for subagents.
+        context_window: Option<u64>,
     },
     /// No run or sidecar message remains active.
     Settled,
@@ -422,6 +425,8 @@ pub struct SessionInfo {
     pub pending_deferred: Vec<DeferredCall>,
     /// Measured startup latency in milliseconds.
     pub startup_ms: u64,
+    /// `openside_agent` package version from the sidecar's hello; empty for fake runtimes.
+    pub agent_version: String,
 }
 
 /// A ready agent session, owning one sidecar connection.

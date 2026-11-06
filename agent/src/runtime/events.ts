@@ -3,13 +3,15 @@ import type { AssistantMessage, AssistantMessageEvent, Effort, Usage as LlmUsage
 import type { EventBody, Usage } from "../protocol/types";
 
 /** Daemon usage counts all prompt tokens, cached or not. */
-export function usageEvent(model: string, usage: LlmUsage, effort?: Effort): Usage {
+export function usageEvent(model: string, usage: LlmUsage, effort?: Effort, contextWindow?: number): Usage {
 	return {
 		kind: "usage",
 		model,
 		input_tokens: usage.input + usage.cacheRead + usage.cacheWrite,
 		output_tokens: usage.output,
 		...(effort !== undefined ? { effort } : {}),
+		// Presence marks the session's own agent; 0 says its window is unknown.
+		...(contextWindow !== undefined ? { context_window: contextWindow > 0 ? contextWindow : 0 } : {}),
 	};
 }
 
@@ -22,6 +24,8 @@ export interface TurnEventsOptions {
 	fallbackModel: string;
 	/** Thinking effort the request was actually sent with, after per-model resolution. */
 	servedEffort?: () => Effort | undefined;
+	/** The parent model's context window, so the daemon can show how full the chat is. */
+	contextWindow?: number;
 }
 
 export class TurnEvents {
@@ -55,7 +59,14 @@ export class TurnEvents {
 			emit({ kind: "assistant.delta", text: this.#held.join("") });
 		}
 		this.#held = [];
-		emit(usageEvent(message.model || this.options.fallbackModel, message.usage, this.options.servedEffort?.()));
+		emit(
+			usageEvent(
+				message.model || this.options.fallbackModel,
+				message.usage,
+				this.options.servedEffort?.(),
+				this.options.contextWindow,
+			),
+		);
 		emit({ kind: "turn.ended" });
 		this.turnOpen = false;
 	}

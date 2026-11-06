@@ -386,6 +386,8 @@ export interface Usage {
 	output_tokens: number;
 	/** Effort the request was sent with after per-model resolution; absent when it carried none. */
 	effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+	/** Context window of the requesting model, 0 when unknown; only the session's own agent sends it. */
+	context_window?: number;
 }
 
 export type EventBody =
