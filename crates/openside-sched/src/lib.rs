@@ -1,11 +1,11 @@
-//! Routine scheduler: cron and interval routines that start sessions or send heartbeats.
+//! Routine scheduler: cron, RRULE and interval routines that start sessions or send heartbeats.
 //!
 //! A [`Routine`](openside_proto::Routine) pairs a [`RoutineSchedule`](openside_proto::RoutineSchedule)
-//! (exactly five-field POSIX cron with an optional IANA time zone, UTC by default, or a fixed
-//! interval) with a [`RoutineAction`](openside_proto::RoutineAction): create a new session
-//! with a prompt, or inject a follow-up into an existing session (heartbeat). The
-//! [`Scheduler`] owns persistence in SQLite (`routines.db`) and all decisions; the
-//! daemon supplies a [`RoutineHost`] that performs the side effects, and a [`Clock`]
+//! (exactly five-field POSIX cron or an RFC 5545 RRULE, each with an optional IANA time zone,
+//! UTC by default, or a fixed interval) with a [`RoutineAction`](openside_proto::RoutineAction):
+//! create a new session with a prompt, or inject a follow-up into an existing session
+//! (heartbeat). The [`Scheduler`] owns persistence in SQLite (`routines.db`) and all decisions;
+//! the daemon supplies a [`RoutineHost`] that performs the side effects, and a [`Clock`]
 //! so tests advance time without sleeping.
 //!
 //! Behaviour contract:
@@ -21,8 +21,11 @@
 //! - [`Scheduler::recover`] runs at daemon start: occurrences missed while down are
 //!   recorded `missed` and never replayed; `catch_up` allows one run for the latest.
 //! - [`suggest::suggest`] drafts routines from messages the user keeps repeating.
+//! - An RRULE series that has ended (COUNT or UNTIL) keeps `enabled` as set and has no
+//!   `next_run_at`. An RRULE stored without `start` gets its anchor's minute as `start`
+//!   ([`schedule::resolve`]), so restarts continue the same series.
 //!
-//! The cron engine is the `croner` crate (MIT).
+//! The cron engine is the `croner` crate (MIT); RRULEs use the `rrule` crate (MIT/Apache-2.0).
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 

@@ -1,6 +1,6 @@
 [package]
 name = "openside-sched"
-description = "Routine scheduler for openside: cron/interval routines, overlap skipping, restart recovery and repetition suggestions"
+description = "Routine scheduler for openside: cron/interval/RRULE routines, overlap skipping, restart recovery and repetition suggestions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,7 @@ croner = "4"
 openside-proto = { path = "../openside-proto" }
 parking_lot = "0.12"
 rusqlite = { version = "0.37", features = ["bundled"] }
+rrule = "0.14"
 serde = "1"
 serde_json = "1"
 thiserror = "2"

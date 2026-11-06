@@ -1653,3 +1653,517 @@ async fn team_routine_targets_home_and_retirement_pauses_without_fallback() {
     assert_eq!(paused.paused_reason, Some(RoutinePauseReason::AgentRetired));
     assert_eq!(f.host.follow_ups().len(), 1);
 }
+
+// RFC 5545 recurrence rules
+
+fn rrule(rule: &str, timezone: Option<&str>, start: Option<&str>) -> RoutineSchedule {
+    RoutineSchedule::Rrule {
+        rule: rule.into(),
+        timezone: timezone.map(Into::into),
+        start: start.map(|start| start.parse().unwrap()),
+    }
+}
+
+/// The next `n` occurrences after `after`, each found with [`crate::schedule::next_after`].
+fn upcoming(schedule: &RoutineSchedule, after: &str, n: usize) -> Vec<DateTime<Utc>> {
+    let mut current = at(after);
+    let mut seen = Vec::new();
+    for _ in 0..n {
+        match crate::schedule::next_after(schedule, current, current).unwrap() {
+            Some(next) => {
+                seen.push(next);
+                current = next;
+            }
+            None => break,
+        }
+    }
+    seen
+}
+
+#[test]
+fn a_daily_rrule_keeps_its_wall_clock_time_across_the_fall_change() {
+    let schedule = rrule(
+        "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+        NEW_YORK,
+        Some("2026-10-30T09:00:00"),
+    );
+    assert_eq!(
+        upcoming(&schedule, "2026-10-30T14:00:00Z", 3),
+        [
+            at("2026-10-31T13:00:00Z"), // 09:00 EDT
+            at("2026-11-01T14:00:00Z"), // 09:00 EST
+            at("2026-11-02T14:00:00Z"),
+        ]
+    );
+}
+
+#[test]
+fn a_weekly_rrule_fires_on_every_listed_weekday() {
+    let schedule = rrule(
+        "RRULE:FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=9;BYMINUTE=0",
+        None,
+        Some("2026-11-02T09:00:00"),
+    );
+    assert_eq!(
+        upcoming(&schedule, "2026-11-01T00:00:00Z", 4),
+        [
+            at("2026-11-02T09:00:00Z"),
+            at("2026-11-06T09:00:00Z"),
+            at("2026-11-09T09:00:00Z"),
+            at("2026-11-13T09:00:00Z"),
+        ]
+    );
+}
+
+#[test]
+fn a_monthly_rrule_on_the_31st_skips_shorter_months() {
+    let schedule = rrule(
+        "FREQ=MONTHLY;BYMONTHDAY=31",
+        Some("Asia/Seoul"),
+        Some("2027-01-31T08:00:00"),
+    );
+    assert_eq!(
+        upcoming(&schedule, "2027-01-01T00:00:00Z", 4),
+        [
+            at("2027-01-30T23:00:00Z"), // 08:00 KST on the 31st
+            at("2027-03-30T23:00:00Z"),
+            at("2027-05-30T23:00:00Z"),
+            at("2027-07-30T23:00:00Z"),
+        ]
+    );
+}
+
+#[test]
+fn an_until_rrule_ends_after_its_last_occurrence() {
+    let schedule = rrule(
+        "FREQ=DAILY;UNTIL=20261108T090000Z",
+        None,
+        Some("2026-11-06T09:00:00"),
+    );
+    assert_eq!(
+        upcoming(&schedule, "2026-11-06T00:00:00Z", 5),
+        [
+            at("2026-11-06T09:00:00Z"),
+            at("2026-11-07T09:00:00Z"),
+            at("2026-11-08T09:00:00Z"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_one_time_rrule_fires_once_and_then_has_no_next_run_even_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("routines.db");
+    let clock = Arc::new(ManualClock::new(at("2026-11-06T08:00:00Z")));
+    let host = FakeHost::default();
+    let scheduler = reopen(&path, &clock, &host);
+    let routine = scheduler
+        .create(request(
+            rrule(
+                "FREQ=DAILY;COUNT=1",
+                Some("Asia/Seoul"),
+                Some("2026-11-06T18:30:00"),
+            ),
+            new_session("once"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(routine.next_run_at, Some(at("2026-11-06T09:30:00Z")));
+
+    clock.set(at("2026-11-06T09:30:00Z"));
+    let runs = scheduler.tick().await.unwrap();
+    assert_eq!(statuses(&runs), [RunStatus::Started]);
+    let ended = scheduler.get(&routine.id).unwrap();
+    assert_eq!(ended.next_run_at, None, "the series has ended");
+    assert!(ended.enabled, "an ended series keeps the person's switch");
+
+    clock.advance(Duration::days(2));
+    assert!(scheduler.tick().await.unwrap().is_empty());
+    drop(scheduler);
+    let scheduler = reopen(&path, &clock, &host);
+    assert!(scheduler.recover().await.unwrap().is_empty());
+    assert_eq!(scheduler.get(&routine.id).unwrap().next_run_at, None);
+    assert_eq!(host.started(), 1);
+}
+
+#[tokio::test]
+async fn an_rrule_started_in_the_past_keeps_its_interval_phase_on_create_update_and_restart() {
+    // Mondays every other week from 5 January; 2 November is week 43 (off), 9 November is on.
+    let schedule = rrule(
+        "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+        None,
+        Some("2026-01-05T09:00:00"),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("routines.db");
+    let clock = Arc::new(ManualClock::new(at("2026-11-06T12:00:00Z")));
+    let host = FakeHost::default();
+    let scheduler = reopen(&path, &clock, &host);
+    let routine = scheduler
+        .create(request(schedule.clone(), new_session("biweekly")))
+        .await
+        .unwrap();
+    assert_eq!(
+        routine.schedule, schedule,
+        "an explicit start is stored as sent"
+    );
+    assert_eq!(routine.next_run_at, Some(at("2026-11-09T09:00:00Z")));
+
+    clock.set(at("2026-11-07T12:00:00Z"));
+    let updated = scheduler
+        .update(
+            &routine.id,
+            UpdateRoutineRequest {
+                schedule: Some(schedule.clone()),
+                ..UpdateRoutineRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.next_run_at, Some(at("2026-11-09T09:00:00Z")));
+
+    // An explicit start makes the anchor (now on create/update, created_at on restart) moot.
+    let now = at("2026-11-07T12:00:00Z");
+    assert_eq!(
+        crate::schedule::next_after(&schedule, now, routine.created_at).unwrap(),
+        crate::schedule::next_after(&schedule, now, now).unwrap()
+    );
+    // Pause and resume recompute from now; a restart records the missed Monday and skips to
+    // the next on-week.
+    scheduler
+        .update(
+            &routine.id,
+            UpdateRoutineRequest {
+                enabled: Some(false),
+                ..UpdateRoutineRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    scheduler
+        .update(
+            &routine.id,
+            UpdateRoutineRequest {
+                enabled: Some(true),
+                ..UpdateRoutineRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    clock.set(at("2026-11-10T00:00:00Z"));
+    drop(scheduler);
+    let scheduler = reopen(&path, &clock, &host);
+    let records = scheduler.recover().await.unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .map(|run| (run.status, run.scheduled_at))
+            .collect::<Vec<_>>(),
+        [(RunStatus::Missed, at("2026-11-09T09:00:00Z"))]
+    );
+    assert_eq!(
+        scheduler.get(&routine.id).unwrap().next_run_at,
+        Some(at("2026-11-23T09:00:00Z"))
+    );
+}
+
+#[tokio::test]
+async fn an_rrule_without_start_is_stored_with_the_creation_minute_in_its_zone() {
+    let f = fixture("2026-11-06T08:15:42Z");
+    let routine = f
+        .scheduler
+        .create(request(
+            rrule("RRULE:FREQ=DAILY", Some("Asia/Seoul"), None),
+            new_session("daily"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        routine.schedule,
+        rrule(
+            "FREQ=DAILY",
+            Some("Asia/Seoul"),
+            Some("2026-11-06T17:15:00")
+        )
+    );
+    assert_eq!(routine.next_run_at, Some(at("2026-11-07T08:15:00Z")));
+}
+
+#[tokio::test]
+async fn bad_rrules_are_rejected_with_specific_messages() {
+    let f = fixture("2026-11-06T12:00:00Z");
+    for (schedule, code, needle) in [
+        (
+            rrule("FREQ=DAILY;BYHOUR=25", None, None),
+            "invalid_schedule",
+            "invalid recurrence rule",
+        ),
+        (
+            rrule("EVERY DAY", None, None),
+            "invalid_schedule",
+            "invalid recurrence rule",
+        ),
+        (
+            rrule("FREQ=MINUTELY", None, None),
+            "invalid_schedule",
+            "interval schedule",
+        ),
+        (
+            rrule("FREQ=SECONDLY", None, None),
+            "invalid_schedule",
+            "interval schedule",
+        ),
+        (
+            rrule("DTSTART:20261106T090000Z\nRRULE:FREQ=DAILY", None, None),
+            "invalid_schedule",
+            "DTSTART",
+        ),
+        (
+            rrule("FREQ=DAILY", Some("Mars/Base"), None),
+            "invalid_timezone",
+            "time zone",
+        ),
+        (
+            rrule("FREQ=DAILY;COUNT=1", None, Some("2026-11-05T09:00:00")),
+            "invalid_schedule",
+            "recurrence rule never fires",
+        ),
+        (
+            rrule(
+                "FREQ=DAILY;UNTIL=20261101T000000Z",
+                None,
+                Some("2026-10-01T09:00:00"),
+            ),
+            "invalid_schedule",
+            "recurrence rule never fires",
+        ),
+        (
+            rrule("FREQ=DAILY;COUNT=10001", None, Some("2026-11-07T09:00:00")),
+            "invalid_schedule",
+            "COUNT must be at most 10000",
+        ),
+        (
+            rrule("FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=30", None, None),
+            "invalid_schedule",
+            "BYSECOND is not supported",
+        ),
+        (
+            rrule("FREQ=HOURLY;BYMINUTE=0,10,20,30,40,50", None, None),
+            "invalid_schedule",
+            "at least 15 minutes apart",
+        ),
+        (
+            // A week apart overall, but 09:00 and 09:05 on each Monday.
+            rrule(
+                "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0,5",
+                None,
+                Some("2026-11-06T09:00:00"),
+            ),
+            "invalid_schedule",
+            "at least 15 minutes apart",
+        ),
+        (
+            rrule("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30,31", None, None),
+            "invalid_schedule",
+            "BYMONTHDAY never falls in the BYMONTH months listed",
+        ),
+        (
+            rrule("FREQ=MONTHLY;BYMONTH=4,6,9,11;BYMONTHDAY=31", None, None),
+            "invalid_schedule",
+            "BYMONTHDAY never falls in the BYMONTH months listed",
+        ),
+        (
+            rrule("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=-30", None, None),
+            "invalid_schedule",
+            "BYMONTHDAY never falls in the BYMONTH months listed",
+        ),
+        (
+            // The next 29 February is about 11,500 hourly steps away.
+            rrule(
+                "FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=29;BYHOUR=0;BYMINUTE=0",
+                None,
+                Some("2026-11-06T12:00:00"),
+            ),
+            "invalid_schedule",
+            "recurrence rule takes too long to expand",
+        ),
+    ] {
+        let error = f
+            .scheduler
+            .create(request(schedule.clone(), new_session("x")))
+            .await
+            .unwrap_err();
+        let crate::Error::Invalid(invalid) = &error else {
+            panic!("{schedule:?}: {error}");
+        };
+        assert_eq!(invalid.code(), code, "{schedule:?}: {error}");
+        assert!(error.to_string().contains(needle), "{needle}: {error}");
+    }
+    assert!(f.scheduler.list().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn sparse_but_possible_rrules_are_accepted() {
+    let f = fixture("2026-11-06T12:00:00Z");
+    for (rule, next) in [
+        // Only some listed months have the day: 31 March.
+        (
+            "FREQ=YEARLY;BYMONTH=2,3;BYMONTHDAY=31",
+            "2027-03-31T12:00:00Z",
+        ),
+        // The same leap day as the rejected HOURLY rule, in daily steps.
+        (
+            "FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYHOUR=0;BYMINUTE=0",
+            "2028-02-29T00:00:00Z",
+        ),
+        // Weekly through hourly steps: 168 steps per occurrence stays within the budget.
+        (
+            "FREQ=HOURLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+            "2026-11-09T09:00:00Z",
+        ),
+    ] {
+        let routine = f
+            .scheduler
+            .create(request(
+                rrule(rule, None, Some("2026-11-06T12:00:00")),
+                new_session("sparse"),
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("{rule}: {error}"));
+        assert_eq!(routine.next_run_at, Some(at(next)), "{rule}");
+    }
+}
+
+#[test]
+fn due_with_no_room_lists_nothing_but_still_reports_latest_and_next() {
+    let now = at("2026-11-06T10:30:00Z");
+    for (schedule, first, latest, next) in [
+        (
+            cron("0 * * * *", None),
+            "2026-11-06T08:00:00Z",
+            "2026-11-06T10:00:00Z",
+            "2026-11-06T11:00:00Z",
+        ),
+        (
+            interval(3600),
+            "2026-11-06T08:00:00Z",
+            "2026-11-06T10:00:00Z",
+            "2026-11-06T11:00:00Z",
+        ),
+        (
+            rrule("FREQ=HOURLY", None, Some("2026-11-06T08:00:00")),
+            "2026-11-06T08:00:00Z",
+            "2026-11-06T10:00:00Z",
+            "2026-11-06T11:00:00Z",
+        ),
+        // Only `first` is due: still nothing listed, and the listing is truncated.
+        (
+            rrule("FREQ=HOURLY", None, Some("2026-11-06T10:00:00")),
+            "2026-11-06T10:00:00Z",
+            "2026-11-06T10:00:00Z",
+            "2026-11-06T11:00:00Z",
+        ),
+    ] {
+        let due = crate::schedule::due(&schedule, at(first), now, 0).unwrap();
+        assert!(due.listed.is_empty(), "{schedule:?}");
+        assert!(due.truncated, "{schedule:?}");
+        assert_eq!(due.latest, at(latest), "{schedule:?}");
+        assert_eq!(due.next, Some(at(next)), "{schedule:?}");
+    }
+}
+
+#[tokio::test]
+async fn rrule_occurrences_exactly_fifteen_minutes_apart_are_accepted() {
+    let f = fixture("2026-11-06T12:07:00Z");
+    let routine = f
+        .scheduler
+        .create(request(
+            rrule(
+                "FREQ=HOURLY;BYMINUTE=0,15,30,45",
+                None,
+                Some("2026-11-06T12:00:00"),
+            ),
+            new_session("quarterly"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(routine.next_run_at, Some(at("2026-11-06T12:15:00Z")));
+}
+
+#[tokio::test]
+async fn an_hourly_rrule_started_twenty_years_ago_still_schedules_and_fires_once() {
+    let schedule = rrule("FREQ=HOURLY;BYMINUTE=0", None, Some("2006-11-06T00:00:00"));
+    assert_eq!(
+        crate::schedule::next_after(
+            &schedule,
+            at("2026-11-06T12:10:00Z"),
+            at("2026-11-06T12:10:00Z")
+        )
+        .unwrap(),
+        Some(at("2026-11-06T13:00:00Z"))
+    );
+    // A backlog of three days with a cap of 50 lists 50, then skips straight to the latest.
+    let due = crate::schedule::due(
+        &schedule,
+        at("2026-11-03T12:00:00Z"),
+        at("2026-11-06T12:10:00Z"),
+        50,
+    )
+    .unwrap();
+    assert_eq!(due.listed.len(), 50);
+    assert!(due.truncated);
+    assert_eq!(due.latest, at("2026-11-06T12:00:00Z"));
+    assert_eq!(due.next, Some(at("2026-11-06T13:00:00Z")));
+
+    let f = fixture("2026-11-06T12:10:00Z");
+    let routine = f
+        .scheduler
+        .create(request(schedule, new_session("hourly")))
+        .await
+        .unwrap();
+    assert_eq!(routine.next_run_at, Some(at("2026-11-06T13:00:00Z")));
+    f.clock.set(at("2026-11-06T13:00:30Z"));
+    let runs = f.scheduler.tick().await.unwrap();
+    assert_eq!(statuses(&runs), [RunStatus::Started]);
+    assert_eq!(runs[0].scheduled_at, at("2026-11-06T13:00:00Z"));
+    assert_eq!(
+        f.scheduler.get(&routine.id).unwrap().next_run_at,
+        Some(at("2026-11-06T14:00:00Z"))
+    );
+}
+
+#[test]
+fn due_rrule_occurrences_are_capped_and_summarised() {
+    let schedule = rrule("FREQ=HOURLY", None, Some("2026-11-06T00:00:00"));
+    let due = crate::schedule::due(
+        &schedule,
+        at("2026-11-06T00:00:00Z"),
+        at("2026-11-06T10:30:00Z"),
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        due.listed,
+        [
+            at("2026-11-06T00:00:00Z"),
+            at("2026-11-06T01:00:00Z"),
+            at("2026-11-06T02:00:00Z"),
+        ]
+    );
+    assert!(due.truncated);
+    assert_eq!(due.latest, at("2026-11-06T10:00:00Z"));
+    assert_eq!(due.next, Some(at("2026-11-06T11:00:00Z")));
+
+    let ending = rrule("FREQ=HOURLY;COUNT=3", None, Some("2026-11-06T00:00:00"));
+    let due = crate::schedule::due(
+        &ending,
+        at("2026-11-06T00:00:00Z"),
+        at("2026-11-06T10:30:00Z"),
+        10,
+    )
+    .unwrap();
+    assert_eq!(due.listed.len(), 3);
+    assert!(!due.truncated);
+    assert_eq!(due.latest, at("2026-11-06T02:00:00Z"));
+    assert_eq!(due.next, None, "the series ended with its third run");
+}

@@ -212,15 +212,16 @@ impl<H: RoutineHost> Scheduler<H> {
     fn routine(&self, request: CreateRoutineRequest) -> Result<Routine> {
         let now = self.clock.now();
         let enabled = request.enabled.unwrap_or(true);
+        let schedule = schedule::resolve(request.schedule, now)?;
         Ok(Routine {
             id: self.store.new_id()?,
             name: request.name.trim().to_owned(),
             next_run_at: if enabled {
-                schedule::next_after(&request.schedule, now, now)?
+                schedule::next_after(&schedule, now, now)?
             } else {
                 None
             },
-            schedule: request.schedule,
+            schedule,
             owner_agent_id: request.action.owner_agent_id().map(str::to_owned),
             action: request.action,
             enabled,
@@ -303,7 +304,7 @@ impl<H: RoutineHost> Scheduler<H> {
         }
         if let Some(new_schedule) = request.schedule {
             schedule::validate(&new_schedule, now)?;
-            routine.schedule = new_schedule;
+            routine.schedule = schedule::resolve(new_schedule, now)?;
             reschedule = true;
         }
         if let Some(action) = request.action {
