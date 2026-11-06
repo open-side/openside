@@ -764,6 +764,7 @@ impl Service {
             let change = s.models.change_credentials().await;
             let mut guard = s.registry.vault.vault.lock().await;
             let vault = guard.as_mut().ok_or(Error::VaultUnavailable)?;
+            s.registry.vault.touch(s);
             let current = Self::infos(vault)?
                 .into_iter()
                 .find(|info| info.provider == provider && info.account_id == id)
@@ -822,6 +823,7 @@ impl Service {
             let _change = s.models.change_credentials().await;
             let mut guard = s.registry.vault.vault.lock().await;
             let vault = guard.as_mut().ok_or(Error::VaultUnavailable)?;
+            s.registry.vault.touch(s);
             let current = Self::infos(vault)?
                 .into_iter()
                 .find(|info| info.provider == provider && info.account_id == id)
@@ -1118,6 +1120,7 @@ impl Service {
             let change = s.models.change_credentials().await;
             let mut guard = s.registry.vault.vault.lock().await;
             let vault = guard.as_mut().ok_or("oauth_failed")?;
+            s.registry.vault.touch(s);
             // Held from the liveness check through the store, so a cancel or delete either
             // finishes the transaction first (and nothing is stored) or loses to the commit.
             let mut transactions = self.transactions.lock();
@@ -1238,6 +1241,7 @@ impl Service {
                     let change = s.models.change_credentials().await;
                     let mut guard = s.registry.vault.vault.lock().await;
                     let vault = guard.as_mut().ok_or(())?;
+                    s.registry.vault.touch(s);
                     let mut expected = info.clone();
                     let outcome = loop {
                         let encoded = updated.encode().ok_or(())?;
@@ -1297,6 +1301,7 @@ impl Service {
                     let change = s.models.change_credentials().await;
                     let mut guard = s.registry.vault.vault.lock().await;
                     if let Some(vault) = guard.as_mut() {
+                        s.registry.vault.touch(s);
                         let mut target = info;
                         loop {
                             let revision = target.revision;

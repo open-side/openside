@@ -441,6 +441,7 @@ async fn save_passwords(
         passwords.clear();
         return report;
     };
+    shared.registry.vault.touch(shared);
     for mut login in passwords.drain(..) {
         let origin = match url::Url::parse(&login.origin) {
             Ok(url)

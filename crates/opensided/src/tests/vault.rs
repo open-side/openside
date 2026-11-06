@@ -2297,3 +2297,478 @@ async fn an_item_saved_without_its_completion_record_is_already_masked() {
     assert!(!masked.to_string().contains("added"), "{masked}");
     daemon.shutdown().await;
 }
+
+/// Password settings end to end on a passphrase vault: auto-lock on a fake clock, export
+/// behind local access, confirmation and fresh authentication, recovery-key round trip,
+/// clearing sign-ins, and no value in the audit log.
+#[tokio::test]
+async fn password_settings_auto_lock_export_recovery_and_clear() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = resolved_config(root.path());
+    config.loaded.config.vault.unlock = openside_config::VaultUnlockSetting::Passphrase;
+    config.loaded.config.vault.auto_lock = openside_config::VaultAutoLock::FifteenMinutes;
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let base = std::time::Instant::now();
+    let offset = Arc::new(parking_lot::Mutex::new(Duration::ZERO));
+    let clock = offset.clone();
+    daemon
+        .shared
+        .remote
+        .set_clocks(move || base + *clock.lock(), chrono::Utc::now);
+    let advance = |secs: u64| *offset.lock() += Duration::from_secs(secs);
+    let local = api::router(daemon.shared.clone(), true);
+    let tcp = api::router(daemon.shared.clone(), false);
+    let passphrase = "correct horse battery";
+    let (status, _, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/setup",
+        json!({"passphrase":passphrase}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/items",
+        json!({"id":"shop","origins":["https://shop.example"],"username":USERNAME,"password":PASSWORD,"totp":SEED}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Export: local only, confirmed, and fresh (setup just now counts).
+    let (status, body, _) = call_as(
+        &tcp,
+        "POST",
+        "/v1/vault/export",
+        json!({"confirm":true}),
+        None,
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{body}");
+    let (status, body, _) = call_as(&local, "POST", "/v1/vault/export", json!({}), None).await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("confirmation_required"))
+    );
+    let response = local
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/vault/export",
+            json!({"confirm":true}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[axum::http::header::CACHE_CONTROL],
+        "no-store"
+    );
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let export: Value = serde_json::from_slice(&bytes).unwrap();
+    let csv = export["content"].as_str().unwrap();
+    assert!(
+        csv.starts_with("name,url,username,password,otpauth\n"),
+        "{export}"
+    );
+    assert!(csv.contains(&format!(
+        "shop,https://shop.example/,{USERNAME},{PASSWORD},otpauth://totp/shop?secret={SEED}"
+    )));
+    assert_eq!(export["exported"], 1);
+
+    // After the freshness window a passphrase is needed; a wrong one is refused.
+    advance(6 * 60);
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/export",
+        json!({"confirm":true}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::CONFLICT, Some("reauth_required"))
+    );
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/export",
+        json!({"confirm":true,"passphrase":"wrong passphrase"}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("wrong_passphrase"))
+    );
+
+    // Biometrics stand in only for a keyring vault: a passphrase vault refuses them even with
+    // a sensor present.
+    struct FakeSensor(std::sync::atomic::AtomicBool);
+    impl crate::tools::vault::Biometrics for FakeSensor {
+        fn probe(
+            &self,
+        ) -> Result<openside_vault::BiometricMechanism, openside_vault::BiometricError> {
+            Ok(openside_vault::BiometricMechanism::Fprintd)
+        }
+        fn verify(&self, _reason: &str) -> Result<(), openside_vault::BiometricError> {
+            if self.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(openside_vault::BiometricError::NoMatch)
+            }
+        }
+    }
+    daemon
+        .shared
+        .registry
+        .vault
+        .set_biometrics(Arc::new(FakeSensor(std::sync::atomic::AtomicBool::new(
+            false,
+        ))));
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/export",
+        json!({"confirm":true,"biometric":true}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::CONFLICT, Some("biometric_unavailable"))
+    );
+    let (status, body, _) = call_as(
+        &local,
+        "PATCH",
+        "/v1/vault/settings",
+        json!({"biometric_unlock":true}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::CONFLICT, Some("biometric_unavailable"))
+    );
+    let (_, biometrics, _) =
+        call_as(&local, "GET", "/v1/vault/biometrics", Value::Null, None).await;
+    assert_eq!(biometrics["reason"], "passphrase_vault", "{biometrics}");
+
+    // Recovery key, generated with the passphrase, shown once and masked afterwards.
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/recovery-key",
+        json!({"confirm":true,"passphrase":passphrase}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let key = body["recovery_key"].as_str().unwrap().to_owned();
+    let masked = daemon
+        .shared
+        .registry
+        .redact(json!(format!("key {key}")))
+        .unwrap();
+    assert!(!masked.to_string().contains(&key));
+    let (_, settings, _) = call_as(&local, "GET", "/v1/vault/settings", Value::Null, None).await;
+    assert_eq!(settings["recovery"]["configured"], true, "{settings}");
+    assert_eq!(settings["disable_in_incognito"], true);
+
+    // Saving and deleting a model key count as vault use and postpone auto-lock.
+    advance(14 * 60);
+    let (status, model_key, _) = call_as(
+        &local,
+        "POST",
+        "/v1/settings/keys/openai",
+        json!({"key":"sk-auto-lock-activity-123","label":"Work"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{model_key}");
+    advance(14 * 60);
+    assert!(!crate::vault_manage::auto_lock(&daemon.shared).await);
+    let key_path = format!(
+        "/v1/settings/keys/openai/{}",
+        model_key["key_id"].as_str().unwrap()
+    );
+    let (status, _, _) = call_as(&local, "DELETE", &key_path, Value::Null, None).await;
+    assert!(status.is_success(), "{status}");
+    advance(14 * 60);
+    assert!(!crate::vault_manage::auto_lock(&daemon.shared).await);
+
+    // Auto-lock: idle past fifteen minutes on the fake clock locks it.
+    assert!(!crate::vault_manage::auto_lock(&daemon.shared).await);
+    advance(15 * 60);
+    // The daemon's own 5 s loop may get there first; either way the vault ends up locked.
+    crate::vault_manage::auto_lock(&daemon.shared).await;
+    let (_, status_body, _) = call_as(&local, "GET", "/v1/vault", Value::Null, None).await;
+    assert_eq!(status_body["state"], "locked");
+
+    // Recover with the key and a new passphrase; the old passphrase stops working.
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/recover",
+        json!({"recovery_key":"AAAA-BBBB","passphrase":"brand new passphrase"}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("wrong_recovery_key"))
+    );
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/recover",
+        json!({"recovery_key":key.to_lowercase(),"passphrase":"brand new passphrase"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], "unlocked");
+    call_as(&local, "POST", "/v1/vault/lock", Value::Null, None).await;
+    let (status, _, _) = unlock_as(&local, None, passphrase).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, _) = unlock_as(&local, None, "brand new passphrase").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Authentication covers the opening it was checked against: a lock and a new unlock
+    // between the check and the step make the step refuse.
+    for (path, body) in [
+        ("/v1/vault/export", json!({"confirm":true})),
+        ("/v1/vault/clear", json!({"confirm":true})),
+        ("/v1/vault/recovery-key", json!({"confirm":true})),
+    ] {
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let resume = Arc::new(tokio::sync::Notify::new());
+        *daemon.shared.registry.vault.after_reauth.lock() = Some((reached.clone(), resume.clone()));
+        let router = local.clone();
+        let step = tokio::spawn(async move { call_as(&router, "POST", path, body, None).await });
+        reached.notified().await;
+        let (status, _, _) = call_as(&local, "POST", "/v1/vault/lock", json!({}), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _, _) = unlock_as(&local, None, "brand new passphrase").await;
+        assert_eq!(status, StatusCode::OK);
+        resume.notify_one();
+        let (status, body, _) = step.await.unwrap();
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (StatusCode::CONFLICT, Some("reauth_required")),
+            "{path}"
+        );
+    }
+    let (_, items, _) = call_as(&local, "GET", "/v1/vault/items", Value::Null, None).await;
+    assert_eq!(items["items"].as_array().unwrap().len(), 1);
+
+    // Clear removes sign-ins only, after confirmation and fresh authentication.
+    let (status, body, _) = call_as(&local, "POST", "/v1/vault/clear", json!({}), None).await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("confirmation_required"))
+    );
+    let (status, body, _) = call_as(
+        &tcp,
+        "POST",
+        "/v1/vault/clear",
+        json!({"confirm":true}),
+        None,
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{body}");
+    advance(6 * 60);
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/clear",
+        json!({"confirm":true}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::CONFLICT, Some("reauth_required"))
+    );
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/clear",
+        json!({"confirm":true,"passphrase":"not the passphrase"}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("wrong_passphrase"))
+    );
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/clear",
+        json!({"confirm":true,"passphrase":"brand new passphrase"}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["removed"].as_u64()),
+        (StatusCode::OK, Some(1)),
+        "{body}"
+    );
+    let (_, items, _) = call_as(&local, "GET", "/v1/vault/items", Value::Null, None).await;
+    assert_eq!(items["items"].as_array().unwrap().len(), 0);
+
+    // Settings: incognito exclusion is fixed; excluded domains normalize.
+    let (status, body, _) = call_as(
+        &local,
+        "PATCH",
+        "/v1/vault/settings",
+        json!({"disable_in_incognito":false}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("incognito_always_disabled"))
+    );
+    let (status, body, _) = call_as(&local, "PATCH", "/v1/vault/settings", json!({"autofill":{"excluded_domains":["https://Bank.Example/login"]},"auto_lock":"one_hour"}), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["autofill"]["excluded_domains"],
+        json!(["bank.example"])
+    );
+    assert_eq!(body["auto_lock"], "one_hour");
+
+    // `immediately`: the vault locks right after a use, once the short grace has passed.
+    let (status, body, _) = call_as(
+        &local,
+        "PATCH",
+        "/v1/vault/settings",
+        json!({"auto_lock":"immediately"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/items",
+        json!({"id":"later","origins":["https://later.example"],"username":USERNAME,"password":PASSWORD}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    advance(2);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let (_, status_body, _) = call_as(&local, "GET", "/v1/vault", Value::Null, None).await;
+    assert_eq!(status_body["state"], "locked");
+
+    let audit =
+        std::fs::read_to_string(crate::tools::vault::Service::audit_path(&daemon.shared)).unwrap();
+    assert_clean("audit", &audit);
+    assert!(!audit.contains(&key));
+    for what in [
+        "\"export\"",
+        "\"recovery_key\"",
+        "\"recover\"",
+        "\"clear\"",
+        "\"settings_update\"",
+        "\"auto_lock\"",
+    ] {
+        assert!(audit.contains(what), "{what} missing from audit");
+    }
+    daemon.shutdown().await;
+}
+
+/// With biometric unlock on, a new keyring vault is created only by a person at this
+/// computer who passes the biometric check: the first item, a paired admin device and a
+/// failed check are all refused before any file or keyring key exists. (The passing case
+/// would create a key in this machine's real keyring, so it is left to the vault crate.)
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn biometric_unlock_gates_creating_a_keyring_vault() {
+    struct NoMatch;
+    impl crate::tools::vault::Biometrics for NoMatch {
+        fn probe(
+            &self,
+        ) -> Result<openside_vault::BiometricMechanism, openside_vault::BiometricError> {
+            Ok(openside_vault::BiometricMechanism::Fprintd)
+        }
+        fn verify(&self, _reason: &str) -> Result<(), openside_vault::BiometricError> {
+            Err(openside_vault::BiometricError::NoMatch)
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let mut config = resolved_config(root.path());
+    config.loaded.config.vault.unlock = openside_config::VaultUnlockSetting::SecretService;
+    config.loaded.config.vault.biometric_unlock = true;
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    daemon
+        .shared
+        .registry
+        .vault
+        .set_biometrics(Arc::new(NoMatch));
+    let local = api::router(daemon.shared.clone(), true);
+    let tcp = api::router(daemon.shared.clone(), false);
+    let (_, phone) = daemon
+        .shared
+        .db
+        .pair_named("phone".into(), vec![CapabilityScope::Admin])
+        .await
+        .unwrap();
+    let item = json!({"id":"shop","origins":["https://shop.example"],"username":USERNAME,"password":PASSWORD});
+
+    let (status, body, _) = call_as(&local, "POST", "/v1/vault/items", item.clone(), None).await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("biometric_required"))
+    );
+    let (status, body, _) =
+        call_as(&tcp, "POST", "/v1/vault/items", item, Some(phone.as_str())).await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("biometric_required"))
+    );
+    let (status, body, _) = call_as(
+        &tcp,
+        "POST",
+        "/v1/vault/setup",
+        json!({"biometric":true}),
+        Some(phone.as_str()),
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("biometric_required"))
+    );
+    let (status, body, _) = call_as(&local, "POST", "/v1/vault/setup", json!({}), None).await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("biometric_required"))
+    );
+    let (status, body, _) = call_as(
+        &local,
+        "POST",
+        "/v1/vault/setup",
+        json!({"biometric":true}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("biometric_failed"))
+    );
+    assert!(!crate::tools::vault::Service::file(&daemon.shared).exists());
+    let (_, status_body, _) = call_as(&local, "GET", "/v1/vault", Value::Null, None).await;
+    assert_eq!(status_body["state"], "uninitialized");
+    daemon.shutdown().await;
+}

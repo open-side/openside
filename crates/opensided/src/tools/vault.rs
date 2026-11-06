@@ -11,13 +11,16 @@ use std::{
 
 use futures_util::future::BoxFuture;
 use openside_browser::Action as BrowserAction;
-use openside_config::{StoredVault, VaultBackend, VaultPolicySetting, VaultResolveError};
+use openside_config::{
+    StoredVault, VaultAutoLock, VaultAutofillConfig, VaultBackend, VaultConfig, VaultPolicySetting,
+    VaultResolveError,
+};
 use openside_core::ApprovalTier;
 use openside_policy::{Action, Capability};
 use openside_proto::{VaultState, VaultStatus};
 use openside_vault::{
-    AccessPolicy, AuditAction, AuditContext, LoginOutcome, PassphraseLock, PlatformLock, Secret,
-    StoredFormat, TotpMatch, Vault,
+    AccessPolicy, AuditAction, AuditContext, AutofillRules, BiometricError, BiometricMechanism,
+    LoginOutcome, PassphraseLock, PlatformLock, Secret, StoredFormat, TotpMatch, Vault,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -41,6 +44,101 @@ pub(crate) struct Service {
     /// Unlock method of the open vault, and why the last unlock attempt failed.
     state: parking_lot::Mutex<(Option<VaultBackend>, Option<&'static str>)>,
     throttle: parking_lot::Mutex<UnlockThrottle>,
+    /// Password settings changed at runtime; `None` until first read from the config.
+    live: parking_lot::RwLock<Option<LiveSettings>>,
+    /// Last vault use on the daemon's (test-settable) monotonic clock, for auto-lock.
+    last_activity: parking_lot::Mutex<Option<Instant>>,
+    /// Bumped each time a vault is installed, so a step authenticated against one opening
+    /// can tell that the vault was locked and opened again before it ran.
+    opened: std::sync::atomic::AtomicU64,
+    /// Tests: pause the next export, clear or recovery-key step after its authentication
+    /// (signal the first, wait for the second).
+    #[cfg(test)]
+    pub(crate) after_reauth:
+        parking_lot::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// When a person at this computer last opened the vault (setup, unlock, recover), for
+    /// steps that need fresh authentication. The daemon-start unlock never sets it.
+    person_unlock: parking_lot::Mutex<Option<Instant>>,
+    biometrics: parking_lot::RwLock<Arc<dyn Biometrics>>,
+}
+
+/// The `[vault]` settings the Passwords settings change without a restart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LiveSettings {
+    pub(crate) auto_lock: VaultAutoLock,
+    pub(crate) biometric_unlock: bool,
+    pub(crate) autofill: VaultAutofillConfig,
+    pub(crate) default_policy: VaultPolicySetting,
+}
+
+impl LiveSettings {
+    fn from_config(config: &VaultConfig) -> Self {
+        Self {
+            auto_lock: config.auto_lock,
+            biometric_unlock: config.biometric_unlock,
+            autofill: config.autofill.clone(),
+            default_policy: config.default_policy,
+        }
+    }
+
+    /// Write these into a `[vault]` section, keeping its other keys.
+    pub(crate) fn apply_to(&self, config: &mut VaultConfig) {
+        config.auto_lock = self.auto_lock;
+        config.biometric_unlock = self.biometric_unlock;
+        config.autofill = self.autofill.clone();
+        config.default_policy = self.default_policy;
+    }
+
+    /// Vault-side autofill rules. The config loader and the settings API refuse entries
+    /// that are not domain names; should one get through anyway, autofill turns off rather
+    /// than dropping an exclusion.
+    pub(crate) fn autofill_rules(&self) -> AutofillRules {
+        let excluded = self
+            .autofill
+            .excluded_domains
+            .iter()
+            .map(|domain| openside_vault::normalize_domain(domain))
+            .collect::<Result<Vec<_>, _>>();
+        excluded
+            .and_then(|excluded| {
+                AutofillRules::new(
+                    self.autofill.enabled,
+                    self.autofill.allow_insecure,
+                    &excluded,
+                )
+            })
+            .unwrap_or_else(|_| {
+                crate::diag!(
+                    "opensided: vault.autofill.excluded_domains is invalid; autofill is off"
+                );
+                AutofillRules::new(false, false, &[]).unwrap_or_default()
+            })
+    }
+}
+
+/// How long a person's unlock counts as fresh authentication for export and recovery keys.
+pub(crate) const FRESH_UNLOCK: Duration = Duration::from_secs(5 * 60);
+/// How long a biometric prompt waits for the person.
+const BIOMETRIC_TIMEOUT: Duration = Duration::from_secs(30);
+/// The shortest idle time before auto-lock, so `immediately` never cuts into a use that
+/// recorded itself but has not yet taken the vault.
+const IMMEDIATE_GRACE: Duration = Duration::from_secs(1);
+
+/// The OS biometric check, replaceable in tests.
+pub(crate) trait Biometrics: Send + Sync {
+    fn probe(&self) -> Result<BiometricMechanism, BiometricError>;
+    fn verify(&self, reason: &str) -> Result<(), BiometricError>;
+}
+
+struct OsBiometrics;
+
+impl Biometrics for OsBiometrics {
+    fn probe(&self) -> Result<BiometricMechanism, BiometricError> {
+        openside_vault::biometric_probe()
+    }
+    fn verify(&self, reason: &str) -> Result<(), BiometricError> {
+        openside_vault::biometric_verify(reason, BIOMETRIC_TIMEOUT)
+    }
 }
 
 /// What the daemon observed about the vault file and keyring, without unlocking anything.
@@ -160,12 +258,12 @@ impl Drop for Attempt<'_> {
 }
 
 /// Record a value-free lifecycle step in the vault audit log.
-fn lifecycle_audit(
+pub(crate) fn lifecycle_audit(
     shared: &Shared,
     who: &str,
     action: AuditAction,
     decision: &'static str,
-    detail: Option<&'static str>,
+    detail: Option<&str>,
 ) -> Result<(), ()> {
     let ctx = AuditContext {
         who,
@@ -183,7 +281,183 @@ impl Service {
             available: AtomicBool::new(false),
             state: parking_lot::Mutex::new((None, None)),
             throttle: parking_lot::Mutex::new(UnlockThrottle::default()),
+            live: parking_lot::RwLock::new(None),
+            last_activity: parking_lot::Mutex::new(None),
+            opened: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            after_reauth: parking_lot::Mutex::new(None),
+            person_unlock: parking_lot::Mutex::new(None),
+            biometrics: parking_lot::RwLock::new(Arc::new(OsBiometrics)),
         }
+    }
+
+    /// The password settings in effect.
+    pub(crate) fn settings(&self, shared: &Shared) -> LiveSettings {
+        if let Some(live) = self.live.read().as_ref() {
+            return live.clone();
+        }
+        let initial = LiveSettings::from_config(&shared.config.loaded.config.vault);
+        self.live.write().get_or_insert(initial).clone()
+    }
+
+    /// Replace the password settings (already saved by the caller) and apply them to the open
+    /// vault at once.
+    pub(crate) async fn replace_settings(&self, settings: LiveSettings) {
+        let mut guard = self.vault.lock().await;
+        if let Some(vault) = guard.as_mut() {
+            vault.set_default_policy(access_policy(settings.default_policy));
+            vault.set_autofill(settings.autofill_rules());
+        }
+        *self.live.write() = Some(settings);
+    }
+
+    /// Record vault use: it postpones auto-lock. With `immediately`, a lock is queued for
+    /// when this use is over: it waits [`IMMEDIATE_GRACE`] and then for the vault itself, which
+    /// the use holds while it reads values.
+    pub(crate) fn touch(&self, shared: &Shared) {
+        *self.last_activity.lock() = Some(shared.remote.instant());
+        if self.settings(shared).auto_lock == VaultAutoLock::Immediately {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                let shared = shared.clone();
+                runtime.spawn(async move {
+                    tokio::time::sleep(IMMEDIATE_GRACE).await;
+                    crate::vault_manage::auto_lock(&shared).await;
+                });
+            }
+        }
+    }
+
+    /// Whether the open vault has been idle for its auto-lock time. `immediately` still
+    /// waits [`IMMEDIATE_GRACE`] so a use that touched but has not yet taken the vault is not
+    /// locked out; that use queues its own lock.
+    pub(crate) fn idle_due(&self, shared: &Shared) -> bool {
+        let Some(idle) = self.settings(shared).auto_lock.idle() else {
+            return false;
+        };
+        let idle = idle.max(IMMEDIATE_GRACE);
+        self.available()
+            && self
+                .last_activity
+                .lock()
+                .is_some_and(|last| shared.remote.instant().saturating_duration_since(last) >= idle)
+    }
+
+    /// Auto-lock: drop the decrypted vault if it is still idle once its lock is held, and
+    /// record `lock` with detail `auto_lock`, attributed to the daemon. True when it locked.
+    pub(crate) async fn lock_if_idle(&self, shared: &Shared) -> bool {
+        let mut guard = self.vault.lock().await;
+        if guard.is_none() || !self.idle_due(shared) {
+            return false;
+        }
+        self.available.store(false, Ordering::Release);
+        *guard = None;
+        self.state.lock().1 = None;
+        *self.person_unlock.lock() = None;
+        let _ = lifecycle_audit(
+            shared,
+            "opensided",
+            AuditAction::Lock,
+            "locked",
+            Some("auto_lock"),
+        );
+        true
+    }
+
+    /// A person at this computer opened the vault just now.
+    fn person_opened(&self, shared: &Shared) {
+        *self.person_unlock.lock() = Some(shared.remote.instant());
+    }
+
+    /// Whether a person at this computer opened the vault within [`FRESH_UNLOCK`].
+    pub(crate) fn recently_opened(&self, shared: &Shared) -> bool {
+        self.person_unlock
+            .lock()
+            .is_some_and(|at| shared.remote.instant().saturating_duration_since(at) < FRESH_UNLOCK)
+    }
+
+    /// Which opening of the vault is current; see `opened`.
+    pub(crate) fn opening(&self) -> u64 {
+        self.opened.load(Ordering::SeqCst)
+    }
+
+    /// Unlock method of the open (or last opened) vault.
+    pub(crate) fn backend(&self) -> Option<VaultBackend> {
+        self.state.lock().0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_biometrics(&self, biometrics: Arc<dyn Biometrics>) {
+        *self.biometrics.write() = biometrics;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_activity(&self) -> Option<Instant> {
+        *self.last_activity.lock()
+    }
+
+    /// Ask the OS whether a biometric check could run now, without prompting.
+    pub(crate) async fn biometric_probe(&self) -> Result<BiometricMechanism, BiometricError> {
+        let biometrics = self.biometrics.read().clone();
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || biometrics.probe()),
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            _ => Err(BiometricError::Unavailable("service_unavailable")),
+        }
+    }
+
+    /// Prompt the person for a biometric check.
+    pub(crate) async fn biometric_verify(
+        &self,
+        reason: &'static str,
+    ) -> Result<(), BiometricError> {
+        let biometrics = self.biometrics.read().clone();
+        match tokio::time::timeout(
+            BIOMETRIC_TIMEOUT + Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || biometrics.verify(reason)),
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(BiometricError::Failed),
+            Err(_) => Err(BiometricError::Timeout),
+        }
+    }
+
+    /// Check a re-entered passphrase against the open passphrase vault, throttled like
+    /// unlock (per caller; this is a local-only step, so no device-wide limit applies).
+    /// `Ok(false)` is a wrong passphrase.
+    pub(crate) async fn check_passphrase(
+        &self,
+        shared: &Shared,
+        who: &str,
+        passphrase: &Secret,
+    ) -> Result<bool, UnlockRefusal> {
+        let now = shared.remote.instant();
+        if let Err(wait) = self.throttle.lock().admit(who, false, now) {
+            return Err(UnlockRefusal::Throttled(
+                wait.as_secs() + u64::from(wait.subsec_nanos() > 0),
+            ));
+        }
+        let mut attempt = Attempt {
+            throttle: &self.throttle,
+            caller: who,
+            remote: false,
+            outcome: None,
+            now,
+        };
+        let guard = self.vault.lock().await;
+        let vault = guard
+            .as_ref()
+            .ok_or(UnlockRefusal::Failed((409, "vault_unavailable")))?;
+        let matched = vault
+            .verify_passphrase(passphrase)
+            .map_err(|_| UnlockRefusal::Failed((409, "vault_unavailable")))?;
+        attempt.outcome = Some(!matched);
+        Ok(matched)
     }
     /// Unlock attempts admitted and not yet finished.
     #[cfg(test)]
@@ -258,6 +532,11 @@ impl Service {
         let path = Self::file(shared);
         let audit = Self::audit_path(shared);
         let opened = if backend.is_keyring() {
+            // Biometric unlock means a person touches the sensor first; nobody does at boot.
+            if self.settings(shared).biometric_unlock {
+                self.state.lock().1 = Some("biometric_required");
+                return;
+            }
             open_with_keyring(backend, path, audit).await
         } else {
             match shared.config.loaded.config.vault.passphrase_cmd.as_deref() {
@@ -294,16 +573,16 @@ impl Service {
         }
     }
 
-    fn install(
+    pub(crate) fn install(
         &self,
         shared: &Shared,
         slot: &mut Option<DaemonVault>,
         backend: VaultBackend,
         mut vault: DaemonVault,
     ) {
-        vault.set_default_policy(access_policy(
-            shared.config.loaded.config.vault.default_policy,
-        ));
+        let settings = self.settings(shared);
+        vault.set_default_policy(access_policy(settings.default_policy));
+        vault.set_autofill(settings.autofill_rules());
         let Ok(redactor) = vault.redactor() else {
             return;
         };
@@ -315,13 +594,15 @@ impl Service {
         }
         drop(redactors);
         *slot = Some(vault);
+        self.opened.fetch_add(1, Ordering::SeqCst);
         *self.state.lock() = (Some(backend), None);
         self.available.store(true, Ordering::Release);
+        self.touch(shared);
     }
 
     /// Value-free lifecycle state for `GET /v1/vault`.
     pub(crate) async fn status(&self, shared: &Shared) -> VaultStatus {
-        let default_policy = wire_policy(shared.config.loaded.config.vault.default_policy);
+        let default_policy = wire_policy(self.settings(shared).default_policy);
         if self.vault.lock().await.is_some() {
             return VaultStatus {
                 state: VaultState::Unlocked,
@@ -363,15 +644,21 @@ impl Service {
     /// Create the vault file (`POST /v1/vault/setup`, or the first item of a keyring vault).
     /// The caller holds the vault lock, so setup cannot race another setup or unlock. Audited
     /// (`setup`) with `who`; a vault created whose record then fails stays set up and unlocked
-    /// and is reported as `vault_set_up_audit_incomplete`.
+    /// and is reported as `vault_set_up_audit_incomplete`. With biometric unlock on, a new
+    /// keyring vault opens only for a person at this computer who passes the biometric check
+    /// (`biometric`), as an unlock would.
     pub(crate) async fn setup(
         &self,
         shared: &Shared,
         slot: &mut Option<DaemonVault>,
         who: &str,
         passphrase: Option<Secret>,
+        biometric: bool,
     ) -> Result<(), LifecycleError> {
-        let (backend, vault) = match self.create(shared, slot.is_some(), passphrase).await {
+        let created = self
+            .create(shared, slot.is_some(), who, passphrase, biometric)
+            .await;
+        let (backend, vault) = match created {
             Ok(created) => created,
             Err(error) => {
                 let _ = lifecycle_audit(shared, who, AuditAction::Setup, "failed", Some(error.1));
@@ -380,6 +667,9 @@ impl Service {
         };
         let audited = lifecycle_audit(shared, who, AuditAction::Setup, "completed", None);
         self.install(shared, slot, backend, vault);
+        if who == "local" {
+            self.person_opened(shared);
+        }
         audited.map_err(|()| (500, "vault_set_up_audit_incomplete"))
     }
 
@@ -387,7 +677,9 @@ impl Service {
         &self,
         shared: &Shared,
         open: bool,
+        who: &str,
         passphrase: Option<Secret>,
+        biometric: bool,
     ) -> Result<(VaultBackend, DaemonVault), LifecycleError> {
         let probe = Self::probe(shared).await;
         if open || probe.stored != Some(StoredVault::Missing) {
@@ -399,6 +691,18 @@ impl Service {
         let created = if backend.is_keyring() {
             if passphrase.is_some() {
                 return Err((400, "passphrase_not_used"));
+            }
+            if self.settings(shared).biometric_unlock {
+                if who != "local" || !biometric {
+                    return Err((403, "biometric_required"));
+                }
+                if self
+                    .biometric_verify("set up your saved passwords")
+                    .await
+                    .is_err()
+                {
+                    return Err((403, "biometric_failed"));
+                }
             }
             if !probe.keyring_reachable {
                 return Err((503, "keyring_unavailable"));
@@ -427,13 +731,15 @@ impl Service {
     /// every further attempt; paired devices together also share a limit. A throttled attempt
     /// is refused before any key derivation or vault lock and is not audited (guessing must
     /// not flood the log); every attempt that runs is. An unlock whose record cannot be
-    /// written does not happen.
+    /// written does not happen. With `biometric_unlock` on, a keyring vault opens only for a
+    /// local caller that asks for (`biometric`) and passes the OS biometric check.
     pub(crate) async fn unlock_now(
         &self,
         shared: &Shared,
         who: &str,
         remote: bool,
         passphrase: Option<Secret>,
+        biometric: bool,
     ) -> Result<(), UnlockRefusal> {
         let now = shared.remote.instant();
         let admitted = self.throttle.lock().admit(who, remote, now);
@@ -472,6 +778,21 @@ impl Service {
         let opened = if backend.is_keyring() {
             if passphrase.is_some() {
                 return Err(refuse((400, "passphrase_not_used")));
+            }
+            if self.settings(shared).biometric_unlock {
+                if remote || !biometric {
+                    return Err(refuse((403, "biometric_required")));
+                }
+                if let Err(error) = self.biometric_verify("unlock your saved passwords").await {
+                    let _ = lifecycle_audit(
+                        shared,
+                        who,
+                        AuditAction::Unlock,
+                        "denied",
+                        Some(error.wire()),
+                    );
+                    return Err(UnlockRefusal::Failed((403, "biometric_failed")));
+                }
             }
             open_with_keyring(backend, path, audit)
                 .await
@@ -513,7 +834,106 @@ impl Service {
         lifecycle_audit(shared, who, AuditAction::Unlock, "unlocked", None)
             .map_err(|()| UnlockRefusal::Failed((500, "audit_unavailable")))?;
         self.install(shared, &mut guard, backend, vault);
+        if !remote {
+            self.person_opened(shared);
+        }
         Ok(())
+    }
+
+    /// Open a locked vault with its recovery key and give it a new unlock key
+    /// (`POST /v1/vault/recover`, local only): `passphrase` for a passphrase vault, the
+    /// keyring's key for a keyring vault. Wrong keys count against the unlock throttle like
+    /// wrong passphrases. Audited (`recover`): `recovered`, `denied` with
+    /// `wrong_recovery_key`, or `failed` with the code. The re-keyed vault is installed even
+    /// when its record fails (the file already changed), reported as
+    /// `vault_recovered_audit_incomplete`.
+    pub(crate) async fn recover(
+        &self,
+        shared: &Shared,
+        who: &str,
+        recovery_key: &str,
+        passphrase: Option<Secret>,
+    ) -> Result<(), UnlockRefusal> {
+        let now = shared.remote.instant();
+        if let Err(wait) = self.throttle.lock().admit(who, false, now) {
+            return Err(UnlockRefusal::Throttled(
+                wait.as_secs() + u64::from(wait.subsec_nanos() > 0),
+            ));
+        }
+        let mut attempt = Attempt {
+            throttle: &self.throttle,
+            caller: who,
+            remote: false,
+            outcome: None,
+            now,
+        };
+        let _channel_change = shared.channels.change_credentials().await;
+        let _model_change = shared.models.change_credentials().await;
+        let mut guard = self.vault.lock().await;
+        let refuse = |error: LifecycleError| {
+            let _ = lifecycle_audit(shared, who, AuditAction::Recover, "failed", Some(error.1));
+            UnlockRefusal::Failed(error)
+        };
+        if guard.is_some() {
+            return Err(refuse((409, "vault_already_unlocked")));
+        }
+        let probe = Self::probe(shared).await;
+        if probe.stored == Some(StoredVault::Missing) {
+            return Err(refuse((409, "vault_not_set_up")));
+        }
+        let backend = probe
+            .backend
+            .map_err(|_| refuse((503, "vault_unsupported")))?;
+        let path = Self::file(shared);
+        let audit = Self::audit_path(shared);
+        match openside_vault::recovery_info(&path) {
+            Ok(Some(info)) if info.current => {}
+            Ok(_) => return Err(refuse((409, "recovery_not_configured"))),
+            Err(_) => return Err(refuse((500, "internal_error"))),
+        }
+        let platform: Box<dyn PlatformLock + Send> = if backend.is_keyring() {
+            if passphrase.is_some() {
+                return Err(refuse((400, "passphrase_not_used")));
+            }
+            keyring_lock(backend, &path).ok_or_else(|| refuse((503, "vault_unsupported")))?
+        } else {
+            if passphrase.is_none() {
+                return Err(refuse((400, "passphrase_required")));
+            }
+            Box::new(PassphraseLock::default())
+        };
+        let wrong_key = |attempt: &mut Attempt<'_>| {
+            attempt.outcome = Some(true);
+            let _ = lifecycle_audit(
+                shared,
+                who,
+                AuditAction::Recover,
+                "denied",
+                Some("wrong_recovery_key"),
+            );
+            UnlockRefusal::Failed((403, "wrong_recovery_key"))
+        };
+        let Ok(key) = openside_vault::RecoveryKey::parse(recovery_key) else {
+            return Err(wrong_key(&mut attempt));
+        };
+        let recovered =
+            blocking(move || Vault::recover(path, audit, &key, passphrase.as_ref(), platform))
+                .await;
+        let vault = match recovered {
+            Ok(vault) => vault,
+            Err(Some(openside_vault::Error::Authentication)) => {
+                return Err(wrong_key(&mut attempt));
+            }
+            Err(Some(openside_vault::Error::Unavailable)) => {
+                return Err(refuse((503, "keyring_unavailable")));
+            }
+            Err(_) => return Err(refuse((500, "internal_error"))),
+        };
+        attempt.outcome = Some(false);
+        let audited = lifecycle_audit(shared, who, AuditAction::Recover, "recovered", None);
+        self.install(shared, &mut guard, backend, vault);
+        self.person_opened(shared);
+        audited.map_err(|()| UnlockRefusal::Failed((500, "vault_recovered_audit_incomplete")))
     }
 
     /// Drop the decrypted vault (`POST /v1/vault/lock`); vault tools disappear with it. The
@@ -525,6 +945,7 @@ impl Service {
         self.available.store(false, Ordering::Release);
         *guard = None;
         self.state.lock().1 = None;
+        *self.person_unlock.lock() = None;
         // Still under the vault lock, so lifecycle records land in the order the steps ran.
         let audited = lifecycle_audit(shared, who, AuditAction::Lock, "locked", None);
         drop(guard);
@@ -532,7 +953,7 @@ impl Service {
     }
 }
 
-fn access_policy(setting: VaultPolicySetting) -> AccessPolicy {
+pub(crate) fn access_policy(setting: VaultPolicySetting) -> AccessPolicy {
     match setting {
         VaultPolicySetting::Always => AccessPolicy::Always,
         VaultPolicySetting::WhileUnlocked => AccessPolicy::WhileUnlocked,
@@ -540,7 +961,7 @@ fn access_policy(setting: VaultPolicySetting) -> AccessPolicy {
     }
 }
 
-fn wire_policy(setting: VaultPolicySetting) -> openside_proto::VaultPolicy {
+pub(crate) fn wire_policy(setting: VaultPolicySetting) -> openside_proto::VaultPolicy {
     match setting {
         VaultPolicySetting::Always => openside_proto::VaultPolicy::Always,
         VaultPolicySetting::WhileUnlocked => openside_proto::VaultPolicy::WhileUnlocked,
@@ -548,7 +969,7 @@ fn wire_policy(setting: VaultPolicySetting) -> openside_proto::VaultPolicy {
     }
 }
 
-fn wire_backend(backend: VaultBackend) -> openside_proto::VaultBackend {
+pub(crate) fn wire_backend(backend: VaultBackend) -> openside_proto::VaultBackend {
     match backend {
         VaultBackend::Passphrase => openside_proto::VaultBackend::Passphrase,
         VaultBackend::SecretService => openside_proto::VaultBackend::SecretService,
@@ -558,7 +979,7 @@ fn wire_backend(backend: VaultBackend) -> openside_proto::VaultBackend {
 
 /// Run blocking vault work (Argon2id, D-Bus, file I/O) off the runtime, bounded to 20s.
 /// `None` means it panicked or timed out.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, openside_vault::Error> + Send + 'static,
 ) -> Result<T, Option<openside_vault::Error>> {
     match tokio::time::timeout(Duration::from_secs(20), tokio::task::spawn_blocking(work)).await {
@@ -643,7 +1064,10 @@ fn vault_id(path: &Path) -> String {
 }
 
 #[allow(clippy::needless_return)]
-fn keyring_lock(backend: VaultBackend, path: &Path) -> Option<Box<dyn PlatformLock + Send>> {
+pub(crate) fn keyring_lock(
+    backend: VaultBackend,
+    path: &Path,
+) -> Option<Box<dyn PlatformLock + Send>> {
     let id = vault_id(path);
     match backend {
         VaultBackend::SecretService => {
@@ -784,8 +1208,13 @@ impl DaemonTool for Login {
                 let document = browser.document_lifetime_id(&args.tab_id).await.ok();
                 let browser = &browser;
                 let args = &args;
+                // Auto-submit off: fill only; the person (or a later click) submits.
+                let submit = args.submit_ref.as_deref().filter(|_| {
+                    ctx.shared.registry.vault.settings(&ctx.shared).autofill.auto_submit
+                });
                 let mut guard = ctx.shared.registry.vault.vault.lock().await;
                 let vault = guard.as_mut().ok_or_else(|| ToolError("Vault is unavailable".into()))?;
+                ctx.shared.registry.vault.touch(&ctx.shared);
                 let origin_check = origin.clone();
                 let audit = audit_ctx(ctx);
                 let outcome = vault.vault_login_async(&audit, AuditAction::Fill, &args.site, &origin, |secrets| Box::pin(async move {
@@ -801,7 +1230,7 @@ impl DaemonTool for Login {
                         if browser.origin(&args.tab_id).await.map_err(|_| ())? != origin_check { return Err(()); }
                         browser.insert_text(ctx.session.as_str(), &args.tab_id, &args.password_ref, secrets.password).await.map_err(|_| ())?;
                     }
-                    if let Some(reference) = &args.submit_ref { browser.act(ctx.session.as_str(), &args.tab_id, reference, BrowserAction::Click).await.map_err(|_| ())?; }
+                    if let Some(reference) = submit { browser.act(ctx.session.as_str(), &args.tab_id, reference, BrowserAction::Click).await.map_err(|_| ())?; }
                     Ok(())
                 })).await.map_err(|_| ToolError("Vault fill or audit failed".into()))?;
                 drop(guard);
@@ -809,8 +1238,11 @@ impl DaemonTool for Login {
                 if outcome == LoginOutcome::Filled {
                     crate::connections::remember_login_item(&ctx.shared, &ctx.session, &args.tab_id, &args.site).await;
                 }
-                if outcome == LoginOutcome::Filled && args.submit_ref.is_some() {
+                if outcome == LoginOutcome::Filled && submit.is_some() {
                     super::login::complete_vault_login(&ctx.shared, browser, &ctx.session, &args.tab_id, document.as_deref(), &args.site).await;
+                }
+                if outcome == LoginOutcome::Filled && args.submit_ref.is_some() && submit.is_none() {
+                    return Ok(done(json!({"status":"filled","submitted":false,"note":"Auto-submit is off in the password settings, so the form was filled but not submitted."})));
                 }
                 Ok(denied(outcome).unwrap_or_else(|| done(json!({"status":if outcome == LoginOutcome::Filled { "filled" } else { "fill_failed" }}))))
             }.await;
@@ -895,6 +1327,7 @@ pub(super) async fn fill_saved_totp(
     let vault = vault
         .as_mut()
         .ok_or_else(|| ToolError("Vault is unavailable".into()))?;
+    ctx.shared.registry.vault.touch(&ctx.shared);
     let site = match site {
         Some(site) => site.to_owned(),
         None => match vault.totp_site_for(&origin) {
@@ -1086,6 +1519,7 @@ impl DaemonTool for Passkey {
                 let vault = guard
                     .as_mut()
                     .ok_or_else(|| ToolError("Vault is unavailable".into()))?;
+                ctx.shared.registry.vault.touch(&ctx.shared);
                 let port = Arc::new(ceremony::BrowserPort::new(
                     browser.clone(),
                     ctx.session.as_str().to_owned(),

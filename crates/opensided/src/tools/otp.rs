@@ -412,6 +412,7 @@ pub(crate) async fn register_and_fill(
     let vault = guard.as_mut().ok_or(SecretSinkError {
         code: "vault_unavailable",
     })?;
+    shared.registry.vault.touch(shared);
     let audit = AuditContext {
         who,
         session_id: Some(ticket.session_id.as_str()),
@@ -602,6 +603,7 @@ pub(crate) async fn approve_registration(
         drop(guard);
         return keep(pending, "vault_unavailable");
     };
+    shared.registry.vault.touch(shared);
     let operation = crate::persistence::random_id();
     if controller
         .record_fill_intent(shared, &ticket.id, Some(&operation))

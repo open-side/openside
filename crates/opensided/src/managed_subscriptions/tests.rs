@@ -312,6 +312,50 @@ async fn managed_subscription_crash_after_vault_commit_recovers_canonical_state(
     );
 }
 
+/// Adopting a sign-in and removing an account write to the vault, so both postpone
+/// auto-lock.
+#[tokio::test]
+async fn managed_subscription_vault_writes_count_as_vault_use() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = fixture(root.path()).await;
+    let base = std::time::Instant::now();
+    let offset = Arc::new(parking_lot::Mutex::new(Duration::ZERO));
+    let clock = offset.clone();
+    daemon
+        .shared
+        .remote
+        .set_clocks(move || base + *clock.lock(), chrono::Utc::now);
+    let service = Service::new(root.path());
+    let account = service
+        .create(&daemon.shared, "codex-cli", "Busy")
+        .await
+        .unwrap();
+    *offset.lock() += Duration::from_secs(3600);
+    login(
+        root.path(),
+        &account.account_id,
+        &codex("fake-busy", "fake-busy-refresh", u64::MAX),
+    );
+    service
+        .get(&daemon.shared, "codex-cli", &account.account_id)
+        .await
+        .unwrap();
+    let vault = &daemon.shared.registry.vault;
+    assert_eq!(
+        vault.last_activity(),
+        Some(base + Duration::from_secs(3600))
+    );
+    *offset.lock() += Duration::from_secs(3600);
+    service
+        .remove(&daemon.shared, "codex-cli", &account.account_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.last_activity(),
+        Some(base + Duration::from_secs(7200))
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn managed_subscription_wipe_does_not_follow_external_symlink() {

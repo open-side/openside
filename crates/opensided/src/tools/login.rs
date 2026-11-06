@@ -662,8 +662,9 @@ async fn submit(
     }
 }
 
-/// Fill a saved login into the form inside the vault's callback and submit it. The tab is
-/// tainted before any value exists; a refusal releases nothing.
+/// Fill a saved login into the form inside the vault's callback and submit it (unless the
+/// person turned auto-submit off). The tab is tainted before any value exists; a refusal
+/// releases nothing.
 #[allow(clippy::too_many_arguments)]
 async fn fill_account(
     shared: &Shared,
@@ -676,10 +677,12 @@ async fn fill_account(
     audit: &AuditContext<'_>,
 ) -> Result<LoginOutcome, ToolError> {
     let controller = &shared.registry.browser;
+    let auto_submit = shared.registry.vault.settings(shared).autofill.auto_submit;
     let mut guard = shared.registry.vault.vault.lock().await;
     let vault = guard
         .as_mut()
         .ok_or_else(|| ToolError("Vault is unavailable".into()))?;
+    shared.registry.vault.touch(shared);
     if let Ok(redactor) = vault.redactor_for(site) {
         shared.registry.redactors.write().push(redactor);
     }
@@ -697,6 +700,9 @@ async fn fill_account(
                     Controller::fill_node(browser, owner, tab, node, secrets.password)
                         .await
                         .map_err(|_| ())?;
+                }
+                if !auto_submit {
+                    return Ok(());
                 }
                 submit(browser, owner, tab, form).await.map_err(|_| ())
             })
@@ -825,6 +831,9 @@ impl RequestLogin {
                     return Ok(match outcome {
                         LoginOutcome::Filled => {
                             crate::connections::remember_login_item(&ctx.shared, &ctx.session, tab, &account.site).await;
+                            if !ctx.shared.registry.vault.settings(&ctx.shared).autofill.auto_submit {
+                                return Ok(done(json!({"status":"filled_from_vault","item_id":account.site,"submitted":false,"note":"Auto-submit is off in the password settings, so the form was filled but not submitted."})));
+                            }
                             let next = next_step(&browser, owner, tab, before.as_deref()).await;
                             if next.0 == Next::Done {
                                 let _ = crate::connections::complete_login(&ctx.shared, &browser, &ctx.session, tab, openside_proto::ConnectionSource::Vault, Some(&account.site)).await;
@@ -1758,6 +1767,7 @@ async fn save_login(
     let Some(vault) = guard.as_mut() else {
         return (false, None);
     };
+    shared.registry.vault.touch(shared);
     let audit = AuditContext {
         who,
         session_id: Some(ticket.session_id.as_str()),

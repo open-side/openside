@@ -176,6 +176,7 @@ impl Service {
     ) -> Result<SubscriptionInfo, Error> {
         let change = s.models.change_credentials().await;
         let mut guard = s.registry.vault.vault.lock().await;
+        s.registry.vault.touch(s);
         if let Some(expected) = observation {
             let current = self.observe(&info)?;
             let actual = (
@@ -562,6 +563,7 @@ impl Service {
         storage::wipe(&home)?;
         let change = s.models.change_credentials().await;
         let mut guard = s.registry.vault.vault.lock().await;
+        s.registry.vault.touch(s);
         let result = guard
             .as_mut()
             .ok_or(Error::VaultUnavailable)?

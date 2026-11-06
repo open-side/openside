@@ -30,11 +30,11 @@ use crate::{
 
 /// The vault audit label of the caller: `device:<id>` for a paired device, `local` for the
 /// Unix socket.
-fn who(caller: &Caller) -> String {
+pub(crate) fn who(caller: &Caller) -> String {
     crate::tools::otp::approver(caller.0.as_deref())
 }
 
-fn audit_context(who: &str) -> AuditContext<'_> {
+pub(crate) fn audit_context(who: &str) -> AuditContext<'_> {
     AuditContext {
         who,
         session_id: None,
@@ -42,15 +42,15 @@ fn audit_context(who: &str) -> AuditContext<'_> {
     }
 }
 
-const MIN_PASSPHRASE_CHARS: usize = 8;
+pub(crate) const MIN_PASSPHRASE_CHARS: usize = 8;
 
 /// Parse a body that may carry values; serde diagnostics can quote input, so they are
 /// replaced by a fixed code.
-fn value_body<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, HttpError> {
+pub(crate) fn value_body<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, HttpError> {
     serde_json::from_slice(body).map_err(|_| HttpError::invalid_value())
 }
 
-fn lifecycle((status, code): LifecycleError) -> HttpError {
+pub(crate) fn lifecycle((status, code): LifecycleError) -> HttpError {
     HttpError(
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         code,
@@ -86,8 +86,15 @@ pub(crate) async fn setup(
     let change = s.models.change_credentials().await;
     let service = &s.registry.vault;
     let mut guard = service.vault.lock().await;
+    let biometric = request.biometric;
     let result = service
-        .setup(&s, &mut guard, &who(&caller), passphrase(request))
+        .setup(
+            &s,
+            &mut guard,
+            &who(&caller),
+            passphrase(request),
+            biometric,
+        )
         .await;
     drop(guard);
     drop(change);
@@ -115,8 +122,9 @@ pub(crate) async fn unlock(
     };
     let service = &s.registry.vault;
     let remote = caller.0.is_some();
+    let biometric = request.biometric;
     let result = service
-        .unlock_now(&s, &who(&caller), remote, passphrase(request))
+        .unlock_now(&s, &who(&caller), remote, passphrase(request), biometric)
         .await;
     match result {
         Ok(()) => {
@@ -200,18 +208,23 @@ pub(crate) async fn create(
     let mut guard = service.vault.lock().await;
     if guard.is_none() {
         // A keyring vault needs no secret to exist, so the first item creates it; a
-        // passphrase vault must be set up (or unlocked) by a person first.
+        // passphrase vault, or a keyring vault behind biometric unlock, must be set up (or
+        // unlocked) by a person first.
         let probe = Service::probe(&s).await;
         let keyring = probe.backend.is_ok_and(|backend| backend.is_keyring());
         if !keyring {
             return Err(unavailable());
         }
         service
-            .setup(&s, &mut guard, &who, None)
+            .setup(&s, &mut guard, &who, None, false)
             .await
-            .map_err(|_| unavailable())?;
+            .map_err(|error| match error {
+                (403, "biometric_required") => lifecycle(error),
+                _ => unavailable(),
+            })?;
     }
     let vault = guard.as_mut().ok_or_else(unavailable)?;
+    service.touch(&s);
     // Mask the new values in every later output before anything is saved, so no committed
     // outcome (including a save whose completion audit fails) leaves them unmasked.
     s.registry.redactors.write().push(entry.redactor());
@@ -238,6 +251,7 @@ pub(crate) async fn delete(
     let who = who(&caller);
     let mut vault = s.registry.vault.vault.lock().await;
     let vault = vault.as_mut().ok_or_else(unavailable)?;
+    s.registry.vault.touch(&s);
     if vault.is_provider_key(&id) || vault.is_channel_secret(&id) || vault.is_subscription(&id) {
         return Err(HttpError(StatusCode::NOT_FOUND, "unknown_item"));
     }
@@ -285,7 +299,9 @@ pub(crate) async fn items(
     let Some(vault) = vault.as_ref() else {
         return Ok(Json(VaultItemList {
             available: false,
-            default_policy: policy(AccessPolicy::WhileUnlocked),
+            default_policy: crate::tools::vault::wire_policy(
+                s.registry.vault.settings(&s).default_policy,
+            ),
             items: Vec::new(),
         }));
     };
@@ -308,6 +324,7 @@ pub(crate) async fn update(
     let who = who(&caller);
     let mut vault = s.registry.vault.vault.lock().await;
     let vault = vault.as_mut().ok_or_else(unavailable)?;
+    s.registry.vault.touch(&s);
     if vault.is_provider_key(&id) || vault.is_channel_secret(&id) || vault.is_subscription(&id) {
         return Err(HttpError(StatusCode::NOT_FOUND, "unknown_item"));
     }
