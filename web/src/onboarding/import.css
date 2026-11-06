@@ -1,0 +1,804 @@
+/*
+ * Browser import (ImportStep, also hosted by Settings › General's import dialog, which never loads
+ * onboarding.css), the vault gate, the passwords step and its import sheet (VaultImportSheet).
+ */
+
+.onb-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+.onb-note svg {
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+.onb-note a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.onb .empty-state,
+.onb .load-error {
+  border-color: var(--border);
+  background: var(--surface);
+}
+.onb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.onb-problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+/* The guide's import step: the body sits in the middle of the window, as wide as Aside's card list. */
+.onb-import {
+  display: grid;
+  gap: 12px;
+  width: min(415px, 100%);
+  margin-block: auto;
+  padding-top: 16px;
+}
+
+/* The browsers found, as one card of 52px rows (Aside's list card): tile, name and counts, checkbox. */
+.onb-profiles {
+  display: grid;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+  border: 1px solid color-mix(in srgb, var(--card-border) 55%, var(--card-bg));
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+.onb-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color var(--fast) var(--ease);
+}
+.onb-profile:hover {
+  background: color-mix(in srgb, var(--hover) 55%, transparent);
+}
+.onb-profile:has(:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.onb-profile > input,
+.onb-check > input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.onb-profile > input {
+  margin-left: auto;
+}
+/*
+ * The tile colour is the brand's own (set inline), so its letter is always white. Tiles and copy
+ * that sit directly in a <label> are named through their row: the global `label > span` caption
+ * rule (styles.css) outranks a single class and would turn them into grey captions.
+ */
+.onb-brand-tile,
+.onb-profile > .onb-brand-tile,
+.onb-sheet-row > .onb-brand-tile {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  margin: 0;
+  border-radius: 5px;
+  color: #fff;
+  font-weight: var(--weight-title);
+  line-height: 1;
+}
+.onb-profile > .onb-brand-tile {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+}
+.onb-profile > .onb-profile-copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  font-weight: 400;
+}
+.onb-profile-copy > strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.onb-profile-copy > span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.onb-profile-copy > .onb-profile-counts {
+  font-variant-numeric: tabular-nums;
+}
+.onb-profile-copy > .onb-profile-counts--quiet {
+  color: var(--faint);
+}
+.onb-profile-copy > .onb-profile-warning {
+  color: var(--warn);
+}
+
+.onb-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  font-size: var(--text-sm);
+}
+.onb-check > span:not(.badge) {
+  margin: 0;
+  color: var(--text);
+}
+.onb-check input:disabled + span {
+  color: var(--muted);
+}
+.onb-kinds {
+  border: 1px solid color-mix(in srgb, var(--card-border) 55%, var(--card-bg));
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+.onb-kinds > summary {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 14px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+.onb-kinds > summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+.onb-kinds-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  padding: 0 14px 8px;
+}
+.onb-kinds-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.onb-result {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--card-border) 55%, var(--card-bg));
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+.onb-result-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+.onb-result-title svg {
+  color: var(--success);
+}
+.onb-counts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+.onb-counts li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+.onb-counts-value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.onb-meter {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  overflow: hidden;
+}
+.onb-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width var(--normal) var(--ease);
+}
+.onb-notes {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0 0 0 18px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.onb-restore {
+  display: grid;
+  gap: 6px;
+}
+.onb-restore ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: var(--text-sm);
+}
+.onb-restore a {
+  color: var(--link);
+  overflow-wrap: anywhere;
+}
+.onb-listing > ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 14px 10px 32px;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.onb-listing a {
+  color: var(--link);
+}
+
+/* Vault gate: a boxed form in the import step; bare inside the sheet, whose title already names it. */
+.onb-vault {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--card-border) 55%, var(--card-bg));
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+.onb-vault[data-bare] {
+  width: min(400px, 100%);
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.onb-vault-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+.onb-field {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.onb-field input {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+}
+.onb-field input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+/* Passwords step: one drill-in row on the left, an autofill scene on the right. */
+.onb-pw-options {
+  display: grid;
+  gap: 8px;
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.onb-pw-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 14px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--card-border) 55%, var(--card-bg));
+  border-radius: 12px;
+  background: var(--card-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--fast) var(--ease);
+}
+.onb-pw-option:hover {
+  background: color-mix(in srgb, var(--hover) 55%, var(--card-bg));
+}
+.onb-pw-option:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.onb-pw-option-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--hover);
+}
+.onb-pw-option-copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+.onb-pw-option-copy > strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.onb-pw-option-copy > span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.onb-pw-option-chevron {
+  flex: none;
+  color: var(--muted);
+}
+.onb-pw-options + .onb-note {
+  margin-top: 14px;
+}
+
+/* The art keeps its own colours in both themes: it is a picture of a web page, not app chrome. */
+.onb-pw-art {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(80% 60% at 85% 10%, rgb(255 255 255 / 0.35) 0%, transparent 60%),
+    linear-gradient(140deg, #7a62f0 0%, #5a86ee 55%, #9cc6ff 100%);
+}
+.onb-pw-form {
+  display: grid;
+  gap: 10px;
+  width: min(250px, 78%);
+  padding: 20px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.9);
+  box-shadow: 0 14px 36px rgb(32 24 96 / 0.28);
+}
+.onb-pw-field {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #e2e2ea;
+  border-radius: 8px;
+  background: #fff;
+}
+.onb-pw-field[data-focused] {
+  border-color: #5a86ee;
+  box-shadow: 0 0 0 3px rgb(90 134 238 / 0.22);
+}
+.onb-pw-line {
+  width: 62%;
+  height: 6px;
+  border-radius: 3px;
+  background: #d8d8e0;
+}
+.onb-pw-dots {
+  color: #3f3f55;
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+.onb-pw-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  margin-top: -2px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: #1c1c22;
+  color: #fff;
+  font-size: 12px;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.28);
+}
+.onb-pw-submit {
+  height: 30px;
+  border-radius: 8px;
+  background: #1c1c22;
+  opacity: 0.85;
+}
+
+/*
+ * Import sheet: Aside's 640×476 window-modal sheet. It is portaled into the guide window, so only
+ * that window is greyed (#f8 → #d8) and blurred; the canvas around it stays as it is. Outside the
+ * guide (no window to host it) the portal falls back to covering the viewport.
+ */
+.onb-sheet-portal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.onb-window > .onb-sheet-portal {
+  position: absolute;
+}
+.onb-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.13);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition: opacity var(--normal) var(--ease);
+}
+.onb-sheet-backdrop[data-starting-style],
+.onb-sheet-backdrop[data-ending-style] {
+  opacity: 0;
+}
+.onb-sheet-viewport {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+}
+.onb-sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  height: min(476px, 100%);
+  border-radius: 24px;
+  overflow: hidden;
+  transition:
+    opacity var(--normal) var(--ease),
+    transform var(--normal) var(--ease);
+}
+.onb-sheet[data-starting-style],
+.onb-sheet[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.98);
+}
+.onb-sheet-frame {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.onb-sheet-top {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  min-height: 40px;
+  padding: 12px 18px 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.onb-sheet-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+}
+.onb-sheet-path {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  max-width: 56%;
+  overflow: hidden;
+  color: var(--muted);
+  line-height: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+.onb-sheet-top .onb-sheet-crumb {
+  line-height: 28px;
+}
+.onb-sheet-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  min-height: 0;
+  padding: 16px 40px 12px;
+  overflow-y: auto;
+}
+/* Pick and vault views start high, like Aside's; method and export sit lower, as in L01 and L00. */
+.onb-sheet-body[data-view="method"] {
+  padding-top: 77px;
+}
+.onb-sheet-body[data-view="export"] {
+  padding-top: 27px;
+}
+.onb-sheet-head {
+  display: grid;
+  gap: 6px;
+  max-width: 500px;
+  text-align: center;
+}
+.onb-sheet-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+.onb-sheet-lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.onb-sheet-pick {
+  display: grid;
+  gap: 8px;
+  width: min(428px, 100%);
+  margin-top: 8px;
+}
+.onb-sheet-label {
+  margin: 0 0 2px;
+  padding-left: 6px;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.onb-sheet-pick > .onb-note {
+  padding-left: 6px;
+}
+.onb-sheet-rows {
+  display: grid;
+  gap: 8px;
+}
+.onb-sheet-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 0 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--fast) var(--ease),
+    background-color var(--fast) var(--ease);
+}
+.onb-sheet-row:hover {
+  background: color-mix(in srgb, var(--hover) 45%, transparent);
+}
+.onb-sheet-row[data-checked] {
+  border-color: var(--link-strong);
+  background: color-mix(in srgb, var(--link-strong) 8%, transparent);
+}
+.onb-sheet-row:has(:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.onb-sheet-row > .onb-brand-tile {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.onb-sheet-row > .onb-sheet-row-name {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+.onb-sheet-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 0 12px 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+.onb-sheet-disclosure:focus-visible {
+  outline: 2px solid var(--primary);
+}
+.onb-sheet-disclosure svg {
+  color: var(--muted);
+  transition: transform var(--fast) var(--ease);
+}
+.onb-sheet-disclosure[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+.onb-sheet-options {
+  width: min(420px, 100%);
+  margin-top: 8px;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.onb-sheet-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.onb-sheet-option + .onb-sheet-option {
+  border-top: 1px solid var(--control-border);
+}
+.onb-sheet-option[data-checked] {
+  background: color-mix(in srgb, var(--hover) 55%, transparent);
+}
+.onb-sheet-option:has(:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.onb-sheet-option > .onb-sheet-option-copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  font-weight: 400;
+}
+.onb-sheet-option-copy > strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.onb-sheet-option-copy > span {
+  color: var(--text-soft);
+  font-size: var(--text-xs);
+}
+.onb-sheet-option-copy > small {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+.onb-sheet-option > input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--link-strong);
+}
+
+/* Export illustration: the exporting app's menu bar with its menu open, on a soft blue backdrop. */
+.onb-sheet-art {
+  flex: none;
+  width: min(420px, 100%);
+  height: 244px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--link-strong) 14%, var(--overlay)) 0%, color-mix(in srgb, var(--link-strong) 48%, var(--overlay)) 100%);
+  overflow: hidden;
+}
+.onb-sheet-menubar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 36px;
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--overlay) 82%, transparent);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.onb-sheet-menubar strong {
+  font-weight: var(--weight-semibold);
+}
+.onb-sheet-menubar [data-active] {
+  margin-left: -6px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.onb-sheet-menu {
+  display: grid;
+  gap: 2px;
+  width: 284px;
+  margin: 6px 0 0 80px;
+  padding: 5px;
+  border-radius: 9px;
+  background: var(--overlay);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+  color: var(--text);
+  font-size: var(--text-sm);
+  list-style: none;
+}
+.onb-sheet-menu li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 27px;
+  padding: 0 8px;
+  border-radius: 5px;
+}
+.onb-sheet-menu li[data-active] {
+  background: #0a84ff;
+  color: #fff;
+}
+
+.onb-sheet-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px 18px;
+}
+.onb-sheet-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.onb-sheet-footer .ui-button {
+  height: 34px;
+  font-size: var(--text-sm);
+}
+.onb-sheet-quiet.ui-button {
+  border: 0;
+  background: var(--hover);
+  box-shadow: none;
+}
+.onb-sheet-quiet.ui-button:hover:not(:disabled) {
+  background: var(--active);
+}
+.onb-sheet-back.ui-button {
+  gap: 4px;
+  padding: 0 14px 0 10px;
+}
+
+@media (max-width: 820px) {
+  .onb-sheet {
+    height: auto;
+    max-height: 100%;
+  }
+  .onb-sheet-body {
+    padding-inline: 20px;
+  }
+  .onb-sheet-body[data-view="method"],
+  .onb-sheet-body[data-view="export"] {
+    padding-top: 16px;
+  }
+}
+@media (max-width: 520px) {
+  .onb-kinds-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .onb-actions .ui-button--primary {
+    flex: 1 1 100%;
+  }
+}

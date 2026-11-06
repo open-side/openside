@@ -1,30 +1,35 @@
 import { KeyRound } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { Link, useLocation } from "react-router";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Link } from "react-router";
 import type { VaultStatus } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
+import { t } from "../i18n";
 import { ErrorNote } from "../pages/blocks";
-import { manageLinkState } from "../pages/manageRoutes";
 import { Button, ICON_STROKE, Spinner } from "../ui";
 
 const SECRET_INPUT = { autoComplete: "off", autoCapitalize: "none", autoCorrect: "off", spellCheck: false } as const;
 
 /**
  * Passwords can only be imported into the vault, so the import asks for it right where it is
- * needed: set it up, or unlock it, without leaving the guide.
+ * needed: set it up, or unlock it, without leaving the guide. `bare` drops the gate's own title
+ * and box for hosts that already head it (the passwords sheet titles the view with the same words).
+ * `onBusy` reports a set-up or unlock request in flight, so a host can hold itself open until it settles.
  */
-/** What the vault does and does not keep from the agent; shown wherever the vault is offered. */
-export const VAULT_TRUST_COPY =
-  "The vault stores logins and one-time-code keys encrypted on this computer. Login values are left out of the agent’s tool results, but scripts the agent runs on a page can read its filled fields.";
-
-export function VaultGate({ status, onReady }: { status: VaultStatus; onReady: () => void }) {
+export function VaultGate({ status, onReady, onBusy, bare = false }: { status: VaultStatus; onReady: () => void; onBusy?: (busy: boolean) => void; bare?: boolean }) {
   const client = useClient();
-  const location = useLocation();
   const [passphrase, setPassphrase] = useState("");
   const [again, setAgain] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // `busy` only disables the button after a re-render; a second Enter before it must not send a second request.
+  const sending = useRef(false);
+
+  // The cleanup also reports idle when the gate unmounts mid-request (onReady swaps it out before `finally` runs).
+  useEffect(() => {
+    onBusy?.(busy);
+    return () => onBusy?.(false);
+  }, [busy, onBusy]);
 
   const setup = status.state === "uninitialized";
   const usesPassphrase = status.backend === "passphrase";
@@ -32,6 +37,8 @@ export function VaultGate({ status, onReady }: { status: VaultStatus; onReady: (
 
   async function submit(event?: FormEvent) {
     event?.preventDefault();
+    if (sending.current) return;
+    sending.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -43,20 +50,23 @@ export function VaultGate({ status, onReady }: { status: VaultStatus; onReady: (
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
+      sending.current = false;
       setBusy(false);
     }
   }
 
   if (status.state === "unavailable" || status.backend === null) {
     return (
-      <div className="onb-vault" role="group" aria-label="Vault">
-        <p className="onb-vault-title">
-          <KeyRound size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> The vault cannot be used on this computer yet
-        </p>
-        <p className="onb-note">Passwords stay where they are until it can. You can still import everything else.</p>
+      <div className="onb-vault" data-bare={bare || undefined} role="group" aria-label={t("onboarding.vault.label")}>
+        {bare ? null : (
+          <p className="onb-vault-title">
+            <KeyRound size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> {t("onboarding.vault.unavailableTitle")}
+          </p>
+        )}
+        <p className="onb-note">{t("onboarding.vault.unavailableNote")}</p>
         <div className="onb-actions">
-          <Link className="ui-button ui-button--compact" to="/vault" state={manageLinkState(location)}>
-            See why
+          <Link className="ui-button" to="/settings/passwords">
+            {t("onboarding.vault.seeWhy")}
           </Link>
         </div>
       </div>
@@ -65,34 +75,36 @@ export function VaultGate({ status, onReady }: { status: VaultStatus; onReady: (
 
   const disabled = busy || (usesPassphrase && (passphrase.length === 0 || (setup && (again !== passphrase || again.length === 0))));
   return (
-    <form className="onb-vault" aria-label="Vault" onSubmit={(event) => void submit(event)}>
-      <p className="onb-vault-title">
-        <KeyRound size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        {setup ? "Passwords go into an encrypted vault" : "Unlock the vault to import passwords"}
-      </p>
-      <p className="onb-note">{VAULT_TRUST_COPY}</p>
+    <form className="onb-vault" data-bare={bare || undefined} aria-label={t("onboarding.vault.label")} onSubmit={(event) => void submit(event)}>
+      {bare ? null : (
+        <p className="onb-vault-title">
+          <KeyRound size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          {setup ? t("onboarding.vault.setupTitle") : t("onboarding.vault.unlockTitle")}
+        </p>
+      )}
+      <p className="onb-note">{t("onboarding.vault.trust")}</p>
       <p className="onb-note">
         {usesPassphrase
           ? setup
-            ? "Choose a passphrase for it. Nobody can recover a forgotten passphrase."
-            : "Enter its passphrase."
+            ? t("onboarding.vault.choosePassphrase")
+            : t("onboarding.vault.enterPassphrase")
           : setup
-            ? "Its key is kept in this computer’s keyring, so there is nothing to remember."
-            : "Its key is in this computer’s keyring."}
+            ? t("onboarding.vault.keyringSetup")
+            : t("onboarding.vault.keyring")}
       </p>
       {usesPassphrase ? (
         <>
           <label className="onb-field">
-            <span>{setup ? "Passphrase" : "Vault passphrase"}</span>
+            <span>{setup ? t("onboarding.vault.passphrase") : t("onboarding.vault.vaultPassphrase")}</span>
             <input type="password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} {...SECRET_INPUT} />
           </label>
           {setup ? (
             <label className="onb-field">
-              <span>Repeat passphrase</span>
+              <span>{t("onboarding.vault.repeatPassphrase")}</span>
               <input type="password" value={again} aria-invalid={mismatch || undefined} onChange={(event) => setAgain(event.target.value)} {...SECRET_INPUT} />
             </label>
           ) : null}
-          {mismatch ? <p className="onb-note">The passphrases differ.</p> : null}
+          {mismatch ? <p className="onb-note">{t("onboarding.vault.mismatch")}</p> : null}
         </>
       ) : null}
       {error ? <ErrorNote>{error}</ErrorNote> : null}
@@ -100,12 +112,12 @@ export function VaultGate({ status, onReady }: { status: VaultStatus; onReady: (
         <Button type="submit" variant="primary" disabled={disabled}>
           {busy ? (
             <>
-              <Spinner size={16} /> Working…
+              <Spinner size={16} /> {t("onboarding.vault.working")}
             </>
           ) : setup ? (
-            "Set up the vault"
+            t("onboarding.vault.setUp")
           ) : (
-            "Unlock the vault"
+            t("onboarding.vault.unlock")
           )}
         </Button>
       </div>

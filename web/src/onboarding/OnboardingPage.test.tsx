@@ -1,52 +1,68 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent, { PointerEventsCheckLevel, type UserEvent } from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type Client } from "../api/client";
 import type { ImportBatchReport } from "../api/types";
 import { ClientContext } from "../context";
-import { AgentsContext } from "../hooks/useAgents";
-import { agentSummary } from "../test/agents";
-import { json, type Call } from "../test/fakeDaemon";
 import { keyInfo, modelState } from "../models/testDaemon";
-import { offStatus, tailscaleOn } from "../remote/testDaemon";
+import { json, type Call } from "../test/fakeDaemon";
+import { ToastProvider } from "../ui";
 import { guideDismissed } from "./dismissed";
-import { OnboardingPage } from "./OnboardingPage";
-import { batch, job, onboardingDaemon } from "./testDaemon";
 import { POLL_MS } from "./ImportStep";
+import { OnboardingPage } from "./OnboardingPage";
+import { batch, job, onboardingDaemon, type DaemonState } from "./testDaemon";
 
 const grant = vi.hoisted(() => vi.fn());
 const pair = vi.hoisted(() => vi.fn());
 const deliver = vi.hoisted(() => vi.fn());
+const installOffer = vi.hoisted(() => vi.fn());
 vi.mock("../import/delivery", async (original) => ({ ...(await original<typeof import("../import/delivery")>()), requestImportPermissions: grant, deliverImport: deliver }));
 vi.mock("../desktopNotify", async (original) => ({ ...(await original<typeof import("../desktopNotify")>()), pairExtension: pair }));
+vi.mock("../pwa/install", async (original) => ({ ...(await original<typeof import("../pwa/install")>()), currentOffer: installOffer }));
 
 function Where() {
   const location = useLocation();
   return <p data-testid="where">{location.pathname + location.search}</p>;
 }
 
-function open(client: Client, step = "import") {
+function open(client: Client, step?: string) {
   return render(
     <ClientContext.Provider value={client}>
-      <MemoryRouter initialEntries={[step === "import" ? "/welcome" : `/welcome?step=${step}`]}>
-        <Where />
-        <Routes>
-          <Route path="/welcome" element={<OnboardingPage />} />
-          <Route path="/vault" element={<p>vault dialog</p>} />
-          <Route path="/" element={<p>home</p>} />
-        </Routes>
-      </MemoryRouter>
+      <ToastProvider>
+        <MemoryRouter initialEntries={[step ? `/welcome?step=${step}` : "/welcome"]}>
+          <Where />
+          <Routes>
+            <Route path="/welcome" element={<OnboardingPage />} />
+            <Route path="/settings/*" element={<p>settings</p>} />
+            <Route path="/" element={<p>home</p>} />
+          </Routes>
+        </MemoryRouter>
+      </ToastProvider>
     </ClientContext.Provider>,
   );
 }
 
 const writes = (calls: Call[]) => calls.filter((call) => call.method !== "GET");
+const heading = (name: string) => screen.findByRole("heading", { level: 1, name });
+
+/** jsdom's File has no `arrayBuffer()`, which browsers give every file the person picks. */
+function csvFile(text: string): File {
+  const bytes = new TextEncoder().encode(text);
+  const file = new File([bytes], "passwords.csv", { type: "text/csv" });
+  Object.defineProperty(file, "arrayBuffer", { value: async () => bytes.buffer });
+  return file;
+}
+
+function batchSummary(): ImportBatchReport {
+  return { ...batch(false), dry_run: false };
+}
 
 beforeEach(async () => {
   localStorage.clear();
   grant.mockReset();
   pair.mockReset();
+  installOffer.mockReset().mockReturnValue(null);
   const actual = await vi.importActual<typeof import("../import/delivery")>("../import/delivery");
   deliver.mockReset().mockImplementation(actual.deliverImport);
 });
@@ -56,49 +72,53 @@ afterEach(() => {
 });
 
 describe("order and navigation", () => {
-  it("starts with the browser import and walks forward and back through the URL", async () => {
+  it("goes welcome, import, passwords, subscription, done, with a pager on the middle three", async () => {
     const user = userEvent.setup();
-    const { client } = onboardingDaemon({ vault: "unlocked" });
-    open(client);
-    expect(screen.getByRole("heading", { name: "Bring your browser with you" })).toHaveFocus();
-    expect(screen.getByRole("list", { name: "Step 1 of 6: Browser" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Skip for now" }));
-    expect(await screen.findByRole("heading", { name: "Connect a model" })).toHaveFocus();
-    expect(screen.getByTestId("where")).toHaveTextContent("/welcome?step=models");
-    expect(screen.getByRole("list", { name: "Step 2 of 6: Models" })).toBeInTheDocument();
+    open(onboardingDaemon({ vault: "unlocked" }).client);
+    expect(await heading("An AI assistant that works in your browser.")).toHaveFocus();
+    expect(screen.queryByRole("list", { name: /^Step/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+
+    const steps = [
+      { title: "Import from another browser", step: "import", pager: "Step 1 of 3" },
+      { title: "Let openside fill in your passwords", step: "passwords", pager: "Step 2 of 3" },
+      { title: "Choose your AI subscription", step: "subscription", pager: "Step 3 of 3" },
+    ];
+    for (const { title, step, pager } of steps) {
+      expect(await heading(title)).toHaveFocus();
+      expect(screen.getByTestId("where")).toHaveTextContent(`/welcome?step=${step}`);
+      expect(screen.getByRole("list", { name: pager })).toBeInTheDocument();
+      await user.click(await screen.findByRole("button", { name: "Skip" }));
+    }
+    expect(await heading("You’re all set!")).toHaveFocus();
+    expect(screen.getByTestId("where")).toHaveTextContent("/welcome?step=done");
+    expect(screen.queryByRole("list", { name: /^Step/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
+  it("goes back one step through the URL, to the welcome at the start", async () => {
+    const user = userEvent.setup();
+    open(onboardingDaemon().client, "subscription");
+    await heading("Choose your AI subscription");
     await user.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByRole("heading", { name: "Bring your browser with you" })).toBeInTheDocument();
+    expect(await heading("Let openside fill in your passwords")).toHaveFocus();
+    expect(screen.getByTestId("where")).toHaveTextContent("/welcome?step=passwords");
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await heading("Import from another browser");
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(await heading("An AI assistant that works in your browser.")).toBeInTheDocument();
     expect(screen.getByTestId("where")).toHaveTextContent(/^\/welcome$/);
   });
 
-  it("goes browser, models, agents, phone, assistant, done", async () => {
-    const user = userEvent.setup();
-    open(onboardingDaemon().client);
-    const headings: string[] = [];
-    for (let step = 0; step < 5; step++) {
-      headings.push(screen.getByRole("heading", { level: 1 }).textContent ?? "");
-      await user.click(await screen.findByRole("button", { name: /Continue|Skip for now|Skip this step/ }));
-      await screen.findByRole("heading", { level: 1, name: (name) => name !== headings.at(-1) });
-    }
-    expect(headings).toEqual(["Bring your browser with you", "Connect a model", "Connect your agents", "Pair your phone", "Name your assistant"]);
-    expect(screen.getByRole("heading", { name: "You’re all set" })).toBeInTheDocument();
+  it.each(["bogus", "agents", "models", "pair", "assistant"])("starts at the welcome for an unknown ?step=%s", async (step) => {
+    open(onboardingDaemon().client, step);
+    expect(await heading("An AI assistant that works in your browser.")).toBeInTheDocument();
   });
 
-  it("starts at the first step for an unknown ?step", () => {
-    open(onboardingDaemon().client, "bogus");
-    expect(screen.getByRole("heading", { name: "Bring your browser with you" })).toBeInTheDocument();
-  });
-
-  it("has no welcome or vault step any more", () => {
-    open(onboardingDaemon().client, "vault");
-    expect(screen.getByRole("heading", { name: "Bring your browser with you" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Welcome to openside" })).toBeNull();
-  });
-
-  it("skips the whole guide once and records it on the daemon", async () => {
+  it("skips the whole guide from the welcome and records it on the daemon", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon();
-    open(daemon.client, "models");
+    open(daemon.client);
     await user.click(screen.getByRole("button", { name: "Skip setup" }));
     expect(await screen.findByText("home")).toBeInTheDocument();
     expect(writes(daemon.calls)).toEqual([expect.objectContaining({ method: "PUT", path: "/v1/onboarding", body: { state: "skipped" } })]);
@@ -108,7 +128,7 @@ describe("order and navigation", () => {
   it("leaves the stored outcome alone when the guide was reopened from Settings", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ onboarding: "completed" });
-    open(daemon.client, "models");
+    open(daemon.client);
     await user.click(screen.getByRole("button", { name: "Skip setup" }));
     expect(await screen.findByText("home")).toBeInTheDocument();
     expect(writes(daemon.calls)).toEqual([]);
@@ -126,114 +146,32 @@ describe("order and navigation", () => {
   });
 });
 
-describe("models step", () => {
-  it("leads a user with no usable model to connect one, and lets them skip", async () => {
-    const user = userEvent.setup();
-    const daemon = onboardingDaemon();
-    open(daemon.client, "models");
-    const anthropic = await screen.findByRole("region", { name: "Provider Anthropic" });
-    expect(within(anthropic).getByText("Not connected")).toBeInTheDocument();
-    expect(within(anthropic).getByRole("button", { name: "Add Claude Code account" })).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("No model is ready yet");
-    expect(screen.getByRole("button", { name: "Skip this step" })).toBeInTheDocument();
-
-    await user.click(within(anthropic).getByRole("button", { name: "Add Anthropic API key" }));
-    await user.type(screen.getByLabelText("Name"), "Personal");
-    await user.type(screen.getByLabelText("API key"), "sk-ant-abcd1234");
-    await user.click(screen.getByRole("button", { name: "Save key" }));
-    await waitFor(() => expect(screen.getByRole("region", { name: "Provider Anthropic" }).querySelector(".section-list-actions .badge")).toHaveTextContent("Ready"));
-    expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
-    expect(screen.queryByText(/sk-ant-abcd1234/)).toBeNull();
-  });
-
-  it("shows the recap row once a model is ready", async () => {
-    const user = userEvent.setup();
-    const daemon = onboardingDaemon({ models: modelState({ keys: [keyInfo("openai", "k1", "Main", "wxyz")], pools: { openai: [{ source: "vault", account_id: "k1" }] } }) });
-    open(daemon.client, "models");
-    await user.click(await screen.findByRole("button", { name: "Continue" }));
-    for (let step = 0; step < 3; step++) await user.click(screen.getByRole("button", { name: /Continue|Skip this step/ }));
-    expect(await screen.findByRole("heading", { name: "You’re all set" })).toBeInTheDocument();
-    expect(within(screen.getByRole("list", { name: "Summary" })).getByText("Models").closest("li")).toHaveTextContent("OpenAI ready");
-  });
-});
-
-describe("agents step", () => {
-  it("lists agents by what was found and installs the skill for one", async () => {
-    const user = userEvent.setup();
-    const daemon = onboardingDaemon();
-    open(daemon.client, "agents");
-    const list = await screen.findByRole("list", { name: "Agents" });
-    const claude = within(list).getByText("Claude Code").closest("article") as HTMLElement;
-    const codex = within(list).getByText("Codex").closest("article") as HTMLElement;
-    const omp = within(list).getByText("omp").closest("article") as HTMLElement;
-    expect(within(claude).getByText("Found")).toBeInTheDocument();
-    expect(within(codex).getByText("Not found")).toBeInTheDocument();
-    expect(within(omp).getByText("Skill installed")).toBeInTheDocument();
-    expect(within(omp).queryByRole("button")).toBeNull();
-    expect(within(claude).getByText("~/.claude/skills")).toBeInTheDocument();
-    expect(within(codex).getByRole("button", { name: "Install the browser skill for Codex" })).toHaveTextContent("Install anyway");
-
-    // Installed already (omp) counts as done, so Continue replaces Skip.
-    expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
-    await user.click(within(claude).getByRole("button", { name: "Install the browser skill for Claude Code" }));
-    await waitFor(() => expect(within(list).getAllByText("Skill installed")).toHaveLength(2));
-    expect(daemon.calls).toContainEqual(expect.objectContaining({ method: "POST", path: "/v1/external-agents/claude/browser-skill", body: { force: false } }));
-  });
-
-  it("offers Skip while nothing is installed and shows an install error", async () => {
-    const user = userEvent.setup();
-    const daemon = onboardingDaemon({
-      agents: [{ id: "claude", label: "Claude Code", detected: true, skill_installed: false, skills_dir: "/x/skills", custom: false }],
-      override: (call) => (call.method === "POST" ? json(400, { code: "skills_dir_unknown", message: "x" }) : undefined),
-    });
-    open(daemon.client, "agents");
-    expect(await screen.findByRole("button", { name: "Skip this step" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Install the browser skill for Claude Code" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("does not know where this agent keeps its skills");
-    expect(screen.getByRole("button", { name: "Skip this step" })).toBeInTheDocument();
-  });
-
-  it("treats a skill installed another way in the meantime as installed, not as an error", async () => {
-    const user = userEvent.setup();
-    const daemon = onboardingDaemon();
-    open(daemon.client, "agents");
-    await screen.findByRole("list", { name: "Agents" });
-    daemon.state.agents[0]!.skill_installed = true;
-    await user.click(screen.getByRole("button", { name: "Install the browser skill for Codex" }));
-    await waitFor(() => expect(screen.getAllByText("Skill installed").length).toBeGreaterThanOrEqual(3));
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("offers to ask for access when this device lacks the admin scope", async () => {
-    const daemon = onboardingDaemon({ override: (call) => (call.path === "/v1/external-agents" ? json(403, { code: "forbidden", message: "no" }) : undefined) });
-    open(daemon.client, "agents");
-    expect(await screen.findByRole("region", { name: "Access needed" })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Ask for access" })).toBeInTheDocument();
-  });
-});
-
 describe("import step", () => {
   const profileBox = (name: string, checked = true) => screen.findByRole("checkbox", { name, checked });
+  const importButton = () => screen.findByRole("button", { name: "Import" });
 
-  it("preselects every browser and kind, with counts per profile, and a single primary button", async () => {
+  it("preselects every browser and every kind but passwords, puts Import in the footer and only previews", async () => {
     const daemon = onboardingDaemon({ vault: "unlocked" });
-    open(daemon.client);
+    open(daemon.client, "import");
     for (const name of ["Import Chrome · Work", "Import Brave · Personal", "Import Firefox · default"]) expect(await profileBox(name)).toBeChecked();
     const chrome = screen.getByRole("checkbox", { name: "Import Chrome · Work" }).closest("label")!;
     expect(chrome).toHaveTextContent("work@example.test");
-    expect(chrome).toHaveTextContent("1,200 history entries · 31 bookmarks · 77 cookies · 12 passwords · 3 open tabs");
-    expect(screen.getByRole("checkbox", { name: "Import Firefox · default" }).closest("label")).toHaveTextContent("80 history entries · 3 bookmarks");
-    for (const { label } of [{ label: "History" }, { label: "Bookmarks" }, { label: "Cookies" }, { label: "Passwords" }, { label: "Autofill" }, { label: "Open tabs" }, { label: "Search engines" }, { label: "Site permissions" }, { label: "Extensions" }]) {
+    // Passwords have their own step, so the browser rows do not count them.
+    await waitFor(() => expect(chrome).toHaveTextContent("1,200 history entries · 31 bookmarks · 77 cookies · 3 open tabs"));
+    expect(chrome).not.toHaveTextContent("passwords");
+    for (const label of ["History", "Bookmarks", "Cookies", "Autofill", "Open tabs", "Search engines", "Site permissions", "Extensions"]) {
       expect(screen.getByRole("checkbox", { name: new RegExp(`^${label}`) })).toBeChecked();
     }
-    expect(screen.getByRole("button", { name: "Import everything" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Skip for now" })).toBeInTheDocument();
-    expect(screen.queryByText(/openside import/)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: /^Passwords/ })).not.toBeChecked();
+    const start = await importButton();
+    expect(start).toBeEnabled();
+    expect(start.closest("footer")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
     // Looking before writing is the daemon's preview, never a write.
     expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import/preview"]);
   });
 
-  it("runs everything with one click, shows progress, then the summary and a Continue button", async () => {
+  it("runs the import, shows progress, then the summary and a Continue button in place of Skip", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({
       vault: "unlocked",
@@ -242,9 +180,11 @@ describe("import step", () => {
         job({ state: "completed", completed_profiles: 3, summary: { ...batchSummary(), restore_tabs: [{ profile_id: "chrome:Default", url: "https://example.test/a", title: "Example A" }] } }),
       ],
     });
-    open(daemon.client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
-    expect(writes(daemon.calls).at(-1)).toMatchObject({ method: "POST", path: "/v1/import", body: { profiles: null, what: null } });
+    open(daemon.client, "import");
+    await user.click(await importButton());
+    const request = writes(daemon.calls).at(-1)!;
+    expect(request).toMatchObject({ method: "POST", path: "/v1/import", body: { profiles: null } });
+    expect((request.body as { what: string[] }).what).not.toContain("passwords");
     const meter = await screen.findByRole("progressbar", { name: "Import progress" });
     expect(meter).toHaveAttribute("aria-valuenow", "0");
     expect(screen.getByRole("status")).toHaveTextContent("Importing…");
@@ -255,9 +195,10 @@ describe("import step", () => {
     expect(summary).toHaveTextContent("History1,580");
     expect(screen.getByRole("status")).toHaveTextContent("Imported from 3 profiles");
     expect(screen.getByRole("link", { name: "Example A" })).toHaveAttribute("href", "https://example.test/a");
-    expect(screen.queryByRole("button", { name: "Import everything" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Import" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("heading", { name: "Connect a model" })).toBeInTheDocument();
+    expect(await heading("Let openside fill in your passwords")).toBeInTheDocument();
   });
 
   it("lists extensions as names with store links, search engines and permissions, and never installs anything", async () => {
@@ -268,8 +209,8 @@ describe("import step", () => {
       permissions: [{ profile_id: "chrome:Default", origin: "https://meet.example", permission: "camera", setting: "allow" }],
     };
     const daemon = onboardingDaemon({ vault: "unlocked", jobPolls: [job({ state: "completed", completed_profiles: 3, summary: { ...batchSummary(), ...details } })] });
-    open(daemon.client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
+    open(daemon.client, "import");
+    await user.click(await importButton());
     await screen.findByRole("list", { name: "Imported" }, { timeout: POLL_MS * 6 });
     expect(screen.getByRole("link", { name: "Dark Reader" })).toHaveAttribute("href", "https://store.example/abc");
     expect(screen.getByText("Local tool").closest("a")).toBeNull();
@@ -277,21 +218,12 @@ describe("import step", () => {
     expect(screen.getByText("https://meet.example · camera · allow")).toBeInTheDocument();
   });
 
-  it("remembers what was brought over for the final recap", async () => {
-    const user = userEvent.setup();
-    open(onboardingDaemon({ vault: "unlocked" }).client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
-    await user.click(await screen.findByRole("button", { name: "Continue" }, { timeout: POLL_MS * 6 }));
-    for (let step = 0; step < 4; step++) await user.click(await screen.findByRole("button", { name: /Continue|Skip this step/ }));
-    expect(within(await screen.findByRole("list", { name: "Summary" })).getByText("Browser data").closest("li")).toHaveTextContent("Brought over: 3 profiles · 1,715 items");
-  });
-
   it("hands bookmarks and history to the extension after the import", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ vault: "unlocked" });
     deliver.mockResolvedValue({ delivered: 1, pending: 0, extensionMissing: false });
-    open(daemon.client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
+    open(daemon.client, "import");
+    await user.click(await importButton());
     expect(await screen.findByText("Your bookmarks and history are in this browser.", {}, { timeout: POLL_MS * 6 })).toBeInTheDocument();
     expect(deliver).toHaveBeenCalledWith(daemon.client, expect.any(Function));
   });
@@ -301,8 +233,8 @@ describe("import step", () => {
     const daemon = onboardingDaemon({ vault: "unlocked" });
     deliver.mockRejectedValue(new ApiError(0, "import_delivery_permission_required", "Allow the sites first."));
     grant.mockResolvedValue({ delivered: 1, pending: 0, extensionMissing: false });
-    open(daemon.client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
+    open(daemon.client, "import");
+    await user.click(await importButton());
     await user.click(await screen.findByRole("button", { name: "Sign in to your sites in openside" }, { timeout: POLL_MS * 6 }));
     expect(grant).toHaveBeenCalledOnce();
     expect(await screen.findByText("Your bookmarks and history are in this browser.")).toBeInTheDocument();
@@ -314,8 +246,8 @@ describe("import step", () => {
     deliver.mockRejectedValueOnce(new ApiError(0, "import_delivery_pairing_required", "Connect the extension first."));
     deliver.mockResolvedValueOnce({ delivered: 1, pending: 0, extensionMissing: false });
     pair.mockResolvedValue({ ok: true });
-    open(daemon.client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
+    open(daemon.client, "import");
+    await user.click(await importButton());
     await user.click(await screen.findByRole("button", { name: "Connect the openside extension" }, { timeout: POLL_MS * 6 }));
     expect(pair).toHaveBeenCalledOnce();
     expect(await screen.findByText("Your bookmarks and history are in this browser.")).toBeInTheDocument();
@@ -326,8 +258,8 @@ describe("import step", () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ vault: "unlocked" });
     deliver.mockResolvedValue({ delivered: 0, pending: 1, extensionMissing: true });
-    open(daemon.client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
+    open(daemon.client, "import");
+    await user.click(await importButton());
     expect(await screen.findByText(/Install the openside extension/, {}, { timeout: POLL_MS * 6 })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -335,46 +267,52 @@ describe("import step", () => {
   it("imports only the chosen profiles and kinds", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ vault: "unlocked" });
-    open(daemon.client);
+    open(daemon.client, "import");
     await user.click(await profileBox("Import Firefox · default"));
     await user.click(screen.getByText("Choose what to bring"));
     await user.click(screen.getByRole("checkbox", { name: /^Cookies/ }));
-    expect(screen.getByRole("button", { name: "Import selected" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Import selected" }));
+    await user.click(await importButton());
     expect(writes(daemon.calls).at(-1)).toMatchObject({ path: "/v1/import" });
     const body = writes(daemon.calls).at(-1)!.body as { profiles: string[]; what: string[] };
     expect(body.profiles).toEqual(["chrome:Default", "brave:Default"]);
     expect(body.what).not.toContain("cookies");
-    expect(body.what).toContain("passwords");
+    expect(body.what).not.toContain("passwords");
+    expect(body.what).toContain("history");
   });
 
   it("will not start with nothing selected", async () => {
     const user = userEvent.setup();
-    open(onboardingDaemon({ vault: "unlocked" }).client);
+    open(onboardingDaemon({ vault: "unlocked" }).client, "import");
     for (const name of ["Import Chrome · Work", "Import Brave · Personal", "Import Firefox · default"]) await user.click(await profileBox(name));
-    expect(screen.getByRole("button", { name: "Import selected" })).toBeDisabled();
+    expect(await importButton()).toBeDisabled();
     expect(screen.getByText("Choose at least one browser.")).toBeInTheDocument();
   });
 
-  it("sets the vault up inline when passwords need it, and imports without leaving", async () => {
+  it("sets the vault up inline when passwords are added to the browser import", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ vault: "uninitialized" });
-    open(daemon.client);
+    open(daemon.client, "import");
+    await profileBox("Import Chrome · Work");
+    expect(screen.queryByRole("form", { name: "Vault" })).toBeNull();
+    await user.click(screen.getByText("Choose what to bring"));
+    await user.click(screen.getByRole("checkbox", { name: /^Passwords/ }));
     const form = await screen.findByRole("form", { name: "Vault" });
     expect(form).toHaveTextContent("Passwords go into an encrypted vault");
     expect(within(form).queryByRole("link")).toBeNull();
-    expect(screen.queryByText(/openside vault/)).toBeNull();
-    expect(screen.getByRole("button", { name: "Import everything" })).toBeDisabled();
+    expect(await importButton()).toBeDisabled();
     await user.click(within(form).getByRole("button", { name: "Set up the vault" }));
     await waitFor(() => expect(screen.queryByRole("form", { name: "Vault" })).toBeNull());
     expect(writes(daemon.calls).map((call) => call.path)).toContain("/v1/vault/setup");
-    expect(await screen.findByRole("button", { name: "Import everything" })).toBeEnabled();
+    await waitFor(async () => expect(await importButton()).toBeEnabled());
   });
 
   it("asks for a passphrase when the computer has no keyring", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ vault: "uninitialized", vaultBackend: "passphrase" });
-    open(daemon.client);
+    open(daemon.client, "import");
+    await profileBox("Import Chrome · Work");
+    await user.click(screen.getByText("Choose what to bring"));
+    await user.click(screen.getByRole("checkbox", { name: /^Passwords/ }));
     const form = await screen.findByRole("form", { name: "Vault" });
     const submit = within(form).getByRole("button", { name: "Set up the vault" });
     expect(submit).toBeDisabled();
@@ -387,26 +325,18 @@ describe("import step", () => {
     expect(writes(daemon.calls).find((call) => call.path === "/v1/vault/setup")?.body).toEqual({ passphrase: "correct horse" });
   });
 
-  it("can leave passwords out instead of setting the vault up", async () => {
+  it("can leave passwords out again instead of unlocking the vault", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ vault: "locked" });
-    open(daemon.client);
+    open(daemon.client, "import");
+    await profileBox("Import Chrome · Work");
+    await user.click(screen.getByText("Choose what to bring"));
+    await user.click(screen.getByRole("checkbox", { name: /^Passwords/ }));
     expect(await screen.findByRole("form", { name: "Vault" })).toHaveTextContent("Unlock the vault to import passwords");
     await user.click(screen.getByRole("button", { name: "Import without passwords" }));
     expect(screen.queryByRole("form", { name: "Vault" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Import selected" }));
+    await user.click(await importButton());
     expect((writes(daemon.calls).at(-1)!.body as { what: string[] }).what).not.toContain("passwords");
-  });
-
-  it("imports a passwords CSV from a file, secondary to the main import", async () => {
-    const user = userEvent.setup();
-    const daemon = onboardingDaemon({ vault: "unlocked" });
-    open(daemon.client);
-    await screen.findByRole("button", { name: "Import everything" });
-    const file = new File(["name,url,username,password\nx,https://x.test,me,secret\n"], "passwords.csv", { type: "text/csv" });
-    await user.upload(screen.getByLabelText("Passwords CSV file"), file);
-    expect(await screen.findByText(/3 passwords added to the vault/)).toBeInTheDocument();
-    expect(writes(daemon.calls).at(-1)).toMatchObject({ path: "/v1/import/passwords", body: { csv: expect.stringContaining("https://x.test") } });
   });
 
   it("explains a failed import and offers to leave cookies out", async () => {
@@ -415,158 +345,327 @@ describe("import step", () => {
       vault: "unlocked",
       override: (call) => (call.path === "/v1/import" ? json(503, { code: "browser_unavailable", message: "Chrome is running." }) : undefined),
     });
-    open(daemon.client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
+    open(daemon.client, "import");
+    await user.click(await importButton());
     expect(await screen.findByRole("alert")).toHaveTextContent("No Chromium-compatible browser was found");
     await user.click(screen.getByRole("button", { name: "Leave cookies out" }));
-    expect(screen.getByRole("button", { name: "Import selected" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Leave cookies out" })).toBeNull();
+    expect(await importButton()).toBeEnabled();
   });
 
   it("does not claim nothing was changed when a job fails after some profiles finished", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ vault: "unlocked", jobPolls: [job({ state: "failed", completed_profiles: 1, summary: null, error: null })] });
-    open(daemon.client);
-    await user.click(await screen.findByRole("button", { name: "Import everything" }));
+    open(daemon.client, "import");
+    await user.click(await importButton());
     const alert = await screen.findByRole("alert", {}, { timeout: POLL_MS * 6 });
     expect(alert).toHaveTextContent("Data already imported is kept");
     expect(alert).not.toHaveTextContent("Nothing was changed");
+    expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
   });
 
   it("asks a remote browser to approve on the computer instead of failing", async () => {
     const daemon = onboardingDaemon({ override: (call) => (call.path === "/v1/import/profiles" ? json(403, { code: "local_access_required", message: "local" }) : undefined) });
-    open(daemon.client);
+    open(daemon.client, "import");
     expect(await screen.findByText(/use openside on the computer that runs it/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Import" })).toBeNull();
   });
 
   it("offers to ask for access when this device lacks the admin scope", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ override: (call) => (call.path === "/v1/import/profiles" ? json(403, { code: "forbidden", message: "forbidden" }) : undefined) });
-    open(daemon.client);
+    open(daemon.client, "import");
     await user.click(await screen.findByRole("button", { name: "Ask for access" }));
     expect(await screen.findByText(/Waiting for you to approve it on the computer/)).toBeInTheDocument();
     expect(daemon.state.myRequest?.scopes).toEqual(["admin"]);
   });
 
   it("reports when no browser is installed and offers another look", async () => {
-    open(onboardingDaemon({ profiles: [] }).client);
+    open(onboardingDaemon({ profiles: [] }).client, "import");
     expect(await screen.findByText("No other browsers found")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Look again" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Skip for now" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
   });
 });
 
-function batchSummary(): ImportBatchReport {
-  return { ...batch(false), dry_run: false };
-}
+describe("passwords step", () => {
+  const sheetTitle = "Import credentials to openside Vault";
+  const chromePasswords = () => job({ state: "completed", completed_profiles: 1, total_profiles: 1, summary: batch(false, { profiles: ["chrome:Default"], what: ["passwords"] }) });
 
-describe("pair step", () => {
-  it("offers to ask for access, never a command, when this device may not set up pairing", async () => {
+  async function openSheet(user: UserEvent) {
+    await heading("Let openside fill in your passwords");
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    return screen.findByRole("dialog", { name: sheetTitle });
+  }
+
+  it("imports a detected browser's passwords directly and then offers Continue", async () => {
     const user = userEvent.setup();
-    const daemon = onboardingDaemon();
-    open(daemon.client, "pair");
-    expect(await screen.findByRole("region", { name: "Access needed" })).toBeInTheDocument();
-    expect(screen.queryByText(/openside pair/)).toBeNull();
-    await user.click(await screen.findByRole("button", { name: "Ask for access" }));
-    expect(await screen.findByText(/Waiting for you to approve it on the computer/)).toBeInTheDocument();
-    expect(daemon.state.myRequest).toMatchObject({ scopes: ["admin"] });
+    const daemon = onboardingDaemon({ vault: "unlocked", jobPolls: [chromePasswords()] });
+    open(daemon.client, "passwords");
+    expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
+    const sheet = await openSheet(user);
+    const next = within(sheet).getByRole("button", { name: "Next" });
+    expect(next).toBeDisabled();
+    const detected = within(sheet).getByRole("radiogroup", { name: "Detected on this device" });
+    expect(await within(detected).findByRole("radio", { name: "Chrome · Work" })).toBeInTheDocument();
+    expect(within(detected).getByRole("radio", { name: "Brave · Personal" })).toBeInTheDocument();
+    // Firefox holds no saved passwords here, so it is not offered.
+    expect(within(sheet).queryByRole("radio", { name: "Firefox · default" })).toBeNull();
+    await user.click(within(detected).getByRole("radio", { name: "Chrome · Work" }));
+    await user.click(next);
+
+    const method = await screen.findByRole("dialog", { name: "Import Chrome passwords" });
+    expect(within(method).getByRole("radio", { name: /^Import directly \(Recommended\)/ })).toBeChecked();
+    expect(within(method).getByRole("radio", { name: /^Import \.csv file/ })).not.toBeChecked();
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: POLL_MS * 4 });
+
+    expect(writes(daemon.calls)).toEqual([expect.objectContaining({ method: "POST", path: "/v1/import", body: { profiles: ["chrome:Default"], what: ["passwords"] } })]);
+    expect(screen.getByRole("status")).toHaveTextContent("12 passwords added to the vault.");
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await heading("Choose your AI subscription")).toBeInTheDocument();
   });
 
-  it("shows the QR code at once when access is there", async () => {
-    open(onboardingDaemon({ remote: tailscaleOn() }).client, "pair");
-    expect(await screen.findByRole("img", { name: /QR code to connect/ })).toBeInTheDocument();
-  });
-});
+  it("imports a password manager's CSV file read in the browser", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ vault: "unlocked" });
+    open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await within(sheet).findByRole("radio", { name: "Chrome · Work" });
+    // With browsers detected, the other managers start folded away.
+    expect(within(sheet).queryByRole("radio", { name: "Bitwarden" })).toBeNull();
+    await user.click(within(sheet).getByRole("button", { name: "Other password managers" }));
+    for (const name of ["1Password", "LastPass", "Apple Passwords", "Another app (CSV)"]) expect(within(sheet).getByRole("radio", { name })).toBeInTheDocument();
+    await user.click(within(sheet).getByRole("radio", { name: "Bitwarden" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
 
-describe("pair step with remote access", () => {
-  it("shows the QR flow and recognises the phone", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const daemon = onboardingDaemon({ remote: tailscaleOn() });
-    open(daemon.client, "pair");
-    expect(await screen.findByRole("img", { name: /QR code to connect/ })).toBeInTheDocument();
-    expect(screen.getByText("Waiting for your phone…")).toBeInTheDocument();
-    expect(screen.queryByText(/openside pair/)).toBeNull();
+    const exportView = await screen.findByRole("dialog", { name: "Export from Bitwarden" });
+    expect(exportView).toHaveTextContent("Bitwarden / Import .csv file");
+    expect(exportView).toHaveTextContent(/Export vault/);
+    expect(within(exportView).getByRole("button", { name: "Choose file" })).toBeEnabled();
+    const text = "name,url,username,password\nx,https://x.test,me,secret\n";
+    await user.upload(within(exportView).getByLabelText("Passwords CSV file"), csvFile(text));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
-    daemon.state.devices = [...daemon.state.devices, { device_id: "d2", name: "My phone", kind: "person_device", scopes: ["read"], created_at: "2026-10-13T00:00:00Z" }];
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_100);
-    });
-    expect(await screen.findByText("Connected as My phone")).toBeInTheDocument();
+    expect(writes(daemon.calls)).toEqual([expect.objectContaining({ method: "POST", path: "/v1/import/passwords", body: { csv: text } })]);
+    expect(screen.getByRole("status")).toHaveTextContent("3 passwords added to the vault.");
     expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
   });
 
-  it("offers to turn on a connection in place when none is on", async () => {
-    open(onboardingDaemon({ remote: offStatus() }).client, "pair");
-    expect(await screen.findByText("Your phone needs a way to reach this computer.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Turn on Tailscale" })).toBeInTheDocument();
+  it("sets the vault up inside the sheet and carries on with the interrupted import", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ vault: "uninitialized", jobPolls: [chromePasswords()] });
+    open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await user.click(await within(sheet).findByRole("radio", { name: "Chrome · Work" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Import Chrome passwords" })).getByRole("button", { name: "Next" }));
+
+    const vault = await screen.findByRole("dialog", { name: "Passwords go into an encrypted vault" });
+    const form = within(vault).getByRole("form", { name: "Vault" });
+    expect(within(vault).getByRole("button", { name: "Not now" })).toBeInTheDocument();
+    await user.click(within(form).getByRole("button", { name: "Set up the vault" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: POLL_MS * 4 });
+
+    expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import", "/v1/vault/setup", "/v1/import"]);
+    expect(screen.getByRole("status")).toHaveTextContent("12 passwords added to the vault.");
   });
 
-  it("explains that pairing happens on the computer, without a command, for a browser that is not on it", async () => {
-    open(onboardingDaemon({ remote: tailscaleOn({ pairing_allowed: false }) }).client, "pair");
-    expect(await screen.findByText(/use openside on the computer that runs it/)).toBeInTheDocument();
-    expect(screen.queryByText(/openside pair/)).toBeNull();
+  it("unlocks a locked vault before a CSV import and keeps the file it already read", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ vault: "locked", vaultBackend: "passphrase", profiles: [] });
+    open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    // No browser to offer: the managers start open.
+    expect(await within(sheet).findByText("No browser with saved passwords was found on this computer.")).toBeInTheDocument();
+    await user.click(within(sheet).getByRole("radio", { name: "Another app (CSV)" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    const text = "url,username,password\nhttps://a.example,me,pw\n";
+    await user.upload(within(await screen.findByRole("dialog", { name: "Export from Another app (CSV)" })).getByLabelText("Passwords CSV file"), csvFile(text));
+
+    const vault = await screen.findByRole("dialog", { name: "Unlock the vault to import passwords" });
+    await user.type(within(vault).getByLabelText("Vault passphrase"), "correct horse");
+    await user.click(within(vault).getByRole("button", { name: "Unlock the vault" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const posted = writes(daemon.calls);
+    expect(posted.map((call) => call.path)).toEqual(["/v1/import/passwords", "/v1/vault/unlock", "/v1/import/passwords"]);
+    expect(posted.at(-1)!.body).toEqual({ csv: text });
+    expect(screen.getByRole("status")).toHaveTextContent("3 passwords added to the vault.");
+  });
+
+  it("shows a failed direct import inside the sheet and stays open", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({
+      vault: "unlocked",
+      override: (call) => (call.path === "/v1/import" ? json(503, { code: "browser_unavailable", message: "Chrome is running." }) : undefined),
+    });
+    open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await user.click(await within(sheet).findByRole("radio", { name: "Chrome · Work" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Import Chrome passwords" })).getByRole("button", { name: "Next" }));
+
+    const method = await screen.findByRole("dialog", { name: "Import Chrome passwords" });
+    expect(await within(method).findByRole("alert")).toHaveTextContent("No Chromium-compatible browser was found");
+    expect(screen.queryByText(/added to the vault/)).toBeNull();
+  });
+
+  it("closes with Not now without importing anything", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ vault: "unlocked" });
+    open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await within(sheet).findByRole("radio", { name: "Chrome · Work" });
+    await user.click(within(sheet).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(writes(daemon.calls)).toEqual([]);
+    expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });
 
-describe("assistant step", () => {
-  function openWithChief(client: Client) {
-    const team = { agents: [agentSummary("chief", "openside")], error: null, offline: false, refresh: vi.fn() };
-    render(
-      <ClientContext.Provider value={client}>
-        <AgentsContext.Provider value={team}>
-          <MemoryRouter initialEntries={["/welcome?step=assistant"]}>
-            <Routes>
-              <Route path="/welcome" element={<OnboardingPage />} />
-            </Routes>
-          </MemoryRouter>
-        </AgentsContext.Provider>
-      </ClientContext.Provider>,
-    );
-    return team;
-  }
-
-  it("starts from the current name and renames the assistant", async () => {
-    const user = userEvent.setup();
-    const daemon = onboardingDaemon({ override: (call) => (call.method === "PATCH" ? json(200, agentSummary("chief", "Mo")) : undefined) });
-    const team = openWithChief(daemon.client);
-    const name = screen.getByRole("textbox", { name: "Name" });
-    expect(name).toHaveValue("openside");
-    await user.clear(name);
-    await user.type(name, "Mo");
-    await user.click(screen.getByRole("button", { name: "Call them Mo" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument());
-    expect(writes(daemon.calls).find((call) => call.method === "PATCH")).toMatchObject({ path: "/v1/agents/chief", body: { name: "Mo", initials: "M" } });
-    expect(team.refresh).toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(within(await screen.findByRole("list", { name: "Summary" })).getByText("Assistant").closest("li")).toHaveTextContent("Mo");
-  });
-
-  it("keeps the name without a request", async () => {
+describe("subscription step", () => {
+  it("offers ChatGPT first, Claude next, and signs in to the chosen one", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon();
-    openWithChief(daemon.client);
-    await user.click(screen.getByRole("button", { name: "Keep openside" }));
-    expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
-    expect(writes(daemon.calls).filter((call) => call.path.startsWith("/v1/agents"))).toEqual([]);
+    open(daemon.client, "subscription");
+    expect(await screen.findByRole("radio", { name: /ChatGPT/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Claude/ })).not.toBeChecked();
+    // Nothing works yet, and openside has no plan to fall back on: the step stays skippable.
+    expect(await screen.findByRole("button", { name: "Skip" })).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: /Claude/ }));
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByRole("dialog", { name: "Connect Claude" })).toBeInTheDocument();
+    await waitFor(() => expect(writes(daemon.calls).map((call) => call.path)).toContain("/v1/settings/oauth/accounts/anthropic"));
+  });
+
+  it("lists the other sign-ins under More options", async () => {
+    const user = userEvent.setup();
+    open(onboardingDaemon().client, "subscription");
+    await screen.findByRole("radio", { name: /ChatGPT/ });
+    await user.click(screen.getByRole("button", { name: "Show more options" }));
+    const more = await screen.findByRole("dialog", { name: "More options" });
+    for (const name of ["GitHub Copilot", "Gemini", "Antigravity", "Use your own API key"]) expect(within(more).getByRole("button", { name })).toBeInTheDocument();
+    await user.click(within(more).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("heading", { level: 1, name: "Choose your AI subscription" })).toBeInTheDocument();
+  });
+
+  it("connects an API key from More options and moves on to the end", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon();
+    open(daemon.client, "subscription");
+    await screen.findByRole("radio", { name: /ChatGPT/ });
+    await user.click(screen.getByRole("button", { name: "Show more options" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "More options" })).getByRole("button", { name: "Use your own API key" }));
+    const dialog = await screen.findByRole("dialog", { name: "Use your own API key" });
+    await user.type(within(dialog).getByLabelText("API key"), "sk-ant-abcd1234");
+    await user.click(within(dialog).getByRole("button", { name: "Save key" }));
+    expect(await heading("You’re all set!")).toBeInTheDocument();
+    expect(daemon.state.models.received).toContain("sk-ant-abcd1234");
+    expect(screen.queryByText(/sk-ant-abcd1234/)).toBeNull();
+  });
+
+  it("says Continue instead of Skip once a provider already works", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ models: modelState({ keys: [keyInfo("openai", "k1", "Main", "wxyz")], pools: { openai: [{ source: "vault", account_id: "k1" }] } }) });
+    open(daemon.client, "subscription");
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+    expect(await heading("You’re all set!")).toBeInTheDocument();
   });
 });
 
 describe("done step", () => {
-  it("recaps what was set up and finishes the guide", async () => {
+  it("asks about the default browser, opens the browser's settings and finishes the guide", async () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon();
-    open(daemon.client, "agents");
-    await user.click(await screen.findByRole("button", { name: "Install the browser skill for Claude Code" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument());
-    // Agents (done), then the phone and the assistant's name are passed over.
-    for (let step = 0; step < 3; step++) await user.click(screen.getByRole("button", { name: /Continue|Skip this step/ }));
-    expect(await screen.findByRole("heading", { name: "You’re all set" })).toBeInTheDocument();
-    const recap = screen.getByRole("list", { name: "Summary" });
-    expect(within(recap).getByText("Browser skill for Claude Code, omp")).toBeInTheDocument();
-    expect(within(recap).getByText("Browser data").closest("li")).toHaveTextContent("Skipped");
+    open(daemon.client, "done");
+    expect(screen.getByRole("checkbox", { name: /Set openside as your default browser/ })).toBeChecked();
+    // The launcher row needs the browser's install prompt, which this one does not offer.
+    expect(screen.queryByRole("checkbox", { name: /Add openside to your app launcher/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Skip setup" })).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "Open openside" }));
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+    const dialog = await screen.findByRole("dialog", { name: "Make openside your default browser?" });
+    expect(writes(daemon.calls)).toEqual([]);
+    await user.click(within(dialog).getByRole("button", { name: "Open settings" }));
     expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(writes(daemon.calls)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ method: "POST", path: "/v1/browser/person/tabs/command", body: { command: "create", url: "chrome://settings" } }),
+        expect.objectContaining({ method: "PUT", path: "/v1/onboarding", body: { state: "completed" } }),
+      ]),
+    );
+    expect(daemon.state.onboarding).toBe("completed");
+  });
+
+  it("still finishes when the browser is not connected, and says how to reach its settings", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({
+      override: (call) => (call.path === "/v1/browser/person/tabs/command" ? json(409, { code: "person_browser_not_connected", message: "no" }) : undefined),
+    });
+    open(daemon.client, "done");
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Make openside your default browser?" })).getByRole("button", { name: "Open settings" }));
+    expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't open chrome://settings. Paste it into the address bar to open it.")).toBeInTheDocument();
+    expect(daemon.state.onboarding).toBe("completed");
+  });
+
+  it("finishes without opening anything when the person says Not now", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon();
+    open(daemon.client, "done");
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Make openside your default browser?" })).getByRole("button", { name: "Not now" }));
+    expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(writes(daemon.calls)).toEqual([expect.objectContaining({ method: "PUT", path: "/v1/onboarding", body: { state: "completed" } })]);
+  });
+
+  it("finishes directly when the default-browser option is unticked", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon();
+    open(daemon.client, "done");
+    await user.click(screen.getByRole("checkbox", { name: /Set openside as your default browser/ }));
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+    expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(writes(daemon.calls)).toEqual([expect.objectContaining({ method: "PUT", path: "/v1/onboarding", body: { state: "completed" } })]);
+  });
+
+  it("offers the app launcher while the browser can install the app, and installs on Get started", async () => {
+    const user = userEvent.setup();
+    const install = vi.fn(async () => undefined);
+    installOffer.mockReturnValue({ kind: "android", install });
+    const daemon = onboardingDaemon();
+    open(daemon.client, "done");
+    expect(screen.getByRole("checkbox", { name: /Add openside to your app launcher/ })).toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: /Set openside as your default browser/ }));
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+    expect(install).toHaveBeenCalledOnce();
+    expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(daemon.state.onboarding).toBe("completed");
+  });
+
+  it("saves the outcome before opening Appearance from its row", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon();
+    open(daemon.client, "done");
+    await user.click(screen.getByRole("button", { name: /^Customize appearance/ }));
+    expect(await screen.findByText("settings")).toBeInTheDocument();
+    expect(screen.getByTestId("where")).toHaveTextContent("/settings/appearance");
+    expect(daemon.state.onboarding).toBe("completed");
+  });
+
+  it("opens the CLI setup from its row", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon();
+    open(daemon.client, "done");
+    await user.click(screen.getByRole("button", { name: /^Set up the openside CLI/ }));
+    expect(await screen.findByText("settings")).toBeInTheDocument();
+    expect(screen.getByTestId("where")).toHaveTextContent("/settings/developers");
     expect(daemon.state.onboarding).toBe("completed");
   });
 
@@ -574,8 +673,471 @@ describe("done step", () => {
     const user = userEvent.setup();
     const daemon = onboardingDaemon({ override: (call) => (call.method === "PUT" ? json(500, { code: "internal", message: "x" }) : undefined) });
     open(daemon.client, "done");
-    await user.click(screen.getByRole("button", { name: "Open openside" }));
+    await user.click(screen.getByRole("checkbox", { name: /Set openside as your default browser/ }));
+    await user.click(screen.getByRole("button", { name: "Get started" }));
     expect(await screen.findByText("home")).toBeInTheDocument();
     expect(guideDismissed()).toBe(true);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save that setup is finished. It may open again.");
+  });
+});
+
+describe("outcome write guard", () => {
+  const readFails = (status: number) =>
+    onboardingDaemon({ override: (call) => (call.method === "GET" && call.path === "/v1/onboarding" ? json(status, { code: status === 403 ? "forbidden" : "internal", message: "x" }) : undefined) });
+
+  it("dismisses quietly without writing when this device may not read the guide's state", async () => {
+    const user = userEvent.setup();
+    const daemon = readFails(403);
+    open(daemon.client);
+    await user.click(screen.getByRole("button", { name: "Skip setup" }));
+    expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(writes(daemon.calls)).toEqual([]);
+    expect(guideDismissed()).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("does not write over a state it could not read, and says the outcome was not saved", async () => {
+    const user = userEvent.setup();
+    const daemon = readFails(500);
+    open(daemon.client, "done");
+    await user.click(screen.getByRole("checkbox", { name: /Set openside as your default browser/ }));
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+    expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(writes(daemon.calls)).toEqual([]);
+    expect(guideDismissed()).toBe(true);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save that setup is finished. It may open again.");
+  });
+});
+
+describe("passwords sheet hardening", () => {
+  const sheetTitle = "Import credentials to openside Vault";
+  const chromePasswords = () => job({ state: "completed", completed_profiles: 1, total_profiles: 1, summary: batch(false, { profiles: ["chrome:Default"], what: ["passwords"] }) });
+  const directPosts = (calls: Call[]) => writes(calls).filter((call) => call.path === "/v1/import").length;
+  const jobReads = (calls: Call[]) => calls.filter((call) => call.method === "GET" && call.path.startsWith("/v1/import/jobs/")).length;
+
+  async function openSheet(user: UserEvent) {
+    await heading("Let openside fill in your passwords");
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    return screen.findByRole("dialog", { name: sheetTitle });
+  }
+
+  async function toMethod(user: UserEvent) {
+    const sheet = await openSheet(user);
+    await user.click(await within(sheet).findByRole("radio", { name: "Chrome · Work" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    return screen.findByRole("dialog", { name: "Import Chrome passwords" });
+  }
+
+  /** A file whose read waits for `release`, so a test can act while the sheet is still reading it. */
+  function slowCsvFile(text: string) {
+    const bytes = new TextEncoder().encode(text);
+    const read = Promise.withResolvers<void>();
+    const file = new File([bytes], "passwords.csv", { type: "text/csv" });
+    Object.defineProperty(file, "arrayBuffer", { value: () => read.promise.then(() => bytes.buffer) });
+    return { file, release: read.resolve };
+  }
+
+  it("starts one import and one poller for a double click and Enter on Next before the sheet re-renders", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ vault: "unlocked", jobPolls: [job(), chromePasswords()] });
+    open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    const next = within(method).getByRole("button", { name: "Next" });
+    const direct = within(method).getByRole("radio", { name: /^Import directly/ });
+    // One act scope keeps React from re-rendering between the three, like events queued faster than a frame.
+    act(() => {
+      next.click();
+      next.click();
+      direct.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: POLL_MS * 4 });
+
+    expect(directPosts(daemon.calls)).toBe(1);
+    // One poller reads the running job once and the finished job once.
+    expect(jobReads(daemon.calls)).toBe(2);
+    expect(screen.getByRole("status")).toHaveTextContent("12 passwords added to the vault.");
+  });
+
+  it("keeps Next and Enter off while a refused direct import is still finding out about the vault", async () => {
+    const user = userEvent.setup();
+    const vaultAnswer = Promise.withResolvers<void>();
+    const daemon = onboardingDaemon({
+      vault: "locked",
+      override: (call) => (call.method === "GET" && call.path === "/v1/vault" ? vaultAnswer.promise.then(() => json(200, { state: "locked", default_policy: "while_unlocked", backend: "secret_service" })) : undefined),
+    });
+    open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+
+    // The refusal sends the sheet back to the method view while it asks the daemon about the vault.
+    const again = await screen.findByRole("dialog", { name: "Import Chrome passwords" });
+    const next = within(again).getByRole("button", { name: "Next" });
+    await waitFor(() => expect(next).toBeDisabled());
+    await user.click(next);
+    within(again).getByRole("radio", { name: /^Import directly/ }).focus();
+    await user.keyboard("{Enter}");
+    expect(directPosts(daemon.calls)).toBe(1);
+
+    vaultAnswer.resolve();
+    expect(await screen.findByRole("dialog", { name: "Unlock the vault to import passwords" })).toBeInTheDocument();
+    expect(directPosts(daemon.calls)).toBe(1);
+  });
+
+  it("sends only the first file when another is picked while the first is still being read", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ vault: "unlocked", profiles: [] });
+    open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await user.click(await within(sheet).findByRole("radio", { name: "Another app (CSV)" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    const exportView = await screen.findByRole("dialog", { name: "Export from Another app (CSV)" });
+    const first = "url,username,password\nhttps://a.example,me,first\n";
+    const slow = slowCsvFile(first);
+    await user.upload(within(exportView).getByLabelText("Passwords CSV file"), slow.file);
+    expect(within(exportView).getByRole("button", { name: "Importing…" })).toBeDisabled();
+    await user.upload(within(exportView).getByLabelText("Passwords CSV file"), csvFile("url,username,password\nhttps://b.example,me,second\n"));
+
+    slow.release();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(writes(daemon.calls)).toEqual([expect.objectContaining({ method: "POST", path: "/v1/import/passwords", body: { csv: first } })]);
+  });
+
+  it("is not closed by Escape or an outside click while a direct import runs", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const posted = Promise.withResolvers<void>();
+    const daemon = onboardingDaemon({
+      vault: "unlocked",
+      jobPolls: [chromePasswords()],
+      override: (call) => (call.method === "POST" && call.path === "/v1/import" ? posted.promise.then(() => json(202, job({ total_profiles: 1 }))) : undefined),
+    });
+    open(daemon.client, "passwords");
+    // Without an import running, both close the sheet.
+    await openSheet(user);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await openSheet(user);
+    await user.click(document.querySelector<HTMLElement>(".onb-sheet-backdrop")!);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+    const running = await screen.findByRole("dialog", { name: "Importing Chrome passwords" });
+    await user.keyboard("{Escape}");
+    await user.click(document.querySelector<HTMLElement>(".onb-sheet-backdrop")!);
+    expect(running).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Importing Chrome passwords" })).toBe(running);
+
+    posted.resolve();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: POLL_MS * 3 });
+    expect(screen.getByRole("status")).toHaveTextContent("12 passwords added to the vault.");
+  });
+
+  it("stops polling the job when the guide goes away mid-import", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const daemon = onboardingDaemon({ vault: "unlocked", jobPolls: [job()] });
+    const view = open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    await waitFor(() => expect(jobReads(daemon.calls)).toBe(1));
+
+    view.unmount();
+    const seen = daemon.calls.length;
+    await vi.advanceTimersByTimeAsync(POLL_MS * 5);
+    expect(daemon.calls.length).toBe(seen);
+    expect(jobReads(daemon.calls)).toBe(1);
+  });
+
+  it("carries on with the interrupted import exactly once after setting the vault up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const daemon = onboardingDaemon({ vault: "uninitialized", jobPolls: [chromePasswords()] });
+    open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+    const vault = await screen.findByRole("dialog", { name: "Passwords go into an encrypted vault" });
+    await user.click(within(vault).getByRole("button", { name: "Set up the vault" }));
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 5));
+    expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import", "/v1/vault/setup", "/v1/import"]);
+    expect(jobReads(daemon.calls)).toBe(1);
+    expect(screen.getByRole("status")).toHaveTextContent("12 passwords added to the vault.");
+  });
+
+  it("forgets a CSV file once its vault stop is left, so nothing resends it without a new pick", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ vault: "locked", vaultBackend: "passphrase", profiles: [] });
+    open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await user.click(await within(sheet).findByRole("radio", { name: "Another app (CSV)" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    const first = "url,username,password\nhttps://a.example,me,first\n";
+    await user.upload(within(await screen.findByRole("dialog", { name: "Export from Another app (CSV)" })).getByLabelText("Passwords CSV file"), csvFile(first));
+
+    // Back from the vault abandons the import: the export view waits for a file again.
+    await user.click(within(await screen.findByRole("dialog", { name: "Unlock the vault to import passwords" })).getByRole("button", { name: "Back" }));
+    const exportView = await screen.findByRole("dialog", { name: "Export from Another app (CSV)" });
+    expect(within(exportView).getByRole("button", { name: "Choose file" })).toBeEnabled();
+    const second = "url,username,password\nhttps://b.example,me,second\n";
+    await user.upload(within(exportView).getByLabelText("Passwords CSV file"), csvFile(second));
+
+    // Not now from the vault closes the sheet; unlocking elsewhere and reopening sends nothing by itself.
+    await user.click(within(await screen.findByRole("dialog", { name: "Unlock the vault to import passwords" })).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    daemon.state.vault = "unlocked";
+    const reopened = await openSheet(user);
+    await user.click(await within(reopened).findByRole("radio", { name: "Another app (CSV)" }));
+    await user.click(within(reopened).getByRole("button", { name: "Next" }));
+    expect(within(await screen.findByRole("dialog", { name: "Export from Another app (CSV)" })).getByRole("button", { name: "Choose file" })).toBeEnabled();
+
+    expect(writes(daemon.calls).map((call) => [call.path, call.body])).toEqual([
+      ["/v1/import/passwords", { csv: first }],
+      ["/v1/import/passwords", { csv: second }],
+    ]);
+  });
+
+  it("posts the direct import once, polls the job until it finishes, then stops", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const daemon = onboardingDaemon({ vault: "unlocked", jobPolls: [job(), job(), chromePasswords()] });
+    open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+    for (let poll = 0; poll < 3; poll += 1) await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 5));
+    const importCalls = daemon.calls.filter((call) => call.path === "/v1/import" || call.path.startsWith("/v1/import/jobs/")).map((call) => `${call.method} ${call.path}`);
+    expect(importCalls).toEqual(["POST /v1/import", "GET /v1/import/jobs/job1", "GET /v1/import/jobs/job1", "GET /v1/import/jobs/job1"]);
+    expect(screen.getByRole("status")).toHaveTextContent("12 passwords added to the vault.");
+  });
+
+  it("shows the local-only notice inside the sheet when a remote browser starts a direct import", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({
+      vault: "unlocked",
+      override: (call) => (call.method === "POST" && call.path === "/v1/import" ? json(403, { code: "local_access_required", message: "local" }) : undefined),
+    });
+    open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+
+    const sheet = await screen.findByRole("dialog", { name: "Import Chrome passwords" });
+    expect(await within(sheet).findByText("To import passwords, use openside on the computer that runs it")).toBeInTheDocument();
+    expect(within(sheet).queryByRole("button", { name: "Next" })).toBeNull();
+    expect(directPosts(daemon.calls)).toBe(1);
+    expect(jobReads(daemon.calls)).toBe(0);
+  });
+
+  it("shows the local-only notice inside the sheet when a remote browser sends a CSV file", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({
+      vault: "unlocked",
+      profiles: [],
+      override: (call) => (call.method === "POST" && call.path === "/v1/import/passwords" ? json(403, { code: "local_access_required", message: "local" }) : undefined),
+    });
+    open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await user.click(await within(sheet).findByRole("radio", { name: "Another app (CSV)" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    await user.upload(within(await screen.findByRole("dialog", { name: "Export from Another app (CSV)" })).getByLabelText("Passwords CSV file"), csvFile("url,username,password\nhttps://a.example,me,pw\n"));
+
+    const exportView = await screen.findByRole("dialog", { name: "Export from Another app (CSV)" });
+    expect(await within(exportView).findByText("To import passwords, use openside on the computer that runs it")).toBeInTheDocument();
+    expect(within(exportView).queryByRole("button", { name: "Choose file" })).toBeNull();
+    expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import/passwords"]);
+    expect(screen.queryByText(/added to the vault/)).toBeNull();
+  });
+
+  it("sends no CSV file when the guide goes away while the file is still being read", async () => {
+    const user = userEvent.setup();
+    const daemon = onboardingDaemon({ vault: "unlocked", profiles: [] });
+    const view = open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await user.click(await within(sheet).findByRole("radio", { name: "Another app (CSV)" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    const exportView = await screen.findByRole("dialog", { name: "Export from Another app (CSV)" });
+    const slow = slowCsvFile("url,username,password\nhttps://a.example,me,pw\n");
+    await user.upload(within(exportView).getByLabelText("Passwords CSV file"), slow.file);
+    // Busy from the pick itself, before the read finishes.
+    expect(within(exportView).getByRole("button", { name: "Importing…" })).toBeDisabled();
+
+    view.unmount();
+    slow.release();
+    const tick = Promise.withResolvers<void>();
+    setTimeout(tick.resolve, 0);
+    await act(() => tick.promise);
+    expect(writes(daemon.calls)).toEqual([]);
+  });
+
+  /** Answers the vault's set-up or unlock only once `release` runs, as the daemon would then. */
+  function holdVault(path: "/v1/vault/setup" | "/v1/vault/unlock", state: () => DaemonState) {
+    const gate = Promise.withResolvers<void>();
+    const override = (call: Call) =>
+      call.method === "POST" && call.path === path
+        ? gate.promise.then(() => {
+            state().vault = "unlocked";
+            return json(200, { state: "unlocked", default_policy: "while_unlocked", backend: state().vaultBackend });
+          })
+        : undefined;
+    return { override, release: gate.resolve };
+  }
+
+  it("stays open while the vault is being set up, then carries on with the import", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const held = holdVault("/v1/vault/setup", () => daemon.state);
+    const daemon = onboardingDaemon({ vault: "uninitialized", jobPolls: [chromePasswords()], override: held.override });
+    open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+    const vault = await screen.findByRole("dialog", { name: "Passwords go into an encrypted vault" });
+    await user.click(within(vault).getByRole("button", { name: "Set up the vault" }));
+
+    const notNow = within(vault).getByRole("button", { name: "Not now" });
+    const back = within(vault).getByRole("button", { name: "Back" });
+    await waitFor(() => expect(notNow).toBeDisabled());
+    expect(back).toBeDisabled();
+    await user.keyboard("{Escape}");
+    await user.click(document.querySelector<HTMLElement>(".onb-sheet-backdrop")!);
+    await user.click(notNow);
+    await user.click(back);
+    expect(screen.getByRole("dialog", { name: "Passwords go into an encrypted vault" })).toBe(vault);
+
+    held.release();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: POLL_MS * 4 });
+    expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import", "/v1/vault/setup", "/v1/import"]);
+    expect(screen.getByRole("status")).toHaveTextContent("12 passwords added to the vault.");
+  });
+
+  it("sends one vault set-up when the form is submitted twice before it settles", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const held = holdVault("/v1/vault/setup", () => daemon.state);
+    const daemon = onboardingDaemon({ vault: "uninitialized", jobPolls: [chromePasswords()], override: held.override });
+    open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+    const vault = await screen.findByRole("dialog", { name: "Passwords go into an encrypted vault" });
+    const form = vault.querySelector<HTMLFormElement>("form.onb-vault")!;
+    // Submit events reach the handler even once the button is disabled, so only the gate's own guard stops the second.
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    held.release();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: POLL_MS * 4 });
+    expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import", "/v1/vault/setup", "/v1/import"]);
+  });
+
+  it("starts no direct import when the vault set-up finishes after the guide went away", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const held = holdVault("/v1/vault/setup", () => daemon.state);
+    const daemon = onboardingDaemon({ vault: "uninitialized", jobPolls: [chromePasswords()], override: held.override });
+    const view = open(daemon.client, "passwords");
+    const method = await toMethod(user);
+    await user.click(within(method).getByRole("button", { name: "Next" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Passwords go into an encrypted vault" })).getByRole("button", { name: "Set up the vault" }));
+    await waitFor(() => expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import", "/v1/vault/setup"]));
+
+    view.unmount();
+    held.release();
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 5));
+    expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import", "/v1/vault/setup"]);
+    expect(jobReads(daemon.calls)).toBe(0);
+  });
+
+  it("sends no CSV file when the vault unlock finishes after the guide went away", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const held = holdVault("/v1/vault/unlock", () => daemon.state);
+    const daemon = onboardingDaemon({ vault: "locked", vaultBackend: "passphrase", profiles: [], override: held.override });
+    const view = open(daemon.client, "passwords");
+    const sheet = await openSheet(user);
+    await user.click(await within(sheet).findByRole("radio", { name: "Another app (CSV)" }));
+    await user.click(within(sheet).getByRole("button", { name: "Next" }));
+    await user.upload(within(await screen.findByRole("dialog", { name: "Export from Another app (CSV)" })).getByLabelText("Passwords CSV file"), csvFile("url,username,password\nhttps://a.example,me,pw\n"));
+    const vault = await screen.findByRole("dialog", { name: "Unlock the vault to import passwords" });
+    await user.type(within(vault).getByLabelText("Vault passphrase"), "correct horse");
+    await user.click(within(vault).getByRole("button", { name: "Unlock the vault" }));
+    await waitFor(() => expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import/passwords", "/v1/vault/unlock"]));
+
+    view.unmount();
+    held.release();
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 5));
+    expect(writes(daemon.calls).map((call) => call.path)).toEqual(["/v1/import/passwords", "/v1/vault/unlock"]);
+  });
+});
+
+describe("outcome compare-and-set", () => {
+  // GET still says pending, but another device records its outcome before this device's PUT lands.
+  const lostRace = (code = "onboarding_already_set") =>
+    onboardingDaemon({
+      override: (call) =>
+        call.method === "PUT" && call.path === "/v1/onboarding"
+          ? json(409, { code, message: "conflict", state: "completed", updated_at: "2026-10-12T00:00:00Z" })
+          : undefined,
+    });
+
+  it("counts an outcome another device already recorded as done: home, no alert, nothing dismissed locally", async () => {
+    const user = userEvent.setup();
+    const daemon = lostRace();
+    open(daemon.client);
+    await user.click(screen.getByRole("button", { name: "Skip setup" }));
+    expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(screen.getByTestId("where")).toHaveTextContent(/^\/$/);
+    expect(writes(daemon.calls)).toEqual([expect.objectContaining({ method: "PUT", path: "/v1/onboarding", body: { state: "skipped" } })]);
+    expect(guideDismissed()).toBe(false);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("still opens the row's destination when the outcome was already recorded", async () => {
+    const user = userEvent.setup();
+    const daemon = lostRace();
+    open(daemon.client, "done");
+    await user.click(screen.getByRole("button", { name: /^Customize appearance/ }));
+    expect(await screen.findByText("settings")).toBeInTheDocument();
+    expect(screen.getByTestId("where")).toHaveTextContent("/settings/appearance");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("treats any other conflict as a failed save", async () => {
+    const user = userEvent.setup();
+    const daemon = lostRace("invalid_transition");
+    open(daemon.client);
+    await user.click(screen.getByRole("button", { name: "Skip setup" }));
+    expect(await screen.findByText("home")).toBeInTheDocument();
+    expect(guideDismissed()).toBe(true);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save that setup is finished. It may open again.");
+  });
+});
+
+function BackButton() {
+  const navigate = useNavigate();
+  return <button onClick={() => void navigate(-1)}>history back</button>;
+}
+
+describe("step canonicalization", () => {
+  it.each(["bogus", "agents", "welcome"])("replaces ?step=%s with the bare /welcome instead of adding a history entry", async (step) => {
+    const user = userEvent.setup();
+    render(
+      <ClientContext.Provider value={onboardingDaemon().client}>
+        <ToastProvider>
+          <MemoryRouter initialEntries={["/", `/welcome?step=${step}`]} initialIndex={1}>
+            <Where />
+            <BackButton />
+            <Routes>
+              <Route path="/welcome" element={<OnboardingPage />} />
+              <Route path="/" element={<p>home</p>} />
+            </Routes>
+          </MemoryRouter>
+        </ToastProvider>
+      </ClientContext.Provider>,
+    );
+    expect(await heading("An AI assistant that works in your browser.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/^\/welcome$/));
+    // A pushed entry would leave the stale URL behind; one Back must land on the page before the guide.
+    await user.click(screen.getByRole("button", { name: "history back" }));
+    expect(await screen.findByText("home")).toBeInTheDocument();
   });
 });

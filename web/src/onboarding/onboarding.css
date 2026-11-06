@@ -1,6 +1,8 @@
 /*
- * First-run guide (/welcome). Desktop: a split modal on the canvas, the step on the left and a
- * miniature of the app on the right (OnboardingPreview). Below 1024px the step column is the page.
+ * First-run guide (/welcome), drawn as Aside's onboarding window: a 902×562 window centred on the
+ * canvas (Frame.tsx). `centered` steps stack title, lead and body down the middle with the footer
+ * across the window; `split` steps keep copy and footer on the left and art on the right. Below
+ * 1024px the window is the page and the art is dropped. Import and vault styles live in import.css.
  */
 
 .shell[data-focus] {
@@ -19,83 +21,55 @@
   min-height: 0;
   place-items: center;
   padding: max(env(safe-area-inset-top), 24px) 24px max(env(safe-area-inset-bottom), 24px);
-  background: var(--canvas);
-  overflow-y: auto;
+  background: var(--surface);
+  overflow: auto;
 }
-.onb-split {
+
+.onb-window {
+  --onb-split-left: 510px;
+  position: relative;
   display: grid;
-  grid-template-columns: 440px minmax(0, 1fr);
-  width: min(1040px, 100%);
-  height: min(640px, calc(var(--app-height, 100dvh) - 48px));
-  min-height: 480px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-bubble);
+  grid-template-columns: minmax(0, 1fr);
+  width: min(902px, 100%);
+  height: min(562px, calc(var(--app-height, 100dvh) - 48px));
+  min-height: 460px;
+  border: 1px solid color-mix(in srgb, var(--text) 32%, transparent);
+  border-radius: 12px;
+  /* --canvas rather than --sheet-bg: in dark the sheet colour equals --card-bg and the cards would vanish. */
   background: var(--canvas);
-  box-shadow: var(--shadow-overlay);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.16);
   overflow: hidden;
 }
-.onb-card {
+.onb-window[data-layout="split"] {
+  grid-template-columns: var(--onb-split-left) minmax(0, 1fr);
+}
+.onb-window[data-step="welcome"] {
+  --onb-split-left: 420px;
+}
+/* Aside's last step fades into a faint sky tint toward the bottom of the window. */
+.onb-window[data-step="done"] {
+  background: radial-gradient(140% 80% at 50% 120%, color-mix(in srgb, var(--link-strong) 16%, var(--canvas)) 0%, var(--canvas) 75%);
+}
+
+.onb-pane {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
   min-width: 0;
   min-height: 0;
-  padding: 40px;
-}
-.onb-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-height: 36px;
-}
-.onb-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-size: var(--text-lg);
-  font-weight: var(--weight-title);
-  letter-spacing: -0.4px;
-}
-.onb-header .ui-button--ghost {
-  margin-right: -14px;
-  color: var(--muted);
 }
 
-.onb-progress {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.onb-progress li {
-  height: 4px;
-  border-radius: var(--radius-pill);
-  background: var(--border);
-  transition: background-color var(--normal) var(--ease);
-}
-.onb-progress li[data-state="past"] {
-  background: color-mix(in srgb, var(--text) 35%, var(--canvas));
-}
-.onb-progress li[data-state="current"] {
-  background: var(--text);
-}
-
-/* The step scrolls inside the card so the footer actions stay in reach. */
+/* The step scrolls inside the window so the footer stays in reach. */
 .onb-body {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: var(--space-4);
   min-height: 0;
-  /* Room for focus rings, which the scroller would otherwise clip. */
-  margin: -4px;
-  padding: 4px;
+  padding: 48px 32px 16px;
   overflow-y: auto;
   animation: onb-in var(--normal) var(--ease);
+}
+.onb-window[data-layout="split"] .onb-body {
+  padding: 28px 28px 16px;
 }
 @keyframes onb-in {
   from {
@@ -113,590 +87,425 @@
     }
   }
 }
-.onb-body h1 {
+
+.onb-head {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.onb-head h1 {
   margin: 0;
+  color: var(--text);
   font-size: var(--text-2xl);
-  font-weight: var(--weight-bold);
-  letter-spacing: -0.03em;
-  line-height: var(--leading-tight);
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.02em;
+  line-height: 1.15;
   outline: none;
 }
 .onb-lead {
-  margin: -4px 0 0;
-  color: var(--muted);
-  font-size: 0.9375rem;
-  line-height: 1.55;
-}
-.onb code {
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  background: var(--bubble);
-  color: var(--text);
-  font-family: var(--font-code);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
-}
-.onb code.onb-path {
-  overflow-wrap: normal;
-}
-.onb-note {
   margin: 0;
   color: var(--muted);
-  font-size: var(--text-sm);
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.4;
 }
-.onb-note svg {
-  display: inline-block;
-  margin-right: 4px;
-  vertical-align: -2px;
+.onb-window[data-layout="centered"] .onb-body {
+  align-items: center;
 }
-.onb .empty-state,
-.onb .load-error {
-  border-color: var(--border);
-  background: var(--surface);
+.onb-window[data-layout="centered"] .onb-head {
+  align-items: center;
+  max-width: 640px;
+  text-align: center;
 }
-.onb .empty-state code {
-  background: var(--bubble);
+.onb-window[data-layout="split"] .onb-head h1 {
+  font-size: 30px;
+  line-height: 1.2;
 }
 
-.onb-overview,
-.onb-recap {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.onb-overview li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 10px 14px 10px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  font-size: 0.9375rem;
-}
-.onb-overview-icon {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-sm);
-  background: var(--bubble);
-}
-
-.onb-choices {
-  display: grid;
-  gap: var(--space-2);
-}
-.onb-choice {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: 56px;
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  cursor: pointer;
-  transition:
-    border-color var(--fast) var(--ease),
-    background-color var(--fast) var(--ease);
-}
-.onb-choice:hover {
-  background: var(--hover);
-}
-.onb-choice[data-checked] {
-  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
-  background: var(--surface-raised);
-}
-.onb-choice:has(:focus-visible) {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-.onb-choice > .onb-choice-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.onb-choice-copy > span {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-.onb-fieldset {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-.onb-fieldset legend {
-  margin-bottom: 4px;
-  padding: 0;
-  color: var(--muted);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-.onb-check {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  font-size: 0.9375rem;
-}
-.onb-check > span:not(.badge) {
-  margin: 0;
-  color: var(--text);
-  font-size: 0.9375rem;
-  font-weight: 450;
-}
-.onb-check input:disabled + span {
-  color: var(--muted);
-}
-
-.onb-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-.onb-problem {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-}
-.onb-result {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-}
-.onb-result-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-}
-.onb-result-title svg {
-  color: var(--success);
-}
-.onb-counts {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--text-md);
-}
-.onb-counts li {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 2px 12px;
-}
-.onb-counts-value {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.onb-waiting {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--text-md);
-}
-
-.onb-steps {
-  display: grid;
-  gap: 14px;
-  margin: 0;
-  padding: 0 0 0 20px;
-  font-size: 0.9375rem;
-  line-height: 1.5;
-}
-.onb-steps li::marker {
-  color: var(--muted);
-  font-weight: var(--weight-semibold);
-}
-.onb-command {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-top: 6px;
-  padding: 4px 4px 4px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-}
-.onb-command code {
-  padding: 0;
-  background: none;
-  font-size: var(--text-md);
-  overflow-wrap: anywhere;
-}
-
-.onb-recap li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 10px 14px 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  font-size: 0.9375rem;
-}
-.onb-recap li > span:last-child {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.onb-recap li > span:last-child > span {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-.onb-recap-mark {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-pill);
-  background: var(--bubble);
-  color: var(--muted);
-}
-.onb-recap li[data-done] .onb-recap-mark {
-  background: color-mix(in srgb, var(--success) 16%, transparent);
-  color: var(--success);
-}
-
-/* The way forward is one full-width pill; Back and the skips are quiet text buttons below it. */
+/* Footer: Back on the left, the pager in the middle, Skip and the primary action on the right. */
 .onb-footer {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  padding: 0 22px 21px;
 }
-.onb-footer--solo {
+.onb-footer-start,
+.onb-footer-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.onb-footer-end {
   justify-content: flex-end;
 }
-.onb-footer .ui-button--ghost {
+.onb-footer--center {
+  display: flex;
+  justify-content: center;
+}
+.onb-footer--center > .onb-footer-start {
+  display: none;
+}
+.onb-primary {
+  display: contents;
+}
+.onb-footer .ui-button {
+  height: 34px;
+  font-size: var(--text-sm);
+}
+.onb-back.ui-button {
+  gap: 4px;
+  padding: 0 14px 0 10px;
+  border: 0;
+  background: var(--hover);
+  box-shadow: none;
+}
+.onb-back.ui-button:hover:not(:disabled) {
+  background: var(--active);
+}
+.onb-skip.ui-button {
+  padding: 0 10px;
   color: var(--muted);
 }
-.onb-footer > .ui-button--ghost:first-child {
-  margin-left: -18px;
+.onb-primary-button.ui-button {
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px 0 12px;
+  font-size: var(--text-sm);
 }
-.onb-footer > .ui-button--ghost:last-child {
-  margin-right: -18px;
-}
-.onb-footer .onb-next.ui-button--primary {
-  flex: 1 1 100%;
-  order: -1;
-  min-height: 48px;
-  font-size: 0.9375rem;
-}
-
-.onb a.ui-button {
-  text-decoration: none;
+.onb-primary-button .onb-enter {
+  width: 12px;
+  height: 12px;
+  opacity: 0.6;
 }
 
-/* Step 1: the browsers found on this computer, all selected. */
-.onb-note a,
-.onb-lead a {
-  color: var(--primary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.onb .cli-hint {
-  color: var(--muted);
-}
-.onb .cli-hint code {
-  background: var(--bubble);
-}
-.onb-profiles {
-  display: grid;
-  gap: var(--space-2);
+.onb-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.onb-profile {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: 64px;
-  padding: 10px 14px 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  cursor: pointer;
-  transition:
-    border-color var(--fast) var(--ease),
-    background-color var(--fast) var(--ease);
-}
-.onb-profile:hover {
-  background: var(--hover);
-}
-.onb-profile[data-checked] {
-  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
-}
-.onb-profile:has(:focus-visible) {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-.onb-profile > input,
-.onb-check > input {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  accent-color: var(--primary);
-}
-/* The tile colour is the browser's own (ImportStep sets it), so its letter is always white. */
-.onb-profile > .onb-brand-tile {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-sm);
-  color: #fff;
-  font-size: 1.0625rem;
-  font-weight: var(--weight-title);
-}
-.onb-profile > .onb-profile-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.onb-profile-copy > strong {
-  color: var(--text);
-  font-weight: var(--weight-semibold);
-}
-.onb-profile-copy > span {
-  color: var(--muted);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
-}
-.onb-profile-copy > .onb-profile-counts {
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-.onb-profile-copy > .onb-profile-counts--quiet {
-  color: var(--muted);
-}
-.onb-profile-copy > .onb-profile-warning {
-  color: var(--warn);
-}
-
-.onb-kinds {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-}
-.onb-kinds > summary {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 14px;
-  color: var(--muted);
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
-  cursor: pointer;
-}
-.onb-kinds > summary:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-  border-radius: var(--radius-md);
-}
-.onb-kinds-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 12px;
-  padding: 0 14px 10px;
-}
-.onb-kinds-count {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.onb-meter {
+.onb-pager li {
+  width: 6px;
   height: 6px;
   border-radius: var(--radius-pill);
-  background: var(--hover);
-  overflow: hidden;
+  background: var(--step-dot);
+  transition:
+    width var(--normal) var(--ease),
+    background-color var(--normal) var(--ease);
 }
-.onb-meter > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--primary);
-  transition: width var(--normal) var(--ease);
-}
-.onb-notes {
-  display: grid;
-  gap: 4px;
-  margin: 4px 0 0;
-  padding: 0 0 0 18px;
-  color: var(--muted);
-  font-size: var(--text-sm);
-  line-height: 1.5;
+.onb-pager li[data-state="current"] {
+  width: 12px;
+  background: var(--text);
 }
 
-.onb-vault {
-  display: grid;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-}
-.onb-vault-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  font-size: 0.9375rem;
-  font-weight: var(--weight-semibold);
-}
-.onb-field {
-  display: grid;
-  gap: 4px;
-  font-size: var(--text-sm);
-  color: var(--muted);
-}
-.onb-field input {
-  min-height: 48px;
-  padding: 0 14px;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-md);
-  background: var(--canvas);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--text-base);
-}
-.onb-field input:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
-}
-
-.onb-csv {
-  display: grid;
-  gap: var(--space-2);
-  justify-items: start;
-}
-.onb-restore {
-  display: grid;
-  gap: 6px;
-}
-.onb-restore ul {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0 0 0 18px;
-  font-size: var(--text-md);
-}
-.onb-restore a {
-  color: var(--primary);
-  overflow-wrap: anywhere;
-}
-.onb-listing > ul {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0 14px 10px 32px;
-  font-size: var(--text-md);
-  overflow-wrap: anywhere;
-}
-.onb-listing a {
-  color: var(--primary);
-}
-
-/*
- * The preview pane: a miniature of the app (sidebar + home) bleeding off the pane's edges.
- * It is decoration only. Its right edge stays inside the split's padding: clipped boxes still
- * count as overflow for the layout checks (web_overflow.rs).
- */
-.onb-preview {
+/* Split art: the right panel, inset from the window edge. */
+.onb-art {
   position: relative;
-  margin: var(--space-3) var(--space-3) var(--space-3) 0;
-  border-radius: var(--radius-lg);
-  background: var(--surface);
+  margin: 8px 8px 8px 0;
+  border-radius: 12px;
   overflow: hidden;
   pointer-events: none;
   user-select: none;
 }
+
+/* Welcome: the mark and name, the headline, and the two ways forward at the bottom of the column. */
+.onb-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.02em;
+}
+.onb-window[data-step="welcome"] .onb-head h1 {
+  font-size: 32px;
+  font-weight: 400;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+.onb-window[data-step="welcome"] .onb-body {
+  padding-bottom: 34px;
+}
+.onb-welcome-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: auto;
+}
+.onb-welcome-actions .ui-button {
+  width: 100%;
+  height: 38px;
+  font-size: 15px;
+}
+
+/* Subscription: Settings › Models' radio cards restyled as Aside's 415px card list. */
+.onb-subscription {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: min(415px, 100%);
+  margin-block: auto;
+}
+.onb-subscription .models-choices {
+  width: 100%;
+  gap: 0;
+  padding: 2px 0;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, var(--card-bg));
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+.onb-subscription .models-choice {
+  gap: 18px;
+  min-height: 52px;
+  padding: 6px 18px 6px 12px;
+  border-radius: 0;
+}
+.onb-subscription .models-choice-glyph {
+  width: 20px;
+}
+.onb-subscription .models-choice > .models-choice-copy {
+  gap: 1px;
+}
+.onb-subscription .models-choice:hover,
+.onb-subscription .models-choice:has(input:checked) {
+  background: none;
+}
+.onb-subscription .models-choice:has(:focus-visible) {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
+  border-radius: 12px;
+}
+.onb-subscription .models-choice-name {
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+.onb-subscription .models-choice-detail {
+  font-size: var(--text-xs);
+}
+/* Aside's radio: a pale ring, and a thick sky ring around a white centre once chosen. */
+.onb-subscription .models-choice input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, var(--card-bg));
+  border-radius: var(--radius-pill);
+  background: var(--card-bg);
+  cursor: pointer;
+}
+.onb-subscription .models-choice input:checked {
+  border-color: var(--radio-on);
+  box-shadow: inset 0 0 0 4px var(--radio-on);
+}
+.onb-subscription .models-more-link {
+  font-size: var(--text-sm);
+  color: var(--link);
+}
+
+/* Done: the logo above the title, two drill-in rows and the finishing options. */
+.onb-logo {
+  display: grid;
+  place-items: center;
+  margin: -14px 0 13px;
+  color: var(--faint);
+}
+.onb-done {
+  display: grid;
+  gap: 14px;
+  width: min(440px, 100%);
+  margin-top: 21px;
+}
+.onb-list {
+  margin: 0;
+  padding: 0;
+  border-radius: 12px;
+  background: var(--card-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 55%, var(--card-bg));
+  list-style: none;
+  overflow: hidden;
+}
+.onb-list > li + li {
+  border-top: 1px solid color-mix(in srgb, var(--row-divider) 70%, var(--card-bg));
+}
+.onb-drill,
+.onb-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+.onb-drill {
+  justify-content: flex-start;
+  min-height: 53px;
+  padding: 6px 18px 6px 14px;
+  border-radius: 0;
+  cursor: pointer;
+}
+.onb-drill:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hover) 55%, var(--card-bg));
+}
+.onb-drill:focus-visible,
+.onb-option:has(:focus-visible) {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
+}
+.onb-drill-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  color: var(--muted);
+}
+.onb-drill-chevron {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+}
+.onb-option {
+  align-items: flex-start;
+  min-height: 58px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+.onb-option > input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: var(--primary);
+}
+/* `.onb-option > .onb-row-copy` outranks styles.css's field-caption rule for `label > span`. */
+.onb-row-copy,
+.onb-option > .onb-row-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: inherit;
+  font-weight: inherit;
+}
+.onb-row-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.onb-row-detail {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+/*
+ * Aside's guide dialogs (More options, the default-browser question) are window-modal: only the
+ * guide window greys, lightly, and the canvas around it stays untouched. The kit's viewport-wide
+ * scrim is cleared while the guide is mounted; the vault sheet keeps its own blurred backdrop.
+ * Below 1024px the window is the viewport, so the kit scrim already matches.
+ */
+@media (min-width: 1024px) {
+  body:has(.onb-window) .ui-backdrop:not(.onb-sheet-backdrop) {
+    background: transparent;
+  }
+  body:has(.ui-dialog) .onb-window::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: rgb(0 0 0 / 0.13);
+    pointer-events: none;
+  }
+}
+
+/* The default-browser question is a small alert, like the system one it stands in for. */
+.onb-default-dialog.ui-dialog {
+  width: min(340px, 100%);
+}
+.onb-default-dialog .ui-dialog-actions > .ui-button {
+  flex: 1 1 0;
+}
+
+/*
+ * The welcome art: a sky gradient with a miniature openside window bleeding off the bottom right.
+ * Decoration only, drawn from tokens so it follows the theme.
+ */
+.onb-preview {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(45% 22% at 80% 12%, color-mix(in srgb, var(--surface-raised) 80%, transparent) 0%, transparent 100%),
+    radial-gradient(35% 18% at 62% 22%, color-mix(in srgb, var(--surface-raised) 55%, transparent) 0%, transparent 100%),
+    linear-gradient(180deg, color-mix(in srgb, var(--link-strong) 48%, var(--surface)) 0%, color-mix(in srgb, var(--link-strong) 22%, var(--surface)) 100%);
+}
 .onb-mini {
   position: absolute;
-  top: 56px;
-  right: -24px;
-  left: 56px;
+  top: 144px;
+  right: -48px;
+  bottom: -24px;
+  left: 16px;
   display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
-  height: 600px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  grid-template-columns: 166px minmax(0, 1fr);
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: 10px;
   background: var(--canvas);
-  box-shadow: var(--shadow-overlay);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.12);
   color: var(--text);
-  font-size: var(--text-xs);
+  font-size: 9px;
   overflow: hidden;
 }
 .onb-mini-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px 8px;
+  gap: 3px;
+  padding: 10px 8px;
   border-right: 1px solid var(--border);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 70%, var(--link-strong) 6%);
 }
-.onb-mini-brand,
-.onb-mini-new {
+.onb-mini-lights {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 26px;
-  padding: 0 8px;
+  gap: 5px;
+  margin-bottom: 8px;
 }
-.onb-mini-brand {
-  margin-bottom: 6px;
-  font-weight: var(--weight-title);
-}
-.onb-mini-new {
-  border-radius: var(--radius-xs);
-  background: var(--hover);
-  font-weight: var(--weight-medium);
-}
-.onb-mini-heading {
-  width: 36%;
-  height: 5px;
-  margin: 14px 8px 6px;
+.onb-mini-lights > span {
+  width: 7px;
+  height: 7px;
   border-radius: var(--radius-pill);
   background: var(--border);
 }
+.onb-mini-pins {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.onb-mini-pins > span {
+  height: 24px;
+  border-radius: 6px;
+  background: var(--hover);
+}
+.onb-mini-new,
 .onb-mini-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  padding: 0 8px;
+  gap: 6px;
+  min-height: 22px;
+  padding: 0 6px;
+}
+.onb-mini-new {
+  color: var(--muted);
+}
+.onb-mini-heading {
+  width: 30%;
+  height: 4px;
+  margin: 10px 6px 4px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
 }
 .onb-mini-row::before,
 .onb-mini-row::after {
@@ -705,30 +514,33 @@
   background: var(--hover);
 }
 .onb-mini-row::before {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
+  flex: none;
+  width: 10px;
+  height: 10px;
 }
 .onb-mini-row::after {
   width: 62%;
-  height: 6px;
+  height: 5px;
 }
-.onb-mini-row:nth-last-child(2)::after {
-  width: 44%;
-}
-.onb-mini-row:last-child::after {
-  width: 54%;
+.onb-mini-row:nth-child(even)::after {
+  width: 48%;
 }
 .onb-mini-main {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: var(--space-4);
-  padding: 120px 40px 0;
+  gap: 18px;
+  min-width: 0;
 }
-.onb-mini-title {
-  width: 180px;
-  height: 10px;
+.onb-mini-toolbar {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px 0 64px;
+  border-bottom: 1px solid var(--border);
+}
+.onb-mini-toolbar > span {
+  width: 60%;
+  height: 6px;
   border-radius: var(--radius-pill);
   background: var(--hover);
 }
@@ -736,14 +548,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  width: min(100%, 400px);
-  min-height: 44px;
-  padding: 0 7px 0 16px;
+  gap: 6px;
+  width: 260px;
+  min-height: 30px;
+  margin: 100px 0 0 120px;
+  padding: 0 5px 0 10px;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-composer);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
   color: var(--muted);
   white-space: nowrap;
 }
@@ -754,56 +566,60 @@
 }
 .onb-mini-send {
   display: grid;
-  flex: 0 0 auto;
+  flex: none;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 20px;
+  height: 20px;
   border-radius: var(--radius-pill);
   background: var(--send-bg);
   color: var(--send-fg);
 }
 .onb-mini-tasks {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  width: min(100%, 400px);
-  margin-top: var(--space-2);
+  grid-template-columns: repeat(2, 168px);
+  gap: 8px;
+  margin: 28px 0 0 68px;
 }
 .onb-mini-task {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  min-height: 84px;
-  padding: 12px;
+  gap: 6px;
+  padding: 10px 8px 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 8px;
   background: var(--surface-raised);
 }
 .onb-mini-task > span {
-  height: 7px;
+  height: 5px;
   border-radius: var(--radius-pill);
   background: var(--hover);
 }
 .onb-mini-task > span:first-child {
-  width: 34%;
-  height: 5px;
-  margin-bottom: 3px;
+  width: 40%;
+  height: 4px;
   background: var(--border);
 }
 .onb-mini-task > span:nth-child(2) {
   width: 88%;
 }
-.onb-mini-task > span:last-child {
-  width: 58%;
+.onb-mini-task > span:nth-child(3) {
+  width: 64%;
+}
+.onb-mini-task > .onb-mini-shot {
+  height: 96px;
+  margin-top: 4px;
+  border-radius: 4px 4px 0 0;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--warn) 45%, var(--surface)), color-mix(in srgb, var(--link-strong) 30%, var(--surface)));
 }
 
-/* Below desktop the preview would squeeze the step; the step column becomes the page. */
+/* Below desktop the window is the page; the art would squeeze the step, so it goes. */
 @media (max-width: 1023px) {
   .onb {
     place-items: stretch;
     padding: 0;
   }
-  .onb-split {
+  .onb-window,
+  .onb-window[data-layout="split"] {
     grid-template-columns: minmax(0, 1fr);
     width: 100%;
     height: 100%;
@@ -812,27 +628,31 @@
     border-radius: 0;
     box-shadow: none;
   }
-  .onb-preview {
+  .onb-art {
     display: none;
   }
-  .onb-card {
+  .onb-pane {
     justify-self: center;
     width: min(560px, 100%);
-    padding: max(env(safe-area-inset-top), 32px) 24px max(env(safe-area-inset-bottom), 20px);
+  }
+  .onb-body {
+    padding-top: max(env(safe-area-inset-top), 32px);
+  }
+  .onb-footer {
+    padding-bottom: max(env(safe-area-inset-bottom), 20px);
   }
 }
 @media (max-width: 520px) {
-  .onb-card {
-    gap: var(--space-4);
-    padding: max(env(safe-area-inset-top), 16px) 20px max(env(safe-area-inset-bottom), 16px);
+  .onb-body,
+  .onb-window[data-layout="split"] .onb-body {
+    padding: max(env(safe-area-inset-top), 20px) 20px 12px;
   }
-  .onb-body h1 {
-    font-size: 1.625rem;
+  .onb-head h1,
+  .onb-window[data-layout="split"] .onb-head h1,
+  .onb-window[data-step="welcome"] .onb-head h1 {
+    font-size: 26px;
   }
-  .onb-kinds-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .onb-actions .ui-button--primary {
-    flex: 1 1 100%;
+  .onb-footer {
+    padding: 0 16px max(env(safe-area-inset-bottom), 16px);
   }
 }

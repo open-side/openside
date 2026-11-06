@@ -1,26 +1,8 @@
 import type { ImportBatchReport, ImportCategory, ImportCategoryReport, ImportJob, ImportProfile } from "../api/types";
+import { t } from "../i18n";
 
-export interface Kind {
-  id: ImportCategory;
-  label: string;
-  one: string;
-  many: string;
-}
-
-/** Display order of the kinds an import can carry. */
-export const KINDS: readonly Kind[] = [
-  { id: "history", label: "History", one: "history entry", many: "history entries" },
-  { id: "bookmarks", label: "Bookmarks", one: "bookmark", many: "bookmarks" },
-  { id: "cookies", label: "Cookies", one: "cookie", many: "cookies" },
-  { id: "passwords", label: "Passwords", one: "password", many: "passwords" },
-  { id: "autofill", label: "Autofill", one: "autofill entry", many: "autofill entries" },
-  { id: "tabs", label: "Open tabs", one: "open tab", many: "open tabs" },
-  { id: "search_engines", label: "Search engines", one: "search engine", many: "search engines" },
-  { id: "permissions", label: "Site permissions", one: "site permission", many: "site permissions" },
-  { id: "extensions", label: "Extensions", one: "extension", many: "extensions" },
-];
-
-export const ALL_KINDS: readonly ImportCategory[] = KINDS.map((kind) => kind.id);
+/** Display order of the kinds an import can carry; labels are `onboarding.kind.<id>` messages. */
+export const ALL_KINDS: readonly ImportCategory[] = ["history", "bookmarks", "cookies", "passwords", "autofill", "tabs", "search_engines", "permissions", "extensions"];
 
 interface Brand {
   label: string;
@@ -52,15 +34,8 @@ export function brandOf(profile: Pick<ImportProfile, "brand" | "browser">): Bran
 
 export const profileTitle = (profile: ImportProfile) => `${brandOf(profile).label} · ${profile.name}`;
 
-export const formatCount = (value: number) => value.toLocaleString("en-US");
-
-export function kindOf(id: ImportCategory): Kind {
-  return KINDS.find((kind) => kind.id === id)!;
-}
-
 export function phrase(id: ImportCategory, value: number): string {
-  const kind = kindOf(id);
-  return `${formatCount(value)} ${value === 1 ? kind.one : kind.many}`;
+  return t(`onboarding.kindCount.${id}`, { count: value });
 }
 
 export type Counts = Partial<Record<ImportCategory, number>>;
@@ -92,8 +67,8 @@ export const totalOf = (counts: Counts) => Object.values(counts).reduce((sum, va
 
 /** `12,000 history entries · 300 bookmarks`; the kinds that have something, in display order. */
 export function describeCounts(counts: Counts): string {
-  return KINDS.filter(({ id }) => counts[id])
-    .map(({ id }) => phrase(id, counts[id]!))
+  return ALL_KINDS.filter((id) => counts[id])
+    .map((id) => phrase(id, counts[id]!))
     .join(" · ");
 }
 
