@@ -403,11 +403,13 @@ impl<M: Messenger> Core<M> {
                 model: state.and_then(|state| state.model),
                 mode: None,
                 workspace: None,
+                project_id: None,
                 incognito: false,
                 browser_space: Default::default(),
                 effort: None,
                 speed: None,
                 profile: None,
+                confirmation: None,
             })
             .await?;
         if !self.daemon.owns_session(&session) {
