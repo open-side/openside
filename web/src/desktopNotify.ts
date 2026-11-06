@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ApiError, type Client } from "./api/client";
 import { EXTENSION_ID, type DesktopReply, type DesktopRequest } from "./desktopNotifyProtocol";
+import { t } from "./i18n";
 
 /*
  * Desktop notifications through the openside MV3 extension, for browsers where Web Push cannot
@@ -30,23 +31,28 @@ function isReply(value: unknown): value is DesktopReply {
   return typeof value === "object" && value !== null && "ok" in value && typeof value.ok === "boolean";
 }
 
-/** `null`: the extension is not installed (or not allowed on this page); nothing answered. */
-export function askExtension(request: DesktopRequest): Promise<DesktopReply | null> {
+/** One message to the extension; `null` when nothing well formed answered (not installed, not allowed on this page, or too slow). */
+export function messageExtension<Reply>(request: unknown, accept: (value: unknown) => value is Reply, timeoutMs = REPLY_TIMEOUT_MS): Promise<Reply | null> {
   const bridge = runtime();
   if (!bridge?.sendMessage) return Promise.resolve(null);
-  const { promise, resolve } = Promise.withResolvers<DesktopReply | null>();
-  const timer = setTimeout(() => resolve(null), request.type === "openside.desktop.pair" && request.code ? CONSENT_TIMEOUT_MS : REPLY_TIMEOUT_MS);
+  const { promise, resolve } = Promise.withResolvers<Reply | null>();
+  const timer = setTimeout(() => resolve(null), timeoutMs);
   try {
     bridge.sendMessage(EXTENSION_ID, request, (reply) => {
       clearTimeout(timer);
       // Reading lastError marks it handled; without a listener Chromium logs it as unchecked.
-      resolve(bridge.lastError === undefined && isReply(reply) ? reply : null);
+      resolve(bridge.lastError === undefined && accept(reply) ? reply : null);
     });
   } catch {
     clearTimeout(timer);
     resolve(null);
   }
   return promise;
+}
+
+/** `null`: the extension is not installed (or not allowed on this page); nothing answered. */
+export function askExtension(request: DesktopRequest): Promise<DesktopReply | null> {
+  return messageExtension(request, isReply, request.type === "openside.desktop.pair" && request.code ? CONSENT_TIMEOUT_MS : REPLY_TIMEOUT_MS);
 }
 
 export function desktopRequested(): boolean {
@@ -73,7 +79,7 @@ async function mintPairingCode(client: Client, importDelivery: boolean): Promise
   try {
     return (await client.createPairing({ ...request, scopes: [...request.scopes] })).code;
   } catch (cause) {
-    if (cause instanceof ApiError) throw new Error(`Could not pair the openside extension: ${cause.message}`);
+    if (cause instanceof ApiError) throw new Error(t("settings.notifications.error.extensionPairFailed", { message: cause.message }));
     throw cause;
   }
 }
@@ -90,14 +96,14 @@ function readDevice(): string | null {
 /** Turns desktop notifications on, pairing the extension with a fresh one-time code only when it has none. */
 export async function enableDesktop(client: Client): Promise<void> {
   let reply = await askExtension({ type: "openside.desktop.enable" });
-  if (reply === null) throw new Error("The openside extension is not installed in this browser. Install it to get desktop notifications, or use a browser with Web Push.");
+  if (reply === null) throw new Error(t("settings.notifications.error.extensionMissing"));
   if (!reply.ok && reply.reason === "needs_pairing") {
     // A restarted browser left the old token behind on the daemon; it is of no use to anyone now.
     const stale = readDevice();
     if (stale) await client.revokeDevice(stale).catch(() => undefined);
     reply = await askExtension({ type: "openside.desktop.enable", code: await mintPairingCode(client, false) });
   }
-  if (reply === null) throw new Error("The openside extension did not answer. Reload the extension and try again.");
+  if (reply === null) throw new Error(t("settings.notifications.error.extensionSilent"));
   if (!reply.ok) throw new Error(reply.message);
   localStorage.setItem(DESKTOP_KEY, JSON.stringify({ device: reply.device }));
 }

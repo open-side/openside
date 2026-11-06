@@ -76,7 +76,7 @@
   font-size: 0.9375rem;
 }
 .token-card a {
-  color: var(--primary);
+  color: var(--link);
   font-weight: var(--weight-medium);
   text-underline-offset: 2px;
 }

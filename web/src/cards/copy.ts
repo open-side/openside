@@ -3,17 +3,10 @@
 // text fallback used for accessibility and export.
 import { ApiError } from "../api/client";
 import type { Block, Card, CardStatus, InputField } from "../api/types";
+import { t } from "../i18n";
 import { formatMoney, formatRating, valueText } from "./values";
 
-export const CARD_LABEL = {
-  name: "Name on card",
-  number: "Card number",
-  expiry: "Expiry",
-  cvc: "CVC",
-  postal_code: "Postal code",
-} as const;
-
-export const CARD_AUTOCOMPLETE = {
+const CARD_AUTOCOMPLETE = {
   name: "cc-name",
   number: "cc-number",
   expiry: "cc-exp",
@@ -21,24 +14,12 @@ export const CARD_AUTOCOMPLETE = {
   postal_code: "postal-code",
 } as const;
 
-export const STATUS_LABEL: Record<CardStatus, string> = {
-  pending: "Waiting",
-  done: "Done",
-  failed: "Didn’t go through",
-  expired: "Expired",
-};
-
-export const SECURE_NOTE = "Handled by";
-export const SECRET_PLACEHOLDER = "[secure input]";
-export const AUTHENTICATOR_SUMMARY = "Save this site’s authenticator";
-export const UNHANDLED_ACTION = "This action isn’t available here. Open openside to continue.";
-export const GENERIC_FAILURE = "Request failed";
-export const SAVE_REFUSED = "Saving to the vault needs approval rights on this device. Send it again to continue without saving.";
-export const KEY_REFUSED = "Saving an authenticator needs approval rights on this device. You can still fill this one code.";
-export const BAD_SETUP_KEY = "That is not a setup key or otpauth:// link.";
+export function statusLabel(status: CardStatus): string {
+  return t(`cards.status.${status}`);
+}
 
 export function fieldLabel(field: InputField): string {
-  return field.card ? CARD_LABEL[field.card] : field.label;
+  return field.card ? t(`cards.field.card.${field.card}`) : field.label;
 }
 
 export function fieldAutocomplete(field: InputField): string {
@@ -48,31 +29,30 @@ export function fieldAutocomplete(field: InputField): string {
 }
 
 export function requiredMessage(field: InputField): string {
-  return `Enter your ${fieldLabel(field).toLowerCase()}.`;
+  return t("cards.field.required", { label: fieldLabel(field).toLowerCase() });
 }
 
 /** Errors reach the person as sanitized sentences; a changed page gets the way forward. */
 export function failureMessage(cause: unknown): string {
   if (cause instanceof ApiError) {
-    if (cause.code === "target_unavailable" || cause.code === "origin_mismatch")
-      return "The page changed before your details could be filled. Ask the agent to open it again.";
+    if (cause.code === "target_unavailable" || cause.code === "origin_mismatch") return t("cards.error.pageChanged");
     return cause.message;
   }
-  return cause instanceof Error && cause.message ? cause.message : GENERIC_FAILURE;
+  return cause instanceof Error && cause.message ? cause.message : t("cards.error.generic");
 }
 
 /** "Expires in 4:05", "Expires in 2 h 30 min"; `short` drops the lead-in for the collapsed bubble. */
 export function expiresIn(ms: number, short = false): string {
-  if (ms <= 0) return short ? "0:00" : "Time is up";
+  if (ms <= 0) return short ? "0:00" : t("cards.expiry.timeUp");
   const total = Math.ceil(ms / 1000);
   let left: string;
   if (total < 3600) left = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
   else {
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
-    left = minutes ? `${hours} h ${minutes} min` : `${hours} h`;
+    left = minutes ? t("cards.expiry.hoursMinutes", { hours, minutes }) : t("cards.expiry.hours", { hours });
   }
-  return short ? left : `Expires in ${left}`;
+  return short ? left : t("cards.expiry.in", { time: left });
 }
 
 function blockText(block: Block): string[] {
@@ -90,7 +70,7 @@ function blockText(block: Block): string[] {
     case "choice_options":
       return block.options.map((option) => `- ${option.label}${option.description ? ` (${option.description})` : ""}`);
     case "input_fields":
-      return block.fields.map((field) => `${fieldLabel(field)}: ${field.secret || field.otp || field.card ? SECRET_PLACEHOLDER : "(input)"}`);
+      return block.fields.map((field) => `${fieldLabel(field)}: ${field.secret || field.otp || field.card ? t("cards.text.secureInput") : t("cards.text.input")}`);
     case "notice":
       return [block.text];
     case "media":
@@ -102,7 +82,7 @@ function blockText(block: Block): string[] {
 
 /** Plain-text equivalent of a card; entered values never appear, secure fields read `[secure input]`. */
 export function cardText(card: Card): string {
-  const lines = [card.title, ...(card.subtitle ? [card.subtitle] : []), `Status: ${STATUS_LABEL[card.status]}`];
+  const lines = [card.title, ...(card.subtitle ? [card.subtitle] : []), t("cards.text.status", { status: statusLabel(card.status) })];
   for (const block of card.blocks) lines.push(...blockText(block));
   return lines.join("\n");
 }

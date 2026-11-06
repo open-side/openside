@@ -1,240 +1,308 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentSummary } from "../api/types";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PersonBookmark, Session } from "../api/types";
 import { ClientContext } from "../context";
-import { isUnread, people, type AgentsState } from "../hooks/useAgents";
-import { ShellContext } from "../shell";
-import { seen } from "../state/seen";
+import type { AgentsState } from "../hooks/useAgents";
+import { PersonBrowserContext, type PersonBrowser } from "../hooks/usePersonBrowser";
+import { saveSidebarPrefs, ShellContext, SIDEBAR_PREFS_KEY } from "../shell";
 import { agentSummary } from "../test/agents";
-import { fakeClient, json } from "../test/fakeDaemon";
+import { fakeClient, json, type Call } from "../test/fakeDaemon";
+import { ToastProvider } from "../ui";
 import { Sidebar } from "./Sidebar";
+import { TAB_DRAG_TYPE } from "./SidebarTabs";
 
-const roster = (): AgentSummary[] => [
-  agentSummary("mina", "Mina", { last_message_at: "2026-10-12T08:00:00Z" }),
-  agentSummary("theo", "Theo", { last_message_at: "2026-10-12T10:00:00Z" }),
-  agentSummary("chief", "openside", { last_message_at: "2026-10-01T08:00:00Z" }),
-  agentSummary("ada", "Ada", { pinned: true, last_message_at: "2026-10-02T08:00:00Z" }),
-  agentSummary("old", "Old", { status: "retired" }),
-  agentSummary("quiet", "Quiet", { hidden: true }),
-];
+const session = (id: string, over: Partial<Session> = {}): Session =>
+  ({ id, title: `Chat ${id}`, activity: "", agent_id: null, archived: false, browser_space: "shared", incognito: false, last_seq: 1, mode: "guard", model: "m", pinned: false, queue: [], status: "idle", unread: false, confirmation: "ask_first", ...over }) as Session;
 
-function team(agents: AgentSummary[] | null): AgentsState {
-  return { agents, error: null, offline: false, refresh: () => {} };
-}
-
+const team: AgentsState = { agents: [agentSummary("chief", "openside", { home_session_id: "home" })], error: null, offline: false, refresh: () => {} };
 const toggleSidebar = vi.fn();
 const openSearch = vi.fn();
-const THIS_DEVICE = { device_id: "d1", kind: "person_device", name: "Work laptop", scopes: ["read", "admin"] };
+const refreshSessions = vi.fn();
 
-function setup(agents: AgentSummary[] | null, path = "/history", onClose?: () => void, me: () => Response = () => json(404, { code: "not_found", message: "none" })) {
-  // Pinned tabs and agent tabs are absent: those sections render nothing.
-  const { client } = fakeClient((call) => (call.path === "/v1/devices/me" ? me() : json(404, { code: "not_found", message: "none" })));
-  return render(
+function browser(over: Partial<PersonBrowser> = {}): PersonBrowser {
+  return { connected: true, focusedWindow: 1, tabs: [], groups: [], bookmarks: [], bookmarkBar: "1", command: vi.fn(() => Promise.resolve()), refreshBookmarks: vi.fn(), ...over };
+}
+
+interface Options {
+  sessions?: Session[];
+  path?: string;
+  onClose?: () => void;
+  person?: PersonBrowser;
+  respond?: (call: Call) => Response | undefined;
+  roster?: AgentsState;
+}
+
+function setup({ sessions = [], path = "/", onClose, person = browser(), respond, roster = team }: Options = {}) {
+  const { client, calls } = fakeClient((call) => respond?.(call) ?? (call.path === "/v1/settings/preferences" ? json(200, { name: "Work" }) : json(404, { code: "not_found", message: "none" })));
+  const view = render(
     <ClientContext.Provider value={client}>
-      <ShellContext.Provider value={{ openDrawer: () => undefined, openSearch, refreshSessions: () => undefined, sidebarCollapsed: false, toggleSidebar }}>
-        <MemoryRouter initialEntries={[path]}>
-          <Sidebar team={team(agents)} tabs={[]} onClose={onClose} />
-          <Path />
-        </MemoryRouter>
+      <ShellContext.Provider value={{ openDrawer: () => undefined, openSearch, refreshSessions, sidebarCollapsed: false, toggleSidebar, needsYou: 0 }}>
+        <PersonBrowserContext.Provider value={person}>
+          <ToastProvider>
+            <MemoryRouter initialEntries={[path]}>
+              <Sidebar team={roster} tabs={[]} sessions={sessions} pageLabel={() => null} onClose={onClose} />
+              <Path />
+            </MemoryRouter>
+          </ToastProvider>
+        </PersonBrowserContext.Provider>
       </ShellContext.Provider>
     </ClientContext.Provider>,
   );
+  return { ...view, calls, person };
 }
 
 function Path() {
   return <output data-testid="path">{useLocation().pathname}</output>;
 }
 
-const names = () => within(screen.getByRole("list", { name: "Team" })).getAllByRole("link").map((link) => link.querySelector(".person-name")?.textContent);
+const chatRows = () => within(screen.getByRole("region", { name: "Chats" })).getAllByRole("link").map((link) => link.textContent);
 
 beforeEach(() => {
-  seen.reset();
+  toggleSidebar.mockClear();
   openSearch.mockClear();
+  refreshSessions.mockClear();
 });
+afterEach(() => localStorage.clear());
 
-describe("people order", () => {
-  it("puts the assistant first, then pinned teammates, then the latest conversation; retired and hidden stay out", () => {
-    const { chief, teammates, hidden } = people(roster());
-    expect(chief?.id).toBe("chief");
-    expect(teammates.map((agent) => agent.id)).toEqual(["ada", "theo", "mina"]);
-    expect(hidden.map((agent) => agent.id)).toEqual(["quiet"]);
+describe("Sidebar", () => {
+  it("shows Bookmarks, Chats and Tabs in order, with no team or persona navigation", () => {
+    setup();
+    expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Bookmarks", "Chats", "Tabs"]);
+    expect(screen.queryByRole("link", { name: /Workspace|Team/ })).toBeNull();
   });
 
-  it("renders the same order and links each person to their thread", () => {
-    setup(roster());
-    expect(names()).toEqual(["openside", "Ada", "Theo", "Mina"]);
-    expect(screen.getByRole("list", { name: "Team" }).querySelector(".avatar")).toBeNull();
-    expect(screen.getByRole("link", { name: /^Theo/ })).toHaveAttribute("href", "/agents/theo");
-    expect(screen.queryByText("Old")).toBeNull();
-  });
-
-  it("folds hidden teammates behind a disclosure", async () => {
+  it("lists New Chat, the three most recent chats and Show all", async () => {
     const user = userEvent.setup();
-    setup(roster());
-    expect(screen.queryByRole("link", { name: /^Quiet/ })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Hidden · 1" }));
-    expect(within(screen.getByRole("list", { name: "Hidden teammates" })).getByRole("link", { name: /^Quiet/ })).toBeInTheDocument();
+    setup({ sessions: [session("a"), session("b"), session("c"), session("d"), session("x", { archived: true })] });
+    expect(chatRows()).toEqual(["New Chat", "Chat a", "Chat b", "Chat c", "Show all"]);
+    await user.click(screen.getByRole("link", { name: "Show all" }));
+    expect(screen.getByTestId("path")).toHaveTextContent("/chats");
+    await user.click(screen.getByRole("link", { name: "New Chat" }));
+    expect(screen.getByTestId("path")).toHaveTextContent(/^\/$/);
   });
 
-  it("offers New task, Show all, History, Workspace and Settings, and no new chat", () => {
-    setup(roster());
-    expect(screen.getByRole("link", { name: "New task" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "Show all" })).toHaveAttribute("href", "/history");
-    expect(screen.getByRole("heading", { name: "Chats" })).toBeInTheDocument();
-    const nav = screen.getByRole("navigation", { name: "Sections" });
-    expect(within(nav).getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
-    expect(within(nav).getByRole("link", { name: "Workspace" })).toHaveAttribute("href", "/workspace");
-    expect(screen.queryByRole("link", { name: "New chat" })).toBeNull();
-    expect(screen.queryByRole("searchbox")).toBeNull();
-    expect(screen.queryByRole("region", { name: "Pinned" })).toBeNull();
+  it("keeps Show all with no chats yet, so the Chats tab and its archived chats stay reachable", async () => {
+    const user = userEvent.setup();
+    setup({ sessions: [session("x", { archived: true })], path: "/" });
+    expect(chatRows()).toEqual(["New Chat", "Show all"]);
+    expect(screen.getByRole("link", { name: "Show all" })).not.toHaveAttribute("aria-current");
+    await user.click(screen.getByRole("link", { name: "Show all" }));
+    expect(screen.getByTestId("path")).toHaveTextContent("/chats");
+    expect(screen.getByRole("link", { name: "Show all" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("marks New task current on Home", () => {
-    setup(roster(), "/");
-    expect(screen.getByRole("link", { name: "New task" })).toHaveAttribute("aria-current", "page");
+  it("follows the recent-chats choice from Appearance, also when it changes while shown", () => {
+    saveSidebarPrefs({ recentChats: 5 });
+    setup({ sessions: ["a", "b", "c", "d", "e", "f"].map((id) => session(id)) });
+    expect(chatRows()).toHaveLength(7);
+    fireEvent(window, new StorageEvent("storage", { key: SIDEBAR_PREFS_KEY }));
+    expect(chatRows()).toHaveLength(7);
+    act(() => void saveSidebarPrefs({ recentChats: 10, bookmarks: false }));
+    expect(chatRows()).toHaveLength(8);
+    expect(screen.queryByRole("region", { name: "Bookmarks" })).toBeNull();
+  });
+
+  it("marks the open chat, a working chat and one that needs the person", () => {
+    setup({ sessions: [session("a"), session("b", { status: "running" }), session("c", { status: "waiting_human" })], path: "/sessions/a" });
+    expect(screen.getByRole("link", { name: "Chat a" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Chat b, Working" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Chat c, Needs you" })).toBeInTheDocument();
+  });
+
+  it("keeps Archive on a working or waiting chat beside its mark", () => {
+    setup({ sessions: [session("b", { status: "running" }), session("c", { status: "waiting_human" })] });
+    expect(screen.getByRole("button", { name: "Archive Chat b" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive Chat c" })).toBeInTheDocument();
+  });
+
+  it("offers Delete only once the roster has loaded, and never for an agent's home", async () => {
+    const first = setup({ sessions: [session("a")], roster: { ...team, agents: null } });
+    fireEvent.contextMenu(screen.getByRole("link", { name: "Chat a" }));
+    await screen.findByRole("menu", { name: "Options for Chat a" });
+    expect(screen.queryByRole("menuitem", { name: "Delete chat" })).toBeNull();
+    first.unmount();
+    setup({ sessions: [session("home", { title: "Home chat" })] });
+    fireEvent.contextMenu(screen.getByRole("link", { name: "Home chat" }));
+    await screen.findByRole("menu", { name: "Options for Home chat" });
+    expect(screen.queryByRole("menuitem", { name: "Delete chat" })).toBeNull();
+  });
+
+  it("archives a chat from its hover button and leaves it when it was open", async () => {
+    const user = userEvent.setup();
+    const { calls } = setup({ sessions: [session("a")], path: "/sessions/a", respond: (call) => (call.method === "PATCH" ? json(200, session("a", { archived: true })) : undefined) });
+    await user.click(screen.getByRole("button", { name: "Archive Chat a" }));
+    await waitFor(() => expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ archived: true }));
+    expect(refreshSessions).toHaveBeenCalled();
+    expect(screen.getByTestId("path")).toHaveTextContent(/^\/$/);
+  });
+
+  it("opens a chat's menu on right-click and pins it", async () => {
+    const user = userEvent.setup();
+    const { calls } = setup({ sessions: [session("a")], respond: (call) => (call.method === "PATCH" ? json(200, session("a", { pinned: true })) : undefined) });
+    fireEvent.contextMenu(screen.getByRole("link", { name: "Chat a" }));
+    const menu = await screen.findByRole("menu", { name: "Options for Chat a" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Pin chat", "Rename chat", "Archive chat", "Delete chat", "Bookmark chat", "Mark as unread", "Copy session ID", "Open in new tab"]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Pin chat" }));
+    await waitFor(() => expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ pinned: true }));
+  });
+
+  it("bookmarks a chat into the browser's Bookmarks bar", async () => {
+    const user = userEvent.setup();
+    const { calls, person } = setup({ sessions: [session("a")], respond: (call) => (call.method === "POST" ? json(200, { id: "9", parent_id: "1", title: "Chat a", url: "x", children: [] }) : undefined) });
+    fireEvent.contextMenu(screen.getByRole("link", { name: "Chat a" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Bookmark chat" }));
+    await waitFor(() => expect(calls.find((call) => call.method === "POST")?.body).toEqual({ parent_id: "1", title: "Chat a", url: `${window.location.origin}/sessions/a` }));
+    expect(person.refreshBookmarks).toHaveBeenCalled();
+  });
+
+  it("moves between rows with the arrow keys", async () => {
+    const user = userEvent.setup();
+    setup({ sessions: [session("a")] });
+    screen.getByRole("link", { name: "New Chat" }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("link", { name: "Chat a" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("link", { name: "Show all" })).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("button", { name: "New tab" })).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("link", { name: "New Chat" })).toHaveFocus();
+  });
+
+  it("shows a drop box until a bookmark exists, and saves a tab dropped on it", async () => {
+    const { calls, person } = setup({ respond: (call) => (call.method === "POST" ? json(200, { id: "9", parent_id: "1", title: "Docs", url: "https://docs.example/", children: [] }) : undefined) });
+    const section = screen.getByRole("region", { name: "Bookmarks" });
+    expect(within(section).getByText("Drag tabs here to bookmark them")).toBeInTheDocument();
+    const data = { [TAB_DRAG_TYPE]: JSON.stringify({ title: "Docs", url: "https://docs.example/" }) };
+    const dataTransfer = { types: [TAB_DRAG_TYPE], getData: (type: string) => data[type as keyof typeof data] ?? "", dropEffect: "none" };
+    fireEvent.dragOver(section, { dataTransfer });
+    fireEvent.drop(section, { dataTransfer });
+    await waitFor(() => expect(calls.find((call) => call.method === "POST")?.body).toEqual({ parent_id: "1", title: "Docs", url: "https://docs.example/" }));
+    expect(person.refreshBookmarks).toHaveBeenCalled();
+  });
+
+  it("refuses to save a dropped address that is not a web page", async () => {
+    for (const url of ["javascript:alert(1)", "data:text/html,hi", "file:///etc/passwd", "blob:https://a.example/1", "https://user:pw@a.example/"]) {
+      const { calls, unmount } = setup();
+      const section = screen.getByRole("region", { name: "Bookmarks" });
+      const data = { [TAB_DRAG_TYPE]: JSON.stringify({ title: "Bad", url }), "text/uri-list": url };
+      const dataTransfer = { types: [TAB_DRAG_TYPE, "text/uri-list"], getData: (type: string) => data[type as keyof typeof data] ?? "", dropEffect: "none" };
+      fireEvent.drop(section, { dataTransfer });
+      expect(await screen.findByText("Only web pages can be bookmarked.")).toBeInTheDocument();
+      expect(calls.some((call) => call.method === "POST"), url).toBe(false);
+      unmount();
+    }
+    const { calls } = setup();
+    const link = "javascript:alert(1)";
+    fireEvent.drop(screen.getByRole("region", { name: "Bookmarks" }), { dataTransfer: { types: ["text/uri-list"], getData: (type: string) => (type === "text/uri-list" ? link : ""), dropEffect: "none" } });
+    expect(await screen.findByText("Only web pages can be bookmarked.")).toBeInTheDocument();
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  it("opens a bookmark, closes the drawer, and says so when the browser cannot switch", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const bookmarks: PersonBookmark[] = [{ id: "5", parent_id: "1", title: "Docs", url: "https://docs.example/", children: [] }];
+    const tabs = [{ tab_id: 4, window_id: 1, index: 0, title: "Docs", url: "https://docs.example/", favicon_url: null, active: false, pinned: false, audible: false, muted: false, discarded: false, group_id: null }];
+    const command = vi.fn(() => Promise.reject(new Error("gone")));
+    setup({ onClose, person: browser({ bookmarks, tabs, command }) });
+    await user.click(within(screen.getByRole("region", { name: "Bookmarks" })).getByRole("button", { name: "Docs" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(command).toHaveBeenCalledWith({ command: "activate", tab_id: 4 });
+    expect(await screen.findByText("Request failed")).toBeInTheDocument();
+  });
+
+  it("lists bookmarks from the browser and removes one", async () => {
+    const user = userEvent.setup();
+    const bookmarks: PersonBookmark[] = [{ id: "5", parent_id: "1", title: "Docs", url: "https://docs.example/", children: [] }];
+    const { calls } = setup({ person: browser({ bookmarks }), respond: (call) => (call.method === "DELETE" ? new Response(null, { status: 204 }) : undefined) });
+    expect(within(screen.getByRole("region", { name: "Bookmarks" })).getByRole("button", { name: "Docs" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove bookmark Docs" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "DELETE" && call.path === "/v1/browser/person/bookmarks/5")).toBe(true));
   });
 
   it("collapses on desktop and closes in the drawer", async () => {
     const user = userEvent.setup();
-    const { unmount } = setup(roster());
+    const first = setup();
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
     expect(toggleSidebar).toHaveBeenCalledTimes(1);
-    unmount();
+    first.unmount();
     const onClose = vi.fn();
-    setup(roster(), "/history", onClose);
-    expect(screen.queryByRole("button", { name: "Collapse sidebar" })).toBeNull();
+    setup({ onClose });
     await user.click(screen.getByRole("button", { name: "Close menu" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("account and search", () => {
-  it("shows this device with a menu into Devices and Remote access", async () => {
+describe("account menu", () => {
+  it("lists Aside's items in order under the person's name and opens Settings", async () => {
     const user = userEvent.setup();
-    setup(roster(), "/history", undefined, () => json(200, THIS_DEVICE));
-    const account = await screen.findByRole("button", { name: "Account: Work laptop" });
-    expect(account).toHaveTextContent("WLWork laptop");
-    await user.click(account);
+    setup();
+    const trigger = await screen.findByRole("button", { name: "Account: Work" });
+    await user.click(trigger);
     const menu = await screen.findByRole("menu", { name: "Account" });
-    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Devices", "Remote access"]);
-    await user.click(within(menu).getByRole("menuitem", { name: "Devices" }));
-    expect(screen.getByTestId("path")).toHaveTextContent("/devices");
-  });
-
-  it("keeps search without an identity, and closes the drawer before opening the palette", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-    setup(roster(), "/history", onClose);
-    const search = screen.getByRole("button", { name: "Search" });
-    expect(search.getAttribute("title")).toMatch(/^Search \((⇧⌘A|Ctrl\+Shift\+K)\)$/);
-    await user.click(search);
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(openSearch).toHaveBeenCalledTimes(1);
-    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(openSearch.mock.invocationCallOrder[0]!);
-    expect(screen.queryByRole("button", { name: /^Account/ })).toBeNull();
-  });
-
-  /** Lets the pending identity request and its `finally` run before the next event. */
-  async function settle() {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 0);
-    await act(() => promise);
-  }
-
-  it("stays hidden without asking again when the daemon has no identity route (404)", async () => {
-    const me = vi.fn(() => json(404, { code: "not_found", message: "none" }));
-    setup(roster(), "/history", undefined, me);
-    await waitFor(() => expect(me).toHaveBeenCalledTimes(1));
-    await settle();
-    fireEvent.focus(window);
-    fireEvent(document, new Event("visibilitychange"));
-    await settle();
-    expect(me).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: /^Account/ })).toBeNull();
-  });
-
-  it("asks again on the next focus or visibility change after a network failure or 5xx", async () => {
-    const replies: (() => Response)[] = [
-      () => {
-        throw new TypeError("Failed to fetch");
-      },
-      () => json(503, { code: "unavailable", message: "starting" }),
-      () => json(200, THIS_DEVICE),
-    ];
-    const me = vi.fn(() => replies[me.mock.calls.length - 1]!());
-    setup(roster(), "/history", undefined, me);
-    await waitFor(() => expect(me).toHaveBeenCalledTimes(1));
-    await settle();
-    expect(screen.queryByRole("button", { name: /^Account/ })).toBeNull();
-    fireEvent.focus(window);
-    await waitFor(() => expect(me).toHaveBeenCalledTimes(2));
-    await settle();
-    fireEvent(document, new Event("visibilitychange"));
-    expect(await screen.findByRole("button", { name: "Account: Work laptop" })).toBeInTheDocument();
-    fireEvent.focus(window);
-    await settle();
-    expect(me).toHaveBeenCalledTimes(3);
-  });
-});
-
-describe("row state", () => {
-  it("shows a live dot while working and Needs you; activity goes to the tooltip", () => {
-    setup([
-      agentSummary("chief", "openside", { needs_you: true, session_status: "waiting_human" }),
-      agentSummary("theo", "Theo", { session_status: "running", activity: "Checking prices", last_activity: "Old preview" }),
-      agentSummary("mina", "Mina", { last_activity: "Here is the weekly summary" }),
+    expect(within(menu).getByText("Profiles")).toBeInTheDocument();
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.querySelector(".ui-menu-label")?.textContent)).toEqual([
+      "Work",
+      "New profile",
+      "Bookmarks",
+      "Downloads",
+      "Extensions",
+      "History",
+      "Developers",
+      "Settings",
+      "New Tab",
+      "Incognito Window",
     ]);
-    expect(within(screen.getByRole("link", { name: "openside, Needs you" })).getByText("Needs you")).toHaveClass("row-badge");
-    const theo = screen.getByRole("link", { name: "Theo, Working" });
-    expect(theo.querySelector(".live-dot")).not.toBeNull();
-    expect(theo).toHaveAttribute("title", "Theo · Checking prices");
-    expect(screen.getByRole("link", { name: /^Mina/ })).toHaveAttribute("title", "Mina · Here is the weekly summary");
-    expect(screen.queryByText("Here is the weekly summary")).toBeNull();
+    await user.click(within(menu).getByRole("menuitem", { name: /^Settings/ }));
+    expect(screen.getByTestId("path")).toHaveTextContent("/settings");
   });
 
-  it("falls back to the role when there is no message yet", () => {
-    setup([agentSummary("chief", "openside"), agentSummary("mina", "Mina", { persona: { role: "Watches prices", voice: "", responsibilities: ["x"], boundaries: [] } })]);
-    expect(screen.getByRole("link", { name: /^Mina/ })).toHaveAttribute("title", "Mina · Watches prices");
-  });
-});
-
-describe("unread", () => {
-  it("treats everything as read on a fresh device, then flags newer events", () => {
-    seen.seed({ chief: 4, mina: 2 });
-    const mina = agentSummary("mina", "Mina", { last_seq: 2 });
-    expect(isUnread(mina, seen.cursors(), null)).toBe(false);
-    expect(isUnread({ ...mina, last_seq: 3 }, seen.cursors(), null)).toBe(true);
-    // The open thread is being read right now.
-    expect(isUnread({ ...mina, last_seq: 3 }, seen.cursors(), "mina")).toBe(false);
-    seen.mark("mina", 3);
-    expect(isUnread({ ...mina, last_seq: 3 }, seen.cursors(), null)).toBe(false);
+  it("opens the profile's options from its … and incognito through the browser", async () => {
+    const user = userEvent.setup();
+    const { person } = setup();
+    await user.click(await screen.findByRole("button", { name: "Account: Work" }));
+    await user.click(await screen.findByRole("menuitem", { name: /^Incognito Window/ }));
+    expect(person.command).toHaveBeenCalledWith({ command: "new_incognito_window" });
+    await user.click(screen.getByRole("button", { name: "Account: Work" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Work" }));
+    const options = await screen.findByRole("menu", { name: "Work" });
+    expect(within(options).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Edit profile", "Delete profile"]);
+    // Submenu popups sit under `pointer-events: none` in jsdom, so choose the row from the keyboard.
+    within(options).getByRole("menuitem", { name: "Edit profile" }).focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("path")).toHaveTextContent("/settings/account");
   });
 
-  it("never moves a cursor backwards", () => {
-    seen.seed({});
-    seen.mark("mina", 5);
-    seen.mark("mina", 2);
-    expect(seen.cursors().mina).toBe(5);
+  it("opens browser pages through the person's browser, and says so when it is not connected", async () => {
+    const user = userEvent.setup();
+    const { calls } = setup({ respond: (call) => (call.path === "/v1/browser/person/tabs/command" ? json(409, { code: "person_browser_not_connected", message: "no" }) : undefined) });
+    await user.click(await screen.findByRole("button", { name: "Account: Work" }));
+    await user.click(await screen.findByRole("menuitem", { name: "New profile" }));
+    await waitFor(() => expect(calls.find((call) => call.path === "/v1/browser/person/tabs/command")?.body).toEqual({ command: "create", url: "chrome://profile-picker" }));
+    expect(await screen.findByText("Your browser isn’t connected to openside")).toBeInTheDocument();
   });
 
-  it("shows a teammate hired after the first roster as unread", () => {
-    seen.seed({ chief: 1 });
-    expect(isUnread(agentSummary("new", "New", { last_seq: 1 }), seen.cursors(), null)).toBe(true);
+  it("shows Developers with Performance, Task manager, Developer tools and Remote debugging, and opens a native tool", async () => {
+    const user = userEvent.setup();
+    const { calls } = setup({ respond: (call) => (call.path === "/v1/browser/person/native-tools" ? json(409, { code: "browser_not_running", message: "no" }) : undefined) });
+    await user.click(await screen.findByRole("button", { name: "Account: Work" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Developers" }));
+    const sub = await screen.findByRole("menu", { name: "Developers" });
+    expect(within(sub).getAllByRole("menuitem").map((item) => item.querySelector(".ui-menu-label")?.textContent)).toEqual(["Performance", "Task manager", "Developer tools", "Advanced"]);
+    // Submenu popups sit under `pointer-events: none` in jsdom, so choose the row from the keyboard.
+    within(sub).getByRole("menuitem", { name: "Task manager" }).focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(calls.find((call) => call.path === "/v1/browser/person/native-tools")?.body).toEqual({ tool: "task_manager" }));
+    expect(await screen.findByText("Open your openside browser first.")).toBeInTheDocument();
   });
 
-  it("marks the row with a dot and updates when the thread is read", () => {
-    seen.seed({ chief: 1, mina: 1 });
-    setup([agentSummary("chief", "openside"), agentSummary("mina", "Mina", { last_seq: 3 })]);
-    expect(screen.getByRole("link", { name: "Mina, Unread" }).querySelector(".unread-dot")).not.toBeNull();
-    act(() => seen.mark("mina", 3));
-    expect(screen.getByRole("link", { name: "Mina" }).querySelector(".unread-dot")).toBeNull();
-  });
-
-  it("does not flag the thread that is open", () => {
-    seen.seed({ chief: 1, mina: 1 });
-    setup([agentSummary("chief", "openside"), agentSummary("mina", "Mina", { last_seq: 3 })], "/agents/mina");
-    expect(screen.getByRole("link", { name: "Mina" })).toHaveAttribute("aria-current", "page");
+  it("opens the search palette from the bar", async () => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    expect(openSearch).toHaveBeenCalledTimes(1);
   });
 });

@@ -27,28 +27,39 @@ export interface SegmentedProps<T extends string> {
   onChange: (value: T) => void;
   /** `tab` filters a list in place; `radio` picks a setting. */
   kind?: "tab" | "radio";
+  /**
+   * Tabs only: the id of the one panel showing the chosen tab's content. Each tab gets the id
+   * `${panel}-${value}` (for the panel's `aria-labelledby`), and the chosen one `aria-controls`.
+   */
+  panel?: string;
 }
 
 const STEP: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
 /**
+ * Roving choice for radio groups and tab lists: arrows wrap, Home/End jump. Moves the choice and
+ * the focus (the `itemSelector` child at the new index) together, as both ARIA patterns ask.
+ */
+export function rovingChoice<T>(event: KeyboardEvent<HTMLElement>, items: readonly T[], current: number, itemSelector: string, choose: (item: T) => void): void {
+  const step = STEP[event.key];
+  const next = step !== undefined ? (current + step + items.length) % items.length : event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : null;
+  const target = next === null ? undefined : items[next];
+  if (next === null || target === undefined) return;
+  event.preventDefault();
+  choose(target);
+  event.currentTarget.querySelectorAll<HTMLElement>(itemSelector)[next]?.focus();
+}
+
+/**
  * One choice out of a few, as a radio group or a tab list. Tab enters at the chosen segment only;
  * arrows (wrapping), Home and End move the choice and the focus together, as both ARIA patterns ask.
  */
-export function Segmented<T extends string>({ label, options, value, onChange, kind = "radio" }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ label, options, value, onChange, kind = "radio", panel }: SegmentedProps<T>) {
   const chosen = Math.max(
     0,
     options.findIndex((option) => option.value === value),
   );
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const step = STEP[event.key];
-    const next = step !== undefined ? (chosen + step + options.length) % options.length : event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : null;
-    const target = next === null ? undefined : options[next];
-    if (next === null || !target) return;
-    event.preventDefault();
-    onChange(target.value);
-    event.currentTarget.querySelectorAll<HTMLButtonElement>(".ui-segment")[next]?.focus();
-  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => rovingChoice(event, options, chosen, ".ui-segment", (option) => onChange(option.value));
   return (
     <div className="ui-segmented" role={kind === "tab" ? "tablist" : "radiogroup"} aria-label={label} onKeyDown={onKeyDown}>
       {options.map((option, index) => {
@@ -58,6 +69,8 @@ export function Segmented<T extends string>({ label, options, value, onChange, k
             key={option.value}
             type="button"
             role={kind}
+            id={kind === "tab" && panel ? `${panel}-${option.value}` : undefined}
+            aria-controls={kind === "tab" && panel && selected ? panel : undefined}
             aria-selected={kind === "tab" ? selected : undefined}
             aria-checked={kind === "radio" ? selected : undefined}
             tabIndex={index === chosen ? 0 : -1}
@@ -79,11 +92,12 @@ export interface SwitchProps {
   label?: string;
   id?: string;
   disabled?: boolean;
+  "aria-labelledby"?: string;
   "aria-describedby"?: string;
 }
 
-/** On/off toggle: a native `role="switch"` checkbox over a drawn track, with a 44px hit box. */
-export function Switch({ checked, onChange, label, id, disabled, "aria-describedby": describedBy }: SwitchProps) {
+/** Aside's toggle: a native `role="switch"` checkbox over a drawn 40×20 track, with a 44px hit box. */
+export function Switch({ checked, onChange, label, id, disabled, "aria-labelledby": labelledBy, "aria-describedby": describedBy }: SwitchProps) {
   return (
     <span className="ui-switch">
       <input
@@ -91,6 +105,7 @@ export function Switch({ checked, onChange, label, id, disabled, "aria-described
         role="switch"
         id={id}
         aria-label={label}
+        aria-labelledby={labelledBy}
         aria-describedby={describedBy}
         checked={checked}
         disabled={disabled}
@@ -132,4 +147,31 @@ export function Chip({ children, icon, onClick, pressed, title, "aria-label": ar
       {content}
     </button>
   );
+}
+
+/**
+ * Aside's shortcut key cap (Appearance › Keyboard shortcuts): 26px, the glyphs of one shortcut
+ * in one cap. `unset` is the unfilled cap of a shortcut that is not assigned or not active.
+ */
+export function KbdChip({ keys, unset, label }: { keys: readonly string[]; unset?: boolean; label?: string }) {
+  const cap = (
+    <kbd className={cx("ui-kbd", unset && "ui-kbd--unset")} aria-hidden={label ? true : undefined}>
+      {keys.map((key, index) => (
+        <kbd key={index}>{key}</kbd>
+      ))}
+    </kbd>
+  );
+  if (!label) return cap;
+  // aria-label is not announced on <kbd> (a generic role), so the spoken name is hidden text.
+  return (
+    <>
+      {cap}
+      <span className="sr-only">{label}</span>
+    </>
+  );
+}
+
+/** Small pill after a label: `neutral` ("This device", "Default"), `new` (sky "New"). */
+export function Badge({ tone = "neutral", children }: { tone?: "neutral" | "new"; children: ReactNode }) {
+  return <span className={cx("ui-badge", tone === "new" && "ui-badge--new")}>{children}</span>;
 }

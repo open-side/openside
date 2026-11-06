@@ -12,6 +12,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
+import { t, type MessageKey } from "../i18n";
 import type { BrowserStateView, TimelineItem } from "../state/session";
 import { hostOf } from "./toolStatus";
 
@@ -98,7 +99,7 @@ function baseName(path: string | null): string | null {
 /** `my_server__fetch_page` → "fetch page": a tool nobody wrote copy for still reads as words. */
 export function humanize(name: string): string {
   const last = name.split("__").filter(Boolean).at(-1) ?? name;
-  return last.replace(/[^\p{L}\p{N}]+/gu, " ").trim().toLowerCase() || "a tool";
+  return last.replace(/[^\p{L}\p{N}]+/gu, " ").trim().toLowerCase() || t("timeline.tool.unnamed");
 }
 
 interface Call {
@@ -113,12 +114,28 @@ interface Phrase {
   detail?: (call: Call) => string | undefined;
 }
 
-const fixed = (kind: ToolKindId, past: string, present: string, detail?: Phrase["detail"]): Phrase => ({
+const fixed = (kind: ToolKindId, past: MessageKey, present: MessageKey, detail?: Phrase["detail"]): Phrase => ({
   kind,
-  past: () => past,
-  present: () => present,
+  past: () => t(past),
+  present: () => t(present),
   ...(detail ? { detail } : {}),
 });
+
+/** A sentence naming what the call acted on, or the generic one when nothing is known. */
+function about(value: string | null, named: MessageKey, unnamed: MessageKey, param: string): string {
+  return value ? t(named, { [param]: value }) : t(unnamed);
+}
+
+/** Keys of one verb in both tenses: `<base>.past`, `<base>.pastAny`, `<base>.present`, `<base>.presentAny`. */
+type Tensed = "open" | "click" | "press" | "choose" | "hover" | "focus" | "readFile" | "saveFile" | "editFile" | "skill" | "savedLogin" | "savedCode" | "passkeyCreate" | "passkeySignIn" | "webFetch";
+
+function past(base: Tensed, value: string | null, param: string): string {
+  return about(value, `timeline.tool.${base}.past`, `timeline.tool.${base}.pastAny`, param);
+}
+
+function present(base: Tensed, value: string | null, param: string): string {
+  return about(value, `timeline.tool.${base}.present`, `timeline.tool.${base}.presentAny`, param);
+}
 
 function siteOf(call: Call): string | null {
   return call.facts?.host ?? hostOf(call.args.url) ?? hostOf(`https://${str(call.args, "site") ?? ""}`) ?? null;
@@ -126,14 +143,8 @@ function siteOf(call: Call): string | null {
 
 const open: Phrase = {
   kind: "browse",
-  past: ({ args, facts }) => {
-    const page = facts?.title ? clip(facts.title) : (facts?.host ?? hostOf(args.url));
-    return page ? `Opened ${page}` : "Opened a page";
-  },
-  present: ({ args, facts }) => {
-    const host = facts?.host ?? hostOf(args.url);
-    return host ? `Opening ${host}` : "Opening a page";
-  },
+  past: ({ args, facts }) => past("open", facts?.title ? clip(facts.title) : (facts?.host ?? hostOf(args.url)), "page"),
+  present: ({ args, facts }) => present("open", facts?.host ?? hostOf(args.url), "host"),
   detail: ({ args, facts }) => (facts?.title ? (facts.host ?? hostOf(args.url) ?? undefined) : undefined),
 };
 
@@ -143,38 +154,41 @@ const act: Phrase = {
     const label = quoted(facts?.label);
     switch (args.action) {
       case "click":
-        return label ? `Clicked ${label}` : "Clicked on the page";
-      case "type":
-        return `${facts?.label ? `Filled the ${field(facts.label)} field` : "Filled in a field"}${args.submit === true ? " and submitted" : ""}`;
+        return past("click", label, "label");
+      case "type": {
+        const submitted = args.submit === true;
+        if (facts?.label) return t(submitted ? "timeline.tool.fill.pastSubmit" : "timeline.tool.fill.past", { field: field(facts.label) });
+        return t(submitted ? "timeline.tool.fill.pastAnySubmit" : "timeline.tool.fill.pastAny");
+      }
       case "press":
-        return `Pressed ${str(args, "key") ?? "a key"}`;
+        return past("press", str(args, "key"), "key");
       case "select":
-        return label ? `Chose an option in ${label}` : "Chose an option";
+        return past("choose", label, "label");
       case "hover":
-        return label ? `Hovered over ${label}` : "Hovered over the page";
+        return past("hover", label, "label");
       case "focus":
-        return label ? `Selected ${label}` : "Selected a field";
+        return past("focus", label, "label");
       default:
-        return "Interacted with the page";
+        return t("timeline.tool.interact.past");
     }
   },
   present: ({ args, facts }) => {
     const label = quoted(facts?.label);
     switch (args.action) {
       case "click":
-        return label ? `Clicking ${label}` : "Clicking on the page";
+        return present("click", label, "label");
       case "type":
-        return facts?.label ? `Filling the ${field(facts.label)} field` : "Filling in a field";
+        return about(facts?.label ? field(facts.label) : null, "timeline.tool.fill.present", "timeline.tool.fill.presentAny", "field");
       case "press":
-        return `Pressing ${str(args, "key") ?? "a key"}`;
+        return present("press", str(args, "key"), "key");
       case "select":
-        return label ? `Choosing an option in ${label}` : "Choosing an option";
+        return present("choose", label, "label");
       case "hover":
-        return label ? `Hovering over ${label}` : "Hovering over the page";
+        return present("hover", label, "label");
       case "focus":
-        return label ? `Selecting ${label}` : "Selecting a field";
+        return present("focus", label, "label");
       default:
-        return "Interacting with the page";
+        return t("timeline.tool.interact.present");
     }
   },
 };
@@ -184,82 +198,99 @@ const pointer: Phrase = {
   past: ({ args }) => {
     switch (args.action) {
       case "double_click":
-        return "Double-clicked on the page";
+        return t("timeline.tool.doubleClick.past");
       case "type":
-        return "Typed on the page";
+        return t("timeline.tool.typePage.past");
       case "scroll":
-        return "Scrolled the page";
+        return t("timeline.tool.scroll.past");
       default:
-        return "Clicked on the page";
+        return t("timeline.tool.click.pastAny");
     }
   },
   present: ({ args }) => {
     switch (args.action) {
       case "double_click":
-        return "Double-clicking on the page";
+        return t("timeline.tool.doubleClick.present");
       case "type":
-        return "Typing on the page";
+        return t("timeline.tool.typePage.present");
       case "scroll":
-        return "Scrolling the page";
+        return t("timeline.tool.scroll.present");
       default:
-        return "Clicking on the page";
+        return t("timeline.tool.click.presentAny");
     }
   },
 };
 
 const file = (call: Call) => baseName(str(call.args, "path"));
 
+const onFile = (kind: ToolKindId, base: "readFile" | "saveFile" | "editFile"): Phrase => ({
+  kind,
+  past: (call) => past(base, file(call), "file"),
+  present: (call) => present(base, file(call), "file"),
+});
+
+const onSite = (base: "savedLogin" | "savedCode"): Phrase => ({
+  kind: "vault",
+  past: (call) => past(base, siteOf(call), "site"),
+  present: (call) => present(base, siteOf(call), "site"),
+});
+
 /** Every tool the daemon registers for the agent, in the voice of the person watching it work. */
 const PHRASES: Record<string, Phrase> = {
   browser_open_tab: open,
   browser_navigate: open,
-  browser_tabs: fixed("browse", "Checked the open tabs", "Checking the open tabs"),
-  browser_snapshot: fixed("browse", "Read the page", "Reading the page"),
-  browser_screenshot: fixed("browse", "Read the page", "Reading the page"),
-  browser_close_tab: fixed("browse", "Closed a tab", "Closing a tab"),
+  browser_tabs: fixed("browse", "timeline.tool.tabs.past", "timeline.tool.tabs.present"),
+  browser_downloads: fixed("browse", "timeline.tool.downloads.past", "timeline.tool.downloads.present"),
+  browser_snapshot: fixed("browse", "timeline.tool.readPage.past", "timeline.tool.readPage.present"),
+  browser_screenshot: fixed("browse", "timeline.tool.readPage.past", "timeline.tool.readPage.present"),
+  browser_close_tab: fixed("browse", "timeline.tool.closeTab.past", "timeline.tool.closeTab.present"),
   browser_act: act,
   browser_pointer: pointer,
-  browser_repl: fixed("browse", "Worked on the page", "Working on the page"),
-  browser_space_reset: fixed("browse", "Reset the browser", "Resetting the browser"),
-  read: { kind: "read", past: (call) => `Read ${file(call) ?? "a file"}`, present: (call) => `Reading ${file(call) ?? "a file"}` },
-  write: { kind: "edit", past: (call) => `Saved ${file(call) ?? "a file"}`, present: (call) => `Saving ${file(call) ?? "a file"}` },
-  edit: { kind: "edit", past: (call) => `Edited ${file(call) ?? "a file"}`, present: (call) => `Editing ${file(call) ?? "a file"}` },
-  bash: fixed("shell", "Ran a command", "Running a command", ({ args }) => firstLine(str(args, "command"))),
-  request_human_step: fixed("ask", "Asked you to take a step", "Waiting for you"),
-  ask_user: fixed("ask", "Asked you a question", "Asking you a question", ({ args }) => firstLine(str(args, "question"))),
-  request_login: fixed("ask", "Asked you to sign in", "Waiting for you to sign in"),
-  request_choice: fixed("ask", "Asked you to choose", "Waiting for your choice"),
-  wait_for_approval: fixed("ask", "Waited for your approval", "Waiting for your approval"),
-  request_otp: fixed("ask", "Asked you for a code", "Waiting for your code"),
-  register_authenticator: fixed("vault", "Set up an authenticator", "Setting up an authenticator"),
-  memory_search: fixed("memory", "Checked memory", "Checking memory", ({ args }) => firstLine(str(args, "query"))),
-  memory_write: fixed("memory", "Remembered something", "Remembering something"),
+  browser_repl: fixed("browse", "timeline.tool.repl.past", "timeline.tool.repl.present"),
+  browser_space_reset: fixed("browse", "timeline.tool.resetBrowser.past", "timeline.tool.resetBrowser.present"),
+  computer_use_apps: fixed("other", "timeline.tool.computerApps.past", "timeline.tool.computerApps.present"),
+  computer_use_connect: fixed("other", "timeline.tool.computerConnect.past", "timeline.tool.computerConnect.present"),
+  computer_use_screenshot: fixed("other", "timeline.tool.computerLook.past", "timeline.tool.computerLook.present"),
+  computer_use_act: fixed("other", "timeline.tool.computerAct.past", "timeline.tool.computerAct.present"),
+  computer_use_stop: fixed("other", "timeline.tool.computerStop.past", "timeline.tool.computerStop.present"),
+  read: onFile("read", "readFile"),
+  write: onFile("edit", "saveFile"),
+  edit: onFile("edit", "editFile"),
+  bash: fixed("shell", "timeline.tool.command.past", "timeline.tool.command.present", ({ args }) => firstLine(str(args, "command"))),
+  request_human_step: fixed("ask", "timeline.tool.humanStep.past", "timeline.tool.humanStep.present"),
+  ask_user: fixed("ask", "timeline.tool.question.past", "timeline.tool.question.present", ({ args }) => firstLine(str(args, "question"))),
+  request_login: fixed("ask", "timeline.tool.login.past", "timeline.tool.login.present"),
+  request_choice: fixed("ask", "timeline.tool.choice.past", "timeline.tool.choice.present"),
+  wait_for_approval: fixed("ask", "timeline.tool.approval.past", "timeline.tool.approval.present"),
+  request_otp: fixed("ask", "timeline.tool.code.past", "timeline.tool.code.present"),
+  register_authenticator: fixed("vault", "timeline.tool.authenticator.past", "timeline.tool.authenticator.present"),
+  memory_search: fixed("memory", "timeline.tool.memorySearch.past", "timeline.tool.memorySearch.present", ({ args }) => firstLine(str(args, "query"))),
+  websearch: fixed("search", "timeline.tool.webSearch.past", "timeline.tool.webSearch.present", ({ args }) => firstLine(str(args, "query"))),
+  webfetch: {
+    kind: "browse",
+    past: ({ args, facts }) => past("webFetch", facts?.title ? clip(facts.title) : (facts?.host ?? hostOf(args.url)), "page"),
+    present: ({ args, facts }) => present("webFetch", facts?.host ?? hostOf(args.url), "host"),
+    detail: ({ args, facts }) => (facts?.title ? (facts.host ?? hostOf(args.url) ?? undefined) : undefined),
+  },
+  memory_write: fixed("memory", "timeline.tool.memoryWrite.past", "timeline.tool.memoryWrite.present"),
   skill: {
     kind: "skill",
-    past: ({ args }) => `Loaded the ${str(args, "name") ?? "a"} skill`.replace("the a skill", "a skill"),
-    present: ({ args }) => `Loading the ${str(args, "name") ?? "a"} skill`.replace("the a skill", "a skill"),
+    past: ({ args }) => past("skill", str(args, "name"), "name"),
+    present: ({ args }) => present("skill", str(args, "name"), "name"),
   },
-  vault_login: {
-    kind: "vault",
-    past: (call) => `Filled your saved login on ${siteOf(call) ?? "the page"}`,
-    present: (call) => `Filling your saved login on ${siteOf(call) ?? "the page"}`,
-  },
-  vault_otp: {
-    kind: "vault",
-    past: (call) => `Entered a saved code on ${siteOf(call) ?? "the page"}`,
-    present: (call) => `Entering a saved code on ${siteOf(call) ?? "the page"}`,
-  },
+  vault_login: onSite("savedLogin"),
+  vault_otp: onSite("savedCode"),
   vault_passkey: {
     kind: "vault",
-    past: (call) => (call.args.action === "register" ? `Created a passkey for ${siteOf(call) ?? "this site"}` : `Signed in to ${siteOf(call) ?? "the site"} with a passkey`),
-    present: (call) => (call.args.action === "register" ? `Creating a passkey for ${siteOf(call) ?? "this site"}` : `Signing in to ${siteOf(call) ?? "the site"} with a passkey`),
+    past: (call) => (call.args.action === "register" ? past("passkeyCreate", siteOf(call), "site") : past("passkeySignIn", siteOf(call), "site")),
+    present: (call) => (call.args.action === "register" ? present("passkeyCreate", siteOf(call), "site") : present("passkeySignIn", siteOf(call), "site")),
   },
-  delegate: fixed("helper", "Asked a helper", "Asking a helper", ({ args }) => firstLine(str(args, "task"))),
-  create_task: fixed("helper", "Started a task", "Starting a task", ({ args }) => firstLine(str(args, "goal"))),
-  steer_task: fixed("helper", "Updated a task", "Updating a task"),
-  cancel_task: fixed("helper", "Cancelled a task", "Cancelling a task"),
-  get_tasks: fixed("helper", "Checked on tasks", "Checking on tasks"),
-  send_message: fixed("other", "Sent a message", "Writing a message"),
+  delegate: fixed("helper", "timeline.tool.delegate.past", "timeline.tool.delegate.present", ({ args }) => firstLine(str(args, "task"))),
+  create_task: fixed("helper", "timeline.tool.startTask.past", "timeline.tool.startTask.present", ({ args }) => firstLine(str(args, "goal"))),
+  steer_task: fixed("helper", "timeline.tool.updateTask.past", "timeline.tool.updateTask.present"),
+  cancel_task: fixed("helper", "timeline.tool.cancelTask.past", "timeline.tool.cancelTask.present"),
+  get_tasks: fixed("helper", "timeline.tool.checkTasks.past", "timeline.tool.checkTasks.present"),
+  send_message: fixed("other", "timeline.tool.sendMessage.past", "timeline.tool.sendMessage.present"),
 };
 
 /** Tool names the daemon registers; the table above must speak for each of them. */
@@ -269,7 +300,6 @@ export function hasPhrase(name: string): boolean {
 
 /** Tools no one wrote copy for (plugin or future tools) still get a sentence and a sensible icon. */
 function generic(name: string): Phrase {
-  const words = humanize(name);
   const lower = name.toLowerCase();
   const kind: ToolKindId = /search|grep|glob|find/.test(lower)
     ? "search"
@@ -278,8 +308,12 @@ function generic(name: string): Phrase {
       : /shell|exec|command|terminal/.test(lower)
         ? "shell"
         : "other";
-  if (kind === "search") return fixed("search", "Searched", "Searching");
-  return fixed(kind, `Used ${words}`, `Using ${words}`);
+  if (kind === "search") return fixed("search", "timeline.tool.search.past", "timeline.tool.search.present");
+  return {
+    kind,
+    past: () => t("timeline.tool.generic.past", { name: humanize(name) }),
+    present: () => t("timeline.tool.generic.present", { name: humanize(name) }),
+  };
 }
 
 function phraseOf(name: string): Phrase {
@@ -306,12 +340,6 @@ const isNavigation = (name: string) => name === "browser_navigate" || name === "
 
 export function opensPage(tool: ToolItem): boolean {
   return isNavigation(tool.name.toLowerCase());
-}
-
-/** A browser call that works on the page a navigation opened (as opposed to opening one). */
-export function isPageStep(tool: ToolItem): boolean {
-  const name = tool.name.toLowerCase();
-  return name.startsWith("browser_") && !isNavigation(name) && name !== "browser_tabs" && name !== "browser_close_tab";
 }
 
 // --- facts read from the conversation --------------------------------------------------------
@@ -353,6 +381,18 @@ export function collectToolFacts(items: readonly TimelineItem[], states: Readonl
   for (const item of items) {
     if (item.type !== "tool") continue;
     const name = item.name.toLowerCase();
+    if (name === "webfetch") {
+      // The daemon's citation record names the page it read; no tab is involved.
+      const result = record(item.result);
+      const icon = record(result.favicon_ref);
+      facts.set(item.id, {
+        host: hostOf(result.url) ?? hostOf(record(item.args).url) ?? null,
+        title: typeof result.title === "string" && result.title ? cleanTitle(result.title) : null,
+        label: null,
+        favicon: safeFavicon(icon.data_url),
+      });
+      continue;
+    }
     if (!name.startsWith("browser_") && !name.startsWith("vault_")) continue;
     const args = record(item.args);
     const result = record(item.result);
@@ -398,104 +438,36 @@ export function collectToolFacts(items: readonly TimelineItem[], states: Readonl
     const nav = tabs.get(state.tab_id)?.nav;
     if (nav && !nav.title && nav.host === host) nav.title = cleanTitle(state.title);
   }
-  for (const entry of facts.values()) entry.favicon = entry.host ? (faviconByHost.get(entry.host) ?? null) : null;
+  for (const entry of facts.values()) entry.favicon = (entry.host ? faviconByHost.get(entry.host) : undefined) ?? entry.favicon;
   return facts;
 }
 
-// --- group labels ----------------------------------------------------------------------------
-
-function plural(count: number, one: string, many: string): string {
-  return count === 1 ? one : many.replace("{n}", String(count));
-}
-
-/** Hosts of the browser calls, in the order first visited. */
-export function hostsOf(tools: readonly ToolItem[], facts: ToolFactsMap): string[] {
-  const hosts = new Set<string>();
-  for (const tool of tools) {
-    if (toolKind(tool.name) !== "browse") continue;
-    const host = facts.get(tool.id)?.host ?? hostOf(record(tool.args).url);
-    if (host) hosts.add(host);
-  }
-  return [...hosts];
-}
-
-/** The sentence calls of one kind read as, e.g. "Read 2 files". */
-function kindSummary(kind: ToolKindId, tools: readonly ToolItem[], facts: ToolFactsMap): string {
-  const count = tools.length;
-  switch (kind) {
-    case "browse": {
-      const hosts = hostsOf(tools, facts);
-      const where = hosts.length === 0 ? "the web" : hosts.length === 1 ? hosts[0]! : hosts.length === 2 ? `${hosts[0]} and ${hosts[1]}` : `${hosts.length} sites`;
-      const steps = tools.filter((tool) => isPageStep(tool) || opensPage(tool)).length;
-      return `Browsed ${where}${steps > 1 ? ` · ${steps} steps` : ""}`;
-    }
-    case "search":
-      return "Searched";
-    case "read":
-      return count === 1 ? describeTool(tools[0]!).title : `Read ${count} files`;
-    case "edit": {
-      const verbs = new Set(tools.map((tool) => (tool.name === "write" ? "Saved" : "Edited")));
-      const verb = verbs.size === 1 ? [...verbs][0]! : "Edited";
-      return count === 1 ? describeTool(tools[0]!).title : `${verb} ${count} files`;
-    }
-    case "shell":
-      return plural(count, "Ran a command", "Ran {n} commands");
-    case "helper":
-      return plural(count, describeTool(tools[0]!).title, "Delegated {n} tasks");
-    case "skill":
-      return plural(count, describeTool(tools[0]!).title, "Loaded {n} skills");
-    case "memory":
-      return "Checked memory";
-    case "vault":
-      return "Used a saved login";
-    case "ask":
-      return plural(count, describeTool(tools[0]!).title, "Asked you {n} things");
-    default:
-      return count === 1 ? describeTool(tools[0]!).title : `Used ${count} tools`;
-  }
-}
+// --- durations -------------------------------------------------------------------------------
 
 /**
- * The sentence heading one group of an opened run: the work, not the count ("Browsed acme.com ·
- * 2 steps"). A call still running names itself, so the sentence never claims more than has happened.
+ * Whole seconds between two daemon event times; null when either is missing or unreadable, so a
+ * duration is never estimated. Floored: 0.6s reads "Worked", 1.9s "Worked for 1s".
  */
-export function groupSentence(tools: readonly ToolItem[], facts: ToolFactsMap): string {
-  const running = tools.findLast((tool) => !tool.done);
-  if (running) return describeTool(running, facts.get(running.id)).title;
-  const first = tools[0];
-  return first ? kindSummary(toolKind(first.name), tools, facts) : "Worked on it";
-}
-
-/**
- * Whole seconds from the first call starting to the last one ending, from the daemon's event
- * times. Null when any call is unfinished or lacks a time: a duration is never estimated.
- */
-export function runSeconds(tools: readonly ToolItem[]): number | null {
-  let start = Infinity;
-  let end = -Infinity;
-  for (const tool of tools) {
-    const started = tool.startedAt ? Date.parse(tool.startedAt) : NaN;
-    const ended = tool.endedAt ? Date.parse(tool.endedAt) : NaN;
-    if (!tool.done || Number.isNaN(started) || Number.isNaN(ended)) return null;
-    start = Math.min(start, started);
-    end = Math.max(end, ended);
-  }
-  // Floored, so 0.6s is "Worked" and 1.9s "Worked for 1s": never more time than actually passed.
-  return end >= start ? Math.floor((end - start) / 1000) : null;
+export function spanSeconds(start: string | undefined, end: string | number | undefined): number | null {
+  const from = start ? Date.parse(start) : NaN;
+  const to = typeof end === "number" ? end : end ? Date.parse(end) : NaN;
+  if (Number.isNaN(from) || Number.isNaN(to) || to < from) return null;
+  return Math.floor((to - from) / 1000);
 }
 
 /** 45 → "45s", 125 → "2m 5s", 3720 → "1h 2m". */
 export function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return t("timeline.duration.seconds", { seconds });
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return seconds % 60 ? `${minutes}m ${seconds % 60}s` : `${minutes}m`;
-  return minutes % 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${Math.floor(minutes / 60)}h`;
+  if (minutes < 60) return seconds % 60 ? t("timeline.duration.minutesSeconds", { minutes, seconds: seconds % 60 }) : t("timeline.duration.minutes", { minutes });
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? t("timeline.duration.hoursMinutes", { hours, minutes: minutes % 60 }) : t("timeline.duration.hours", { hours });
 }
 
-/** The folded run's one line: "Worked for 12s", or plain "Worked" when under a second or untimed. */
-export function workedLabel(tools: readonly ToolItem[]): string {
-  const seconds = runSeconds(tools);
-  return seconds ? `Worked for ${formatDuration(seconds)}` : "Worked";
+/** A turn's work line: "Working for 4s" while it runs, "Worked for 12s" after; plain "Working"/"Worked" under a second or untimed. */
+export function workLabel(seconds: number | null, live: boolean): string {
+  if (!seconds) return t(live ? "timeline.activity.working" : "timeline.activity.worked");
+  return t(live ? "timeline.activity.workingFor" : "timeline.activity.workedFor", { duration: formatDuration(seconds) });
 }
 
 // --- technical details -----------------------------------------------------------------------
@@ -522,7 +494,7 @@ export function technicalView(tool: ToolItem, value: unknown): unknown {
   let shown = debugMode() ? value : strip(value);
   const args = record(tool.args);
   if (value === tool.args && typeof args.text === "string" && (args.action === "type" || tool.name.toLowerCase() === "browser_pointer")) {
-    shown = { ...record(shown), text: `<${args.text.length} characters>` };
+    shown = { ...record(shown), text: t("timeline.tool.hiddenText", { count: args.text.length }) };
   }
   return shown;
 }

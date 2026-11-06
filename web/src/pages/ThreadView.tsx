@@ -1,11 +1,13 @@
 import { ArrowDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
+import { ApiError } from "../api/client";
 import { AppHeader } from "../components/AppHeader";
 import { FilesTray } from "../components/FilesTray";
 import { AgentTabsPanel } from "../components/AgentTabsPanel";
 import { useAgentTabsPanel } from "../components/agentTabsStore";
 import { BrowserPreview, browserAnchor } from "../components/BrowserPreview";
+import { ComputerUseCard } from "../components/ComputerUseCard";
 import { Composer } from "../components/Composer";
 import { quoteText } from "../components/MessageMenu";
 import { CardSheet } from "../components/CardSheet";
@@ -17,6 +19,7 @@ import { Timeline } from "../components/Timeline";
 import { useClient } from "../context";
 import { useSessionFiles } from "../hooks/useSessionFiles";
 import { useSessionView } from "../hooks/useSessionView";
+import { t } from "../i18n";
 import { useShell } from "../shell";
 import { isAttentionTicket } from "../cards/attention";
 import type { ShareDraft } from "../pwa/share";
@@ -37,22 +40,21 @@ export interface ThreadViewProps {
   sessionId: string;
   /** The screen's header, built from the live thread state. */
   header: (state: ThreadState) => ReactNode;
-  addressee?: string;
-  /** Replaces the composer, e.g. for a retired teammate's thread. */
-  readOnly?: ReactNode;
-  /** Shown above an empty thread, before anything was said. */
-  empty?: (pick: (text: string) => void) => ReactNode;
-  /** Content shared to the app; it becomes the composer's starting message. */
-  draft?: ShareDraft | null;
-  onDraftApplied?: () => void;
-  /** Every new event sequence this view rendered, for the device's read cursor. */
-  onSeen?: (lastSeq: number) => void;
-  /** The thread of the front agent, which only talks and hands work to Tasks. */
-  front?: boolean;
+  /**
+   * A side chat in the split pane: no Agent Tabs column, no `?ticket=` handling and no
+   * document-wide layout variables, which belong to the chat the page is about.
+   */
+  side?: boolean;
+}
+
+/** What a failed branch says: the reply still being written has its own words; others keep the daemon's. */
+function forkFailure(cause: unknown): string {
+  if (!(cause instanceof ApiError)) return t("timeline.fork.failed");
+  return cause.code === "message_not_finished" ? t("timeline.fork.notFinished") : cause.message;
 }
 
 /** One continuous conversation: transcript, live browser card, queue and composer. */
-export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, draft, onDraftApplied, onSeen, front = false }: ThreadViewProps) {
+export function ThreadView({ sessionId: id, header, side = false }: ThreadViewProps) {
   const client = useClient();
   const shell = useShell();
   const toast = useToast();
@@ -61,14 +63,11 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
   const sending = useOutgoing(id);
   const [starter, setStarter] = useState<ShareDraft | null>(null);
   const [quote, setQuote] = useState<{ id: string; text: string } | null>(null);
-  const onQuote = readOnly ? undefined : (text: string) => setQuote({ id: `quote-${Date.now()}`, text: quoteText(text) });
+  const onQuote = (text: string) => setQuote({ id: `quote-${Date.now()}`, text: quoteText(text) });
   // Once the event log has the message, the log (not this device's copy) shows its delivery state.
   useEffect(() => {
     outgoing.prune(id, new Set([...view.queue.map((message) => message.id), ...view.items.flatMap((item) => (item.type === "user" ? [item.id] : []))]));
   }, [id, view.queue, view.items]);
-  useEffect(() => {
-    if (view.lastSeq > 0) onSeen?.(view.lastSeq);
-  }, [view.lastSeq, onSeen]);
   const pending = pendingTickets(view);
   const waiting = pending.length > 0;
   const running = view.status === "running";
@@ -87,7 +86,7 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
   // handled, so the conversation is what Back and a reload show afterwards.
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  const linked = params.get("ticket");
+  const linked = side ? null : params.get("ticket");
   const linkedTicket = linked ? view.tickets[linked] : undefined;
   const sheetCard = linkedTicket?.status === "pending" && isAttentionTicket(linkedTicket) ? (view.cards[linkedTicket.card?.id ?? ""]?.card ?? null) : null;
   const sheetTicket = sheetCard ? linkedTicket : null;
@@ -121,7 +120,7 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
           },
           { replace: true },
         ),
-      openConnection: () => navigate("/connections"),
+      openConnection: () => navigate("/settings/security"),
     }),
     [setParams, navigate],
   );
@@ -177,15 +176,15 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
     const observer = new ResizeObserver(() => {
       const height = `${Math.round(element.getBoundingClientRect().height)}px`;
       root.style.setProperty("--composer-height", height);
-      document.documentElement.style.setProperty("--composer-height", height);
+      if (!side) document.documentElement.style.setProperty("--composer-height", height);
       pin();
     });
     observer.observe(element);
     return () => {
       observer.disconnect();
-      document.documentElement.style.removeProperty("--composer-height");
+      if (!side) document.documentElement.style.removeProperty("--composer-height");
     };
-  }, [error, pin]);
+  }, [error, pin, side]);
 
   // A dropped or restored stream re-checks the daemon at once, so the shell's connection
   // banner follows it instead of waiting for the next list sync.
@@ -194,17 +193,30 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
     if (connection === "reconnecting" || connection === "open") refreshSessions();
   }, [connection, refreshSessions]);
 
+  const onFork = useCallback(
+    async (messageId: string) => {
+      try {
+        const branch = await client.forkSession(id, { from_message: messageId });
+        refreshSessions();
+        navigate(`/sessions/${encodeURIComponent(branch.id)}`);
+      } catch (cause) {
+        toast.notify(forkFailure(cause), "error");
+      }
+    },
+    [client, id, refreshSessions, navigate, toast],
+  );
+
   if (error) {
     return (
       <main className="conversation session-error">
-        <AppHeader title="Conversation" />
+        <AppHeader title={t("timeline.thread.conversation")} />
         <div className="conversation-scroll thin-scroll">
           <div className="empty-chat">
             <p role="alert" className="error">
               {error.message}
             </p>
-            <Link to="/history" className="action-link">
-              Open History
+            <Link to="/chats" className="action-link">
+              {t("timeline.thread.openChats")}
             </Link>
           </div>
         </div>
@@ -213,13 +225,18 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
   }
 
   const blank = view.lastSeq > 0 && view.items.length === 0 && view.queue.length === 0 && sending.length === 0;
+  // Until the log's first events arrive the thread is only its header, as in Aside: no composer
+  // to type into a chat that is not there yet.
+  const loading = view.lastSeq === 0 && connection === "connecting" && sending.length === 0;
 
   return (
     <main
       className="session conversation"
       data-status={view.status}
       data-last-seq={view.lastSeq}
-      data-agent-tabs={agentTabs.shown && !view.incognito ? "open" : undefined}
+      data-loading={loading || undefined}
+      data-side={side || undefined}
+      data-agent-tabs={!side && agentTabs.shown && !view.incognito ? "open" : undefined}
       ref={main}
     >
       {header({ view, running, waiting })}
@@ -235,7 +252,6 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
         }}
       >
         <div className="conversation-column">
-          {blank && empty && !readOnly ? empty((text) => setStarter({ id: `starter-${Date.now()}`, text, files: [] })) : null}
           <CardHostContext.Provider value={cardHost}>
             <Timeline
               view={view}
@@ -243,55 +259,55 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
               visuals={files.visuals}
               outgoing={sending}
               inertCardId={sheetCard?.id ?? null}
-              front={front}
               onShowPending={showPending}
               onQuote={onQuote}
-              browserCard={{
-                anchorItemId: browserAnchor(view.items),
-                node: <BrowserPreview key={id} sessionId={id} view={view} onShowPending={showPending} onCancel={() => setConfirmStop(true)} />,
-              }}
+              // Branching would replace the page's own chat; Aside's compact side chat offers no branch either.
+              onFork={side ? undefined : onFork}
+              // A side chat stays a compact transcript; the page's own chat carries the live browser.
+              {...(side
+                ? {}
+                : {
+                    browserCard: {
+                      anchorItemId: browserAnchor(view.items),
+                      node: <BrowserPreview key={id} sessionId={id} view={view} onShowPending={showPending} onCancel={() => setConfirmStop(true)} />,
+                    },
+                  })}
             />
           </CardHostContext.Provider>
+          {side ? null : <ComputerUseCard key={`computer-${id}`} sessionId={id} view={view} />}
           <QueueList sessionId={id} queue={view.queue.filter((message) => message.id !== view.delivering)} running={running} onQuote={onQuote} />
         </div>
       </div>
       {!atBottom ? (
-        <IconButton label="Scroll to latest" outlined className="jump-latest" onClick={() => scrollToEnd(true)}>
+        <IconButton label={t("timeline.thread.scrollLatest")} outlined className="jump-latest" onClick={() => scrollToEnd(true)}>
           <ArrowDown size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </IconButton>
       ) : null}
       <div ref={dock} className="composer-anchor">
-        {readOnly ?? (
+        {loading ? null : (
           <Composer
             sessionId={id}
-            addressee={addressee}
+            fresh={blank}
             running={running}
             waiting={waiting}
             reconnecting={connection === "reconnecting"}
             onStop={() => setConfirmStop(true)}
             onShowPending={waiting ? showPending : undefined}
             onSent={() => scrollToEnd()}
-            draft={starter ?? draft}
+            draft={starter}
             quote={quote}
             onQuoteApplied={() => setQuote(null)}
-            onDraftApplied={() => {
-              setStarter(null);
-              onDraftApplied?.();
-            }}
+            onDraftApplied={() => setStarter(null)}
             tools={
-              // The assistant's thread stays a plain conversation: its work shows as Task units
-              // and a document reaches the person only attached to a message.
-              front ? undefined : (
-                <>
-                  <AgentsTray subagents={view.subagents} />
-                  <FilesTray sessionId={id} artifacts={files.artifacts} />
-                </>
-              )
+              <>
+                <AgentsTray subagents={view.subagents} />
+                <FilesTray sessionId={id} artifacts={files.artifacts} />
+              </>
             }
           />
         )}
       </div>
-      <AgentTabsPanel sessionId={id} view={view} container={main} />
+      {side ? null : <AgentTabsPanel sessionId={id} view={view} container={main} />}
       {sheetCard ? <CardSheet card={sheetCard} sessionId={id} onClose={closeSheet} /> : null}
       <StopTaskDialog
         open={confirmStop && running}
@@ -299,7 +315,7 @@ export function ThreadView({ sessionId: id, header, addressee, readOnly, empty, 
         onClose={() => setConfirmStop(false)}
         onConfirm={() => {
           setConfirmStop(false);
-          void client.stopSession(id).catch(() => toast.notify("Could not stop the agent", "error"));
+          void client.stopSession(id).catch(() => toast.notify(t("timeline.thread.stopFailed"), "error"));
         }}
       />
     </main>

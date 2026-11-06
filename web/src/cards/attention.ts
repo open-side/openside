@@ -1,6 +1,7 @@
 // Which pending requests are worth interrupting someone for, and how they are announced. Shared
 // by the web dock, the extension's notifications and the deep-link handling of a tapped push.
 import type { Ticket } from "../api/types";
+import { t } from "../i18n";
 
 /**
  * A code, a login, a choice, a phone approval or an authenticator offer: time-limited or holding
@@ -25,22 +26,22 @@ export function byAttention(a: Ticket, b: Ticket): number {
 
 /** Title of the desktop notification for a waiting request. */
 export function announcementTitle(ticket: Ticket): string {
-  if (ticket.otp_register) return "Save authenticator?";
+  if (ticket.otp_register) return t("cards.attention.saveAuthenticator");
   switch (ticket.kind) {
     case "login":
-      return "Login needed";
+      return t("cards.attention.login");
     case "choice":
-      return "Choice needed";
+      return t("cards.attention.choice");
     case "device_approval":
-      return "Approve on your phone";
+      return t("cards.attention.deviceApproval");
     case "secret_input":
-      return ticket.otp ? "Code needed" : "Question from the agent";
+      return ticket.otp ? t("cards.attention.code") : t("cards.attention.question");
     case "confirm":
-      return "Approval needed";
+      return t("cards.attention.confirm");
     case "takeover":
-      return "Action needed";
+      return t("cards.attention.takeover");
     default:
-      return "Question from the agent";
+      return t("cards.attention.question");
   }
 }
 
@@ -52,5 +53,5 @@ export function announcementMessage(ticket: Ticket): string {
 /** Who raised a request when a child agent did: the helper task's title, or a short id when it is unknown here. */
 export function askerOf(ticket: Ticket, task?: string | null): { id: string; label: string } | null {
   const id = ticket.origin.subagent_id;
-  return id ? { id, label: task?.trim() || `Subagent ${id.slice(0, 8)}` } : null;
+  return id ? { id, label: task?.trim() || t("cards.asker.subagent", { id: id.slice(0, 8) }) } : null;
 }

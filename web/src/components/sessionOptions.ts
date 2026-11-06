@@ -1,81 +1,110 @@
-import type { CreateSessionRequest, PolicyMode } from "../api/types";
+import type { ChatConfirmation, CreateSessionRequest, PolicyMode, Session, UpdateSessionRequest } from "../api/types";
+import { t, type MessageKey } from "../i18n";
 
 export type ThinkingEffort = NonNullable<CreateSessionRequest["effort"]>;
-export type SessionSpeed = NonNullable<CreateSessionRequest["speed"]>;
 export type SessionProfile = NonNullable<CreateSessionRequest["profile"]>;
 
 /**
- * What the person picked in a new task's toolbar. `null` leaves the field out of the request,
- * so the daemon applies its own default; every field is fixed once the session exists.
+ * A chat's composer options. `null` leaves the field to the daemon (preferences, the model's own
+ * effort, the daemon default ceiling). Before the chat exists they go into its create request;
+ * afterwards mode, model, effort and confirmation are changed with PATCH, while profile and
+ * incognito stay what the chat was created with. `projectId` and `workspace` (at most one set)
+ * say where the chat works; an existing chat changes them with PUT …/folder.
  */
 export interface SessionOptions {
   mode: PolicyMode | null;
   model: string | null;
   effort: ThinkingEffort | null;
-  speed: SessionSpeed | null;
   profile: SessionProfile | null;
+  confirmation: ChatConfirmation | null;
   incognito: boolean;
+  projectId: string | null;
+  /** An absolute folder of the chat's own, outside any project. */
+  workspace: string | null;
 }
 
-export const DEFAULT_SESSION_OPTIONS: SessionOptions = { mode: null, model: null, effort: null, speed: null, profile: null, incognito: false };
+export const DEFAULT_SESSION_OPTIONS: SessionOptions = { mode: null, model: null, effort: null, profile: null, confirmation: null, incognito: false, projectId: null, workspace: null };
 
-export const MODE_OPTIONS: readonly { value: PolicyMode; label: string }[] = [
-  { value: "read-only", label: "Read only" },
-  { value: "guard", label: "Guard" },
-  { value: "full", label: "Full access" },
+export const MODE_OPTIONS: readonly { value: PolicyMode; labelKey: MessageKey }[] = [
+  { value: "read-only", labelKey: "thread.mode.readOnly" },
+  { value: "guard", labelKey: "thread.mode.guard" },
+  { value: "full", labelKey: "thread.mode.full" },
 ];
 
-export const EFFORT_OPTIONS: readonly { value: ThinkingEffort; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "minimal", label: "Minimal" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra high" },
-  { value: "max", label: "Max" },
+/** The composer's effort ladder; the runtime's `off` and `minimal` stay CLI options. */
+export const EFFORT_OPTIONS: readonly { value: ThinkingEffort; labelKey: MessageKey }[] = [
+  { value: "low", labelKey: "thread.effort.low" },
+  { value: "medium", labelKey: "thread.effort.medium" },
+  { value: "high", labelKey: "thread.effort.high" },
+  { value: "xhigh", labelKey: "thread.effort.xhigh" },
+  { value: "max", labelKey: "thread.effort.max" },
+];
+
+export const CONFIRMATION_OPTIONS: readonly { value: ChatConfirmation; labelKey: MessageKey }[] = [
+  { value: "ask_first", labelKey: "thread.confirmation.askFirst" },
+  { value: "skip", labelKey: "thread.confirmation.skip" },
 ];
 
 const MODE_RANK: Record<PolicyMode, number> = { "read-only": 0, guard: 1, full: 2 };
 
 /**
- * Why `mode` cannot be picked for a new task, or `null` when it can. The agent's `mode` is
- * already its ceiling intersected with the chief's and the daemon default, and the daemon clamps
- * anything looser to it. Separately, a paired device (every web client) gets 403
- * local_socket_required for a mode looser than the daemon default (`deviceLimit`).
+ * Why `mode` cannot be picked, or `null` when it can. A paired device (every web client) gets 403
+ * local_socket_required for a mode looser than the daemon default (`deviceLimit`), at creation and
+ * on PATCH alike.
  */
-export function modeBlock(mode: PolicyMode, ceiling: PolicyMode, deviceLimit: PolicyMode | null, agentName: string): string | null {
-  if (MODE_RANK[mode] > MODE_RANK[ceiling]) return `More than ${agentName} may have`;
-  if (deviceLimit && MODE_RANK[mode] > MODE_RANK[deviceLimit]) return "Only the computer running openside can allow this";
+export function modeBlock(mode: PolicyMode, deviceLimit: PolicyMode | null): string | null {
+  if (deviceLimit && MODE_RANK[mode] > MODE_RANK[deviceLimit]) return t("thread.mode.deviceLimit");
   return null;
 }
 
-export const modeLabel = (mode: PolicyMode) => MODE_OPTIONS.find((option) => option.value === mode)?.label ?? mode;
-export const effortLabel = (effort: ThinkingEffort) => EFFORT_OPTIONS.find((option) => option.value === effort)?.label ?? effort;
+export function modeLabel(mode: PolicyMode): string {
+  const key = MODE_OPTIONS.find((option) => option.value === mode)?.labelKey;
+  return key ? t(key) : mode;
+}
 
-export function hasOverrides(options: SessionOptions): boolean {
-  return (
-    options.incognito ||
-    options.mode !== null ||
-    options.model !== null ||
-    options.effort !== null ||
-    options.speed !== null ||
-    options.profile !== null
-  );
+export function effortLabel(effort: ThinkingEffort): string {
+  const key = EFFORT_OPTIONS.find((option) => option.value === effort)?.labelKey;
+  return key ? t(key) : effort;
+}
+
+/** Options of an existing chat, as the daemon reports them. */
+export function sessionOptionsOf(session: Session): SessionOptions {
+  return {
+    mode: session.mode,
+    model: session.model,
+    effort: session.effort ?? null,
+    profile: session.profile ?? null,
+    confirmation: session.confirmation,
+    incognito: session.incognito,
+    projectId: session.project_id ?? null,
+    workspace: session.workspace ?? null,
+  };
 }
 
 /**
- * The request for a new task with these options. A private session cannot belong to a person
- * (the daemon answers 400 invalid_browser_space), so it is created unowned and lands in History.
+ * The request for a new chat with these options. Chats belong to no persona (aside-gap-audit D1),
+ * so `agent_id` is always null and the chat lands in the sidebar's Chats.
  */
-export function createSessionRequest(agentId: string, options: SessionOptions): CreateSessionRequest {
+export function createSessionRequest(options: SessionOptions): CreateSessionRequest {
   return {
-    agent_id: options.incognito ? null : agentId,
+    agent_id: null,
     // Named rather than defaulted: incognito cannot be combined with an isolated space.
     ...(options.incognito ? { incognito: true, browser_space: "shared" as const } : {}),
     ...(options.mode !== null ? { mode: options.mode } : {}),
     ...(options.model !== null ? { model: options.model } : {}),
     ...(options.effort !== null ? { effort: options.effort } : {}),
-    ...(options.speed !== null ? { speed: options.speed } : {}),
     ...(options.profile !== null ? { profile: options.profile } : {}),
+    ...(options.confirmation !== null ? { confirmation: options.confirmation } : {}),
+    ...(options.projectId !== null ? { project_id: options.projectId } : options.workspace !== null ? { workspace: options.workspace } : {}),
+  };
+}
+
+/** The PATCH body for a change of one of the options an existing chat can change. */
+export function optionsPatch(change: Partial<SessionOptions>): UpdateSessionRequest {
+  return {
+    ...(change.mode ? { mode: change.mode } : {}),
+    ...(change.model ? { model: change.model } : {}),
+    ...(change.effort ? { effort: change.effort } : {}),
+    ...(change.confirmation ? { confirmation: change.confirmation } : {}),
   };
 }

@@ -1,0 +1,12 @@
+/* Tab style: the person's own tab titles in the sidebar. */
+:root[data-tab-style="serif"] .sidebar-tabs {
+  font-family: ui-serif, "New York", Georgia, "Noto Serif KR", serif;
+}
+
+/*
+ * A browser tab cannot show the desktop through the sidebar, so Tinted lays a warm wash over the
+ * sidebar instead and Transparent keeps the plain sidebar colour.
+ */
+:root[data-transparency="tinted"] .sidebar {
+  background-image: linear-gradient(rgb(176 137 104 / 0.12), rgb(176 137 104 / 0.12));
+}

@@ -9,7 +9,10 @@
 import type { Action, Block, Card, CardKind } from "../api/types";
 import { dispatchAction, fieldsOf, SaveRefused, type ActionOutcome, type CardPort, type HostActionHandler, type Transient } from "./actions";
 import { renderBlock, renderNotice, renderTotal, type BlockContext } from "./blocks";
-import { AUTHENTICATOR_SUMMARY, SECURE_NOTE, STATUS_LABEL, UNHANDLED_ACTION, expiresIn, failureMessage } from "./copy";
+import { t } from "../i18n";
+import { en, ko } from "../i18n/catalog";
+import { formatParts, getLocale } from "../i18n/core";
+import { expiresIn, failureMessage, statusLabel } from "./copy";
 import { element, setPending, uid } from "./dom";
 import { FieldRegistry, renderField } from "./fields";
 import { brandMark, glyph, type GlyphName } from "./glyphs";
@@ -86,6 +89,18 @@ function countRows(blocks: Block[]): number {
 
 function reducedMotion(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** "Handled by [mark] openside": the brand sits in a slot so each language places it in its own word order. */
+function secureNote(): HTMLElement {
+  const message = (getLocale() === "ko" ? ko : en)["cards.secure.handledBy"];
+  const brand = {};
+  const parts = formatParts<object>(message, { brand }).flatMap((part) => {
+    if (typeof part !== "string") return [brandMark(12), element("span", {}, "openside")];
+    const text = part.trim();
+    return text ? [element("span", {}, text)] : [];
+  });
+  return element("p", { class: "oc-secure" }, glyph("lock", 12), ...parts);
 }
 
 class CardView implements MountedCard {
@@ -177,9 +192,9 @@ class CardView implements MountedCard {
   private markFor(size: number): HTMLElement {
     const { card } = this;
     if (card.status !== "pending") {
-      return element("span", { class: "oc-status", "data-status": card.status, role: "img", "aria-label": STATUS_LABEL[card.status] }, glyph(STATUS_GLYPH[card.status], size - 4));
+      return element("span", { class: "oc-status", "data-status": card.status, role: "img", "aria-label": statusLabel(card.status) }, glyph(STATUS_GLYPH[card.status], size - 4));
     }
-    if (card.kind === "activity") return element("span", { class: "oc-status", "data-status": "pending", role: "img", "aria-label": STATUS_LABEL.pending }, element("span", { class: "oc-spinner" }));
+    if (card.kind === "activity") return element("span", { class: "oc-status", "data-status": "pending", role: "img", "aria-label": statusLabel("pending") }, element("span", { class: "oc-spinner" }));
     return siteMark(card.site, this.media, card.site.origin || card.site.favicon_ref ? null : (KIND_GLYPH[card.kind] ?? null), size);
   }
 
@@ -257,7 +272,7 @@ class CardView implements MountedCard {
   /** "<helper> asked": which child agent the request came from; the label is the host's, never the card's. */
   private askerLine(tag: "p" | "span"): HTMLElement {
     const { asker } = this.options;
-    return element(tag, { class: "oc-asker", "data-subagent-id": asker?.id ?? "", title: asker?.id ?? "" }, `${asker?.label ?? ""} asked`);
+    return element(tag, { class: "oc-asker", "data-subagent-id": asker?.id ?? "", title: asker?.id ?? "" }, t("cards.asker.asked", { name: asker?.label ?? "" }));
   }
 
   private pill(): HTMLElement {
@@ -284,7 +299,7 @@ class CardView implements MountedCard {
     if (expiry) text.append(expiry);
     const head = element("header", { class: "oc-head" }, this.markFor(28), text);
     if (this.closable) {
-      const close = element("button", { type: "button", class: "oc-close", "aria-label": "Collapse", "aria-expanded": "true", "aria-controls": this.bodyId }, glyph("chevron-down", 16));
+      const close = element("button", { type: "button", class: "oc-close", "aria-label": t("cards.collapse"), "aria-expanded": "true", "aria-controls": this.bodyId }, glyph("chevron-down", 16));
       close.addEventListener("click", () => this.collapse());
       head.append(close);
     }
@@ -335,12 +350,13 @@ class CardView implements MountedCard {
     if (authAction && authAnswer?.type === "otp_authenticator") form.append(this.authenticatorSection(authAction, authAnswer.field_id, authAnswer.save_field_id));
 
     if (clipped) {
-      const more = element("button", { type: "button", class: "oc-more", "aria-expanded": String(this.previewAll), "aria-controls": scroller.id }, this.previewAll ? "Show less" : `Show all ${countRows(blocks)}`);
+      const moreLabel = () => (this.previewAll ? t("common.showLess") : t("cards.preview.showAll", { count: countRows(blocks) }));
+      const more = element("button", { type: "button", class: "oc-more", "aria-expanded": String(this.previewAll), "aria-controls": scroller.id }, moreLabel());
       more.addEventListener("click", () => {
         this.previewAll = !this.previewAll;
         scroller.toggleAttribute("data-clipped", !this.previewAll);
         more.setAttribute("aria-expanded", String(this.previewAll));
-        more.textContent = this.previewAll ? "Show less" : `Show all ${countRows(blocks)}`;
+        more.textContent = moreLabel();
       });
       form.append(more);
     }
@@ -354,7 +370,7 @@ class CardView implements MountedCard {
     const actions = this.actionsRow(visible.filter((action) => action !== authAction));
     if (actions) form.append(actions);
     if (this.pendingAsk && blocks.some((block) => block.type === "input_fields" && block.fields.some(isSecretField))) {
-      form.append(element("p", { class: "oc-secure" }, glyph("lock", 12), element("span", {}, SECURE_NOTE), brandMark(12), element("span", {}, "openside")));
+      form.append(secureNote());
     }
     body.append(form);
     this.shell.append(body);
@@ -366,7 +382,7 @@ class CardView implements MountedCard {
     const fields = fieldsOf(this.card, this.card.blocks.map((block) => block.id));
     const key = fields.find((field) => field.id === keyId);
     const save = fields.find((field) => field.id === saveId);
-    const section = element("details", { class: "oc-details" }, element("summary", {}, AUTHENTICATOR_SUMMARY));
+    const section = element("details", { class: "oc-details" }, element("summary", {}, t("cards.authenticator.summary")));
     const run = element("button", { type: "button", class: "oc-btn oc-btn--secondary" }, action.label);
     run.addEventListener("click", () => void this.run(action, run));
     this.buttons.set(action.id, run);
@@ -464,7 +480,7 @@ class CardView implements MountedCard {
     } else if (outcome?.kind === "invalid") {
       this.setError(outcome.message);
       if (outcome.focus) this.registry.focus(outcome.focus);
-    } else if (outcome?.kind === "unhandled") this.setError(UNHANDLED_ACTION);
+    } else if (outcome?.kind === "unhandled") this.setError(t("cards.error.unhandledAction"));
     this.applyBusy(trigger);
     if (!this.submitted && document.activeElement === document.body) trigger.focus?.();
   }

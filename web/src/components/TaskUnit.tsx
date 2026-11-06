@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import { useClient } from "../context";
 import { previewNotice, useBrowserPreview } from "../hooks/useBrowserPreview";
 import { useTaskThumbnail } from "../hooks/useTaskThumbnail";
+import { t } from "../i18n";
 import type { BrowserStateView, SubagentView } from "../state/session";
 import { ICON_STROKE, useToast } from "../ui";
 import { BrowserFrame } from "./BrowserFrame";
@@ -41,7 +42,7 @@ function toneOf(task: SubagentView, tabWaiting: boolean): Tone {
 function Trail({ lines }: { lines: string[] }) {
   if (!lines.length) return null;
   return (
-    <ol className="task-browser-trail" aria-label="Earlier steps">
+    <ol className="task-browser-trail" aria-label={t("timeline.task.earlierSteps")}>
       {lines.map((entry, index) => (
         <li key={`${index}-${entry}`}>{entry}</li>
       ))}
@@ -56,7 +57,7 @@ function StopTask({ sessionId, task, className }: { sessionId: string; task: Sub
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button type="button" className={className} aria-label="Stop this task" title="Stop this task" onClick={() => setOpen(true)}>
+      <button type="button" className={className} aria-label={t("timeline.task.stop")} title={t("timeline.task.stop")} onClick={() => setOpen(true)}>
         <X size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
       </button>
       <StopTaskDialog
@@ -65,7 +66,7 @@ function StopTask({ sessionId, task, className }: { sessionId: string; task: Sub
         onClose={() => setOpen(false)}
         onConfirm={() => {
           setOpen(false);
-          void client.cancelSubagent(sessionId, task.id).catch(() => toast.notify("Couldn’t stop the task. Try again.", "error"));
+          void client.cancelSubagent(sessionId, task.id).catch(() => toast.notify(t("timeline.task.stopFailed"), "error"));
         }}
       />
     </>
@@ -100,7 +101,7 @@ function TaskCard({
           <ToneMark tone={tone} />
         </span>
         {/* A tab waiting on the person outranks the Task's own status. */}
-        {tone === "warn" ? "Needs you" : taskStateLabel(task)}
+        {tone === "warn" ? t("timeline.task.state.needsYou") : taskStateLabel(task)}
       </span>
       <span className="task-browser-title">{task.task}</span>
       <span className={tone === "running" ? "task-browser-line status-line-text" : "task-browser-line"} key={line}>
@@ -149,7 +150,11 @@ function StepTask({ sessionId, task, onShowPending }: TaskUnitProps) {
   const steps = taskSteps(task.progress);
   const tone = toneOf(task, false);
   const running = tone === "running";
-  const line = running ? (steps.at(-1)?.text ?? (task.progress.length ? "Thinking" : "Starting")) : tone === "warn" ? "Waiting for you" : taskLine(task);
+  const line = running
+    ? (steps.at(-1)?.text ?? t(task.progress.length ? "timeline.status.thinking" : "timeline.task.starting"))
+    : tone === "warn"
+      ? t("timeline.status.waiting")
+      : taskLine(task);
   // A call still open when the Task ended was never finished; its present-tense phrase must not outlive the Task.
   const earlier = (running ? steps.slice(0, -1) : steps.filter((step) => step.state !== "running"))
     .slice(-2)
@@ -163,7 +168,7 @@ function StepTask({ sessionId, task, onShowPending }: TaskUnitProps) {
         task={task}
         tone={tone}
         line={line}
-        label={`${task.task}: ${line}`}
+        label={t("timeline.task.rowLabel", { task: task.task, line })}
         earlier={earlier}
         {...(tone === "warn" ? { onClick: onShowPending } : {})}
         {...(active ? { stop: <StopTask sessionId={sessionId} task={task} className="task-browser-stop" /> } : {})}
@@ -187,11 +192,11 @@ function BrowserTask({ sessionId, task, state, newest, onShowPending }: TaskUnit
   const thumbnailUrl = useTaskThumbnail(sessionId, state.thumbnail ?? undefined, expanded);
 
   const tone = toneOf(task, state.phase === "waiting_human");
-  const line = tone === "running" ? browserLine(state) : tone === "warn" ? "Action needed" : taskLine(task);
+  const line = tone === "running" ? browserLine(state) : tone === "warn" ? t("timeline.task.actionNeeded") : taskLine(task);
   // Its browser steps are phrased in the present tense, so a Task that has ended keeps only the result line.
   const ended = tone === "done" || tone === "failed";
   const earlier = (ended ? [] : state.trail).filter((entry) => entry !== line).reverse();
-  const title = state.title.trim() || state.host || "Browser";
+  const title = state.title.trim() || state.host || t("timeline.task.browserFallback");
   // Once the Task has left the page to write its answer, stopping it would only lose the answer.
   const stoppable = active && state.phase !== "done";
 
@@ -202,7 +207,7 @@ function BrowserTask({ sessionId, task, state, newest, onShowPending }: TaskUnit
           task={task}
           tone={tone}
           line={line}
-          label={`Show the browser: ${title}. ${line}`}
+          label={t("timeline.task.showBrowser", { title, line })}
           earlier={earlier}
           onClick={() => setChoice(true)}
           {...(stoppable ? { stop: <StopTask sessionId={sessionId} task={task} className="task-browser-stop" /> } : {})}
@@ -220,21 +225,21 @@ function BrowserTask({ sessionId, task, state, newest, onShowPending }: TaskUnit
     </span>
   ) : thumbnailUrl && !notice ? (
     <span className="browser-card-frame">
-      <img src={thumbnailUrl} alt={`Last picture of ${title}`} draggable={false} />
+      <img src={thumbnailUrl} alt={t("timeline.task.lastPicture", { title })} draggable={false} />
     </span>
   ) : (
     <span className="task-browser-skeleton" role="status">
       <span className="task-browser-skeleton-bar" aria-hidden="true" />
       <span className="task-browser-skeleton-bar" aria-hidden="true" />
       <span className="task-browser-skeleton-bar" aria-hidden="true" />
-      <span className="task-browser-skeleton-text">{notice ?? "Loading the browser"}</span>
+      <span className="task-browser-skeleton-text">{notice ?? t("timeline.task.loadingBrowser")}</span>
     </span>
   );
   return (
     <div className="task-browser" data-tone={tone} data-task={task.id} data-status={task.status} data-expanded={true}>
       <section
         className="browser-card task-browser-card"
-        aria-label={`Browser: ${title}`}
+        aria-label={t("timeline.task.browserRegion", { title })}
         data-tone={tone}
         data-live={frame ? true : undefined}
         data-loading={(state.phase === "loading" && tone === "running") || undefined}
@@ -254,7 +259,7 @@ function BrowserTask({ sessionId, task, state, newest, onShowPending }: TaskUnit
               </span>
             </p>
           )}
-          <button type="button" className="browser-card-pill browser-card-control" aria-label="Collapse" title="Collapse" onClick={() => setChoice(false)}>
+          <button type="button" className="browser-card-pill browser-card-control" aria-label={t("timeline.task.collapse")} title={t("timeline.task.collapse")} onClick={() => setChoice(false)}>
             <Minimize2 size={17} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </button>
           {stoppable ? <StopTask sessionId={sessionId} task={task} className="browser-card-pill browser-card-control" /> : null}

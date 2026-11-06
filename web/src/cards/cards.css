@@ -365,7 +365,7 @@ button.oc-pill:hover {
   font-size: var(--text-sm);
 }
 .oc-link {
-  color: var(--primary);
+  color: var(--link);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
   text-underline-offset: 3px;

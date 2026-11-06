@@ -2,20 +2,21 @@ import { CircleAlert, RotateCw } from "lucide-react";
 import { useState } from "react";
 import type { Attachment } from "../api/types";
 import { useClient } from "../context";
+import { getLocale, t, tMaybe } from "../i18n";
 import type { TimelineItem } from "../state/session";
 import { retryMessage } from "../state/retry";
 import { Button, ICON_STROKE } from "../ui";
 
-/** Plain first-person lines for the codes the daemon names, for events recorded before it wrote one. */
-const COPY: Record<string, string> = {
-  interrupted: "I was interrupted before I finished.",
-  sandbox_unavailable: "I couldn’t start the sandbox, so shell commands run without one.",
-  browser_tab_limit: "Too many tabs are open, so I stopped.",
-};
-
-const AUTH_LINE = "No model account is available. Check Settings → Models & accounts, then retry.";
-
-const FALLBACK = "Something went wrong on my side.";
+/**
+ * The daemon writes `user_message` in English from the error code (openside-proto
+ * `runtime_error`). English shows it verbatim; other languages show the catalog line for a known
+ * code and fall back to the daemon's words for an unknown one. `legacy` keys cover events
+ * recorded before the daemon wrote a line at all.
+ */
+function errorLine(code: string, userMessage: string | undefined): string {
+  if (userMessage) return getLocale() === "en" ? userMessage : (tMaybe(`shell.runtimeError.daemon.${code}`) ?? userMessage);
+  return tMaybe(`shell.runtimeError.legacy.${code}`) ?? t("shell.runtimeError.fallback");
+}
 
 export interface RuntimeErrorItem {
   code: string;
@@ -56,7 +57,7 @@ export function RuntimeErrorRow({
   // recovers them now, so both are decided here from the code.
   const auth = error.code === "auth_unavailable";
   const retryable = auth || (error.retryable ?? error.code === "interrupted");
-  const line = auth ? AUTH_LINE : error.userMessage?.trim() || COPY[error.code] || FALLBACK;
+  const line = auth ? t("shell.runtimeError.auth") : errorLine(error.code, error.userMessage?.trim());
 
   async function again() {
     if (!retry) return;
@@ -64,7 +65,7 @@ export function RuntimeErrorRow({
     setFailure(null);
     const result = await retryMessage(client, sessionId, retry);
     setBusy(false);
-    if (result) setFailure(result.status === 0 ? "Can’t reach openside" : result.message);
+    if (result) setFailure(result.status === 0 ? t("shell.runtimeError.offline") : result.message);
   }
 
   return (
@@ -73,9 +74,9 @@ export function RuntimeErrorRow({
       <div className="runtime-error-body">
         <p className="runtime-error-title">{line}</p>
         {retryable && retry ? (
-          <Button size="compact" disabled={busy} onClick={() => void again()}>
+          <Button disabled={busy} onClick={() => void again()}>
             <RotateCw size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            {busy ? "Retrying…" : "Retry"}
+            {busy ? t("shell.runtimeError.retrying") : t("common.retry")}
           </Button>
         ) : null}
         {failure ? (
@@ -84,7 +85,7 @@ export function RuntimeErrorRow({
           </p>
         ) : null}
         <details className="runtime-error-tech">
-          <summary>Technical details</summary>
+          <summary>{t("shell.runtimeError.technicalDetails")}</summary>
           {error.message ? <p>{error.message}</p> : null}
           <p className="runtime-error-code">{error.code}</p>
         </details>

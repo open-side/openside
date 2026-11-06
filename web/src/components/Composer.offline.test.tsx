@@ -7,8 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClientContext } from "../context";
 import { outbox } from "../pwa/outbox";
 import { outgoing } from "../state/outgoing";
-import { fakeClient, json, type Call } from "../test/fakeDaemon";
-import { Composer } from "./Composer";
+import { composerDaemon, json, type Call } from "../test/composerDaemon";
+import { fakeClient } from "../test/fakeDaemon";
+import { Composer, type ComposerProps } from "./Composer";
 
 const render = (ui: ReactElement) => renderPlain(ui, { wrapper: MemoryRouter });
 
@@ -23,8 +24,8 @@ function unreachable(call: Call): Response {
   throw new TypeError("Failed to fetch");
 }
 
-function mount(sessionId: string, handler: (call: Call) => Response, extra: Partial<Parameters<typeof Composer>[0]> = {}) {
-  const daemon = fakeClient(handler);
+function mount(sessionId: string, respond?: (call: Call) => Response | undefined, extra: Partial<ComposerProps> = {}) {
+  const daemon = composerDaemon({ respond });
   render(
     <ClientContext.Provider value={daemon.client}>
       <Composer sessionId={sessionId} {...extra} />
@@ -60,7 +61,7 @@ describe("Composer offline outbox", () => {
 
   it("keeps a refusal from the daemon in the transcript as a Not sent message instead of queueing it", async () => {
     const user = userEvent.setup();
-    mount("s1", (call) => (call.path.includes("/prewarm") ? json(204, undefined) : json(400, { code: "empty_message", message: "Nothing to send" })));
+    mount("s1", (call) => (isSend(call) ? json(400, { code: "empty_message", message: "Nothing to send" }) : undefined));
     await user.type(screen.getByRole("textbox", { name: "Message" }), "x");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(outgoing.snapshot()).toMatchObject([{ session_id: "s1", text: "x", state: "failed" }]));
@@ -73,7 +74,7 @@ describe("Composer offline outbox", () => {
 describe("Composer share draft", () => {
   it("starts from shared text and files, once", async () => {
     const applied = vi.fn();
-    mount("s1", () => json(204, undefined), {
+    mount("s1", undefined, {
       draft: { id: "d1", text: "Title\nhttps://example.com", files: [new File(["x"], "shot.png", { type: "image/png" })] },
       onDraftApplied: applied,
     });

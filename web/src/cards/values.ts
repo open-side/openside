@@ -1,4 +1,5 @@
 import type { CardValue, InputField } from "../api/types";
+import { formatNumber, t } from "../i18n";
 
 /** Host shown to the person: `https://www.example.com:443` → `example.com`. */
 export function siteOf(origin: string | null | undefined): string {
@@ -78,7 +79,7 @@ export function formatMoney(money: { minor_units: number; currency: string }): s
   const digits = fractionDigits(money.currency);
   const amount = money.minor_units / 10 ** digits;
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: money.currency, minimumFractionDigits: digits, maximumFractionDigits: digits }).format(amount);
+    return formatNumber(amount, { style: "currency", currency: money.currency, minimumFractionDigits: digits, maximumFractionDigits: digits });
   } catch {
     return `${money.currency} ${amount.toFixed(digits)}`;
   }
@@ -88,13 +89,13 @@ export function formatMoney(money: { minor_units: number; currency: string }): s
 export function formatRating(rating: { milli_value: number; milli_max: number; count?: number | null }): string {
   const value = (rating.milli_value / 1000).toFixed(1);
   const scale = rating.milli_max === 5000 ? "" : `/${+(rating.milli_max / 1000).toFixed(1)}`;
-  const count = rating.count != null ? ` (${rating.count.toLocaleString("en-US")})` : "";
+  const count = rating.count != null ? ` (${formatNumber(rating.count)})` : "";
   return `${value}${scale}${count}`;
 }
 
 export function ratingLabel(rating: { milli_value: number; milli_max: number; count?: number | null }): string {
-  const count = rating.count != null ? `, ${rating.count.toLocaleString("en-US")} ratings` : "";
-  return `Rated ${(rating.milli_value / 1000).toFixed(1)} out of ${+(rating.milli_max / 1000).toFixed(1)}${count}`;
+  const params = { value: (rating.milli_value / 1000).toFixed(1), max: String(+(rating.milli_max / 1000).toFixed(1)) };
+  return rating.count != null ? t("cards.rating.labelWithCount", { ...params, count: rating.count }) : t("cards.rating.label", params);
 }
 
 /** Plain text for any typed value (clipboard, table cells without a richer form, text fallback). */

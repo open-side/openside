@@ -1,4 +1,5 @@
 import { PanelTopOpen } from "lucide-react";
+import { t } from "../i18n";
 import type { SessionView } from "../state/session";
 import { ICON_STROKE, IconButton } from "../ui";
 import { useAgentTabsPanel } from "./agentTabsStore";
@@ -19,7 +20,7 @@ export function BrowserButton({ sessionId, view }: { sessionId: string; view: Se
   if (view.incognito || Object.keys(view.browserStates).length === 0) return null;
   return (
     <IconButton
-      label="Show browser"
+      label={t("browser.button.show")}
       onClick={() => {
         if (panel.shown || window.matchMedia?.(PHONE_QUERY).matches) setSheet(true);
         else setPip("open");

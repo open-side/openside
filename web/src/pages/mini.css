@@ -1,0 +1,29 @@
+/*
+ * The mini popup window (`/mini`, 480×600): the content card fills the window without the sidebar
+ * column or the toolbar, and the message box sits at the bottom under a small mark.
+ */
+.shell[data-mini] {
+  grid-template-columns: minmax(0, 1fr);
+  background: var(--canvas);
+}
+.shell[data-mini] .shell-sidebar {
+  display: none;
+}
+.shell[data-mini] .shell-content {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.mini {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) max(var(--space-4), env(safe-area-inset-right)) max(var(--space-4), env(safe-area-inset-bottom)) max(var(--space-4), env(safe-area-inset-left));
+  overflow-y: auto;
+}
+.mini-mark {
+  display: flex;
+  justify-content: center;
+  color: var(--home-mark);
+}

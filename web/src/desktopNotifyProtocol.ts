@@ -12,9 +12,6 @@ export const EXTENSION_ID = "jneddlbpgmlheplolfonafkbkbkjhcfj";
 export const EXTENSION_KEY =
   "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyu+JYqfYd7cUG1RmR/GPlNE6bIdempP10mWGtlwDMjYS5uLnTUmI4UH1xzHvvEtSKCGq/rczsenhT59VPa6M9S7CKN040XDIV72QhDSVRMMpG4evnmKi6F8gsoqwr5pyAjMbqsuwapkWiAYbQ6Qj3/ecXQDbSu9i0DEQHR8nadPZqhOOG/UB6pllj93yfW7MxJ1Kb0/A0icpQ9smruVHd7p7A6qYZEFiWA1UbaGbhO8Ca7ln+KgsPTnf1ckjg6h2Xg9hOCyH438nwppgdBrKcsuR1FC9uDAoZuMuBLych3QQ/C4ALB7BWIH8gKiA2V2ET9yqW0xNV0NkoJIuUU7SAQIDAQAB";
 
-/** Page origins the manifest lets talk to the extension: the daemon UI on this computer. */
-export const EXTENSION_PAGE_MATCHES = ["http://127.0.0.1/*", "http://localhost/*"];
-
 export type DesktopRequest =
   | { type: "openside.desktop.status" }
   /** `code` is a one-time pairing code; omit it when the extension already holds a pairing for this origin. */

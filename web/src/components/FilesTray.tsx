@@ -1,9 +1,10 @@
-import { CodeXml, Download, File, FileCode2, FileImage, FileText, Files } from "lucide-react";
+import { CodeXml, Download, File, FileCode2, FileImage, FileText, Files, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isOutputArtifact } from "../api/artifacts";
 import { ApiError, type Client } from "../api/client";
 import type { Artifact } from "../api/types";
 import { useClient } from "../context";
+import { formatNumber, t, type MessageKey } from "../i18n";
 import { Button, Dialog, ICON_STROKE, IconButton, useToast } from "../ui";
 import { ArtifactImage } from "./ArtifactImage";
 import { SandboxFrame } from "./VisualFrame";
@@ -11,10 +12,11 @@ import "./browser.css";
 
 export const TEXT_LIMIT = 200_000;
 
-function size(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+export function size(bytes: number): string {
+  const decimal = { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false } as const;
+  if (bytes < 1024) return t("thread.files.size.bytes", { size: formatNumber(bytes, { useGrouping: false }) });
+  if (bytes < 1024 * 1024) return t("thread.files.size.kb", { size: formatNumber(bytes / 1024, decimal) });
+  return t("thread.files.size.mb", { size: formatNumber(bytes / 1024 / 1024, decimal) });
 }
 
 const textual = (mime: string) =>
@@ -24,11 +26,11 @@ const raster = (mime: string) => mime.startsWith("image/") && mime !== "image/sv
 
 const basename = (path: string) => path.split("/").pop() ?? path;
 
-const ORIGIN: Record<Artifact["source"], string> = {
-  attachment: "Attached",
-  tool: "Created",
-  visual: "Visual",
-  transcript: "Transcript",
+const ORIGIN: Record<Artifact["source"], MessageKey> = {
+  attachment: "thread.files.origin.attachment",
+  tool: "thread.files.origin.tool",
+  visual: "thread.files.origin.visual",
+  transcript: "thread.files.origin.transcript",
 };
 
 function FileIcon({ mime }: { mime: string }) {
@@ -36,7 +38,7 @@ function FileIcon({ mime }: { mime: string }) {
   return <Icon size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />;
 }
 
-async function download(client: Client, sessionId: string, path: string) {
+export async function download(client: Client, sessionId: string, path: string) {
   const blob = await client.artifactBlob(sessionId, path);
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -46,9 +48,18 @@ async function download(client: Client, sessionId: string, path: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const failure = (cause: unknown) => (cause instanceof ApiError ? cause.message : "Request failed");
+const failure = (cause: unknown) => (cause instanceof ApiError ? cause.message : t("thread.requestFailed"));
 
-function ArtifactPreview({ sessionId, artifact }: { sessionId: string; artifact: Artifact }) {
+function QuarantineNote() {
+  return (
+    <span className="files-caution">
+      <TriangleAlert size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      {t("timeline.download.quarantined")}
+    </span>
+  );
+}
+
+export function ArtifactPreview({ sessionId, artifact }: { sessionId: string; artifact: Artifact }) {
   const client = useClient();
   const [source, setSource] = useState<{ text: string; total: number } | null>(null);
   const [showSource, setShowSource] = useState(false);
@@ -74,40 +85,42 @@ function ArtifactPreview({ sessionId, artifact }: { sessionId: string; artifact:
           {artifact.path}
         </span>
         <div className="artifact-preview-actions">
-          {textual(artifact.mime) ? (
-            <Button variant="ghost" size="compact" aria-pressed={showSource} onClick={() => setShowSource(!showSource)}>
+          {textual(artifact.mime) && !artifact.quarantined ? (
+            <Button variant="ghost" aria-pressed={showSource} onClick={() => setShowSource(!showSource)}>
               <CodeXml size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              {showSource ? "Preview" : "Source"}
+              {showSource ? t("thread.files.preview") : t("thread.files.source")}
             </Button>
           ) : null}
           <Button
             variant="ghost"
-            size="compact"
             onClick={() => void download(client, sessionId, artifact.path).catch((cause) => setError(failure(cause)))}
           >
             <Download size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            Download
+            {t("thread.files.download")}
           </Button>
         </div>
       </div>
-      {showSource ? (
+      {artifact.quarantined ? (
+        <p className="artifact-empty">
+          <QuarantineNote />
+        </p>
+      ) : showSource ? (
         <>
           {source && source.total > TEXT_LIMIT ? (
             <p className="artifact-note" role="note">
-              Showing the first {TEXT_LIMIT.toLocaleString("en-US")} of {source.total.toLocaleString("en-US")} bytes.
-              Download the file for the rest.
+              {t("thread.files.truncated", { limit: TEXT_LIMIT, total: source.total })}
             </p>
           ) : null}
           <pre className="visual-source" tabIndex={0}>
-            {source?.text ?? "Loading…"}
+            {source?.text ?? t("common.loading")}
           </pre>
         </>
       ) : raster(artifact.mime) ? (
         <ArtifactImage sessionId={sessionId} path={artifact.path} alt={artifact.path} />
       ) : artifact.preview_url ? (
-        <SandboxFrame src={artifact.preview_url} title={`Preview of ${artifact.path}`} />
+        <SandboxFrame src={artifact.preview_url} title={t("thread.files.previewOf", { path: artifact.path })} />
       ) : (
-        <p className="artifact-empty">No preview for this file type.</p>
+        <p className="artifact-empty">{t("thread.files.noPreview")}</p>
       )}
       {error ? (
         <p role="alert" className="artifact-error">
@@ -120,7 +133,8 @@ function ArtifactPreview({ sessionId, artifact }: { sessionId: string; artifact:
 
 /**
  * Files the session produced or received: one pill in the composer's tool row that opens a
- * sheet listing them (open to preview, or download). Nothing is added to the transcript.
+ * sheet listing them (open to preview, or download). Nothing is added to the transcript. A
+ * quarantined browser download has no preview to open; its row only offers the download.
  */
 export function FilesTray({ sessionId, artifacts }: { sessionId: string; artifacts: Artifact[] }) {
   const client = useClient();
@@ -134,7 +148,7 @@ export function FilesTray({ sessionId, artifacts }: { sessionId: string; artifac
     setOpen(false);
     setSelected(null);
   };
-  const count = `${files.length} ${files.length === 1 ? "file" : "files"}`;
+  const count = t("thread.files.count", { count: files.length });
   return (
     <>
       <button type="button" className="tool-pill files-pill" aria-haspopup="dialog" onClick={() => setOpen(true)}>
@@ -146,36 +160,50 @@ export function FilesTray({ sessionId, artifacts }: { sessionId: string; artifac
         onClose={close}
         size="wide"
         className="tray-sheet"
-        title={current ? basename(current.path) : "Files"}
-        description={current ? undefined : "From this conversation"}
-        back={current ? { label: "Back to files", onClick: () => setSelected(null) } : undefined}
+        title={current ? basename(current.path) : t("thread.files.title")}
+        description={current ? undefined : t("thread.files.description")}
+        back={current ? { label: t("thread.files.backToFiles"), onClick: () => setSelected(null) } : undefined}
       >
         <div className="tray-scroll thin-scroll">
           {current ? (
             <ArtifactPreview key={current.path} sessionId={sessionId} artifact={current} />
           ) : (
-            <ul className="files-list" aria-label="Files">
-              {files.map((artifact) => (
-                <li key={artifact.path}>
-                  <button type="button" className="files-open" title={artifact.path} onClick={() => setSelected(artifact.path)}>
+            <ul className="files-list" aria-label={t("thread.files.title")}>
+              {files.map((artifact) => {
+                const label = (
+                  <>
                     <FileIcon mime={artifact.mime} />
                     <span className="files-text">
                       <span className="files-name">{basename(artifact.path)}</span>
                       <span className="files-meta">
-                        {size(artifact.size)} · {ORIGIN[artifact.source]}
+                        {size(artifact.size)} · {t(ORIGIN[artifact.source])}
                       </span>
+                      {artifact.quarantined ? <QuarantineNote /> : null}
                     </span>
-                  </button>
-                  <IconButton
-                    label={`Download ${basename(artifact.path)}`}
-                    size="small"
-                    className="files-download"
-                    onClick={() => void download(client, sessionId, artifact.path).catch((cause) => toast.notify(failure(cause), "error"))}
-                  >
-                    <Download size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                  </IconButton>
-                </li>
-              ))}
+                  </>
+                );
+                return (
+                  <li key={artifact.path}>
+                    {artifact.quarantined ? (
+                      <div className="files-open files-static" title={artifact.path}>
+                        {label}
+                      </div>
+                    ) : (
+                      <button type="button" className="files-open" title={artifact.path} onClick={() => setSelected(artifact.path)}>
+                        {label}
+                      </button>
+                    )}
+                    <IconButton
+                      label={t("thread.files.downloadFile", { name: basename(artifact.path) })}
+                      size="small"
+                      className="files-download"
+                      onClick={() => void download(client, sessionId, artifact.path).catch((cause) => toast.notify(failure(cause), "error"))}
+                    >
+                      <Download size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                    </IconButton>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

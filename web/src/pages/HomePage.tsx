@@ -1,35 +1,32 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { loadNewTabMode } from "../appearance";
 import { AppHeader } from "../components/AppHeader";
 import { Composer } from "../components/Composer";
 import { HomeSearch } from "../components/HomeSearch";
-import { RecentTasks } from "../components/RecentTasks";
-import { HOME_SUGGESTIONS, SuggestedTasks, type Suggestion } from "../components/SuggestedTasks";
-import { people, useTeam } from "../hooks/useAgents";
+import { AccountMenu } from "../components/SidebarAccount";
+import { HOME_SUGGESTIONS, SuggestedTasks } from "../components/SuggestedTasks";
+import { t, type MessageKey } from "../i18n";
 import { setShareDraft, useShareDraft, type ShareDraft } from "../pwa/share";
-import { BrandMark, Segmented, Spinner } from "../ui";
+import { BrandMark, Segmented } from "../ui";
+import "./home.css";
 
 type Mode = "ask" | "search";
 
-const MODES = [
-  { value: "search", label: "Search" },
-  { value: "ask", label: "Ask" },
-] as const;
 const MODE_KEYS: Record<string, true> = { ArrowLeft: true, ArrowRight: true, ArrowUp: true, ArrowDown: true, Home: true, End: true, Enter: true, " ": true };
 
 /**
- * `/`: hand the assistant a task, or find an earlier conversation. Ask sends into the
- * assistant's one continuous thread (or, with a per-request override, a fresh session), which
- * opens once it is accepted or parked in the outbox; the pending bubble carries over.
+ * `/`, the new tab (`L 10`): the mark, one pill that searches the web (Search) or starts a new chat
+ * (Ask), and suggested tasks. Ask creates the chat with the options picked under the pill and opens
+ * it once the first message is accepted or parked in the outbox; the pending bubble carries over.
  */
 export function HomePage() {
   const navigate = useNavigate();
-  const team = useTeam();
-  const chief = people(team.agents ?? []).chief;
   const shared = useShareDraft();
-  // "New task" (sidebar, Mod+Shift+E) navigates to `/` again: every visit starts in Ask.
+  // "New Chat" (sidebar, Mod+Shift+E) navigates to `/` again: those visits start in Ask. The page a
+  // new tab loads (react-router's first location, key "default") follows Settings › New tab mode.
   const visit = useLocation().key;
-  const [chosen, setChosen] = useState<{ visit: string; mode: Mode }>({ visit, mode: "ask" });
+  const [chosen, setChosen] = useState<{ visit: string; mode: Mode }>(() => ({ visit, mode: visit === "default" ? loadNewTabMode() : "ask" }));
   const mode = chosen.visit === visit ? chosen.mode : "ask";
   const setMode = (next: Mode) => setChosen({ visit, mode: next });
   const [picked, setPicked] = useState<ShareDraft | null>(null);
@@ -41,6 +38,7 @@ export function HomePage() {
   const modes = useRef<HTMLDivElement>(null);
   const keyed = useRef(false);
   const refocus = useRef(false);
+  const panel = useId();
   const toggle = (next: Mode) => {
     refocus.current = keyed.current;
     keyed.current = false;
@@ -52,30 +50,33 @@ export function HomePage() {
     modes.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
   }, [shown]);
 
-  if (!chief) {
-    return (
-      <main className="home">
-        <AppHeader newTask={false} />
-        <div className="home-loading">{team.offline ? null : <Spinner label="Loading" />}</div>
-      </main>
-    );
-  }
-  const thread = `/agents/${encodeURIComponent(chief.id)}`;
-  const pick = (suggestion: Suggestion) => {
-    setPicked({ id: `${suggestion.id}-${Date.now()}`, text: suggestion.prompt, files: [] });
+  const pick = (id: string, prompt: MessageKey) => {
+    setPicked({ id: `${id}-${Date.now()}`, text: t(prompt), files: [] });
     refocus.current = false;
     setMode("ask");
   };
+  // Tab flips the mode from an empty field, as the hint beside the toggle says. Once something is
+  // typed Tab is the field's again (the @ menu takes it, then the focus order).
+  const switchOnTab = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Tab" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
+    const field = event.target;
+    if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) || field.value !== "") return;
+    event.preventDefault();
+    refocus.current = false;
+    setMode(shown === "search" ? "ask" : "search");
+  };
+
   return (
     <main className="home" data-mode={shown}>
       <AppHeader newTask={false} />
-      <div className="home-scroll thin-scroll">
+      <div className="home-scroll">
+        <AccountMenu placement="home" />
         <div className="home-column">
           <div className="home-mark" role="img" aria-label="openside">
-            <BrandMark size={56} />
+            <BrandMark size={60} />
           </div>
-          <h1 className="home-title sr-only">What should we do?</h1>
-          <div className="home-omnibox-area">
+          <h1 className="sr-only">{t("shell.home.title")}</h1>
+          <div className="home-omnibox-area" onKeyDownCapture={switchOnTab}>
             <div
               ref={modes}
               className="home-modes"
@@ -87,27 +88,42 @@ export function HomePage() {
                 keyed.current = false;
               }}
             >
-              <Segmented label="Home mode" kind="tab" options={[...MODES]} value={shown} onChange={toggle} />
-            </div>
-            {shown === "search" ? (
-              <HomeSearch />
-            ) : (
-              <Composer
-                variant="home"
-                sessionId={chief.home_session_id}
-                newTask={{ agentId: chief.id }}
-                onSent={(created) => navigate(created ? `/sessions/${encodeURIComponent(created)}` : thread)}
-                onDraftApplied={() => {
-                  setMode("ask");
-                  if (shared) setShareDraft(null);
-                  else setPicked(null);
-                }}
-                draft={draft}
+              <span className="home-switch-hint">
+                <kbd>Tab</kbd>
+                {t("shell.home.switchHint")}
+              </span>
+              <Segmented
+                label={t("shell.home.modeLabel")}
+                kind="tab"
+                panel={panel}
+                options={[
+                  { value: "search", label: t("common.search") },
+                  { value: "ask", label: t("shell.home.ask") },
+                ]}
+                value={shown}
+                onChange={toggle}
               />
-            )}
+            </div>
+            <div role="tabpanel" id={panel} aria-labelledby={`${panel}-${shown}`}>
+              {shown === "search" ? (
+                <HomeSearch />
+              ) : (
+                <Composer
+                  variant="home"
+                  onSent={(created) => {
+                    if (created) navigate(`/sessions/${encodeURIComponent(created)}`);
+                  }}
+                  onDraftApplied={() => {
+                    setMode("ask");
+                    if (shared) setShareDraft(null);
+                    else setPicked(null);
+                  }}
+                  draft={draft}
+                />
+              )}
+            </div>
           </div>
-          <SuggestedTasks suggestions={HOME_SUGGESTIONS} onPick={pick} />
-          <RecentTasks sessionId={chief.home_session_id} to={thread} />
+          <SuggestedTasks suggestions={HOME_SUGGESTIONS} onPrompt={pick} />
         </div>
       </div>
     </main>

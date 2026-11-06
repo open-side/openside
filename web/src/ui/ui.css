@@ -1,20 +1,28 @@
 /* Primitives (web/src/ui). Token values live in tokens.css; see web/DESIGN.md. */
 
+/*
+ * Buttons (Aside settings §3). The default is the outline button: 32px, radius 8, a hairline and
+ * a faint shadow. Primary (black) and danger (red tint) are 30px and borderless, as measured.
+ * `small` is the 22px small outline button (Preview, Change).
+ */
 .ui-button {
   display: inline-flex;
+  box-sizing: border-box;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 0 18px;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-pill);
-  background: transparent;
+  height: var(--control-height);
+  min-height: 0;
+  padding: 0 10px;
+  border: 1px solid var(--button-outline-border);
+  border-radius: var(--radius-control);
+  background: var(--button-outline-bg);
+  box-shadow: var(--shadow-xs);
   color: var(--text);
   font: inherit;
   font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  line-height: 1.2;
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-ui);
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -23,36 +31,57 @@
     opacity var(--fast) var(--ease),
     transform var(--fast) var(--ease);
 }
+.ui-button > svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
 .ui-button:active:not(:disabled) {
   transform: scale(0.97);
 }
-.ui-button:hover:not(:disabled) {
+.ui-button:hover:not(:disabled),
+.ui-button[data-popup-open] {
   background: var(--hover);
 }
 .ui-button:disabled {
   cursor: default;
-  opacity: 0.45;
+  opacity: 0.5;
+}
+.ui-button--primary,
+.ui-button--danger,
+.ui-button--ghost {
+  height: var(--button-height);
+  padding: 0 11px;
+  border: 0;
+  box-shadow: none;
 }
 .ui-button--primary {
-  border-color: transparent;
   background: var(--primary);
   color: var(--primary-foreground);
 }
-.ui-button--primary:hover:not(:disabled) {
+.ui-button--primary:hover:not(:disabled),
+.ui-button--primary[data-popup-open] {
   background: var(--primary-hover);
 }
 .ui-button--danger {
+  background: var(--danger-surface);
   color: var(--danger);
 }
+.ui-button--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 18%, var(--danger-surface));
+}
 .ui-button--ghost {
-  border-color: transparent;
+  height: var(--control-height);
   background: transparent;
 }
-.ui-button--compact {
-  min-height: 32px;
-  padding: 0 14px;
-  border-radius: var(--radius-pill);
-  font-size: var(--text-sm);
+.ui-button--small {
+  gap: 4px;
+  height: var(--button-small-height);
+  padding: 0 7px;
+  font-size: var(--text-xs);
+}
+.ui-button--small > svg {
+  width: 12px;
+  height: 12px;
 }
 
 .ui-icon-button {
@@ -84,9 +113,13 @@
   cursor: default;
   opacity: 0.4;
 }
+/* Aside's bordered "…" box in settings rows: 32px square, radius 8, on the control fill. */
 .ui-icon-button--outlined {
+  width: var(--control-height);
+  height: var(--control-height);
   border-color: var(--control-border);
-  background: transparent;
+  border-radius: var(--radius-control);
+  background: var(--control-bg);
 }
 .ui-icon-button--small {
   width: 32px;
@@ -338,15 +371,27 @@ button.ui-chip:disabled {
   z-index: 56;
   outline: none;
 }
+/*
+ * Aside popover (home-thread §4.1): radius 12, a hairline, rows on a 32px pitch whose highlight
+ * is 26px tall and inset 6px; the first highlight sits 10px below the top edge (1 border + 9).
+ * The surface is translucent over a backdrop blur (see .ui-menu, .ui-select-popup below).
+ */
 .ui-menu {
   display: grid;
-  gap: 2px;
-  width: min(272px, calc(100vw - 16px));
+  align-content: start;
+  gap: calc(var(--menu-row) - var(--menu-row-highlight));
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 120px;
+  max-width: min(320px, calc(100vw - 16px));
   max-height: var(--available-height);
-  padding: 6px;
+  padding: 9px 6px 8px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  border-radius: var(--radius-lg);
+  border-color: var(--menu-border);
+  background: var(--menu-bg-solid);
+  box-shadow: var(--menu-shadow);
+  border-radius: var(--radius-menu);
   outline: none;
   transform-origin: var(--transform-origin);
   transition:
@@ -358,32 +403,51 @@ button.ui-chip:disabled {
   opacity: 0;
   transform: scale(0.96);
 }
-/* Same left inset as the items, so the title lines up with the icons beneath it. */
+.ui-menu-list {
+  display: grid;
+  gap: inherit;
+}
+/* Group header ("Projects", "Profiles"): 12px muted, not interactive, aligned with the icons. */
 .ui-menu-title {
   overflow: hidden;
-  padding: 8px 12px 6px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 600;
+  padding: 2px 8px 0;
+  color: var(--menu-icon);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Row radius 10 = menu radius 16 - menu padding 6, so rows follow the curve of the corners. */
+/* A menu row's explanation (MenuItem `description`): a wrapped note, not a one-word hint. */
+.ui-tooltip {
+  max-width: 260px;
+  padding: 6px 8px;
+  border: 1px solid var(--tooltip-border);
+  border-radius: var(--radius-control);
+  background: var(--tooltip-bg);
+  color: var(--tooltip-text);
+  box-shadow: var(--shadow-overlay);
+  font-size: var(--text-sm);
+  line-height: 16px;
+  z-index: 60;
+}
 .ui-menu-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  padding: 0 12px;
-  border-radius: 10px;
+  gap: 9px;
+  min-height: var(--menu-row-highlight);
+  padding: 0 7px 0 6px;
+  border-radius: var(--radius-control);
+  color: var(--menu-label);
   font-size: var(--text-md);
+  line-height: var(--leading-ui);
+  white-space: nowrap;
   cursor: pointer;
   outline: none;
   user-select: none;
-  transition: background-color var(--fast) var(--ease);
 }
 .ui-menu-item[data-highlighted] {
-  background: var(--hover);
+  background: var(--menu-hover);
 }
 .ui-menu-item:active:not([data-disabled]) {
   background: var(--active);
@@ -394,7 +458,7 @@ button.ui-chip:disabled {
 }
 .ui-menu-item[data-disabled] {
   cursor: default;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 .ui-menu-item--danger {
   color: var(--danger);
@@ -402,29 +466,88 @@ button.ui-chip:disabled {
 .ui-menu-item--danger[data-highlighted] {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
-.ui-menu-item--danger:active:not([data-disabled]) {
-  background: color-mix(in srgb, var(--danger) 20%, transparent);
-}
-/* Icons sit quiet until their row is highlighted; a destructive row keeps its colour. */
 .ui-menu-icon {
   display: inline-grid;
   flex: none;
   place-items: center;
-  width: 20px;
-  height: 20px;
-  color: var(--muted);
-  transition: color var(--fast) var(--ease);
+  width: 16px;
+  height: 16px;
+  color: var(--menu-icon);
 }
-.ui-menu-item[data-highlighted] .ui-menu-icon {
-  color: inherit;
+.ui-menu-icon > svg {
+  width: 14px;
+  height: 14px;
 }
 .ui-menu-item--danger .ui-menu-icon {
   color: inherit;
 }
+.ui-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Trailing slot: a value ("Guard"), a shortcut, ›, ↗ or the ✓ of the current choice. */
+.ui-menu-trailing {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+  color: var(--menu-icon);
+  font-size: var(--text-sm);
+}
+.ui-menu-trailing > svg {
+  width: 14px;
+  height: 14px;
+}
+.ui-menu-check {
+  color: var(--menu-label);
+}
+/* 1px, inset 8 from the menu edge; the pitch across it is 32 + 10 like Aside's. */
 .ui-menu-separator {
   height: 1px;
-  margin: 4px 8px;
-  background: var(--border);
+  margin: 1px 2px 2px;
+  background: var(--menu-divider);
+}
+/*
+ * Search row (model picker, `L 15`): no frame of its own; it takes a 32px row plus 4px before
+ * the first item, and its glyph sits 3px further in than item icons.
+ */
+.ui-menu-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--menu-row-highlight);
+  margin-bottom: 4px;
+  padding: 0 7px 0 9px;
+  color: var(--menu-icon);
+}
+.ui-menu-search > svg {
+  width: 14px;
+  height: 14px;
+}
+.ui-menu-search input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--menu-label);
+  font: inherit;
+  font-size: var(--text-md);
+  line-height: var(--leading-ui);
+  outline: none;
+}
+.ui-menu-empty {
+  padding: 3px 8px;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+.ui-menu-empty:empty {
+  display: none;
 }
 @media (pointer: coarse) {
   .ui-menu-item {
@@ -438,23 +561,31 @@ button.ui-chip:disabled {
   }
 }
 
-/* Select (ui/Select.tsx): a combobox button and an overlay listbox; a bottom sheet on phones. */
+/*
+ * Select (ui/Select.tsx), Aside settings §3: a 32px box, radius 8, hairline on the control fill,
+ * text 11px in from the left border and the ⌃⌄ stepper (or ⌄ for Dropdown) 14px in from the
+ * right. `inline` hugs its content at a row's end; `field` fills its column.
+ */
 .ui-select {
   display: inline-flex;
+  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
   max-width: 100%;
-  min-height: 44px;
-  padding: 0 10px 0 14px;
+  height: var(--control-height);
+  min-height: 0;
+  padding: 0 11px 0 10px;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius-md);
-  background: var(--canvas);
+  border-radius: var(--radius-control);
+  background: var(--control-bg);
+  box-shadow: var(--shadow-xs);
   color: var(--text);
   font: inherit;
-  font-size: 1rem;
+  font-size: var(--text-md);
   font-weight: 400;
+  line-height: var(--leading-ui);
   text-align: left;
   cursor: pointer;
   transition: background-color var(--fast) var(--ease);
@@ -465,32 +596,13 @@ button.ui-chip:disabled {
 }
 .ui-select[data-disabled] {
   cursor: default;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 .ui-select--field {
   width: 100%;
 }
-/* Dialog fields sit on --surface (same rule as inputs in .ui-dialog). */
-.ui-dialog .ui-select--field {
-  background: var(--surface);
-}
-.ui-dialog .ui-select--field:hover:not([data-disabled]),
-.ui-dialog .ui-select--field[data-popup-open] {
-  background: var(--hover);
-}
-/* Settings rows: the current value sits borderless at the row's end, like a native row picker. */
 .ui-select--inline {
-  padding: 0 8px 0 10px;
-  border-color: transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  font-size: 0.9375rem;
-}
-.ui-select--inline:hover:not([data-disabled]),
-.ui-select--inline[data-popup-open] {
-  background: var(--hover);
-  color: var(--text);
+  flex: none;
 }
 .ui-select-value {
   display: inline-flex;
@@ -500,7 +612,7 @@ button.ui-chip:disabled {
   min-width: 0;
 }
 .ui-select-value[data-placeholder] .ui-select-label {
-  color: var(--muted);
+  color: var(--placeholder);
 }
 .ui-select-label {
   overflow: hidden;
@@ -511,11 +623,21 @@ button.ui-chip:disabled {
   display: inline-grid;
   flex: none;
   place-items: center;
+  width: 14px;
+  height: 14px;
+}
+.ui-select-icon > svg {
+  width: 14px;
+  height: 14px;
 }
 .ui-select-chevron {
   display: inline-grid;
   flex: none;
   color: var(--muted);
+}
+.ui-select-chevron > svg {
+  width: 14px;
+  height: 14px;
 }
 .ui-select-backdrop {
   position: fixed;
@@ -531,12 +653,20 @@ button.ui-chip:disabled {
   z-index: 57;
   outline: none;
 }
+/*
+ * Listbox (V appearance-select-1): radius 12, hairline, 7px inside the border; options are 30px
+ * on a 32px pitch with a radius-6 highlight. On a mouse the popup overlaps the trigger so the
+ * chosen option sits on the trigger's value (Base UI alignItemWithTrigger).
+ */
 .ui-select-popup {
   display: flex;
   box-sizing: border-box;
-  min-width: max(var(--anchor-width), 200px);
+  min-width: var(--anchor-width);
   max-width: min(380px, calc(100vw - 16px));
-  border-radius: var(--radius-lg);
+  border-color: var(--menu-border);
+  background: var(--menu-bg-solid);
+  box-shadow: var(--menu-shadow);
+  border-radius: var(--radius-menu);
   outline: none;
   transform-origin: var(--transform-origin);
   transition:
@@ -548,23 +678,61 @@ button.ui-chip:disabled {
   opacity: 0;
   transform: scale(0.96);
 }
+/*
+ * Aside's menus and listboxes are 80% white (dark: 90% #262626) over a backdrop blur. Text stays
+ * readable because the blur flattens whatever is behind; without backdrop-filter, or when the
+ * person asks for less transparency, the surface stays solid. The phone select sheet sits over
+ * a scrim and stays solid too, like the composer's sheets.
+ */
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  @media not (prefers-reduced-transparency: reduce) {
+    .ui-menu,
+    .ui-select-popup {
+      background: var(--menu-bg);
+      -webkit-backdrop-filter: blur(var(--menu-blur)) saturate(1.5);
+      backdrop-filter: blur(var(--menu-blur)) saturate(1.5);
+    }
+  }
+}
+@media (forced-colors: active) {
+  .ui-menu,
+  .ui-select-popup {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (max-width: 820px) {
+  .ui-select-popup {
+    background: var(--menu-bg-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
 .ui-select-list {
   display: grid;
   flex: 1;
+  align-content: start;
   gap: 2px;
   max-height: min(var(--available-height), 320px);
-  padding: 8px;
+  padding: 7px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .ui-select-group + .ui-select-group {
   margin-top: 4px;
   padding-top: 4px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--menu-divider);
 }
 .ui-select-group {
   display: grid;
   gap: 2px;
+}
+.ui-select-item {
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 8px 0 7px;
+  border-radius: var(--radius-kbd);
+  color: var(--text);
 }
 .ui-select-text {
   display: grid;
@@ -581,21 +749,25 @@ button.ui-chip:disabled {
   flex: none;
   padding: 1px 8px;
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  background: var(--badge-bg);
   color: var(--muted);
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
   line-height: 1.4;
 }
 .ui-select-detail {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--text-xs);
 }
 .ui-select-check {
   display: inline-grid;
   flex: none;
-  margin-left: auto;
-  color: var(--primary);
+  margin-left: 14px;
+  color: var(--text);
+}
+.ui-select-check > svg {
+  width: 10px;
+  height: 10px;
 }
 @media (max-width: 820px) {
   .ui-select-backdrop {
@@ -748,16 +920,15 @@ button.ui-chip:disabled {
   .ui-segmented .ui-segment {
     min-height: 44px;
   }
-  /* Compact buttons and chips keep their 32px look and grow an invisible 44px hit area. */
-  :where(.ui-button--compact, button.ui-chip) {
+  /* Buttons and chips keep their measured height and grow an invisible 44px hit area. */
+  :where(.ui-button, button.ui-chip) {
     position: relative;
   }
-  .ui-button--compact::after,
+  .ui-button::after,
   button.ui-chip::after {
     content: "";
     position: absolute;
-    /* Relative to the 30px padding box of a 32px control: 7px each way makes 44px. */
-    inset: -7px 0;
+    inset: calc((100% - 44px) / 2) 0;
   }
 }
 
@@ -832,21 +1003,25 @@ button.ui-chip:disabled {
   }
 }
 
-/* Switch: the native checkbox stays on top (transparent) so clicks, focus and forms work. */
+/*
+ * Switch (Aside's toggle, settings §3): a 40×20 track with a 24×18 knob pill inset 1px. The
+ * layout box is the track, so the row's 10px end padding lines up; the transparent native
+ * checkbox on top reaches out to a 44px hit box and keeps clicks, focus and forms working.
+ */
 .ui-switch {
   position: relative;
   display: inline-grid;
   flex: 0 0 auto;
-  place-items: center;
-  width: 44px;
-  height: 44px;
+  width: var(--toggle-width);
+  height: var(--toggle-height);
 }
 .ui-switch input {
   position: absolute;
-  inset: 0;
+  inset: calc((var(--toggle-height) - 44px) / 2) calc((var(--toggle-width) - 44px) / 2);
   z-index: 1;
-  width: 100%;
-  height: 100%;
+  width: auto;
+  height: auto;
+  min-height: 0;
   margin: 0;
   opacity: 0;
   cursor: pointer;
@@ -856,40 +1031,484 @@ button.ui-chip:disabled {
 }
 .ui-switch-track {
   position: relative;
-  width: 36px;
-  height: 22px;
+  box-sizing: border-box;
+  width: var(--toggle-width);
+  height: var(--toggle-height);
   border-radius: var(--radius-pill);
-  background: var(--control-border);
+  background: var(--toggle-off);
   transition: background-color var(--fast) var(--ease);
 }
 .ui-switch-track::after {
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
+  top: 1px;
+  left: 1px;
+  box-sizing: border-box;
+  width: 24px;
+  height: calc(var(--toggle-height) - 2px);
+  border: 1px solid var(--toggle-knob-border);
   border-radius: var(--radius-pill);
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.24);
+  background: var(--toggle-knob);
   content: "";
-  transition: transform var(--fast) var(--ease);
+  transition:
+    transform var(--fast) var(--ease),
+    border-color var(--fast) var(--ease);
 }
 .ui-switch input:checked + .ui-switch-track {
-  background: var(--primary);
+  background: var(--toggle-on);
 }
 .ui-switch input:checked + .ui-switch-track::after {
-  transform: translateX(14px);
+  border-color: var(--toggle-on);
+  transform: translateX(calc(var(--toggle-width) - 24px - 2px));
 }
 .ui-switch input:focus-visible + .ui-switch-track {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 .ui-switch input:disabled + .ui-switch-track {
-  opacity: 0.45;
+  opacity: 0.5;
 }
 @media (prefers-reduced-motion: reduce) {
   .ui-switch-track,
   .ui-switch-track::after {
     transition-duration: 1ms;
   }
+}
+
+/* Split select (ui/SplitSelect.tsx, `L 48`): one 176px box, the choice, a hairline, a 32px "…". */
+.ui-split-select {
+  display: inline-flex;
+  flex: none;
+  box-sizing: border-box;
+  width: 176px;
+  height: var(--control-height);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  background: var(--control-bg);
+  box-shadow: var(--shadow-xs);
+}
+.ui-split-select[data-disabled] {
+  opacity: 0.5;
+}
+.ui-split-select .ui-split-select-choice {
+  flex: 1;
+  height: 100%;
+  border: 0;
+  border-radius: calc(var(--radius-control) - 1px) 0 0 calc(var(--radius-control) - 1px);
+  background: transparent;
+  box-shadow: none;
+}
+.ui-split-select .ui-split-select-choice:only-child {
+  border-radius: calc(var(--radius-control) - 1px);
+}
+.ui-split-select .ui-split-select-choice[data-disabled] {
+  opacity: 1;
+}
+.ui-split-select .ui-select-chevron {
+  color: var(--faint);
+}
+.ui-split-select-more {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--control-border);
+  border-radius: 0 calc(var(--radius-control) - 1px) calc(var(--radius-control) - 1px) 0;
+  background: transparent;
+  color: var(--text);
+}
+.ui-split-select-more > svg {
+  width: 14px;
+  height: 14px;
+}
+.ui-split-select-more:hover:not(:disabled),
+.ui-split-select-more[data-popup-open] {
+  background: var(--hover);
+}
+.ui-split-select-more:disabled {
+  opacity: 1;
+}
+/*
+ * At phone width the 32px select trigger and the 32px "…" button answer a 44px box without
+ * growing: an invisible hit area, so Aside's row geometry is unchanged.
+ */
+@media (max-width: 820px) {
+  .ui-select,
+  .ui-split-select-more {
+    position: relative;
+  }
+  .ui-select::after,
+  .ui-split-select-more::after {
+    content: "";
+    position: absolute;
+    inset: calc((100% - 44px) / 2) min(0px, calc((100% - 44px) / 2));
+  }
+}
+
+/* Key cap (ui/misc.tsx KbdChip): 26px on --kbd-bg, 12px glyphs in the UI face. */
+.ui-kbd {
+  display: inline-flex;
+  flex: none;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  height: var(--kbd-height);
+  min-width: var(--kbd-height);
+  padding: 0 8px;
+  border-radius: var(--radius-kbd);
+  background: var(--kbd-bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+.ui-kbd > kbd {
+  font: inherit;
+}
+.ui-kbd--unset {
+  background: transparent;
+  color: var(--muted);
+}
+
+/* Badge (ui/misc.tsx): a 16px pill, 11px text. */
+.ui-badge {
+  display: inline-flex;
+  flex: none;
+  box-sizing: border-box;
+  align-items: center;
+  height: 16px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--badge-bg);
+  color: var(--text);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ui-badge--new {
+  background: var(--badge-new-bg);
+  color: var(--badge-new-text);
+  font-weight: var(--weight-medium);
+}
+
+/* Thumbnail picker (ui/ThumbnailPicker.tsx, `L 42`): 78px items 14px apart, 70×43 pictures. */
+/* Aside's last item ends 3px into the row's 10px end padding (x 1513 against 1510). */
+.ui-thumbs {
+  display: flex;
+  gap: 14px;
+  margin-right: -3px;
+}
+.ui-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  width: 78px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--row-desc);
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+.ui-thumb:hover:not(:disabled) {
+  background: transparent;
+}
+.ui-thumb:focus-visible {
+  outline: none;
+}
+.ui-thumb-image {
+  display: block;
+  overflow: hidden;
+  width: 70px;
+  height: 43px;
+  border-radius: var(--radius-control);
+  background: var(--thumb-bg);
+}
+.ui-thumb-image > :is(img, svg) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ui-thumb--selected {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+.ui-thumb--selected .ui-thumb-image {
+  box-shadow:
+    0 0 0 1px var(--card-bg),
+    0 0 0 4px var(--thumb-accent, var(--active));
+}
+.ui-thumb:focus-visible .ui-thumb-image {
+  outline: 2px solid var(--primary);
+  outline-offset: 5px;
+}
+
+/* Hero card (ui/Cards.tsx): copy and action on the start side, the picture inset 4px at the end. */
+.ui-hero {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  min-height: 175px;
+  padding: 20px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  background: var(--card-bg);
+}
+.ui-hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 260px;
+}
+.ui-hero-title {
+  margin: 0;
+  color: var(--row-title);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  line-height: 20px;
+}
+.ui-hero-description {
+  margin: 6px 0 0;
+  color: var(--row-desc);
+  font-size: var(--text-md);
+  line-height: 20px;
+}
+.ui-hero-action {
+  margin-top: auto;
+  padding-top: 16px;
+}
+.ui-hero-art {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  bottom: 4px;
+  overflow: hidden;
+  width: 288px;
+  border-radius: var(--radius-control);
+}
+.ui-hero-art > :is(img, svg) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+@media (max-width: 820px) {
+  .ui-hero-art {
+    display: none;
+  }
+}
+
+/* Empty state (ui/Cards.tsx, `L 60`): a 194px card, 32px tile, title and line, centred. */
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 194px;
+  padding: 24px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  background: var(--card-bg);
+  text-align: center;
+}
+.ui-empty-tile {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 9px;
+  border-radius: var(--radius-control);
+  background: var(--empty-tile);
+  color: var(--muted);
+}
+.ui-empty-tile > svg {
+  width: 16px;
+  height: 16px;
+}
+.ui-empty-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: 20px;
+}
+.ui-empty-description {
+  margin: 5px 0 0;
+  color: var(--row-desc);
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+.ui-empty > .ui-button {
+  margin-top: 12px;
+}
+
+/* Info banner (ui/Cards.tsx): the grey 36px strip atop a card, or the sky strip (MCPs). */
+.ui-banner {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--row-divider);
+  background: var(--banner-bg);
+  color: var(--banner-text);
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+.ui-banner-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.ui-banner-copy {
+  flex: 1;
+  min-width: 0;
+}
+.ui-banner-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: 20px;
+}
+.ui-banner--info {
+  align-items: flex-start;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: var(--radius-card);
+  background: var(--info-banner-bg);
+  color: var(--info-banner-text);
+}
+.ui-banner--info .ui-banner-icon {
+  margin-top: 3px;
+}
+
+/*
+ * Settings rows (ui/Settings.tsx, Aside settings §2). The card's 1px gaps over --row-divider are
+ * the full-bleed hairlines, so every row keeps its measured inner height (56, or 52 single-line).
+ */
+.ui-section {
+  display: grid;
+  gap: 8px;
+}
+.ui-section + .ui-section {
+  margin-top: 32px;
+}
+.ui-section-label {
+  margin: 0;
+  padding: 0 14px;
+  color: var(--section-label);
+  font-size: var(--text-md);
+  font-weight: 400;
+  line-height: 20px;
+}
+/* Aside's ⓘ: a 12px circle 6px after the label, the label's colour. */
+.ui-section-info {
+  display: inline-flex;
+  margin-left: 6px;
+  vertical-align: -1px;
+  cursor: help;
+}
+.ui-section-info > svg {
+  width: 12px;
+  height: 12px;
+}
+.ui-card {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  background: var(--row-divider);
+}
+.ui-row {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--settings-row-height);
+  padding: 8px 10px 8px 13px;
+  border: 0;
+  border-radius: 0;
+  background: var(--card-bg);
+  color: var(--row-title);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+.ui-row--single {
+  min-height: var(--settings-row-height-single);
+}
+/* Two-line copy sits 1px below centre in Aside (title cap at row top + 15); controls stay centred. */
+.ui-row:not(.ui-row--single) > .ui-row-copy {
+  padding-top: 2px;
+}
+/* A row whose control is taller than the row (thumbnail pickers) keeps its title at the top. */
+.ui-row:has(> .ui-row-control .ui-thumbs) {
+  align-items: flex-start;
+  padding-top: 11px;
+}
+.ui-row--action {
+  padding-right: 18px;
+  cursor: pointer;
+}
+.ui-row--action:hover {
+  background: color-mix(in srgb, var(--hover) 50%, var(--card-bg));
+}
+.ui-row--action:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.ui-row-leading {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  color: var(--muted);
+}
+.ui-row-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.ui-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: 17px;
+}
+.ui-row-description {
+  color: var(--row-desc);
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+.ui-row-control {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  max-width: 60%;
+  margin-left: auto;
+}
+.ui-row-glyph {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  color: var(--muted);
 }

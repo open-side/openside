@@ -1,68 +1,41 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { ClientContext } from "../context";
-import { SettingsNav, SettingsPage } from "../pages/SettingsPage";
-import { manageTarget, WORKSPACE_SECTIONS } from "../pages/manageRoutes";
-import { fakeClient, json } from "../test/fakeDaemon";
+import { describe, expect, it } from "vitest";
+import { t, type MessageKey } from "../i18n";
+import { SETTINGS_NAV } from "../settings/nav";
 
 const root = resolve(__dirname, "../../..");
 const help = readFileSync(resolve(root, "docs/specs/app-help.md"), "utf8");
 const source = (path: string) => readFileSync(resolve(root, "web/src", path), "utf8");
 
-afterEach(cleanup);
-
 describe("static openside app help", () => {
   it("names every real route and no invented route", () => {
     const screenRoutes = [...source("App.tsx").matchAll(/<Route path="([^"*]+)"/g)].map((match) => `/${match[1]}`);
-    const dialogRoutes = [...source("pages/manageRoutes.ts").matchAll(/path === "(\/[^" ]+)"/g)].flatMap((match) => match[1] ?? []);
-    dialogRoutes.push(...WORKSPACE_SECTIONS.map((section) => section.path));
-    for (const route of dialogRoutes) expect(manageTarget(route)).not.toBeNull();
     expect(source("App.tsx")).toContain('window.location.pathname === "/pair"');
-    const routes = ["/", "/pair", ...screenRoutes, ...dialogRoutes];
+    const routes = ["/", "/pair", ...screenRoutes];
     const documented = [...help.matchAll(/(?<![\w/])(\/(?:[a-z]+(?:\/:[a-z]+)?)?)(?=[\s):,;])/g)].map((match) => match[1]);
     expect([...new Set(documented)].sort()).toEqual([...new Set(routes)].sort());
-    for (const section of WORKSPACE_SECTIONS) expect(help).toContain(`${section.title} (${section.path}`);
   });
 
-  it("uses actual sidebar, History and phone connection menu labels", () => {
-    const sidebar = source("components/Sidebar.tsx");
-    const navigation = sidebar.slice(sidebar.indexOf('<nav className="manage-nav"'), sidebar.indexOf("</nav>"));
-    const links = [...navigation.matchAll(/<Link to="(\/[^" ]*)"[\s\S]*?<span>([^<]*)<\/span>/g)];
-    expect(links.map((match) => match[2])).toEqual(["History", "Workspace", "Settings"]);
-    for (const [, route, label] of links) {
-      expect(help).toContain(`${label} (${route})`);
-      expect(help).toContain(label);
-    }
-    const history = source("pages/HistoryPage.tsx");
-    for (const label of ["Earlier", "Archived"]) {
-      expect(history).toContain(`label: "${label}"`);
-      expect(help).toContain(label);
-    }
-    expect(source("remote/RemoteAccess.tsx")).toContain('title="Connect your phone"');
+  it("uses actual Chats filter and phone connection labels", () => {
+    const chats = source("pages/ChatsPage.tsx");
+    const filters = [...chats.matchAll(/"(shell\.chats\.show[A-Za-z]+)"/g)].map(([, key]) => t(key as MessageKey));
+    expect(filters).toEqual(["All chats", "Unread", "Pinned", "Archived"]);
+    for (const label of filters) expect(help).toContain(label);
+    expect(source("remote/RemoteAccess.tsx")).toContain('title={t("connections.remote.connectPhone")}');
+    expect(t("connections.remote.connectPhone")).toBe("Connect your phone");
     expect(help).toContain("Connect your phone");
     expect(help).toContain("Home threads offer neither Delete conversation nor Clear.");
   });
 
-  it("covers the rendered Settings entries and sections", () => {
-    const { client } = fakeClient(() => json(200, { ok: true, api_version: "v1" }));
-    const noop = vi.fn();
-    const { container } = render(
-      <ClientContext.Provider value={client}>
-        <SettingsNav current="settings" onOpen={noop} onGuide={noop} />
-        <SettingsPage onSignOut={noop} />
-      </ClientContext.Provider>,
-    );
-    // General is the pane the Settings list sits on, so the help names its sections instead.
-    const entries = [...container.querySelectorAll(".settings-nav-row:not(.settings-nav-general) strong")].map((entry) => entry.textContent);
-    expect(entries).toEqual(["Models & accounts", "Channels", "Remote access", "Workspace", "Setup guide"]);
-    for (const entry of entries) expect(help).toContain(entry);
-    for (const heading of ["Connection", "Notifications", "Appearance"]) {
-      expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
-      expect(help).toContain(heading);
+  it("names every Settings group and page", () => {
+    for (const group of SETTINGS_NAV) {
+      expect(help).toContain(`${t(group.heading)}:`);
+      for (const page of group.pages) {
+        expect(help).toContain(t(page.title));
+        for (const child of page.children ?? []) expect(help).toContain(t(child.title));
+      }
     }
-    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(help).toContain("Sign out");
   });
 

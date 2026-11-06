@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type Client } from "../api/client";
 import type { Session } from "../api/types";
+import { t } from "../i18n";
 
 const SYNC_MS = 5000;
 
@@ -51,7 +52,7 @@ export function useSessionList(client: Client, agent?: string): SessionListState
     } catch (cause) {
       // An aborted request always belongs to a superseded generation, so it lands here too.
       if (mine !== generation.current) return;
-      setError(cause instanceof ApiError ? cause.message : "Request failed");
+      setError(cause instanceof ApiError ? cause.message : t("browser.requestFailed"));
       setOffline(cause instanceof ApiError && cause.status === 0);
     } finally {
       if (inflight.current === controller) inflight.current = null;

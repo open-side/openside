@@ -1,4 +1,5 @@
 import type { Action, Block, BlockOf, Card, CardValue, ListItem } from "../api/types";
+import { t } from "../i18n";
 import { element, uid } from "./dom";
 import { renderField, type FieldRegistry } from "./fields";
 import { glyph, providerGlyph } from "./glyphs";
@@ -87,7 +88,7 @@ function isNumeric(rows: CardValue[][], column: number): boolean {
 function table(block: BlockOf<"table">, ctx: BlockContext): HTMLElement {
   const sites = block.row_sites;
   const head = element("tr", {});
-  if (sites) head.append(element("th", { scope: "col" }, element("span", { class: "oc-sr" }, "Source")));
+  if (sites) head.append(element("th", { scope: "col" }, element("span", { class: "oc-sr" }, t("cards.table.source"))));
   block.columns.forEach((column, index) => {
     const th = element("th", { scope: "col" }, column.label);
     if (isNumeric(block.rows, index)) th.setAttribute("data-align", "end");
@@ -105,7 +106,7 @@ function table(block: BlockOf<"table">, ctx: BlockContext): HTMLElement {
     });
     body.append(tr);
   });
-  const scroller = element("div", { class: "oc-table-scroll", role: "region", tabindex: "0", "aria-label": "Results table" }, element("table", { class: "oc-table", "data-layout": block.layout }, element("thead", {}, head), body));
+  const scroller = element("div", { class: "oc-table-scroll", role: "region", tabindex: "0", "aria-label": t("cards.table.label") }, element("table", { class: "oc-table", "data-layout": block.layout }, element("thead", {}, head), body));
   return scroller;
 }
 

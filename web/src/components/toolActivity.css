@@ -1,261 +1,208 @@
 /*
- * Tool activity rows: an opened run is a few groups, each one sentence over its calls chained
- * down a thin line with small icon nodes on the canvas, as in aside-relay (MIT) Activity.tsx.
- * Page visits nest their steps one level deeper; a call opens onto a monospace detail card.
+ * A turn's work above its reply: "Worked for 12s" in 14px muted with a chevron, opening onto its
+ * steps (14px icon, 14px muted sentence, 32px apart, joined by a hairline through the icons). A
+ * step opens onto a monospace card of what it took and gave.
  */
 
-.activity-groups {
+.work {
   display: grid;
-  gap: var(--space-2);
-  margin: var(--space-1) 0 2px;
-  animation: status-in var(--normal) var(--ease);
 }
-.activity-group {
-  display: grid;
-  gap: 2px;
-}
-.activity-group-title {
+.work-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  min-height: 20px;
   margin: 0;
   color: var(--muted);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  line-height: 1.4;
+  font-size: var(--text-md);
+  line-height: 20px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
 }
-.activity-actions,
-.tool-steps {
+.work-summary::-webkit-details-marker {
+  display: none;
+}
+.work-summary:hover {
+  color: var(--text-soft);
+}
+.work-summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.work-summary-static {
+  cursor: default;
+}
+.work-summary-static:hover {
+  color: var(--muted);
+}
+.work-chevron {
+  flex: none;
+  rotate: -90deg;
+  transition: rotate var(--fast) var(--ease);
+}
+.work[open] > .work-summary .work-chevron {
+  rotate: 0deg;
+}
+.work[data-live] > .work-summary > span {
+  color: var(--text);
+}
+
+.work-steps {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  margin: 0;
+  margin: 6px 0 0;
   padding: 0;
   list-style: none;
 }
-/* The chain: a hairline through the centre of the icon nodes, from the first to the last. */
-.activity-actions::before,
-.tool-steps::before {
+/* The chain: a hairline through the centre of the step icons, first to last. */
+.work-steps::before {
   content: "";
   position: absolute;
   top: 16px;
   bottom: 16px;
-  left: 11px;
+  left: 7px;
   width: 1px;
   background: var(--border);
 }
-.tool-details > summary.tool-line {
+.work-steps:has(> :only-child)::before {
+  display: none;
+}
+
+.step-details > summary.step-line {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 28px;
-  padding: 0 4px 0 0;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
+  gap: 12px;
+  min-height: 32px;
+  color: var(--muted);
+  font-size: var(--text-md);
+  line-height: 20px;
   list-style: none;
   cursor: pointer;
 }
-.tool-details > summary.tool-line:hover .tool-title,
-.tool-details[open] > summary.tool-line .tool-title {
-  color: var(--text);
-}
-.tool-details > summary::-webkit-details-marker {
+.step-details > summary::-webkit-details-marker {
   display: none;
 }
-.tool-details > summary.tool-line:focus-visible {
+.step-details > summary.step-line:hover .step-title,
+.step-details[open] > summary.step-line .step-title {
+  color: var(--text);
+}
+.step-details > summary.step-line:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
-/* The node sits on the canvas so the chain line runs behind it, not through it. */
-.tool-icon {
+/* The icon sits on the canvas so the chain runs behind it, not through it. */
+.step-icon {
   position: relative;
   display: inline-grid;
   flex: none;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-pill);
+  width: 14px;
+  height: 20px;
   background: var(--canvas);
-  color: var(--faint);
+  color: var(--step-icon);
 }
-.tool-favicon {
-  display: block;
+.step-favicon {
   width: 14px;
   height: 14px;
-  border-radius: var(--radius-xs);
+  border-radius: 3px;
+  object-fit: contain;
 }
-.tool-title {
+.step-title {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
-  font-weight: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tool-detail {
-  flex: 1 1 0;
+.step-detail {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
-  font-size: var(--text-xs);
+  color: var(--faint);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tool-state {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  margin-left: auto;
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-.tool-failed .tool-icon,
-.tool-failed .tool-state {
+.step-failed,
+.step[data-state="failed"] .step-icon {
   color: var(--danger);
 }
-/* Rows stay quiet: the chevron shows on hover, focus or once open, as on the live status line. */
-.tool-chevron {
+.step-failed {
   flex: none;
+  font-size: var(--text-sm);
+}
+.step[data-state="running"] .step-title,
+.work-thinking .shimmer-text {
+  background: linear-gradient(100deg, var(--muted) 0%, var(--muted) 40%, var(--text) 50%, var(--muted) 60%, var(--muted) 100%) 0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: status-shimmer 2s linear infinite;
+}
+.work-thinking {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
   color: var(--muted);
-  opacity: 0;
-  transition:
-    transform var(--fast) var(--ease),
-    opacity var(--fast) var(--ease);
+  font-size: var(--text-md);
+  line-height: 20px;
 }
-.tool-details > summary.tool-line:is(:hover, :focus-visible) .tool-chevron,
-.tool-details[open] > summary .tool-chevron {
-  opacity: 0.7;
+/* Words the agent wrote between its calls: muted, like the steps they sit among. */
+.work-note {
+  padding: 6px 0 6px 26px;
+  color: var(--muted);
 }
-.tool-details[open] > summary .tool-chevron {
-  transform: rotate(90deg);
-}
-@media (hover: none) {
-  .tool-chevron {
-    opacity: 0.7;
-  }
-}
-@media (pointer: coarse) {
-  .tool-details > summary.tool-line {
-    min-height: 44px;
-  }
+.work-note .markdown {
+  color: inherit;
 }
 
-/* A page visit: what the agent did on the page, one step deeper than the page itself. */
-.tool-steps-item {
-  list-style: none;
+.step-card {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 8px 26px;
+  padding: 10px 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  background: var(--surface-raised);
 }
-.tool-steps {
-  margin: 0 0 var(--space-1) 32px;
-}
-
-/* A navigation in flight: a 2px bar slides along the bottom edge of its row. */
-.tool-progress {
-  position: absolute;
-  inset: auto 8px 0;
-  height: 2px;
-  overflow: hidden;
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--primary) 16%, transparent);
-}
-.tool-progress::before {
-  content: "";
-  display: block;
-  width: 38%;
-  height: 100%;
-  border-radius: var(--radius-xs);
-  background: var(--primary);
-  animation: tool-progress 1.2s ease-in-out infinite;
-}
-@keyframes tool-progress {
-  from {
-    translate: -100% 0;
-  }
-  to {
-    translate: 270% 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .tool-progress::before {
-    width: 40%;
-    animation: none;
-  }
-}
-
-/* A call's arguments and result: monospace on the surface, scrolling inside the card only. */
-.tool-card {
-  margin: 2px 4px var(--space-2) 32px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-}
-.tool-card h4 {
-  margin: var(--space-2) 0 var(--space-1);
+.step-card h4 {
+  margin: 4px 0 0;
   color: var(--muted);
   font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
 }
-.tool-card h4:first-child {
+.step-card h4:first-child {
   margin-top: 0;
 }
-.tool-card pre {
+.step-card pre {
   max-height: 240px;
   margin: 0;
   overflow: auto;
-  color: var(--text);
+  color: var(--text-soft);
   font-family: var(--font-code);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   line-height: var(--leading-code);
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.tool-card pre:focus-visible {
-  border-radius: var(--radius-xs);
+.step-card pre:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
-.tool-card pre + pre {
-  margin-top: 4px;
-}
 
-/* Opening and closing a group or a step eases its height where the browser can animate it. */
-@supports selector(::details-content) {
-  .activity,
-  .tool-details {
-    interpolate-size: allow-keywords;
+@media (prefers-reduced-motion: reduce) {
+  .step[data-state="running"] .step-title,
+  .work-thinking .shimmer-text {
+    animation: none;
+    background: none;
+    color: var(--muted);
   }
-  .activity::details-content,
-  .tool-details::details-content {
-    height: 0;
-    overflow: clip;
-    transition:
-      height var(--normal) var(--ease),
-      content-visibility var(--normal) allow-discrete;
+  .work-chevron {
+    transition: none;
   }
-  .activity[open]::details-content,
-  .tool-details[open]::details-content {
-    height: auto;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .activity::details-content,
-    .tool-details::details-content {
-      transition: none;
-    }
-  }
-}
-
-/*
- * One reply, one bubble: the agent's words before and after its tool calls read as a single
- * message, with the calls as quiet lines between the paragraphs.
- */
-.reply-activity {
-  margin: 8px 0;
-}
-.reply-activity:first-child {
-  margin-top: 0;
-}
-.reply-activity:last-child {
-  margin-bottom: 0;
-}
-.bubble.assistant > .markdown + .markdown {
-  margin-top: 0.8em;
 }

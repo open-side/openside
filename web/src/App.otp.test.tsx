@@ -125,21 +125,20 @@ describe("code requests never move the person", () => {
     expect(window.history.length).toBe(before);
   });
 
-  it("under Settings, another conversation's code request waits inert in the dock and answers in place once Settings closes", async () => {
+  it("on the Settings tab, another conversation's code request docks live and answers in place without leaving Settings", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "tok");
     window.history.pushState({}, "", "/settings");
     const resolves = stubDaemon({ pending: [otpTicket("k2", "s2")] });
     render(<App />);
     const dock = await waitForDock("Code needed for accounts.example");
-    expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
-    // A modal owns the page: the dock stays visible beneath it but takes no press or focus.
-    expect(dock).toHaveAttribute("inert");
-    expect(within(dock).getByRole("link", { name: /^Go to /, hidden: true })).toHaveAttribute("href", "/sessions/s2");
-    await user.keyboard("{Escape}");
-    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull());
-    await vi.waitFor(() => expect(dock).not.toHaveAttribute("inert"));
+    // Settings is a tab, not a modal: the page and the dock share the window and both take input.
+    expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(dock).not.toHaveAttribute("inert");
     const route = window.location.pathname;
+    expect(route).toMatch(/^\/settings/);
+    expect(within(dock).getByRole("link", { name: /^Go to / })).toHaveAttribute("href", "/sessions/s2");
     // The dock rests as the card's collapsed bubble; opening it puts the cursor in the code field.
     expect(within(dock).queryByLabelText("Code")).toBeNull();
     await user.click(within(dock).getByRole("button", { name: summary("ticket:otp1") }));
@@ -153,19 +152,20 @@ describe("code requests never move the person", () => {
   it("under the search palette, the dock waits inert; closing it returns focus to where the person was", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "tok");
-    window.history.pushState({}, "", "/history");
+    window.history.pushState({}, "", "/chats");
     stubDaemon({ pending: [otpTicket("k2", "s2")] });
     render(<App />);
     const dock = await waitForDock("Code needed for accounts.example");
     expect(dock).not.toHaveAttribute("inert");
-    const field = await screen.findByPlaceholderText("Search conversations");
+    await user.click(await screen.findByRole("button", { name: "Search chats" }));
+    const field = await screen.findByPlaceholderText("Search chats");
     field.focus();
     await user.keyboard("{Control>}{Shift>}K{/Shift}{/Control}");
-    const palette = await screen.findByRole("combobox", { name: "Search tabs and chats" });
+    const palette = await screen.findByRole("combobox", { name: "Search tabs, chats, history, bookmarks or extensions" });
     await vi.waitFor(() => expect(palette).toHaveFocus());
     await vi.waitFor(() => expect(dock).toHaveAttribute("inert"));
     await user.keyboard("{Escape}");
-    await vi.waitFor(() => expect(screen.queryByRole("combobox", { name: "Search tabs and chats" })).toBeNull());
+    await vi.waitFor(() => expect(screen.queryByRole("combobox", { name: "Search tabs, chats, history, bookmarks or extensions" })).toBeNull());
     await vi.waitFor(() => expect(dock).not.toHaveAttribute("inert"));
     expect(field).toHaveFocus();
   });
@@ -223,7 +223,7 @@ describe("code requests never move the person", () => {
 
   it("another conversation's request rests as one collapsed bubble over the assistant's thread", async () => {
     localStorage.setItem("openside.token", "tok");
-    window.history.pushState({}, "", "/agents/chief");
+    window.history.pushState({}, "", "/sessions/s-chief");
     stubDaemon({ pending: [otpTicket("k5", "s2")] });
     render(<App />);
     const dock = await screen.findByRole("complementary", { name: "Code needed for accounts.example" });
@@ -248,18 +248,23 @@ describe("code requests never move the person", () => {
     expect(screen.queryByText(/more waiting/)).toBeNull();
   });
 
-  it("under Settings, another conversation's choice waits inert in the dock and answers in place once Settings closes", async () => {
+  it("over the Settings tab, another conversation's choice waits inert under the palette and answers in place once it closes", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "tok");
     window.history.pushState({}, "", "/settings");
     const resolves = stubDaemon({ pending: [choiceTicket("k4", "s2")] });
     render(<App />);
     const dock = await waitForDock("Choice needed for accounts.example");
-    expect(dock).toHaveAttribute("inert");
-    await user.click(screen.getByRole("button", { name: "Close" }));
-    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull());
-    await vi.waitFor(() => expect(dock).not.toHaveAttribute("inert"));
+    expect(dock).not.toHaveAttribute("inert");
     const route = window.location.pathname;
+    expect(route).toMatch(/^\/settings/);
+    await user.keyboard("{Control>}{Shift>}K{/Shift}{/Control}");
+    await screen.findByRole("combobox", { name: "Search tabs, chats, history, bookmarks or extensions" });
+    // A modal owns the page: the dock stays visible beneath it but takes no press or focus.
+    await vi.waitFor(() => expect(dock).toHaveAttribute("inert"));
+    await user.keyboard("{Escape}");
+    await vi.waitFor(() => expect(screen.queryByRole("combobox", { name: "Search tabs, chats, history, bookmarks or extensions" })).toBeNull());
+    await vi.waitFor(() => expect(dock).not.toHaveAttribute("inert"));
     await user.click(await within(dock).findByRole("button", { name: summary("ticket:choice1") }));
     expect(within(dock).getAllByRole("radio")).toHaveLength(2);
     await user.click(within(dock).getByLabelText(/Work account/));

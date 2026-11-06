@@ -6,6 +6,7 @@ import { whilePageShown } from "../api/pageLifecycle";
 import type { TakeoverInput, TakeoverServerMessage } from "../api/types";
 import { useClient } from "../context";
 import { useBrowserInput } from "../hooks/useBrowserInput";
+import { t, tMaybe } from "../i18n";
 import { Button, ICON_STROKE, IconButton } from "../ui";
 import { BrowserFrame } from "./BrowserFrame";
 import { BrowserPip } from "./BrowserPip";
@@ -13,15 +14,6 @@ import "./browser.css";
 
 type Frame = Extract<TakeoverServerMessage, { type: "frame" }>;
 type Status = "connecting" | "open" | "ended" | "failed";
-
-const END_LABEL: Record<string, string> = {
-  done: "Step completed.",
-  rejected: "The step was rejected.",
-  expired: "The step expired.",
-  idle: "Disconnected after inactivity. Reopen to continue.",
-  revoked: "This device's access was revoked.",
-  tab_unavailable: "The browser tab is gone.",
-};
 
 export interface TakeoverTarget {
   id: string;
@@ -120,7 +112,7 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
     try {
       await action();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Request failed");
+      setError(cause instanceof ApiError ? cause.message : t("browser.requestFailed"));
     } finally {
       setBusy(false);
     }
@@ -129,19 +121,19 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
   const image = frame ? <BrowserFrame data={frame.data} /> : null;
   const state =
     status === "connecting"
-      ? "Connecting…"
+      ? t("browser.takeover.connecting")
       : status === "failed"
-        ? "The remote screen is not available. Finish on the desktop, then mark the step done."
+        ? t("browser.takeover.unavailable")
         : status === "ended"
-          ? (END_LABEL[ended ?? ""] ?? "Disconnected.")
+          ? (tMaybe(`browser.takeover.ended.${ended ?? ""}`) ?? t("browser.takeover.ended"))
           : withheld
-            ? "The screen is hidden because the page holds a secret value. Input still works."
+            ? t("browser.takeover.withheld")
             : null;
 
   if (pip) {
     return (
       <BrowserPip
-        label="Browser preview"
+        label={t("browser.preview.label")}
         title={ticket.summary}
         status={status}
         live={!!image && status === "open" && !withheld}
@@ -151,7 +143,7 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
         onExpand={() => setPip(false)}
         onClose={onClose}
       >
-        {image ?? <p className="pip-state">{state ?? "Waiting for a frame…"}</p>}
+        {image ?? <p className="pip-state">{state ?? t("browser.takeover.waitingFrame")}</p>}
       </BrowserPip>
     );
   }
@@ -187,17 +179,17 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
       className="takeover"
       role="dialog"
       aria-modal="true"
-      aria-label="Remote control"
+      aria-label={t("browser.takeover.title")}
       data-status={status}
       tabIndex={-1}
       onKeyDown={dialogKey}
     >
       <header className="takeover-head">
-        <IconButton label="Minimize" onClick={() => setPip(true)}>
+        <IconButton label={t("browser.pip.minimize")} onClick={() => setPip(true)}>
           <Minimize2 size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </IconButton>
-        <h2>Remote control</h2>
-        <IconButton label="Close" onClick={onClose}>
+        <h2>{t("browser.takeover.title")}</h2>
+        <IconButton label={t("common.close")} onClick={onClose}>
           <X size={22} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </IconButton>
       </header>
@@ -209,7 +201,7 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
             <span>{ticket.origin}</span>
           </div>
         ) : null}
-        <p className="takeover-note">The agent stays paused on this tab until you choose Done or Reject.</p>
+        <p className="takeover-note">{t("browser.takeover.note")}</p>
         {state ? (
           <p className="takeover-state" role="status">
             {state}
@@ -219,20 +211,20 @@ export function TakeoverView({ ticket, onClose }: { ticket: TakeoverTarget; onCl
           {...input.props}
           className="takeover-screen"
           tabIndex={0}
-          aria-label="Remote browser screen; click to interact, type to send keys"
+          aria-label={t("browser.takeover.screenLabel")}
           data-frame-width={frame?.width}
           data-frame-height={frame?.height}
           style={frame ? ({ "--frame-aspect": frame.width / frame.height } as CSSProperties) : undefined}
         >
           {image}
         </div>
-        {inputError ? <p className="takeover-note">Input refused: {inputError}</p> : null}
+        {inputError ? <p className="takeover-note">{t("browser.takeover.inputRefused", { code: inputError })}</p> : null}
         <div className="takeover-actions">
           <Button variant="primary" disabled={busy || status === "ended"} onClick={() => finish(() => client.ticketDone(ticket.id))}>
-            Done
+            {t("common.done")}
           </Button>
           <Button disabled={busy || status === "ended"} onClick={() => finish(() => client.rejectTicket(ticket.id))}>
-            Reject
+            {t("browser.takeover.reject")}
           </Button>
         </div>
         {error ? (

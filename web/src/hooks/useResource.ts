@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "../api/client";
+import { t } from "../i18n";
 
 export function errorMessage(cause: unknown): string {
-  return cause instanceof ApiError ? cause.message : "Request failed";
+  return cause instanceof ApiError ? cause.message : t("browser.requestFailed");
 }
 
 export interface Resource<T> {

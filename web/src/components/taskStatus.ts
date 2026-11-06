@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { SubagentView, TimelineItem } from "../state/session";
 import { describeTool } from "./toolCopy";
 import { toolPhrase } from "./toolStatus";
@@ -55,33 +56,33 @@ export function firstSentence(value: string): string | null {
 export function taskLine(task: SubagentView): string {
   switch (task.status) {
     case "completed":
-      return (task.output ? firstSentence(task.output) : null) ?? "Done";
+      return (task.output ? firstSentence(task.output) : null) ?? t("timeline.task.done");
     case "failed":
-      return task.reason?.trim() || "Couldn’t finish";
+      return task.reason?.trim() || t("timeline.task.couldntFinish");
     case "cancelled":
-      return "Cancelled";
+      return t("timeline.task.cancelled");
     case "waiting_human":
-      return "Waiting for you";
+      return t("timeline.status.waiting");
     case "running": {
       const last = taskSteps(task.progress).at(-1);
       if (last) return last.text;
-      return task.progress.length ? "Thinking" : "Starting";
+      return t(task.progress.length ? "timeline.status.thinking" : "timeline.task.starting");
     }
   }
 }
 
 /** The word a Task card leads with: where the Task stands, without its details. */
-export function taskStateLabel(task: SubagentView): "Working" | "Needs you" | "Done" | "Stopped" | "Failed" {
+export function taskStateLabel(task: SubagentView): string {
   switch (task.status) {
     case "running":
-      return "Working";
+      return t("timeline.task.state.working");
     case "waiting_human":
-      return "Needs you";
+      return t("timeline.task.state.needsYou");
     case "completed":
-      return "Done";
+      return t("timeline.task.state.done");
     case "cancelled":
-      return "Stopped";
+      return t("timeline.task.state.stopped");
     case "failed":
-      return "Failed";
+      return t("timeline.task.state.failed");
   }
 }

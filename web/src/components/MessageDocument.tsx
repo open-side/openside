@@ -2,8 +2,10 @@ import { Check, Copy, FileText } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MessageDocument } from "../api/types";
 import { useClient } from "../context";
+import { t } from "../i18n";
 import { Button, copyText, Dialog, ICON_STROKE, useToast } from "../ui";
 import { Markdown } from "./Markdown";
+import { useSplitPane } from "./splitPaneState";
 import "./documents.css";
 
 /** The document's Markdown, read once through the session's raw artifact route. */
@@ -36,8 +38,6 @@ function previewLines(text: string, title: string): string[] {
     .slice(0, 3);
 }
 
-const FAILED = "Couldn’t open this document.";
-
 /** A document shown in place: rendered Markdown, clipped with Show more when it runs long. */
 function InlineDocument({ sessionId, document }: { sessionId: string; document: MessageDocument }) {
   const text = useDocumentText(sessionId, document.path);
@@ -51,11 +51,11 @@ function InlineDocument({ sessionId, document }: { sessionId: string; document: 
   return (
     <section className="doc-inline" aria-label={document.title} data-open={open} data-clipped={clipped && !open}>
       {text === "failed" ? (
-        <p className="doc-failed">{FAILED}</p>
+        <p className="doc-failed">{t("thread.document.failed")}</p>
       ) : (
         <div className="doc-inline-body" ref={body} aria-busy={text === null}>
           {text === null ? (
-            <span className="doc-skeleton" role="status" aria-label="Loading document">
+            <span className="doc-skeleton" role="status" aria-label={t("thread.document.loading")}>
               <span className="doc-skeleton-bar" aria-hidden="true" />
               <span className="doc-skeleton-bar" aria-hidden="true" />
               <span className="doc-skeleton-bar" aria-hidden="true" />
@@ -67,18 +67,16 @@ function InlineDocument({ sessionId, document }: { sessionId: string; document: 
       )}
       {clipped ? (
         <button type="button" className="doc-more" aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? "Show less" : "Show more"}
+          {open ? t("common.showLess") : t("common.showMore")}
         </button>
       ) : null}
     </section>
   );
 }
 
-/** A document behind a card: its title and a faded start; it opens beside the thread or as a sheet. */
-function PanelDocument({ sessionId, document }: { sessionId: string; document: MessageDocument }) {
-  const text = useDocumentText(sessionId, document.path);
+/** A document read in full: Copy, then its rendered Markdown. */
+function DocumentReader({ text }: { text: string | null | "failed" }) {
   const toast = useToast();
-  const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const ready = typeof text === "string" && text !== "failed";
 
@@ -86,28 +84,55 @@ function PanelDocument({ sessionId, document }: { sessionId: string; document: M
     if (ready && (await copyText(text))) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    } else toast.notify("Couldn’t copy the document.", "error");
+    } else toast.notify(t("thread.document.copyFailed"), "error");
   }
 
   return (
     <>
-      <button type="button" className="doc-card" aria-haspopup="dialog" onClick={() => setOpen(true)}>
+      <div className="doc-panel-actions">
+        <Button disabled={!ready} onClick={() => void copy()}>
+          {copied ? <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> : <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+          {copied ? t("common.copied") : t("common.copy")}
+        </Button>
+      </div>
+      <div className="doc-panel-body">{text === "failed" ? <p className="doc-failed">{t("thread.document.failed")}</p> : ready ? <Markdown text={text} /> : null}</div>
+    </>
+  );
+}
+
+/** A Markdown file of the session read in full, for the split pane. */
+export function SessionDocument({ sessionId, path }: { sessionId: string; path: string }) {
+  return <DocumentReader text={useDocumentText(sessionId, path)} />;
+}
+
+// Below this the thread has no room for the split pane beside it, so documents stay sheets.
+const SPLIT_FITS = "(min-width: 1100px)";
+
+/** A document behind a card: its title and a faded start; it opens beside the thread or as a sheet. */
+function PanelDocument({ sessionId, document }: { sessionId: string; document: MessageDocument }) {
+  const text = useDocumentText(sessionId, document.path);
+  const split = useSplitPane();
+  const [open, setOpen] = useState(false);
+  const ready = typeof text === "string" && text !== "failed";
+
+  function openDocument() {
+    if (split && window.matchMedia?.(SPLIT_FITS).matches) split.show({ kind: "file", path: document.path, title: document.title });
+    else setOpen(true);
+  }
+
+  return (
+    <>
+      <button type="button" className="doc-card" aria-haspopup={split ? undefined : "dialog"} onClick={openDocument}>
         <span className="doc-card-title">
           <FileText size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
           {document.title}
         </span>
         <span className="doc-card-preview" aria-hidden="true">
-          {text === "failed" ? FAILED : ready ? previewLines(text, document.title).map((line, index) => <span key={index}>{line}</span>) : null}
+          {text === "failed" ? t("thread.document.failed") : ready ? previewLines(text, document.title).map((line, index) => <span key={index}>{line}</span>) : null}
         </span>
       </button>
       <Dialog open={open} onClose={() => setOpen(false)} size="wide" className="doc-panel" title={document.title}>
-        <div className="doc-panel-actions">
-          <Button size="compact" disabled={!ready} onClick={() => void copy()}>
-            {copied ? <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> : <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
-            {copied ? "Copied" : "Copy"}
-          </Button>
-        </div>
-        <div className="doc-panel-body">{text === "failed" ? <p className="doc-failed">{FAILED}</p> : ready ? <Markdown text={text} /> : null}</div>
+        <DocumentReader text={text} />
       </Dialog>
     </>
   );

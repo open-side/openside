@@ -5,6 +5,7 @@ import { ApiError } from "../api/client";
 import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
 import { LocalOnlyNotice } from "../remote/LocalOnlyNotice";
+import { t } from "../i18n";
 import { Button, copyText, ICON_STROKE, useToast } from "../ui";
 import { CliHint } from "./CliHint";
 import { ErrorNote } from "./blocks";
@@ -19,7 +20,7 @@ function secondsLeft(offer: PairingOffer, now: number): number {
 export function AgentLink() {
   const client = useClient();
   const toast = useToast();
-  const [name, setName] = useState("My agent");
+  const [name, setName] = useState(() => t("agents.link.defaultName"));
   const [offer, setOffer] = useState<PairingOffer | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ message: string; local: boolean } | null>(null);
@@ -35,7 +36,7 @@ export function AgentLink() {
     setBusy(true);
     setError(null);
     try {
-      setOffer(await client.createPairing({ name: name.trim() || "My agent", scopes: [...AGENT_SCOPES], kind: "agent_client", via: null }));
+      setOffer(await client.createPairing({ name: name.trim() || t("agents.link.defaultName"), scopes: [...AGENT_SCOPES], kind: "agent_client", via: null }));
       setNow(Date.now());
     } catch (cause) {
       setOffer(null);
@@ -49,44 +50,40 @@ export function AgentLink() {
   const left = offer ? secondsLeft(offer, now) : 0;
 
   async function copy() {
-    if (link) toast.notify((await copyText(link)) ? "Link copied" : "Could not copy; select the link instead", "success");
+    if (link) toast.notify((await copyText(link)) ? t("agents.link.copied") : t("agents.link.copyFailed"), "success");
   }
 
   return (
     <div className="agent-link">
-      <p className="section-list-description">
-        Connect a coding agent or script that runs on its own computer. It signs in with a one-time link. It waits for a person’s approval on one of your devices before it does anything sensitive, and the
-        link fixes that role.
-      </p>
+      <p className="section-list-description">{t("agents.link.intro")}</p>
       <div className="agent-link-form">
         <label className="field">
-          <span>Agent name</span>
+          <span>{t("agents.field.agentName")}</span>
           <input value={name} maxLength={100} onChange={(event) => setName(event.target.value)} />
         </label>
         <Button variant="primary" disabled={busy} onClick={() => void create()}>
-          {busy ? "Creating…" : offer ? "Create a new link" : "Create a link"}
+          {busy ? t("agents.link.creating") : offer ? t("agents.link.createNew") : t("agents.link.create")}
         </Button>
       </div>
-      {error?.local ? <LocalOnlyNotice what="connect an agent" onChanged={() => void create()} /> : error ? <ErrorNote>{error.message}</ErrorNote> : null}
+      {error?.local ? <LocalOnlyNotice what={t("agents.link.localOnly")} onChanged={() => void create()} /> : error ? <ErrorNote>{error.message}</ErrorNote> : null}
       {offer && link ? (
         left > 0 ? (
           <div className="agent-link-result" role="status">
             <p className="onb-result-title">
-              <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> Link ready · expires in {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
+              <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />{" "}
+              {t("agents.link.ready", { time: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` })}
             </p>
             <div className="remote-copy-row">
-              <input readOnly aria-label="Agent link" value={link} onFocus={(event) => event.currentTarget.select()} />
-              <Button size="compact" aria-label="Copy the agent link" onClick={() => void copy()}>
-                <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> Copy
+              <input readOnly aria-label={t("agents.link.linkLabel")} value={link} onFocus={(event) => event.currentTarget.select()} />
+              <Button aria-label={t("agents.link.copyLabel")} onClick={() => void copy()}>
+                <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> {t("common.copy")}
               </Button>
             </div>
-            <p className="section-list-description">
-              Give it to the agent. It uses it once, on its own computer, to sign in; the agent’s setup tells it where to paste a link.
-            </p>
-            <CliHint command="openside login">On the agent’s computer, the command that takes this link is</CliHint>
+            <p className="section-list-description">{t("agents.link.giveIt")}</p>
+            <CliHint command="openside login">{t("agents.link.cliHint")}</CliHint>
           </div>
         ) : (
-          <ErrorNote>This link has expired. Create a new one.</ErrorNote>
+          <ErrorNote>{t("agents.link.expired")}</ErrorNote>
         )
       ) : null}
     </div>

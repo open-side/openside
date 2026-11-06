@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { Markdown } from "./Markdown";
+import { artifactPath, Markdown } from "./Markdown";
 
 describe("Markdown images", () => {
   it("never renders an <img>: external, relative and daemon-API sources stay non-fetching", () => {
@@ -36,5 +36,36 @@ describe("Markdown tables", () => {
     const { container } = render(<Markdown text={["| Plan | Price | Share | Note |", "| --- | --- | :-: | --- |", "| Team | $1,200 | 42% | 3 seats left |"].join("\n")} />);
     const cells = [...container.querySelectorAll("td")];
     expect(cells.map((cell) => cell.hasAttribute("data-numeric"))).toEqual([false, true, false, false]);
+  });
+});
+
+describe("artifactPath", () => {
+  it("accepts plain relative files and decodes them", () => {
+    expect(artifactPath("chart.png")).toBe("chart.png");
+    expect(artifactPath("./out/report.md")).toBe("out/report.md");
+    expect(artifactPath("out/my%20report.md?x=1#top")).toBe("out/my report.md");
+  });
+
+  it("rejects schemes, rooted paths and any way out of the chat's folder, encoded or not", () => {
+    for (const href of [
+      undefined,
+      "",
+      "#top",
+      "https://example.com/a.png",
+      "javascript:alert(1)",
+      "/etc/passwd",
+      "../secret",
+      "out/../../secret",
+      "%2e%2e/secret",
+      "foo%2f..%2fsecret",
+      "%2fetc%2fpasswd",
+      "..%5csecret",
+      "a\\b",
+      "a//b",
+      "a/./b",
+      "%E0%A4%A",
+    ]) {
+      expect(artifactPath(href), String(href)).toBeNull();
+    }
   });
 });

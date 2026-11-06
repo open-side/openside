@@ -18,9 +18,11 @@ export function safeUrl(value: string): string {
  * Model output never makes a client fetch: an image would bypass the API client (no auth, no 401
  * handling) and external hosts violate img-src. It becomes its alt text; an absolute http(s)
  * image on another origin stays one click away as a plain link the reader opens deliberately.
+ * `fallbackLabel` names an image without alt text; each caller passes it from its own catalog
+ * because this module is shared with the extension and holds no copy of its own.
  */
-export function imageChip(src: string | undefined, alt: string | undefined, ownOrigin: string): { label: string; href: string | null } {
+export function imageChip(src: string | undefined, alt: string | undefined, ownOrigin: string, fallbackLabel = "Image"): { label: string; href: string | null } {
   const safe = typeof src === "string" ? safeUrl(src) : "";
   const external = /^https?:\/\//i.test(safe) && !safe.startsWith(`${ownOrigin}/`);
-  return { label: alt?.trim() || "Image", href: external ? safe : null };
+  return { label: alt?.trim() || fallbackLabel, href: external ? safe : null };
 }

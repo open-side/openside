@@ -1,6 +1,7 @@
 /*
- * openside web design system. Token values, layout metrics and component language follow
- * mym0404/aside-relay (MIT; see NOTICE and web/DESIGN.md). Primitives live in src/ui/ui.css.
+ * openside web design system. Token values are measured from Aside (see web/DESIGN.md › Tokens);
+ * layout and component language started from mym0404/aside-relay (MIT; see NOTICE). Primitives
+ * live in src/ui/ui.css.
  */
 
 @font-face {
@@ -43,11 +44,17 @@ body {
   background: var(--canvas);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 1rem;
-  line-height: 1.5;
+  font-size: var(--text-md);
+  line-height: var(--leading-ui);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Korean wraps between words, not between syllables; long URLs still break via overflow-wrap. */
+html:lang(ko) body {
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 #root {
@@ -64,7 +71,7 @@ svg {
 }
 
 a {
-  color: var(--primary);
+  color: var(--link);
 }
 
 :focus-visible {
@@ -73,7 +80,7 @@ a {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--primary) 28%, transparent);
+  background: var(--selection);
 }
 
 code,
@@ -95,15 +102,15 @@ summary {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 0 16px;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-pill);
+  min-height: var(--control-height);
+  padding: 0 11px;
+  border: 1px solid var(--button-outline-border);
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   cursor: pointer;
   touch-action: manipulation;
 }
@@ -112,9 +119,10 @@ summary {
 }
 :where(button):disabled {
   cursor: default;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 :where(button.primary) {
+  min-height: var(--button-height);
   border-color: transparent;
   background: var(--primary);
   color: var(--primary-foreground);
@@ -132,22 +140,32 @@ summary {
 
 :where(input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"]), select, textarea) {
   width: 100%;
-  min-height: 44px;
-  padding: 10px 14px;
+  min-height: var(--control-height);
+  padding: 5px 11px;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius-md);
-  background: var(--canvas);
+  border-radius: var(--radius-control);
+  background: var(--control-bg);
   color: var(--text);
   font: inherit;
-  font-size: 1rem;
+  font-size: var(--text-md);
+}
+:where(input, select, textarea)::placeholder {
+  color: var(--placeholder);
+}
+/* Under a finger, fields grow to a 44px target and 16px text so iOS never zooms into them. */
+@media (pointer: coarse) {
+  :where(input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"]), select, textarea) {
+    min-height: 44px;
+    font-size: var(--text-base);
+  }
 }
 /* Form editors (skills, memory, settings JSON) keep aside-relay's vertical resize; the
  * composer opts out. Whole-pixel lines so a single row never overflows by a sub-pixel. */
 :where(textarea) {
-  line-height: 24px;
+  line-height: 20px;
   resize: vertical;
   scrollbar-width: thin;
-  scrollbar-color: var(--control-border) transparent;
+  scrollbar-color: var(--scroll-thumb) transparent;
 }
 /*
  * Shared scrollbar: `.thin-scroll` on any inner scroller. There is never a track; the thumb is
@@ -158,8 +176,8 @@ summary {
  * (a ::-webkit-scrollbar would force a classic one).
  */
 .thin-scroll {
-  --scrollbar-thumb: color-mix(in srgb, var(--text) 28%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--text) 46%, transparent);
+  --scrollbar-thumb: var(--scroll-thumb);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--scroll-thumb) 70%, var(--text));
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
 }
@@ -246,13 +264,13 @@ summary {
 .chip {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 10px;
+  min-height: 16px;
+  padding: 0 6px;
   border-radius: var(--radius-pill);
-  background: var(--hover);
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 600;
+  background: var(--badge-bg);
+  color: var(--text);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
 }
 .field {
   display: grid;
@@ -264,20 +282,21 @@ summary {
 }
 .tabs {
   display: flex;
-  gap: 2px;
+  gap: 0;
   padding: 3px;
-  border-radius: var(--radius-pill);
-  background: var(--hover);
+  border-radius: var(--radius-seg);
+  background: var(--seg-track);
 }
 .tabs > button {
   flex: 1;
-  min-height: 34px;
+  min-height: 25px;
   border: 0;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-seg-item);
   background: transparent;
-  color: var(--muted);
+  color: var(--seg-text);
 }
 .tabs > [aria-selected="true"] {
-  background: var(--canvas);
-  color: var(--text);
+  background: var(--seg-active);
+  box-shadow: var(--shadow-seg-active);
+  color: var(--seg-text-active);
 }

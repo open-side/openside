@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import { ChevronRight, Ellipsis, Plus, TriangleAlert } from "lucide-react";
 import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { Resource } from "../hooks/useResource";
+import { t } from "../i18n";
 import { Button, cx, Dialog, DialogActions, ICON_STROKE, IconButton, PopoverMenu, Spinner } from "../ui";
 import "./pages.css";
 import "./signin.css";
@@ -52,7 +53,7 @@ export function AddButton({
   children: ReactNode;
 }) {
   return (
-    <Button variant={variant} size="compact" onClick={onClick}>
+    <Button variant={variant} onClick={onClick}>
       <Plus size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
       {children}
     </Button>
@@ -109,9 +110,9 @@ export function ResourceCard({ title, detail, badge, badgeTone, icon: Icon, lead
 export function RowMenu({ name, children }: { name: string; children: ReactNode }) {
   return (
     <PopoverMenu
-      label={`Options for ${name}`}
+      label={t("settings.blocks.rowMenu", { name })}
       trigger={
-        <IconButton label={`Options for ${name}`} className="row-menu-trigger">
+        <IconButton label={t("settings.blocks.rowMenu", { name })} className="row-menu-trigger">
           <Ellipsis size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </IconButton>
       }
@@ -164,7 +165,7 @@ export function EmptyState({ icon: Icon, title, detail, action }: { icon: Lucide
   );
 }
 
-export function Loading({ label = "Loading…" }: { label?: string }) {
+export function Loading({ label = t("common.loading") }: { label?: string }) {
   return (
     <p className="loading-row" role="status">
       <Spinner size={16} />
@@ -201,8 +202,8 @@ export function ResourceView<T>({
       <div className="load-error" role="alert">
         <TriangleAlert size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
         <p>{resource.error}</p>
-        <Button size="compact" onClick={() => void resource.reload()}>
-          Try again
+        <Button onClick={() => void resource.reload()}>
+          {t("common.tryAgain")}
         </Button>
       </div>
     ) : (
@@ -236,7 +237,7 @@ export function ConfirmDialog({
   return (
     <Dialog open={open} onClose={onClose} title={title} description={description}>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("common.cancel")}</Button>
         <Button
           variant="primary"
           className="confirm-danger"

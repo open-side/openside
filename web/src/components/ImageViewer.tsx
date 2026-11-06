@@ -1,6 +1,7 @@
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { Minus, Plus, X } from "lucide-react";
 import { useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { t } from "../i18n";
 import { ICON_STROKE, IconButton } from "../ui";
 import "./browser.css";
 
@@ -126,7 +127,7 @@ export function ImageViewer({ label, title, subtitle, src, alt, placeholder, onC
               <h2 className="viewer-title">{title}</h2>
               {subtitle ? <span className="viewer-subtitle">{subtitle}</span> : null}
             </div>
-            <IconButton label="Close" onClick={onClose}>
+            <IconButton label={t("common.close")} onClick={onClose}>
               <X size={22} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </IconButton>
           </header>
@@ -134,8 +135,8 @@ export function ImageViewer({ label, title, subtitle, src, alt, placeholder, onC
             ref={viewport}
             className="viewer-viewport"
             role="region"
-            aria-label="Zoomable view"
-            aria-description="Drag to move. Use plus and minus to zoom, arrow keys to move, or zero to reset."
+            aria-label={t("thread.viewer.zoomable")}
+            aria-description={t("thread.viewer.help")}
             tabIndex={0}
             data-panning={panning || undefined}
             onPointerDown={down}
@@ -156,13 +157,13 @@ export function ImageViewer({ label, title, subtitle, src, alt, placeholder, onC
             )}
           </div>
           <footer className="viewer-controls">
-            <IconButton label="Zoom out" disabled={step === 0} onClick={() => zoomTo(step - 1)}>
+            <IconButton label={t("thread.viewer.zoomOut")} disabled={step === 0} onClick={() => zoomTo(step - 1)}>
               <Minus size={22} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </IconButton>
-            <button type="button" className="viewer-reset" aria-label="Zoom level" title="Reset zoom" onClick={reset}>
+            <button type="button" className="viewer-reset" aria-label={t("thread.viewer.zoomLevel")} title={t("thread.viewer.resetZoom")} onClick={reset}>
               {Math.round(scale * 100)}%
             </button>
-            <IconButton label="Zoom in" disabled={step === ZOOM_STEPS.length - 1} onClick={() => zoomTo(step + 1)}>
+            <IconButton label={t("thread.viewer.zoomIn")} disabled={step === ZOOM_STEPS.length - 1} onClick={() => zoomTo(step + 1)}>
               <Plus size={22} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </IconButton>
           </footer>

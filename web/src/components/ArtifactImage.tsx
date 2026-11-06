@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useClient } from "../context";
+import { t } from "../i18n";
 import { ImageViewer } from "./ImageViewer";
 import "./browser.css";
 
@@ -30,14 +31,14 @@ export function ArtifactImage({ sessionId, path, alt }: { sessionId: string; pat
     };
   }, [client, sessionId, path]);
 
-  if (failed) return <span className="chip">{alt} (unavailable)</span>;
+  if (failed) return <span className="chip">{t("thread.image.unavailable", { name: alt })}</span>;
   if (!src) return <span className="chip">{alt}</span>;
   return (
     <>
-      <button type="button" className="image-button" onClick={() => setZoomed(true)} aria-label={`Open image ${alt}`}>
+      <button type="button" className="image-button" onClick={() => setZoomed(true)} aria-label={t("thread.image.open", { name: alt })}>
         <img src={src} alt={alt} className="attachment-image" />
       </button>
-      {zoomed ? <ImageViewer label={`Image: ${alt}`} title={alt} src={src} alt={alt} onClose={() => setZoomed(false)} /> : null}
+      {zoomed ? <ImageViewer label={t("thread.image.label", { name: alt })} title={alt} src={src} alt={alt} onClose={() => setZoomed(false)} /> : null}
     </>
   );
 }

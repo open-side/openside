@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPalettes, applyTheme } from "./theme";
+import { applyTheme, forgetRetiredThemeKeys } from "./theme";
 
 const metas = () => Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
 
@@ -15,25 +15,32 @@ afterEach(() => {
   metas().forEach((meta) => meta.remove());
   localStorage.clear();
   applyTheme("system");
-  applyPalettes({ light: "openside", dark: "openside" });
 });
 
 describe("theme-color metas", () => {
   it("keeps each scheme's own canvas on its meta under the system preference", () => {
     applyTheme("system");
     const [light, dark] = metas();
-    expect(light?.content).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(dark?.content).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(light?.content).not.toBe(dark?.content);
+    expect(light?.content).toBe("#f9f9f9");
+    expect(dark?.content).toBe("#1f1f1f");
   });
 
   it("pins both metas to the chosen scheme when Light or Dark is explicit", () => {
     applyTheme("dark");
-    const [light, dark] = metas();
-    expect(light?.content).toBe(dark?.content);
-    const darkCanvas = dark?.content;
+    expect(metas().map((meta) => meta.content)).toEqual(["#1f1f1f", "#1f1f1f"]);
     applyTheme("light");
-    expect(metas()[0]?.content).toBe(metas()[1]?.content);
-    expect(metas()[0]?.content).not.toBe(darkCanvas);
+    expect(metas().map((meta) => meta.content)).toEqual(["#f9f9f9", "#f9f9f9"]);
+  });
+});
+
+describe("forgetRetiredThemeKeys", () => {
+  it("drops the palette and accent keys the removed presets left behind and keeps the theme", () => {
+    localStorage.setItem("openside.palette", "{}");
+    localStorage.setItem("openside.accent", "#2f6fed");
+    localStorage.setItem("openside.theme", "dark");
+    forgetRetiredThemeKeys();
+    expect(localStorage.getItem("openside.palette")).toBeNull();
+    expect(localStorage.getItem("openside.accent")).toBeNull();
+    expect(localStorage.getItem("openside.theme")).toBe("dark");
   });
 });

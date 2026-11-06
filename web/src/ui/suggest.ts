@@ -1,3 +1,5 @@
+import { t } from "../i18n";
+
 /**
  * Imperative suggestion combobox for a text input (WAI-ARIA APG "editable combobox with list
  * autocomplete"). Shared by the web app and the extension side panel, whose login cards are built
@@ -13,7 +15,7 @@ export function attachSuggestions(input: HTMLInputElement | HTMLTextAreaElement,
   list.id = listId;
   list.className = "oc-suggest-list";
   list.setAttribute("role", "listbox");
-  list.setAttribute("aria-label", input.getAttribute("placeholder") ?? "Suggestions");
+  list.setAttribute("aria-label", input.getAttribute("placeholder") ?? t("shell.suggest.label"));
   list.hidden = true;
   wrap.append(list);
   input.setAttribute("role", "combobox");

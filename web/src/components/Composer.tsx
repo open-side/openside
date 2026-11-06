@@ -1,20 +1,26 @@
-import { ArrowUp, Eye, FileText, Hand, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Crop, Eraser, Eye, FileText, Globe, Hand, MessageSquareWarning, RotateCcw, SquarePlus, Square, X } from "lucide-react";
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { ApiError } from "../api/client";
-import type { AttachmentUpload, CreateSessionRequest, ModelCatalog, PolicyMode, SkillSummary } from "../api/types";
+import { ApiError, apiErrorMessage } from "../api/client";
+import type { AttachedTab, AttachmentUpload, ChatConfirmation, CreateProjectRequest, CreateSessionRequest, McpServer, ModelCatalog, PolicyMode, Project, Session, SkillSummary } from "../api/types";
 import { mayUse } from "../auth";
 import { newMessageId, useClient } from "../context";
 import { AgentTabsContext } from "../hooks/useAgentTabs";
 import { useTeam } from "../hooks/useAgents";
+import { openInBrowser, usePersonBrowser } from "../hooks/usePersonBrowser";
+import { t } from "../i18n";
 import { OutboxNotice } from "../pwa/OutboxNotice";
 import { outbox } from "../pwa/outbox";
 import type { ShareDraft } from "../pwa/share";
+import { SETTINGS_FOOTER } from "../settings/nav";
 import { outgoing } from "../state/outgoing";
-import { ICON_STROKE, IconButton } from "../ui";
-import { ComposerContextMenu, CONTEXT_TYPING, contextItems, type ContextCommand, type ContextItem } from "./ComposerContextMenu";
-import { EffortMenu, ModelMenu, PermissionMenu, PlusMenu, SpeedMenu } from "./ComposerOptions";
-import { createSessionRequest, DEFAULT_SESSION_OPTIONS, hasOverrides, type SessionOptions } from "./sessionOptions";
+import { cx, ICON_STROKE, IconButton } from "../ui";
+import { ComposerContextMenu, CONTEXT_TYPING, contextItems, stepActive, type ContextCommand, type ContextItem, type ContextTrigger } from "./ComposerContextMenu";
+import { ConfirmationMenu, ContextRing, EffortMenu, folderName, MicButton, PlusMenu, ProjectMenu, type MenuSide, type ProjectControls } from "./ComposerOptions";
+import { ModelPicker } from "./ModelPicker";
+import { leaveHandoff, takeHandoff } from "./composerHandoff";
+import { createSessionRequest, DEFAULT_SESSION_OPTIONS, optionsPatch, sessionOptionsOf, type SessionOptions } from "./sessionOptions";
+import { blobBase64, useDictation } from "./useDictation";
 
 // Same rules as the sidecar (agent/src/features/skills.ts `MENTION_SOURCE`): a mention starts
 // a word and ends before whitespace or punctuation; `/a/b` and `/a.md` are paths, not mentions.
@@ -25,12 +31,12 @@ const MAX_MENTIONS = 5;
 export const MAX_ATTACHMENTS = 4;
 export const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 1024 * 1024;
-/** The `/prefix` being typed right before the caret. */
-const TYPING = /(?:^|[\s([{"'])\/([a-z0-9-]*)$/;
-// Six 24px lines plus the 16px vertical padding; thread.css lowers the cap on phones through
-// the field's max-height, which this reads back.
+// Six 24px lines plus the vertical padding; composer.css lowers the cap on phones through the
+// field's max-height, which this reads back.
 const MAX_INPUT_HEIGHT = 160;
 const PREWARM_EVERY_MS = 30_000;
+const MAX_SKILL_ROWS = 8;
+const FEEDBACK_URL = SETTINGS_FOOTER.find((link) => link.key === "feedback")?.url ?? "";
 
 interface PendingFile {
   key: string;
@@ -39,14 +45,8 @@ interface PendingFile {
   thumbnail: string | null;
 }
 
-function base64(file: File): Promise<string> {
-  const { promise, resolve, reject } = Promise.withResolvers<string>();
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
-  reader.onerror = () => reject(reader.error);
-  reader.readAsDataURL(file);
-  return promise;
-}
+/** A person tab picked before the chat exists; it is attached once the chat is created. */
+type PendingTab = Pick<AttachedTab, "tab_id" | "title" | "url">;
 
 export function mentionedSkills(text: string, known: ReadonlySet<string>): string[] {
   const found: string[] = [];
@@ -58,7 +58,8 @@ export function mentionedSkills(text: string, known: ReadonlySet<string>): strin
 }
 
 export interface ComposerProps {
-  sessionId: string;
+  /** The chat this composer writes to; absent on Home, where sending creates a new chat. */
+  sessionId?: string;
   /** While a run is active, Send becomes Queue and an empty composer offers Stop. */
   running?: boolean;
   /** The run is paused on a ticket: messages queue behind it, but there is nothing to stop. */
@@ -70,31 +71,25 @@ export interface ComposerProps {
   onShowPending?: () => void;
   /**
    * Called once a message is on its way. In a thread that is right away (the transcript shows its
-   * delivery and scrolls back to it); on Home only after the daemon accepted it or the outbox
-   * holds it, since the person is taken to the thread that shows it. A new task started with its
-   * own settings passes the conversation it created.
+   * delivery and scrolls back to it); on Home only after the daemon accepted it, with the chat
+   * it created.
    */
   onSent?: (createdSessionId?: string) => void;
-  /** Compact controls in the composer's bottom bar, after Add files (model picker, browser preview). */
+  /** Compact controls in the composer's bottom bar, after the confirmation chip (agents, files). */
   tools?: ReactNode;
   /** Content shared to the app (share target) or a picked starter; applied once, then `onDraftApplied` fires. */
   draft?: ShareDraft | null;
   onDraftApplied?: () => void;
-  addressee?: string;
   /** A quoted message to put above what is already typed; applied once, then `onQuoteApplied` fires. */
   quote?: { id: string; text: string } | null;
   onQuoteApplied?: () => void;
+  /** The thread has no messages yet: it keeps the new-chat prompt instead of "Reply". */
+  fresh?: boolean;
   /**
-   * `home` hands a new task to the assistant: its own prompt, focus on arrival, two lines tall,
-   * and nothing to stop, queue or switch.
+   * `home` starts a new chat (aside-gap-audit D1: a chat, never a persona's thread) with the
+   * options picked in its toolbar; the toolbar shows once something is typed, under the pill.
    */
   variant?: "thread" | "home";
-  /**
-   * Home only: the toolbar offers the new task's permission, model, effort, profile, speed and
-   * private mode. Untouched, the message joins `sessionId` as before; any choice starts a new
-   * conversation for `agentId` with them, since a conversation's settings are fixed at creation.
-   */
-  newTask?: { agentId: string };
 }
 
 export function Composer({
@@ -108,58 +103,75 @@ export function Composer({
   tools,
   draft,
   onDraftApplied,
-  addressee,
   quote,
   onQuoteApplied,
+  fresh = false,
   variant = "thread",
-  newTask,
 }: ComposerProps) {
-  const home = variant === "home";
+  const home = variant === "home" || !sessionId;
   const running = !home && runningProp;
   const waiting = !home && waitingProp;
   const placeholder = reconnecting
-    ? "Reconnecting… you can keep typing"
-    : home
-      ? "Ask AI a task, @ for context"
+    ? t("thread.composer.placeholder.reconnecting")
+    : home || fresh
+      ? t("thread.composer.placeholder.home")
       : waiting
-        ? "Answer above, or type a reply"
+        ? t("thread.composer.placeholder.waiting")
         : running
-          ? "Add to the task…"
-          : `Message ${addressee ?? "openside"}`;
+          ? t("thread.composer.placeholder.running")
+          : t("thread.composer.placeholder.reply");
   const queueing = running || waiting;
+  const side: MenuSide = home ? "bottom" : "top";
   const client = useClient();
+  const navigate = useNavigate();
+  const team = useTeam();
+  const agentTabs = useContext(AgentTabsContext);
+  const person = usePersonBrowser();
   const warmed = useRef({ key: "", at: -Infinity });
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  // Home sends what was on screen when Send was pressed, then clears or hands it to the new chat;
+  // anything typed, picked or dictated meanwhile would be lost, so Home's input holds still.
+  const locked = home && busy;
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState<string | null>(null);
-  const [candidates, setCandidates] = useState<SkillSummary[]>([]);
-  const [active, setActive] = useState(0);
   const [known, setKnown] = useState<ReadonlySet<string>>(new Set());
   const [files, setFiles] = useState<PendingFile[]>([]);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const form = useRef<HTMLFormElement>(null);
-  const navigate = useNavigate();
-  const team = useTeam();
-  const tabs = useContext(AgentTabsContext);
-  const taskAgent = newTask && home ? team.agents?.find((agent) => agent.id === newTask.agentId) : undefined;
-  const [options, setOptions] = useState<SessionOptions>(DEFAULT_SESSION_OPTIONS);
+  const [context, setContext] = useState<{ trigger: ContextTrigger; query: string; below: boolean } | null>(null);
+  const [contextActive, setContextActive] = useState(0);
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [apps, setApps] = useState<McpServer[] | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   // What this device may ask for: unknown until read, and the daemon still has the last word.
   const [limits, setLimits] = useState<{ deviceMode: PolicyMode | null; agentClient: boolean }>({ deviceMode: null, agentClient: false });
-  const [context, setContext] = useState<{ query: string; below: boolean } | null>(null);
-  const [contextActive, setContextActive] = useState(0);
-  // A conversation created for a send whose message then failed: sending again reuses it.
+  const [defaultConfirmation, setDefaultConfirmation] = useState<ChatConfirmation>("ask_first");
+  const [projects, setProjects] = useState<Project[]>([]);
+  // The settings document's `remote` is the daemon's verdict on this browser's local authority:
+  // only the computer running openside opens the folder picker or makes a project.
+  const [local, setLocal] = useState<boolean | null>(null);
+  // Home: the new chat's options. Thread: the chat as the daemon reports it, plus a change on its way.
+  const [picked, setPicked] = useState<SessionOptions>(DEFAULT_SESSION_OPTIONS);
+  const [session, setSession] = useState<Session | null>(null);
+  const [pending, setPending] = useState<Partial<SessionOptions>>({});
+  const [attached, setAttached] = useState<PendingTab[]>([]);
+  // Thread: tabs Home picked for this chat that could not be attached; the person retries or drops them.
+  const [unattached, setUnattached] = useState<PendingTab[]>([]);
+  // A chat created for a send whose message then failed: sending again reuses it.
   const started = useRef<{ request: string; id: string } | null>(null);
-  const changeOptions = (patch: Partial<SessionOptions>) => setOptions((current) => ({ ...current, ...patch }));
-  const permission = taskAgent ? { onChange: changeOptions, ceiling: taskAgent.mode, deviceLimit: limits.deviceMode, agentName: taskAgent.name } : null;
+  const [touched, setTouched] = useState(false);
 
-  // Labels for the model trigger and the options this device may not pick; without them the
-  // toolbar still offers Default and the daemon refuses what it must.
-  const taskAgentId = taskAgent?.id;
+  const options: SessionOptions | null = home
+    ? { ...picked, confirmation: picked.confirmation ?? defaultConfirmation }
+    : session
+      ? { ...sessionOptionsOf(session), ...pending }
+      : null;
+  const agentHome = !home && (team.agents ?? []).some((agent) => agent.home_session_id === sessionId);
+
   useEffect(() => {
-    if (!taskAgentId) return;
     let live = true;
     client.modelCatalog().then(
       (next) => live && setCatalog(next),
@@ -173,10 +185,161 @@ export function Composer({
       (me) => live && setLimits((current) => ({ ...current, agentClient: me.kind === "agent_client" })),
       () => undefined,
     );
+    client.preferences().then(
+      (preferences) => live && setDefaultConfirmation(preferences.confirmation),
+      () => undefined,
+    );
+    client.listProjects().then(
+      (list) => live && setProjects(list.projects),
+      () => undefined,
+    );
+    client.settingsConfig().then(
+      (document) => live && setLocal(!document.remote),
+      () => live && setLocal(false),
+    );
     return () => {
       live = false;
     };
-  }, [client, taskAgentId]);
+  }, [client]);
+
+  // Option PATCHes and session reads share one queue, so every full-Session answer arrives in the
+  // order it was asked for and a read started before a change can never land after it. Each
+  // field's optimistic value is dropped only by the answer to the newest change of that field.
+  const optionsQueue = useRef<Promise<void>>(Promise.resolve());
+  const optionsGeneration = useRef(0);
+  const fieldGeneration = useRef<Partial<Record<keyof SessionOptions, number>>>({});
+
+  // The chat's options and context use: read on arrival and again whenever a run starts or settles,
+  // since a finished turn is what moves the context ring.
+  useEffect(() => {
+    if (home || !sessionId) return;
+    let live = true;
+    optionsQueue.current = optionsQueue.current.then(() =>
+      client.session(sessionId).then(
+        (next) => {
+          if (live) setSession(next);
+        },
+        () => undefined,
+      ),
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, home, sessionId, running]);
+
+  useEffect(() => {
+    if (home || !sessionId) return;
+    let live = true;
+    client.attachedTabs(sessionId).then(
+      (list) => live && setAttached(list.tabs),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, home, sessionId]);
+
+  function changeOptions(patch: Partial<SessionOptions>) {
+    setTouched(true);
+    if (home) {
+      // The chat is being created with the options on screen at Send; a later pick would be lost.
+      if (lockedRef.current) return;
+      setPicked((current) => ({ ...current, ...patch }));
+      return;
+    }
+    if (!sessionId || !session) return;
+    const generation = ++optionsGeneration.current;
+    const fields = Object.keys(patch) as (keyof SessionOptions)[];
+    for (const field of fields) fieldGeneration.current[field] = generation;
+    setPending((current) => ({ ...current, ...patch }));
+    const settle = () =>
+      setPending((current) => {
+        const next = { ...current };
+        for (const field of fields) if (fieldGeneration.current[field] === generation) delete next[field];
+        return next;
+      });
+    const target = sessionId;
+    // Where the chat works has its own route; both fields always travel together.
+    const folder = "projectId" in patch || "workspace" in patch;
+    optionsQueue.current = optionsQueue.current.then(() =>
+      (folder ? client.setSessionFolder(target, { project_id: patch.projectId ?? null, workspace: patch.workspace ?? null }) : client.updateSession(target, optionsPatch(patch))).then(
+        (next) => {
+          setSession(next);
+          settle();
+        },
+        (cause: unknown) => {
+          settle();
+          // A refusal the app can explain (a device limit) says so; anything else is the generic retry.
+          setError((cause instanceof ApiError && apiErrorMessage(cause.code)) || t(folder ? "thread.project.failed" : "thread.composer.error.optionsFailed"));
+        },
+      ),
+    );
+  }
+
+  /** Makes a project on the computer running openside, from a picked folder or from scratch, and moves the chat into it. */
+  async function createProject(from: "folder" | "scratch") {
+    if (lockedRef.current) return;
+    setError(null);
+    try {
+      let request: CreateProjectRequest = { name: t("thread.project.newName") };
+      if (from === "folder") {
+        const { path } = await client.pickFolder();
+        if (!path || lockedRef.current) return;
+        // The picker and the daemon both canonicalise, so a folder that already is a project matches its root.
+        const known = projects.find((project) => project.root === path);
+        if (known) {
+          changeOptions({ projectId: known.id, workspace: null });
+          return;
+        }
+        request = { name: folderName(path), root: path };
+      }
+      const project = await client.createProject(request);
+      setProjects((current) => [...current.filter((other) => other.id !== project.id), project].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
+      if (!lockedRef.current) changeOptions({ projectId: project.id, workspace: null });
+    } catch (cause) {
+      setError((cause instanceof ApiError && apiErrorMessage(cause.code)) || t("thread.project.failed"));
+    }
+  }
+
+  /** Gives the chat a folder picked on the computer running openside, outside any project. */
+  async function attachFolder() {
+    if (lockedRef.current) return;
+    setError(null);
+    try {
+      const { path } = await client.pickFolder();
+      if (path && !lockedRef.current) changeOptions({ projectId: null, workspace: path });
+    } catch (cause) {
+      setError((cause instanceof ApiError && apiErrorMessage(cause.code)) || t("thread.project.failed"));
+    }
+  }
+
+  const projectControls: ProjectControls = {
+    projects,
+    local,
+    onPick: (projectId) => {
+      if (!lockedRef.current) changeOptions({ projectId, workspace: null });
+    },
+    onCreate: (from) => void createProject(from),
+    onAttachFolder: () => void attachFolder(),
+  };
+
+  const insertText = useCallback((spoken: string) => {
+    const element = textarea.current;
+    if (lockedRef.current) return;
+    setText((current) => {
+      const caret = element && document.activeElement === element ? element.selectionStart : current.length;
+      const before = current.slice(0, caret);
+      const after = current.slice(caret);
+      const joined = `${before}${before && !/\s$/.test(before) ? " " : ""}${spoken}${after && !/^\s/.test(after) ? " " : ""}${after}`;
+      requestAnimationFrame(() => {
+        const end = joined.length - after.length;
+        element?.focus();
+        element?.setSelectionRange(end, end);
+      });
+      return joined;
+    });
+  }, []);
+  const dictation = useDictation(insertText, setError);
 
   // Something was shared to the app: it becomes this composer's starting message.
   useEffect(() => {
@@ -187,6 +350,19 @@ export function Composer({
     textarea.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- applied once per draft id
   }, [draft?.id]);
+
+  // Home created this chat but could not attach every picked tab, so it sent nothing and left
+  // the words, files and failed tabs here.
+  useEffect(() => {
+    if (home || !sessionId) return;
+    const handoff = takeHandoff(sessionId);
+    if (!handoff) return;
+    setText(handoff.text);
+    addFiles(handoff.files);
+    setUnattached(handoff.tabs);
+    setError(handoff.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- taken once per chat
+  }, [home, sessionId]);
 
   // A quoted message goes above whatever is already typed; the caret waits under the quote.
   useEffect(() => {
@@ -200,25 +376,35 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- applied once per quote id
   }, [quote?.id]);
 
+  const contextQuery = context?.query ?? null;
   useEffect(() => {
-    if (query === null) return;
+    if (contextQuery === null) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       client
-        .searchSkills(sessionId, query)
+        .searchSkills(sessionId, contextQuery)
         .then((list) => {
           if (cancelled) return;
-          setCandidates(list.skills);
-          setActive(0);
+          setSkills(list.skills.slice(0, MAX_SKILL_ROWS));
           setKnown((current) => new Set([...current, ...list.skills.map((skill) => skill.name)]));
         })
-        .catch(() => !cancelled && setCandidates([]));
+        .catch(() => !cancelled && setSkills([]));
     }, 120);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [client, sessionId, query]);
+  }, [client, sessionId, contextQuery]);
+
+  // Apps are read the first time `@` opens; the list rarely changes while the page is open.
+  const wantsApps = context?.trigger === "@" && apps === null;
+  useEffect(() => {
+    if (!wantsApps) return;
+    client.mcpServers().then(
+      (list) => setApps(list.servers),
+      () => setApps([]),
+    );
+  }, [client, wantsApps]);
 
   // Thumbnails of files still pending are released when the composer goes away.
   const pendingFiles = useRef(files);
@@ -241,9 +427,9 @@ export function Composer({
     element.style.overflowY = height > cap ? "auto" : "hidden";
   }, []);
   useLayoutEffect(fit, [text, fit]);
-  // The same text wraps differently once the field narrows (Send, Stop and the hand button share
-  // its row; the viewport turns) or a web font replaces the fallback, so a height fitted earlier
-  // would cut the new last line in half. Only width changes refit: the height is ours to set.
+  // The same text wraps differently once the field narrows (the viewport turns) or a web font
+  // replaces the fallback, so a height fitted earlier would cut the new last line in half. Only
+  // width changes refit: the height is ours to set.
   useEffect(() => {
     const element = textarea.current;
     if (!element) return;
@@ -266,36 +452,73 @@ export function Composer({
   }, [fit]);
 
   const chips = mentionedSkills(text, known);
-  const open = query !== null && candidates.length > 0;
   const hasInput = text.trim().length > 0 || files.length > 0;
-  // Only actions this screen can really take: Home is already a new task and has nothing to stop.
+
+  /**
+   * Starts over in an empty chat with this chat's options: the nearest openside has to clearing one.
+   * A folder of the chat's own can only be named from the computer running openside, so elsewhere
+   * the new chat starts without it; a project carries over everywhere.
+   */
+  async function startOver() {
+    try {
+      const current = options ?? DEFAULT_SESSION_OPTIONS;
+      const created = await client.createSession(createSessionRequest(local ? current : { ...current, workspace: null }));
+      navigate(`/sessions/${encodeURIComponent(created.id)}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("thread.composer.error.startFailed"));
+    }
+  }
+
   const commands: ContextCommand[] = [
-    ...(home ? [] : [{ id: "new", label: "New task", detail: "Start a separate task from Home", run: () => navigate("/") }]),
-    ...(running && onStop ? [{ id: "stop", label: "Stop the task", detail: "Ask before stopping what is running", run: onStop }] : []),
+    ...(home
+      ? []
+      : [
+          { id: "clear", label: t("thread.composer.command.clear"), detail: t("thread.composer.command.clearDetail"), icon: Eraser, run: () => void startOver() },
+          // openside summarizes long chats on its own; there is no manual compaction to ask for.
+          { id: "compact", label: t("thread.composer.command.compact"), detail: t("thread.composer.command.compactDetail"), icon: Crop, disabled: true },
+        ]),
+    { id: "feedback", label: t("thread.composer.command.feedback"), detail: t("thread.composer.command.feedbackDetail"), icon: MessageSquareWarning, run: () => void openInBrowser(client, FEEDBACK_URL) },
+    ...(home ? [] : [{ id: "new", label: t("thread.composer.command.new"), detail: t("thread.composer.command.newDetail"), icon: SquarePlus, run: () => navigate("/") }]),
   ];
-  const contextRows = context ? contextItems(context.query, tabs, team.agents ?? [], commands) : [];
+  const contextRows = context
+    ? contextItems({
+        trigger: context.trigger,
+        query: context.query,
+        chatTabs: sessionId ? agentTabs.filter((tab) => tab.owner_session_id === sessionId) : [],
+        agentTabs,
+        personConnected: person.connected,
+        personTabs: person.tabs,
+        personGroups: person.groups,
+        commands,
+        skills,
+        apps: apps ?? [],
+      })
+    : [];
   const contextOpen = contextRows.length > 0;
+  const shownActive = Math.min(contextActive, contextRows.length - 1);
+  // A disabled row (Compact) can come first; Enter would then do nothing, so the highlight skips it.
+  const activeRow = !contextOpen ? 0 : contextRows[shownActive]?.disabled ? stepActive(contextRows, shownActive, 1) : shownActive;
 
   function update(value: string, caret: number) {
+    if (locked) return;
     setText(value);
-    const typing = TYPING.exec(value.slice(0, caret));
-    setQuery(typing ? (typing[1] ?? "") : null);
-    if (!typing) setCandidates([]);
-    const at = CONTEXT_TYPING.exec(value.slice(0, caret));
-    if (!at) {
+    const typing = CONTEXT_TYPING.exec(value.slice(0, caret));
+    if (!typing) {
       setContext(null);
       return;
     }
-    // Opens above the card unless the card sits too close to the top of the window for its 240px.
+    const trigger = typing[1] as ContextTrigger;
+    const query = typing[2] ?? "";
+    // Opens on the side with room: above a thread's card unless it sits too close to the top.
     const top = form.current?.getBoundingClientRect().top ?? Infinity;
-    if (context?.query !== at[1]) setContextActive(0);
-    setContext({ query: at[1] ?? "", below: top < 256 });
+    if (context?.query !== query || context.trigger !== trigger) setContextActive(0);
+    setContext({ trigger, query, below: home || top < 256 });
   }
 
-  function replaceTyped(pattern: RegExp, replacement: string) {
+  function replaceTyped(replacement: string) {
     const element = textarea.current;
     const caret = element?.selectionStart ?? text.length;
-    const before = text.slice(0, caret).replace(pattern, replacement);
+    const before = text.slice(0, caret).replace(/[@/][^\s@/]*$/, replacement);
     setText(before + text.slice(caret));
     requestAnimationFrame(() => {
       element?.focus();
@@ -303,33 +526,65 @@ export function Composer({
     });
   }
 
-  function choose(skill: SkillSummary) {
-    replaceTyped(/\/[a-z0-9-]*$/, `/${skill.name} `);
-    setQuery(null);
-    setCandidates([]);
+  async function attachTabs(ids: readonly number[]) {
+    if (home || !sessionId) {
+      if (locked) return;
+      const tabs = person.tabs.filter((tab) => ids.includes(tab.tab_id));
+      setAttached((current) => [...current, ...tabs.filter((tab) => !current.some((known) => known.tab_id === tab.tab_id))]);
+      return;
+    }
+    // A group pick is several attachments: keep each one that landed and list each refusal as a
+    // failed chip, so a retry only asks again for what is missing.
+    const results = await Promise.allSettled(ids.map((id) => client.attachTab(sessionId, id)));
+    const added = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+    const failedIds = ids.filter((_, index) => results[index]?.status === "rejected");
+    setAttached((current) => [...current.filter((tab) => !added.some((next) => next.tab_id === tab.tab_id)), ...added]);
+    setUnattached((current) => {
+      const kept = current.filter((tab) => !added.some((next) => next.tab_id === tab.tab_id));
+      const known = (id: number) => kept.find((tab) => tab.tab_id === id) ?? person.tabs.find((tab) => tab.tab_id === id);
+      const fresh = failedIds.flatMap((id) => (kept.some((tab) => tab.tab_id === id) ? [] : [known(id) ?? { tab_id: id, title: "", url: "" }]));
+      return [...kept, ...fresh.map(({ tab_id, title, url }) => ({ tab_id, title, url }))];
+    });
+    if (!failedIds.length) return true;
+    const cause = results.find((result) => result.status === "rejected")?.reason as unknown;
+    setError((cause instanceof ApiError && apiErrorMessage(cause.code)) || t("thread.composer.error.attachFailed"));
+    return false;
+  }
+
+  async function retryAttach(tab: PendingTab) {
+    if (await attachTabs([tab.tab_id])) setError(null);
+  }
+
+  function detach(tab: PendingTab) {
+    if (locked) return;
+    setAttached((current) => current.filter((known) => known.tab_id !== tab.tab_id));
+    if (!home && sessionId) client.detachTab(sessionId, tab.tab_id).catch(() => undefined);
   }
 
   function pickContext(item: ContextItem) {
-    replaceTyped(/@[^\s@]*$/, item.insert ? `${item.insert} ` : "");
+    if (item.disabled || locked) return;
+    replaceTyped(item.insert ? `${item.insert} ` : "");
     setContext(null);
+    if (item.attach?.length) void attachTabs(item.attach);
     item.run?.();
   }
 
   function removeMention(name: string) {
+    if (locked) return;
     const mention = new RegExp(`(?:^|(?<=[\\s([{"']))/${name}(?=$|[\\s)\\]}"',;!?]|[.:](?:$|\\s)) ?`, "g");
     setText((current) => current.replace(mention, ""));
   }
 
   function addFiles(list: ArrayLike<File> | null) {
-    if (!list?.length) return;
+    if (!list?.length || locked) return;
     const picked = Array.from(list);
     if (files.length + picked.length > MAX_ATTACHMENTS) {
-      setError(`A message can carry at most ${MAX_ATTACHMENTS} attachments.`);
+      setError(t("thread.composer.error.tooManyAttachments", { max: MAX_ATTACHMENTS }));
       return;
     }
     const bytes = [...files.map((pending) => pending.file), ...picked].reduce((sum, file) => sum + file.size, 0);
     if (bytes > MAX_ATTACHMENT_BYTES) {
-      setError("Attachments are limited to 2 MiB in total.");
+      setError(t("thread.composer.error.attachmentsTooLarge"));
       return;
     }
     setError(null);
@@ -346,7 +601,7 @@ export function Composer({
     const body = text.trim();
     if ((!body && !files.length) || busy) return;
     if (new TextEncoder().encode(body).length > MAX_TEXT_BYTES) {
-      setError("The message is longer than 1 MiB.");
+      setError(t("thread.composer.error.textTooLong"));
       return;
     }
     setBusy(true);
@@ -355,12 +610,10 @@ export function Composer({
     const messageId = newMessageId();
     let attachments: AttachmentUpload[];
     try {
-      attachments = await Promise.all(
-        files.map(async (pending) => ({ name: pending.file.name, data_base64: await base64(pending.file) })),
-      );
+      attachments = await Promise.all(files.map(async (pending) => ({ name: pending.file.name, data_base64: await blobBase64(pending.file) })));
     } catch {
       setBusy(false);
-      setError("A file could not be read. Remove it and try again.");
+      setError(t("thread.composer.error.fileUnreadable"));
       return;
     }
     // The conversation shows this message's delivery itself: Sending, Sent, or Not sent with Retry.
@@ -370,25 +623,38 @@ export function Composer({
       onSent?.();
       setBusy(false);
     }
-    const creating = taskAgent && hasOverrides(options) ? createSessionRequest(taskAgent.id, options) : null;
     let target = sessionId;
-    if (creating) {
-      const created = await startTask(creating);
+    if (home) {
+      // `options` carries the confirmation default from Preferences; the chip shows it, so the
+      // chat must be created with it rather than the daemon's own default.
+      const created = options ? await startChat(createSessionRequest(options)) : null;
       if (created === null) return;
       target = created;
+      // A picked tab is context the person asked for. If one cannot be attached, nothing is sent:
+      // the new chat opens with the words, files and failed tabs so the person decides.
+      const results = await Promise.allSettled(attached.map((tab) => client.attachTab(created, tab.tab_id)));
+      const failed = attached.filter((_, index) => results[index]?.status === "rejected");
+      if (failed.length) {
+        const cause = results.find((result) => result.status === "rejected")?.reason as unknown;
+        leaveHandoff(created, {
+          text,
+          files: files.map((pending) => pending.file),
+          tabs: failed,
+          error: (cause instanceof ApiError && apiErrorMessage(cause.code)) || t("thread.composer.error.attachFailed"),
+        });
+        setBusy(false);
+        resetHome();
+        onSent?.(created);
+        return;
+      }
     }
+    if (!target) return;
     const failure = await outgoing.submit(client, { message_id: messageId, session_id: target, text: body, attachments });
     let kept = failure === null;
     if (failure?.status === 0) {
       // Unreachable daemon: the outbox delivers it later, and its notice replaces the bubble.
       try {
-        await outbox.enqueue({
-          message_id: messageId,
-          session_id: target,
-          text: body,
-          attachments,
-          queued_at: Date.now(),
-        });
+        await outbox.enqueue({ message_id: messageId, session_id: target, text: body, attachments, queued_at: Date.now() });
         outgoing.forget(messageId);
         kept = true;
       } catch {
@@ -398,36 +664,41 @@ export function Composer({
     if (!home) return;
     setBusy(false);
     if (kept) {
-      clearInput();
-      if (creating) {
-        started.current = null;
-        setOptions(DEFAULT_SESSION_OPTIONS);
-      }
-      onSent?.(creating ? target : undefined);
+      resetHome();
+      onSent?.(target);
     } else {
       // The words are still here to send again, so the thread must not hold a Not sent copy too.
       outgoing.forget(messageId);
-      setError(failure?.status === 0 ? "Can’t reach openside. Try again." : (failure?.message ?? "Couldn’t send the task. Try again."));
+      setError(failure?.status === 0 ? t("thread.composer.error.unreachable") : (failure?.message ?? t("thread.composer.error.sendFailed")));
     }
   }
 
+  /** Home starts over for the next chat once this one has its message or its handoff. */
+  function resetHome() {
+    clearInput();
+    started.current = null;
+    setPicked(DEFAULT_SESSION_OPTIONS);
+    setAttached([]);
+    setTouched(false);
+  }
+
   /**
-   * Creates the new task's conversation, or reuses the one an earlier failed send created with
-   * the same settings. `null` when the daemon refused or could not be reached: the error is
-   * shown and the words and settings stay. Creation is never queued offline, because a replay
-   * after a lost response would start a second conversation.
+   * Creates the new chat, or reuses the one an earlier failed send created with the same options.
+   * `null` when the daemon refused or could not be reached: the error is shown and the words and
+   * options stay. Creation is never queued offline, because a replay after a lost response would
+   * start a second chat.
    */
-  async function startTask(request: CreateSessionRequest): Promise<string | null> {
+  async function startChat(request: CreateSessionRequest): Promise<string | null> {
     const key = JSON.stringify(request);
     if (started.current?.request === key) return started.current.id;
     try {
-      const session = await client.createSession(request);
-      started.current = { request: key, id: session.id };
-      return session.id;
+      const created = await client.createSession(request);
+      started.current = { request: key, id: created.id };
+      return created.id;
     } catch (cause) {
       setBusy(false);
       const offline = cause instanceof ApiError && cause.status === 0;
-      setError(offline ? "Can’t start a new task while offline. Your words and settings are kept." : cause instanceof Error ? cause.message : "Couldn’t start the task. Try again.");
+      setError(offline ? t("thread.composer.error.startOffline") : cause instanceof Error ? cause.message : t("thread.composer.error.startFailed"));
       return null;
     }
   }
@@ -439,10 +710,9 @@ export function Composer({
   }
 
   // Focus means a message is coming: start the agent process and browser now instead of
-  // after Send. Best effort, at most once per session per half minute.
+  // after Send. Best effort, at most once per chat per half minute; Home has no chat yet.
   function prewarm() {
-    // A new task with its own settings goes to a conversation that does not exist yet.
-    if (taskAgent && hasOverrides(options)) return;
+    if (home || !sessionId) return;
     const now = Date.now();
     if (warmed.current.key === sessionId && now - warmed.current.at < PREWARM_EVERY_MS) return;
     warmed.current = { key: sessionId, at: now };
@@ -456,38 +726,18 @@ export function Composer({
     if (contextOpen) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        const step = event.key === "ArrowDown" ? 1 : -1;
-        setContextActive((index) => (Math.min(index, contextRows.length - 1) + step + contextRows.length) % contextRows.length);
+        setContextActive(stepActive(contextRows, activeRow, event.key === "ArrowDown" ? 1 : -1));
         return;
       }
-      const picked = contextRows[Math.min(contextActive, contextRows.length - 1)];
-      if ((event.key === "Enter" || event.key === "Tab") && picked) {
+      const row = contextRows[activeRow];
+      if ((event.key === "Enter" || event.key === "Tab") && row && !row.disabled) {
         event.preventDefault();
-        pickContext(picked);
+        pickContext(row);
         return;
       }
       if (event.key === "Escape") {
         event.preventDefault();
         setContext(null);
-        return;
-      }
-    }
-    if (open) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        const step = event.key === "ArrowDown" ? 1 : -1;
-        setActive((index) => (index + step + candidates.length) % candidates.length);
-        return;
-      }
-      const chosen = candidates[active];
-      if ((event.key === "Enter" || event.key === "Tab") && chosen) {
-        event.preventDefault();
-        choose(chosen);
-        return;
-      }
-      if (event.key === "Escape") {
-        setQuery(null);
-        setCandidates([]);
         return;
       }
     }
@@ -506,158 +756,194 @@ export function Composer({
       <div className="composer-dock">
         <p className="composer-readonly" role="note">
           <Eye size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          This device can follow conversations but can’t send messages.
+          {t("thread.composer.readOnly")}
         </p>
       </div>
     );
   }
 
+  const stop = Boolean(running && onStop) && !hasInput;
+  const sendCircle = hasInput || stop;
+  const showBar = !home || hasInput || touched;
+
+  const bar = (
+    <div className="composer-bar">
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        className="sr-only"
+        tabIndex={-1}
+        aria-label={t("thread.composer.attachFiles")}
+        onChange={(e) => {
+          addFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
+      <div className="composer-bar-start">
+        <PlusMenu options={options ?? DEFAULT_SESSION_OPTIONS} existing={!home} deviceLimit={limits.deviceMode} onChange={changeOptions} onUpload={() => picker.current?.click()} project={projectControls} side={side} />
+        {home && options ? <ProjectMenu options={options} project={projectControls} side={side} /> : null}
+        {options ? <ConfirmationMenu value={options.confirmation ?? defaultConfirmation} onChange={changeOptions} side={side} /> : null}
+        {home ? null : <div className="composer-tools">{tools}</div>}
+      </div>
+      <div className="composer-actions">
+        {options ? (
+          <>
+            <ModelPicker
+              catalog={catalog}
+              value={options.model}
+              fallback={catalog?.default_model ?? null}
+              onChange={(model) => changeOptions({ model })}
+              disabled={agentHome}
+              title={agentHome ? t("thread.model.homeFixed") : undefined}
+              side={side}
+            />
+            <EffortMenu
+              options={options}
+              defaultEffort={
+                catalog?.providers.flatMap((provider) => provider.models).find((model) => model.id === (options.model ?? catalog.default_model))?.default_effort ?? null
+              }
+              existing={!home}
+              agentClient={limits.agentClient}
+              onChange={changeOptions}
+              side={side}
+            />
+          </>
+        ) : null}
+        {home ? null : <ContextRing context={session?.context} />}
+        {onShowPending ? (
+          <IconButton label={t("thread.composer.showPending")} className="composer-needs" onClick={onShowPending}>
+            <Hand size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
+        ) : null}
+        {sendCircle ? <MicButton dictation={dictation} variant="glyph" /> : null}
+        {stop ? (
+          <button type="button" className="composer-send composer-stop" title={t("thread.composer.stopTask")} onClick={onStop}>
+            <Square fill="currentColor" strokeWidth={0} aria-hidden="true" />
+            <span className="sr-only">{t("common.stop")}</span>
+          </button>
+        ) : hasInput ? (
+          <button type="submit" className="composer-send" disabled={busy}>
+            <ArrowUp strokeWidth={2.2} aria-hidden="true" />
+            <span className="sr-only">{queueing ? t("thread.composer.queue") : t("common.send")}</span>
+          </button>
+        ) : (
+          <MicButton dictation={dictation} variant={home ? "glyph" : "circle"} />
+        )}
+      </div>
+    </div>
+  );
+
   return (
-    <div className="composer-dock">
-      <OutboxNotice sessionId={sessionId} />
+    <div className="composer-dock" data-variant={variant}>
+      {sessionId && !home ? <OutboxNotice sessionId={sessionId} /> : null}
       {error ? (
         <p role="alert" className="composer-error">
           {error}
         </p>
       ) : null}
-      <form ref={form} className="composer" data-variant={variant} onSubmit={send}>
-        {chips.length || files.length ? (
-          <ul className="composer-chips" aria-label="Message context">
-            {chips.map((name) => (
-              <li key={`s-${name}`} className="chip skill-chip">
-                /{name}
-                <button type="button" className="chip-remove" aria-label={`Remove skill ${name}`} onClick={() => removeMention(name)}>
-                  <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                </button>
-              </li>
-            ))}
-            {files.map((pending) => (
-              <li key={pending.key} className="attachment-chip">
-                {pending.thumbnail ? (
-                  <img src={pending.thumbnail} alt="" className="attachment-thumb" />
-                ) : (
-                  <span className="attachment-file">
-                    <FileText size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                    <span className="attachment-name">{pending.file.name}</span>
-                  </span>
-                )}
-                {pending.thumbnail ? <span className="sr-only">{pending.file.name}</span> : null}
-                <button
-                  type="button"
-                  className="chip-remove attachment-remove"
-                  aria-label={`Remove attachment ${pending.file.name}`}
-                  onClick={() => {
-                    if (pending.thumbnail) URL.revokeObjectURL(pending.thumbnail);
-                    setFiles((current) => current.filter((f) => f.key !== pending.key));
-                  }}
-                >
-                  <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <label className="composer-field">
-          <span className="sr-only">Message</span>
-          <textarea
-            ref={textarea}
-            value={text}
-            onChange={(e) => update(e.target.value, e.target.selectionStart ?? e.target.value.length)}
-            onKeyDown={onKeyDown}
-            onFocus={prewarm}
-            rows={home ? 2 : 1}
-            autoFocus={home}
-            placeholder={placeholder}
-            aria-autocomplete="list"
-            aria-controls={contextOpen ? "context-menu" : open ? "skill-mentions" : undefined}
-            aria-activedescendant={
-              contextOpen
-                ? `context-${contextRows[Math.min(contextActive, contextRows.length - 1)]?.id}`
-                : open && candidates[active]
-                  ? `skill-mention-${candidates[active].name}`
-                  : undefined
-            }
-          />
-        </label>
-        <div className="composer-bar">
-          <input
-            ref={picker}
-            type="file"
-            multiple
-            className="sr-only"
-            tabIndex={-1}
-            aria-label="Attach files"
-            onChange={(e) => {
-              addFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-          <div className="composer-bar-start">
-            {permission ? (
-              <>
-                <PlusMenu onUpload={() => picker.current?.click()} task={{ options, ...permission }} />
-                <PermissionMenu options={options} {...permission} />
-              </>
-            ) : (
-              <IconButton label="Add files" className="composer-attach" onClick={() => picker.current?.click()}>
-                <Plus size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              </IconButton>
-            )}
-            {home ? null : <div className="composer-tools">{tools}</div>}
-          </div>
-          <div className="composer-actions">
-            {taskAgent ? (
-              <>
-                <ModelMenu catalog={catalog} model={options.model} fallback={taskAgent.model ?? catalog?.default_model ?? null} onChange={changeOptions} />
-                <EffortMenu options={options} onChange={changeOptions} agentClient={limits.agentClient} />
-                <SpeedMenu options={options} onChange={changeOptions} agentClient={limits.agentClient} />
-              </>
-            ) : null}
-            {onShowPending ? (
-              <IconButton label="Show the request waiting for you" className="composer-needs" onClick={onShowPending}>
-                <Hand size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              </IconButton>
-            ) : null}
-            {running && onStop ? (
-              <button type="button" className="composer-send composer-stop" title="Stop the task" onClick={onStop}>
-                <Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" />
-                <span className="sr-only">Stop</span>
-              </button>
-            ) : null}
-            {!queueing || hasInput ? (
-              <button type="submit" className="composer-send" disabled={busy || !hasInput}>
-                <ArrowUp size={20} strokeWidth={2.2} aria-hidden="true" />
-                <span className="sr-only">{queueing ? "Queue" : "Send"}</span>
-              </button>
-            ) : null}
-          </div>
+      <form ref={form} className="composer" data-variant={home ? "home" : "thread"} onSubmit={send}>
+        <div className="composer-card">
+          {chips.length || files.length || attached.length || unattached.length ? (
+            <ul className="composer-chips" aria-label={t("thread.composer.chips")}>
+              {chips.map((name) => (
+                <li key={`s-${name}`} className="chip skill-chip">
+                  /{name}
+                  <button type="button" className="chip-remove" aria-label={t("thread.composer.removeSkill", { name })} onClick={() => removeMention(name)}>
+                    <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
+              {attached.map((tab) => {
+                const title = tab.title.trim() || tab.url;
+                return (
+                  <li key={`t-${tab.tab_id}`} className="chip tab-chip" title={tab.url}>
+                    <Globe size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                    <span className="tab-chip-title">{title}</span>
+                    <button type="button" className="chip-remove" aria-label={t("thread.composer.removeTab", { name: title })} onClick={() => detach(tab)}>
+                      <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                    </button>
+                  </li>
+                );
+              })}
+              {unattached.map((tab) => {
+                const title = tab.title.trim() || tab.url || t("thread.context.untitledTab");
+                return (
+                  <li key={`u-${tab.tab_id}`} className="chip tab-chip is-failed" title={tab.url}>
+                    <Globe size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                    <span className="tab-chip-title">{title}</span>
+                    <button type="button" className="chip-remove" aria-label={t("thread.composer.retryTab", { name: title })} onClick={() => void retryAttach(tab)}>
+                      <RotateCcw size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="chip-remove"
+                      aria-label={t("thread.composer.removeTab", { name: title })}
+                      onClick={() => setUnattached((current) => current.filter((known) => known.tab_id !== tab.tab_id))}
+                    >
+                      <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                    </button>
+                  </li>
+                );
+              })}
+              {files.map((pending) => (
+                <li key={pending.key} className="attachment-chip">
+                  {pending.thumbnail ? (
+                    <img src={pending.thumbnail} alt="" className="attachment-thumb" />
+                  ) : (
+                    <span className="attachment-file">
+                      <FileText size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                      <span className="attachment-name">{pending.file.name}</span>
+                    </span>
+                  )}
+                  {pending.thumbnail ? <span className="sr-only">{pending.file.name}</span> : null}
+                  <button
+                    type="button"
+                    className="chip-remove attachment-remove"
+                    aria-label={t("thread.composer.removeAttachment", { name: pending.file.name })}
+                    onClick={() => {
+                      if (locked) return;
+                      if (pending.thumbnail) URL.revokeObjectURL(pending.thumbnail);
+                      setFiles((current) => current.filter((f) => f.key !== pending.key));
+                    }}
+                  >
+                    <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <label className="composer-field">
+            <span className="sr-only">{t("thread.composer.field")}</span>
+            <textarea
+              ref={textarea}
+              value={text}
+              onChange={(e) => update(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+              readOnly={locked}
+              aria-busy={locked || undefined}
+              onKeyDown={onKeyDown}
+              onFocus={prewarm}
+              rows={1}
+              autoFocus={home}
+              placeholder={placeholder}
+              aria-autocomplete="list"
+              aria-controls={contextOpen ? "context-menu" : undefined}
+              aria-activedescendant={contextOpen ? `context-${contextRows[activeRow]?.id}` : undefined}
+            />
+          </label>
+          {home ? null : bar}
         </div>
-        {contextOpen ? (
+        {home ? <div className={cx("composer-below", !showBar && "is-hidden")}>{bar}</div> : null}
+        {contextOpen && context ? (
           <ComposerContextMenu
             items={contextRows}
-            active={Math.min(contextActive, contextRows.length - 1)}
-            below={context?.below ?? false}
-            query={context?.query ?? ""}
+            active={activeRow}
+            below={context.below}
+            trigger={context.trigger}
+            query={context.query}
             onPick={pickContext}
             onClose={() => setContext(null)}
           />
-        ) : open ? (
-          <ul id="skill-mentions" className="mention-list surface-overlay" role="listbox" aria-label="Skills">
-            {candidates.map((skill, index) => (
-              <li
-                key={skill.name}
-                id={`skill-mention-${skill.name}`}
-                role="option"
-                aria-selected={index === active}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  choose(skill);
-                }}
-              >
-                <strong>/{skill.name}</strong> <span className="muted">{skill.description}</span>
-              </li>
-            ))}
-          </ul>
         ) : null}
       </form>
     </div>

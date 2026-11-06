@@ -2,6 +2,7 @@ import { Check, CodeXml, Copy } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { Visual } from "../api/types";
 import { useClient } from "../context";
+import { t } from "../i18n";
 import { copyText, ICON_STROKE, IconButton, useToast } from "../ui";
 import { htmlDocument, htmlPicture, paintedHeight, svgPicture } from "./visualImage";
 import "./browser.css";
@@ -28,7 +29,7 @@ export function SandboxFrame({ src, title }: { src: string; title: string }) {
       if (url) URL.revokeObjectURL(url);
     };
   }, [client, src]);
-  if (client.relay && error) return <p role="alert">Could not load the preview. Try opening it again.</p>;
+  if (client.relay && error) return <p role="alert">{t("browser.visual.previewLoadFailed")}</p>;
   return <iframe className="sandbox-frame" sandbox="" src={client.relay ? (preview?.src === src ? preview.url : undefined) : client.resolve(src)} title={title} referrerPolicy="no-referrer" />;
 }
 
@@ -95,7 +96,7 @@ function VisualPicture({ visual, label }: { visual: Visual; label: string }) {
     <div className="visual-picture" ref={box}>
       {picture === "failed" ? (
         <p className="visual-failed" role="note">
-          Couldn’t show this visual. Its source is under Source.
+          {t("browser.visual.failed")}
         </p>
       ) : picture ? (
         <img
@@ -116,13 +117,13 @@ export function VisualFrame({ visual }: { visual: Visual }) {
   const toast = useToast();
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
-  const label = `${visual.kind.toUpperCase()} visual`;
+  const label = t("browser.visual.label", { kind: visual.kind.toUpperCase() });
 
   async function copy() {
     if (await copyText(visual.source)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    } else toast.notify("Could not copy the source.", "error");
+    } else toast.notify(t("browser.visual.copyFailed"), "error");
   }
 
   return (
@@ -131,9 +132,9 @@ export function VisualFrame({ visual }: { visual: Visual }) {
         <span className="visual-kind">{label}</span>
         <button type="button" className="visual-toggle" aria-pressed={showSource} onClick={() => setShowSource(!showSource)}>
           <CodeXml size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          {showSource ? "Preview" : "Source"}
+          {showSource ? t("browser.visual.preview") : t("browser.visual.source")}
         </button>
-        <IconButton label={copied ? "Source copied" : "Copy source"} size="small" onClick={() => void copy()}>
+        <IconButton label={copied ? t("browser.visual.sourceCopied") : t("browser.visual.copySource")} size="small" onClick={() => void copy()}>
           {copied ? (
             <Check size={17} strokeWidth={ICON_STROKE} aria-hidden="true" />
           ) : (

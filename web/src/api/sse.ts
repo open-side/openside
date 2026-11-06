@@ -1,6 +1,6 @@
 import { ApiError, toApiError, type Client } from "./client";
 import { whilePageShown } from "./pageLifecycle";
-import type { Event, EventPoll } from "./types";
+import type { ComputerUseStreamEvent, Event, EventPoll } from "./types";
 
 /** One dispatched SSE message (WHATWG event-stream framing). */
 export interface SseMessage {
@@ -311,4 +311,57 @@ export function openSessionStream(options: SessionStreamOptions): SessionStream 
     },
   };
   return stream;
+}
+
+/**
+ * Follow `GET /v1/sessions/{id}/computer-use/frames`: a `state` event on connect and on every
+ * change, and a `frame` event whenever the agent takes a new look at the connected window. The
+ * stream carries no history, so a reconnect simply starts again from the current state.
+ */
+export function openComputerUseStream(options: {
+  client: Client;
+  sessionId: string;
+  onEvent: (event: ComputerUseStreamEvent) => void;
+  retryDelayMs?: (attempt: number) => number;
+}): { close(): void } {
+  const delay = options.retryDelayMs ?? defaultDelay;
+  const controller = new AbortController();
+  const url = `${options.client.baseUrl}/v1/sessions/${encodeURIComponent(options.sessionId)}/computer-use/frames`;
+  void (async () => {
+    for (let attempt = 0; !controller.signal.aborted; attempt += 1) {
+      try {
+        const response = await options.client.fetch(url, {
+          headers: options.client.headers({ Accept: "text/event-stream" }),
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        if (!response.ok) throw await toApiError(response);
+        if (!response.body) throw new ApiError(0, "network_error");
+        attempt = 0;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        const parser = new SseParser();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          for (const message of parser.push(decoder.decode(value, { stream: true }))) {
+            try {
+              options.onEvent(JSON.parse(message.data) as ComputerUseStreamEvent);
+            } catch {
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        // A private chat (409), a deleted one (404) or lost access never comes back by retrying.
+        const status = error instanceof ApiError ? error.status : 0;
+        if (FATAL_STATUS[status] || status === 409) return;
+      }
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, delay(attempt));
+      await promise;
+    }
+  })();
+  return { close: () => controller.abort() };
 }

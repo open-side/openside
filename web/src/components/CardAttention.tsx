@@ -6,6 +6,7 @@ import type { Session, Ticket } from "../api/types";
 import { announcementTitle, askerOf, byAttention, isAttentionTicket } from "../cards/attention";
 import { siteOf } from "../cards/values";
 import { useClient } from "../context";
+import { t } from "../i18n";
 import { ICON_STROKE } from "../ui";
 import { ConversationCard } from "./ConversationCard";
 import "./card-surfaces.css";
@@ -96,7 +97,7 @@ export function CardAttention({ visibleSession, sessions }: { visibleSession: st
   // Portaled beside the dialogs rather than inside the app shell so it floats over every route;
   // under a modal it sits beneath the scrim (card-surfaces.css) and is inert.
   return createPortal(
-    <aside ref={dock} className="card-dock" inert={modal} aria-label={`${announcementTitle(first)} for ${siteOf(first.card.site.origin)}`}>
+    <aside ref={dock} className="card-dock" inert={modal} aria-label={t("timeline.dock.label", { title: announcementTitle(first), site: siteOf(first.card.site.origin) })}>
       <ConversationCard
         key={first.id}
         card={first.card}
@@ -108,11 +109,11 @@ export function CardAttention({ visibleSession, sessions }: { visibleSession: st
         }}
       />
       <p className="card-dock-meta">
-        <Link to={`/sessions/${encodeURIComponent(first.session_id)}`} aria-label={`Go to ${title ?? "the conversation"}`}>
-          <span>{title ?? "Another conversation"}</span>
+        <Link to={`/sessions/${encodeURIComponent(first.session_id)}`} aria-label={title ? t("timeline.dock.goTo", { title }) : t("timeline.dock.goToAny")}>
+          <span>{title ?? t("timeline.dock.another")}</span>
           <ArrowUpRight size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </Link>
-        {shown.length > 1 ? <span className="card-dock-more">{shown.length - 1} more waiting</span> : null}
+        {shown.length > 1 ? <span className="card-dock-more">{t("timeline.dock.moreWaiting", { count: shown.length - 1 })}</span> : null}
       </p>
     </aside>,
     document.body,

@@ -1,6 +1,7 @@
 import { ChevronUp, Maximize2, Minus, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { t } from "../i18n";
 import { cx, ICON_STROKE } from "../ui";
 import "./browser.css";
 
@@ -168,8 +169,8 @@ export function BrowserPip({ label, title, status, live, minimized, onMinimizedC
         <button
           type="button"
           className="pip-handle"
-          aria-label={minimized ? `Restore ${label.toLowerCase()}` : `Open ${label.toLowerCase()}`}
-          aria-description="Drag to move, or use the arrow keys."
+          aria-label={minimized ? t("browser.pip.restoreLabel", { label: label.toLowerCase() }) : t("browser.pip.openLabel", { label: label.toLowerCase() })}
+          aria-description={t("browser.pip.dragHint")}
           onPointerDown={pointerDown}
           onPointerMove={pointerMove}
           onPointerUp={pointerUp}
@@ -186,15 +187,15 @@ export function BrowserPip({ label, title, status, live, minimized, onMinimizedC
           <span className="pip-title">{title}</span>
         </button>
         {minimized ? null : (
-          <button type="button" className="pip-control" aria-label="Expand" title="Expand" onClick={onExpand}>
+          <button type="button" className="pip-control" aria-label={t("browser.pip.expand")} title={t("browser.pip.expand")} onClick={onExpand}>
             <Maximize2 size={15} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </button>
         )}
         <button
           type="button"
           className="pip-control"
-          aria-label={minimized ? "Restore" : "Minimize"}
-          title={minimized ? "Restore" : "Minimize"}
+          aria-label={minimized ? t("browser.pip.restore") : t("browser.pip.minimize")}
+          title={minimized ? t("browser.pip.restore") : t("browser.pip.minimize")}
           aria-expanded={!minimized}
           onClick={() => onMinimizedChange(!minimized)}
         >
@@ -204,7 +205,7 @@ export function BrowserPip({ label, title, status, live, minimized, onMinimizedC
             <Minus size={17} strokeWidth={ICON_STROKE} aria-hidden="true" />
           )}
         </button>
-        <button type="button" className="pip-control" aria-label="Close" title="Close" onClick={onClose}>
+        <button type="button" className="pip-control" aria-label={t("common.close")} title={t("common.close")} onClick={onClose}>
           <X size={17} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </button>
       </div>

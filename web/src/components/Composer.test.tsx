@@ -3,30 +3,24 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SkillSummary } from "../api/types";
 import { ClientContext } from "../context";
-import { fakeClient, json, type Call } from "../test/fakeDaemon";
+import { composerDaemon, json, type Call, type ComposerDaemonOptions } from "../test/composerDaemon";
 import { Composer, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_TEXT_BYTES, mentionedSkills } from "./Composer";
 
-// The `@` menu's New task command navigates, so the composer lives under a router.
+// The `@` menu's New command navigates, so the composer lives under a router.
 const render = (ui: ReactElement, options?: RenderOptions) => renderPlain(ui, { wrapper: MemoryRouter, ...options });
 
-const SKILLS = [
+const SKILLS: SkillSummary[] = [
   { name: "research", description: "Deep web research", source: "user", enabled: true },
   { name: "review-pr", description: "Review a pull request", source: "project", enabled: true },
 ];
 
-/** A request the person caused; focus also prewarms the agent, which tests ignore. */
-const sent = (c: Call) => c.method === "POST" && !c.path.includes("/prewarm");
+/** A message the person sent; focus also prewarms the agent, which tests ignore. */
+const sent = (c: Call) => c.method === "POST" && c.path.endsWith("/messages");
 
-function setup() {
-  const daemon = fakeClient((call: Call) => {
-    const url = new URL(call.path, "http://daemon.test");
-    if (url.pathname === "/v1/skills") {
-      const q = url.searchParams.get("q") ?? "";
-      return json(200, { skills: SKILLS.filter((s) => s.name.startsWith(q)), problems: [] });
-    }
-    return json(202, { id: "m", status: "queued" });
-  });
+function setup(options: ComposerDaemonOptions = {}) {
+  const daemon = composerDaemon({ skills: SKILLS, ...options });
   render(
     <ClientContext.Provider value={daemon.client}>
       <Composer sessionId="s1" />
@@ -41,13 +35,15 @@ describe("Composer skill mentions", () => {
     const { calls } = setup();
     const input = screen.getByRole("textbox", { name: "Message" });
     await user.type(input, "Please /re");
-    const list = await screen.findByRole("listbox", { name: "Skills" });
-    expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "/research Deep web research",
-      "/review-pr Review a pull request",
-    ]);
-    expect(calls.find((c) => c.method === "GET")?.path).toBe("/v1/skills?q=re&session=s1&enabled=true");
-    await user.keyboard("{ArrowDown}{Enter}");
+    const list = screen.getByRole("listbox", { name: "Add context" });
+    const skills = await within(list).findByRole("group", { name: "Skills" });
+    await waitFor(() => expect(within(skills).getAllByRole("option")).toHaveLength(2));
+    expect(within(skills).getAllByRole("option").map((o) => o.textContent)).toEqual(["/researchDeep web research", "/review-prReview a pull request"]);
+    expect(calls.find((c) => c.path.startsWith("/v1/skills"))?.path).toBe("/v1/skills?q=re&enabled=true&session=s1");
+    // Compact matches too but cannot be picked, so the highlight starts on Feedback.
+    expect(within(list).getByRole("option", { name: /^Compact/ })).toHaveAttribute("aria-disabled", "true");
+    expect(within(list).getByRole("option", { name: /^Feedback/ })).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     expect(input).toHaveValue("Please /review-pr ");
     expect(screen.queryByRole("listbox")).toBeNull();
     const chips = screen.getByRole("list", { name: "Message context" });
@@ -198,7 +194,7 @@ describe("Composer attachments", () => {
 
 describe("Composer run states", () => {
   function renderRunning(onStop: () => void) {
-    const daemon = fakeClient(() => json(202, { id: "m", status: "queued" }));
+    const daemon = composerDaemon();
     render(
       <ClientContext.Provider value={daemon.client}>
         <Composer sessionId="s1" running onStop={onStop} />
@@ -216,19 +212,19 @@ describe("Composer run states", () => {
   it("offers Stop while a run is active and the composer is empty", async () => {
     const user = userEvent.setup();
     let stopped = 0;
-    const { calls } = renderRunning(() => stopped++);
+    const { writes } = renderRunning(() => stopped++);
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Queue" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(stopped).toBe(1);
-    expect(calls).toHaveLength(0);
+    expect(writes()).toHaveLength(0);
   });
 
-  it("queues a follow-up typed during a run and keeps Stop available", async () => {
+  it("queues a follow-up typed during a run; the circle turns from Stop into Queue while there is text", async () => {
     const user = userEvent.setup();
     const { calls } = renderRunning(() => undefined);
     await user.type(screen.getByRole("textbox", { name: "Message" }), "also check prices");
-    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Queue" }));
     await waitFor(() =>
       expect(calls.find(sent)).toMatchObject({
@@ -240,7 +236,7 @@ describe("Composer run states", () => {
 
   it("queues behind a pending ticket without a faint Send or a Stop", async () => {
     const user = userEvent.setup();
-    const daemon = fakeClient(() => json(202, { id: "m", status: "queued" }));
+    const daemon = composerDaemon();
     render(
       <ClientContext.Provider value={daemon.client}>
         <Composer sessionId="s1" waiting onStop={() => undefined} />
@@ -324,56 +320,66 @@ describe("Composer Enter key", () => {
 });
 
 describe("Composer home variant", () => {
-  function renderHome(respond: (call: Call) => Response, onSent: () => void) {
-    const daemon = fakeClient(respond);
+  function renderHome(options: ComposerDaemonOptions = {}) {
+    const daemon = composerDaemon(options);
+    const onSent = vi.fn();
     render(
       <ClientContext.Provider value={daemon.client}>
-        <Composer sessionId="chief-home" variant="home" running waiting onStop={() => undefined} addressee="Chief" onSent={onSent} tools={<button type="button">Tool</button>} />
+        <Composer variant="home" running waiting onStop={() => undefined} onSent={onSent} tools={<button type="button">Tool</button>} />
       </ClientContext.Provider>,
     );
-    return daemon;
+    return { ...daemon, onSent };
   }
 
-  it("asks for a task with focus, two lines, and nothing to stop, queue or switch", () => {
-    renderHome(() => json(202, { id: "m", status: "queued" }), () => undefined);
+  it("asks for a task with focus, and has nothing to stop, queue or switch", () => {
+    renderHome();
     const field = screen.getByRole("textbox", { name: "Message" });
-    expect(field).toHaveAttribute("placeholder", "Ask AI a task, @ for context");
-    expect(field).toHaveAttribute("rows", "2");
+    expect(field).toHaveAttribute("placeholder", "Ask openside anything or give it a task, @ for context");
     expect(field).toHaveFocus();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Queue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Tool" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /^Context/ })).toBeNull();
   });
 
-  it("reports the task as sent only once the daemon accepted it", async () => {
+  it("starts a new chat and reports it as sent only once the daemon accepted the message", async () => {
     const user = userEvent.setup();
-    let sentCount = 0;
-    const { calls } = renderHome(() => json(202, { id: "m", status: "queued" }), () => sentCount++);
+    const { calls, onSent } = renderHome();
     const field = screen.getByRole("textbox", { name: "Message" });
     await user.type(field, "Find a flight to Lisbon");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(sentCount).toBe(1));
-    expect(calls.find(sent)).toMatchObject({ path: "/v1/sessions/chief-home/messages", body: { text: "Find a flight to Lisbon" } });
+    await waitFor(() => expect(onSent).toHaveBeenCalledWith("fresh"));
+    const writes = calls.filter((c) => c.method === "POST");
+    expect(writes.map((c) => c.path)).toEqual(["/v1/sessions", "/v1/sessions/fresh/messages"]);
+    expect(writes[0]?.body).toEqual({ agent_id: null, confirmation: "ask_first" });
+    expect(writes[1]?.body).toMatchObject({ text: "Find a flight to Lisbon" });
     expect(field).toHaveValue("");
   });
 
-  it("keeps the words and says why when the daemon refuses the task", async () => {
+  it("keeps the words and says why when the daemon refuses the message, then reuses the chat it made", async () => {
     const user = userEvent.setup();
-    let sentCount = 0;
-    renderHome((call) => (sent(call) ? json(409, { code: "busy", message: "The assistant is restarting" }) : json(200, {})), () => sentCount++);
+    let refuse = true;
+    const { calls, onSent } = renderHome({
+      respond: (call) => (sent(call) && refuse ? json(409, { code: "busy", message: "The assistant is restarting" }) : undefined),
+    });
     const field = screen.getByRole("textbox", { name: "Message" });
     await user.type(field, "Find a flight to Lisbon");
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The assistant is restarting");
     expect(field).toHaveValue("Find a flight to Lisbon");
-    expect(sentCount).toBe(0);
+    expect(onSent).not.toHaveBeenCalled();
+
+    refuse = false;
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSent).toHaveBeenCalledWith("fresh"));
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/sessions")).toHaveLength(1);
   });
 });
 
 describe("Composer quote", () => {
   it("puts a quoted message above what is already typed", async () => {
     const user = userEvent.setup();
-    const daemon = fakeClient(() => json(202, { id: "m", status: "queued" }));
+    const daemon = composerDaemon();
     let applied = 0;
     const ui = (quote: { id: string; text: string } | null) => (
       <ClientContext.Provider value={daemon.client}>

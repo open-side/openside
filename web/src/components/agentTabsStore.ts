@@ -1,8 +1,8 @@
 import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 import { AgentTabsContext, type OwnedTab } from "../hooks/useAgentTabs";
 
-/** Thread column (≈680) + gap + panel (300) + right inset: below this the panel gives way to the PiP. */
-export const AGENT_TABS_MIN_WIDTH = 680 + 16 + 300 + 16;
+/** Thread column (≈680) + gap (30) + panel (300) + right inset (10): below this the panel gives way to the PiP. */
+export const AGENT_TABS_MIN_WIDTH = 680 + 30 + 300 + 10;
 
 interface PanelState {
   /** Tab ids, oldest first: the order the conversation opened them (see `syncAgentTabs`). */

@@ -6,6 +6,8 @@ export interface Call {
   path: string;
   headers: Record<string, string>;
   body: unknown;
+  /** The request's abort signal, so a test can see a request was cancelled. */
+  signal?: AbortSignal;
 }
 
 type Handler = (call: Call) => Response | Promise<Response>;
@@ -28,6 +30,8 @@ export function fakeClient(handler: Handler, token = "test-token"): { client: Cl
       headers: (init?.headers ?? {}) as Record<string, string>,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
     };
+    // Not enumerable, so existing toEqual assertions on recorded calls are unaffected.
+    if (init?.signal) Object.defineProperty(call, "signal", { value: init.signal });
     calls.push(call);
     return handler(call);
   });

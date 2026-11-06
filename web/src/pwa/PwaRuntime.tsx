@@ -2,6 +2,7 @@ import { Download, Share, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useClient } from "../context";
+import { t } from "../i18n";
 import { useShell } from "../shell";
 import { Button, ICON_STROKE, IconButton, useToast } from "../ui";
 import { usePendingTicketBadge } from "./badge";
@@ -43,7 +44,7 @@ function useLaunchIntent(): void {
         break;
       case "share-failed":
         home();
-        toast.notify("Couldn’t open what you shared.", "error");
+        toast.notify(t("shell.pwa.shareFailed"), "error");
         break;
       case "share":
         home();
@@ -52,9 +53,9 @@ function useLaunchIntent(): void {
           .then((draft) => {
             if (!mounted.current) return;
             if (draft) setShareDraft(draft);
-            else toast.notify("The shared content is no longer available.", "error");
+            else toast.notify(t("shell.pwa.shareGone"), "error");
           })
-          .catch(() => mounted.current && toast.notify("Couldn’t open what you shared.", "error"));
+          .catch(() => mounted.current && toast.notify(t("shell.pwa.shareFailed"), "error"));
         break;
       case "needs-you":
         home();
@@ -62,11 +63,11 @@ function useLaunchIntent(): void {
           ({ tickets }) => {
             if (!mounted.current) return;
             const target = needsYouTarget(tickets);
-            if (!target) return toast.notify("Nothing is waiting for you.");
+            if (!target) return toast.notify(t("shell.pwa.nothingWaiting"));
             navigate(`/sessions/${encodeURIComponent(target.sessionId)}`, { replace: true });
-            if (target.conversations > 1) toast.notify(`${target.conversations} conversations need you.`);
+            if (target.conversations > 1) toast.notify(t("shell.pwa.conversationsNeedYou", { count: target.conversations }));
           },
-          () => mounted.current && toast.notify("Can’t reach openside.", "error"),
+          () => mounted.current && toast.notify(t("shell.pwa.offline"), "error"),
         );
         break;
     }
@@ -82,22 +83,22 @@ function InstallBanner() {
   }, []);
   if (!offer || !ready) return null;
   return (
-    <aside className="install-banner" aria-label="Install openside">
+    <aside className="install-banner" aria-label={t("shell.pwa.installLabel")}>
       {offer.kind === "android" ? (
         <>
           <Download size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          <span className="install-text">Install openside for quick access and approval alerts.</span>
+          <span className="install-text">{t("shell.pwa.installAndroid")}</span>
           <Button type="button" variant="primary" onClick={() => void offer.install()}>
-            Install
+            {t("shell.pwa.install")}
           </Button>
         </>
       ) : (
         <>
           <Share size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          <span className="install-text">Install openside: tap Share, then Add to Home Screen.</span>
+          <span className="install-text">{t("shell.pwa.installIos")}</span>
         </>
       )}
-      <IconButton label="Dismiss" size="small" onClick={dismiss}>
+      <IconButton label={t("common.dismiss")} size="small" onClick={dismiss}>
         <X size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
       </IconButton>
     </aside>
@@ -125,8 +126,8 @@ export function PwaRuntime() {
   const onFlushed = useCallback(
     ({ sent, failed, created }: FlushResult) => {
       refreshSessions();
-      if (failed) toast.notify("A queued message was refused and was not sent.", "error");
-      else if (sent) toast.notify(sent === 1 ? "Queued message sent." : `${sent} queued messages sent.`);
+      if (failed) toast.notify(t("shell.pwa.queuedRefused"), "error");
+      else if (sent) toast.notify(t("shell.pwa.queuedSent", { count: sent }));
       // A chat started offline opens once it exists, but only if the person is still on the empty screen.
       const only = created[0];
       if (created.length === 1 && only && onEmptyScreen.current) navigate(`/sessions/${encodeURIComponent(only)}`);

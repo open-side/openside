@@ -4,6 +4,94 @@
  */
 
 export interface paths {
+    "/v1/about": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["About"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/about/update-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UpdateCheck"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/access-requests": {
         parameters: {
             query?: never;
@@ -569,6 +657,1527 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/browser/person/bookmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonBookmarkTree"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** @description Bookmark an http(s) page in the person's own browser. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreatePersonBookmarkRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonBookmark"];
+                    };
+                };
+                /** @description A value the daemon or the browser refuses */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No such tab, bookmark or session */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "tab_not_found",
+                         *       "message": "tab not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_not_connected",
+                         *       "message": "person browser not connected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/bookmarks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Remove a bookmark or an empty bookmark folder from the person's own browser. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description A value the daemon or the browser refuses */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No such tab, bookmark or session */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "tab_not_found",
+                         *       "message": "tab not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_not_connected",
+                         *       "message": "person browser not connected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/bridge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description WebSocket the openside extension in the person's own browser keeps open so the daemon can read and drive that browser. Only the extension may connect: a person_device token and Origin chrome-extension://jneddlbpgmlheplolfonafkbkbkjhcfj; the bearer travels as on the takeover stream (`Sec-WebSocket-Protocol: openside.v1, openside.bearer.<token>`). The extension first sends {kind:"hello",protocol:"openside.person-browser",version:1,run}; the daemon then sends requests {id,method,params} and the extension answers {id,result} or {id,error:{code}}. A newer connection replaces the older one; a new run id (browser restart) drops every chat's tab attachments. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Switching to WebSocket */
+                101: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not the openside extension of a person's device */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/clear-data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Delete the chosen kinds of data from the person's own browser profile, as the browser's own Delete browsing data dialog does. Only the person can do this; it is audited without the data itself. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ClearBrowsingDataRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description A value the daemon or the browser refuses */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No such tab, bookmark or session */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "tab_not_found",
+                         *       "message": "tab not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_not_connected",
+                         *       "message": "person browser not connected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. Only file base names are returned, never folders. */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonDownloadList"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/extensions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonExtensionList"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. q searches titles and URLs; without q the most recent pages are listed. */
+        get: {
+            parameters: {
+                query?: {
+                    q?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonHistoryList"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/native-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Open the Task manager, or developer tools for the selected tab of the most recently active window, in the person's own browser. The daemon reaches it through the person-role gateway that `openside-browser` starts a patched browser with; that gateway serves only the person's settings and these tools, never their tabs. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["OpenPersonNativeToolRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Unknown tool */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser is not open (browser_not_running), or cannot open the tool: a stock browser, no window of the person's profile, or a policy turns developer tools off (native_tools_unsupported) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "browser_not_running",
+                         *       "message": "browser not running"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser closed the connection or did not answer in time */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "browser_disconnected",
+                         *       "message": "browser disconnected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/recently-closed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonRecentlyClosedList"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/recently-closed/{session_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Reopen a recently closed tab or window in the person's own browser. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonTabCommandResult"];
+                    };
+                };
+                /** @description A value the daemon or the browser refuses */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No such tab, bookmark or session */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "tab_not_found",
+                         *       "message": "tab not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_not_connected",
+                         *       "message": "person browser not connected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/tabs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonTabList"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/person/tabs/command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Run one tab operation in the person's own browser through the openside extension (switch, open, close, duplicate, reload, pin, mute, group, move, new incognito window). create accepts http(s) URLs and a fixed set of browser pages only. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PersonTabCommand"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonTabCommandResult"];
+                    };
+                };
+                /** @description A value the daemon or the browser refuses */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No such tab, bookmark or session */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "tab_not_found",
+                         *       "message": "tab not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_not_connected",
+                         *       "message": "person browser not connected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/prefs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Reads the settings of the person's own browser (the patched browser `openside-browser` opens, through its person-role gateway), from its startup profile; the agent browser's profile is never read. status is not_running when that browser is closed (the daemon never launches it) and unsupported for stock Chromium/Chrome; prefs is then null. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BrowserPrefs"];
+                    };
+                };
+                /** @description The person's browser closed the connection or did not answer in time (browser_disconnected), or could not load its search engines in time or has too many such requests waiting (browser_busy) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "browser_disconnected",
+                         *       "message": "browser disconnected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Writes settings of the person's own browser through its person-role gateway, one allowlisted preference at a time in field order, and returns the values read back. Never launches a browser and never writes the agent browser's profile. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateBrowserPrefsRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BrowserPrefs"];
+                    };
+                };
+                /** @description A value the browser refuses */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser is not open (browser_not_running), cannot change settings (browser_prefs_unsupported), or a policy manages the setting (browser_pref_managed) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "browser_not_running",
+                         *       "message": "browser not running"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser closed the connection or did not answer in time (browser_disconnected), or could not load its search engines in time or has too many such requests waiting (browser_busy) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "browser_disconnected",
+                         *       "message": "browser disconnected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/v1/browser/prewarm": {
         parameters: {
             query?: never;
@@ -651,6 +2260,51 @@ export interface paths {
                          *     }
                          */
                         "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/computer-use": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Whether computer use is turned on (preferences.computer_use, changeable only with local access) and what works on this computer: window frames, pointer and keyboard, each with the mechanism in use or the reason it does not work. Probes the desktop at most every 30 seconds. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ComputerUseStatus"];
                     };
                 };
                 /** @description Sanitized error */
@@ -1458,7 +3112,42 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        patch?: never;
+        /** @description Rename a paired device. The name is trimmed and must be 1-100 characters (400 invalid_value); 404 not_found for an unknown device. An agent client may rename only itself (403 person_approval_required). Audited as `device` `renamed`. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RenameDeviceRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Device"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/v1/doctor": {
@@ -1689,11 +3378,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown (add the folder with `PUT /v1/external-agents/{id}`). */
+        /** @description Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. The agent trusts what lands there, so this needs local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret; 403 local_access_required otherwise) and a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required. Right before writing, the directory, presets included even when it comes from CLAUDE_CONFIG_DIR, CODEX_HOME, OMP_CODING_AGENT_DIR or PI_CODING_AGENT_DIR, must be absolute, inside the user's home, reached without any symbolic link below home and outside openside's data directory (400 invalid_skills_dir; nothing is written). 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown (add the folder with `PUT /v1/external-agents/{id}`). Audited. */
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. */
+                    "X-Openside-Local-Secret"?: string;
+                };
                 path: {
                     id: string;
                 };
@@ -1767,6 +3459,51 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/folders/pick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Open the native folder picker on the screen of the computer running openside and wait until the person chooses a folder or closes it. Returns the canonical path, or `path: null` when the picker was closed without a choice. The folder must be usable as a project folder: not the file system root, the home folder or a folder above it, nor openside's data folder, a folder above it or anything inside it, nor inside an operating-system folder or another person's home, nor a credential folder such as ~/.ssh or a folder above one (400 invalid_project_root). Requires local access (403 local_access_required). 409 folder_picker_busy while another picker is open; 503 folder_picker_unavailable when no folder picker could be started. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PickedFolder"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -2401,6 +4138,242 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description External MCP servers whose tools agents can call, with connection state and tool lists. Secret values are never returned; secrets lists their names. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["McpServerList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** @description Connect a stdio (command) or http (URL) MCP server. Secret values go to the Vault, which must be set up and unlocked (409 vault_unavailable; 403 biometric_required when a new keyring vault would be needed but biometric unlock is on, so a person sets it up first). Requires local access (403 local_access_required): a stdio server runs a program on this computer. 409 mcp_server_exists, 409 mcp_server_limit, 400 invalid_value. The response reflects the first connection attempt. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateMcpServerRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["McpServer"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/servers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description One configured MCP server. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["McpServer"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** @description Stop the server, delete its Vault secrets and remove it from config.toml. Requires local access. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** @description Change a server; secrets set to null are removed from the Vault. Requires local access. The server reconnects with the new settings. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateMcpServerRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["McpServer"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/mcp/servers/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Reconnect the server and list its tools again; returns the state after the attempt. Requires local access (403 local_access_required): reconnecting a stdio server runs its program. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["McpServer"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/memory": {
         parameters: {
             query?: never;
@@ -2488,6 +4461,132 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/memory/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The memory store shown as three files: MEMORY.md (notes not tagged profile), USER.md (notes tagged profile) and TAXONOMY.md (tags and kinds, read-only). Visited-page history is not part of these files. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryFileList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory/files/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: "MEMORY.md" | "USER.md" | "TAXONOMY.md";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryFile"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        /** @description Save an edited MEMORY.md or USER.md in one transaction: blocks under a `<!-- memory id=… -->` marker update that note, removed blocks delete their note, and text before the first marker or under a bare `<!-- memory -->` marker adds notes (USER.md adds the profile tag; dropping or adding the profile tag moves a note between the two files). A note changed, added or removed elsewhere after `revision` fails the whole save with 409 memory_conflict. A note whose text contains a hidden Vault value cannot be edited here (400 redacted_memory); secrets are 400 secret_detected; TAXONOMY.md is 400 read_only_view. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: "MEMORY.md" | "USER.md" | "TAXONOMY.md";
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateMemoryFileRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryFileSaved"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/memory/health": {
         parameters: {
             query?: never;
@@ -2511,6 +4610,55 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["MemoryHealth"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every memory change (create, update, delete, purge), newest first, across all memories. Deleted and purged entries keep only operation, actor and time. */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    /** @description next_before of the previous page. */
+                    before?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryChangeList"];
                     };
                 };
                 /** @description Sanitized error */
@@ -2656,6 +4804,94 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["MemoryModelStatus"];
                     };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Rebuild the full-text index of every live memory and recompute embeddings with the loaded local model. Expired memories are purged first. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryRebuild"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memory/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Write a copy of MEMORY.md, USER.md and TAXONOMY.md, as GET /v1/memory/files/{name} serves them, into `<data_dir>/memory/files` (0700 folder, 0600 files, replaced on every call) and open that folder in the file manager of the computer running openside. Edits made to the copy are not read back. Requires local access (403 local_access_required). 503 file_manager_unavailable when no file manager could be started. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
                 /** @description Sanitized error */
                 default: {
@@ -2867,7 +5103,7 @@ export interface paths {
                 };
             };
         };
-        /** @description Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). Reopening the guide from Settings does not reset the flag. */
+        /** @description Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). A compare-and-set: it writes only while the stored state is `pending`, so of two devices finishing the guide at once exactly one outcome is kept. Reopening the guide from Settings does not reset the flag. */
         put: {
             parameters: {
                 query?: never;
@@ -2888,6 +5124,38 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["OnboardingStatus"];
+                    };
+                };
+                /** @description `pending` was sent */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The guide already ended; nothing was written. The body carries the outcome already recorded */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "onboarding_already_set",
+                         *       "message": "onboarding already set",
+                         *       "state": "completed",
+                         *       "updated_at": "2026-01-01T00:00:00Z"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["OnboardingAlreadySet"];
                     };
                 };
                 /** @description Sanitized error */
@@ -2966,7 +5234,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Issue a one-time pairing code valid for 180 monotonic seconds. Requires the local socket, or verified loopback TCP with a socket-issued person_device admin token and current X-Openside-Local-Secret. Proxied/relay traffic is refused with 403 local_access_required; loopback alone never proves locality. Requested scopes cannot exceed caller grants (403 scope_ceiling_exceeded). The local operator fixes person_device or agent_client in the offer; redemption cannot change kind. Codes and local secrets are never audited. */
+        /** @description Issue a one-time pairing code valid for 180 monotonic seconds. Requires the local socket, or verified loopback TCP with a socket-issued person_device admin token and current X-Openside-Local-Secret. Proxied/relay traffic is refused with 403 local_access_required; loopback alone never proves locality. Requested scopes cannot exceed caller grants (403 scope_ceiling_exceeded). The local operator fixes person_device or agent_client in the offer; redemption cannot change kind. Codes and local secrets are never audited. While Remote Control is off the offer carries no link (url and transport are null) and naming a transport in via is refused with 409 remote_disabled. */
         post: {
             parameters: {
                 query?: never;
@@ -3437,6 +5705,197 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List every project, sorted by name. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProjectList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** @description Create a project from an existing folder (root) or, without root, from scratch in a new empty folder under openside's data. Only the computer running openside creates projects (403 local_access_required elsewhere). 400 invalid_project_name for a blank name or one longer than 80 characters; 400 instructions_too_large over 16 KiB; 400 invalid_project_root for a folder that is missing, not a folder, the file system root, the home folder or above it, inside openside's data, inside an operating-system folder (such as /etc or /usr) or another person's home, or a credential folder such as ~/.ssh or above one; 409 project_exists when another project already uses the folder. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateProjectRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Project"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description One project; 404 project_not_found. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Project"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** @description Delete a project and return the remaining ones. Its chats stay and leave the project first, in one commit (each gets `session.folder_changed` with no project and no folder); the folder and its files are never deleted. 404 project_not_found; 403 person_device_required for agent_client devices. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProjectList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** @description Rename a project, replace its instructions, or confirm its folder; the folder is fixed. Chats in the project receive the new instructions from their agent's next start. confirm_root checks the project's folder again as at creation and records it, clearing needs_confirmation; only the computer running openside may confirm (403 local_access_required elsewhere; 400 invalid_project_root when the folder no longer passes). Any other change from the computer running openside to a project that needs confirming also records its folder when it still passes. 400 invalid_value for an empty body, invalid_project_name or instructions_too_large; 404 project_not_found; 403 person_device_required for agent_client devices (the instructions become part of every project chat's system prompt). */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateProjectRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Project"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/v1/push/presence": {
         parameters: {
             query?: never;
@@ -3656,6 +6115,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        /** @description Turn one transport on or off and save its settings. Turning one on while Remote Control is off is refused with 409 remote_disabled and changes nothing; turn Remote Control on first (POST /v1/remote/enable). Turning one off works either way. */
         put: {
             parameters: {
                 query?: never;
@@ -3699,6 +6159,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/remote/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Turn Remote Control off. Needs local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret; 403 local_access_required otherwise) and a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required. Saves remote.enabled = false and, from that moment, refuses every TCP request that does not come directly from this computer with 403 remote_disabled: other addresses, the relay, and loopback requests carrying proxy or tunnel headers (Forwarded, Via, X-Forwarded-*, Cf-*, Tailscale-*) or a non-loopback Host. The Unix socket and the local web UI keep working. Then stops every transport (Tailscale Serve handler, cloudflared, relay registration), keeping each one's saved settings, and goes on past failures: still_on lists the transports that could not be stopped. Audited as remote/disabled. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RemoteDisabled"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/remote/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Turn Remote Control back on with the saved transports: saves remote.enabled = true, then restarts each configured transport (Tailscale Serve handler, cloudflared, relay registration). A transport that fails to start shows its error in the returned status. Same access rules as /v1/remote/disable (403 local_access_required, 403 person_access_required). Audited as remote/enabled. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RemoteStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/remote/local-access": {
         parameters: {
             query?: never;
@@ -3706,7 +6262,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Local socket only: every call atomically replaces the one managed owner-bootstrap device/token, closes the predecessor's streams/polls, clears its push subscriptions, and audits rotation. A distinct persistent bootstrap marker survives boots; intentional CLI devices are never revoked by display name. Returns the per-boot locality secret and fresh person/admin token plus a loopback launch URL with credentials in its fragment. TCP/relay callers get 403 local_socket_required. Keep the proof only in sessionStorage; strip the fragment immediately and clear proof on sign-out, rejection or identity change. */
+        /** @description Local socket only: every call atomically replaces the one managed owner-bootstrap device/token, closes the predecessor's streams/polls, clears its push subscriptions, and audits rotation. A distinct persistent bootstrap marker survives boots; intentional CLI devices are never revoked by display name. Returns the per-boot locality secret and fresh person/admin token plus a loopback launch URL with credentials in its fragment. TCP/relay callers get 403 local_socket_required. Keep the proof only in sessionStorage; strip the fragment immediately and clear proof on sign-out, rejection or identity change. With a listener it also returns extension_code: a one-time pairing code only the openside extension's own origin may redeem, for a person device (read, steer, approve, human_step) that replaces the extension device of the previous launch. person_browser_runtime_dir is the private directory `openside-browser` gives the person's browser for its person-role gateway and launch record; the daemon looks for that browser nowhere else. */
         get: {
             parameters: {
                 query?: never;
@@ -3752,6 +6308,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        /** @description Turn one transport on or off and save its settings. Turning one on while Remote Control is off is refused with 409 remote_disabled and changes nothing; turn Remote Control on first (POST /v1/remote/enable). Turning one off works either way. */
         put: {
             parameters: {
                 query?: never;
@@ -3850,6 +6407,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        /** @description Turn one transport on or off and save its settings. Turning one on while Remote Control is off is refused with 409 remote_disabled and changes nothing; turn Remote Control on first (POST /v1/remote/enable). Turning one off works either way. */
         put: {
             parameters: {
                 query?: never;
@@ -4235,6 +6793,8 @@ export interface paths {
                     q?: string;
                     /** @description List archived (true) or unarchived (false, default) sessions; pinned sessions come first. */
                     archived?: boolean;
+                    /** @description Filter by project: none selects chats outside every project; a project id selects that project's chats. */
+                    project?: string;
                 };
                 header?: never;
                 path?: never;
@@ -4263,7 +6823,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** @description Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). Paired devices get 403 local_socket_required for a mode looser than the daemon default or any workspace; agent_client devices also get it for speed "fast", effort "xhigh"/"max" or profile "ultrabrowse". */
+        /** @description Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). project_id starts the chat in a project: its folder becomes the workspace and `session.created` is followed by `session.folder_changed` in the same commit (404 project_not_found; 409 project_root_changed when the project's folder was moved or replaced since the project was made, or still needs confirming (needs_confirmation); 400 invalid_workspace together with workspace). Any person device or the local socket may start a chat in an existing project; agent_client devices get 403 person_device_required. Paired devices get 403 local_socket_required for a mode looser than the daemon default, and for a workspace unless they have local access (an admin person device on the computer running openside); agent_client devices also get it for speed "fast", effort "xhigh"/"max" or profile "ultrabrowse". A model a person picks for a chat without an agent becomes the default for new chats; agent clients and `openside mcp` never change it. */
         post: {
             parameters: {
                 query?: never;
@@ -4375,7 +6935,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** @description Update title/pinned/archived as a durable session.updated event. Archiving an isolated-space session disposes its browser space. */
+        /** @description Change a chat. title, pinned and archived are recorded as one session.updated event; archiving an isolated-space session disposes its browser space. model, effort, mode and confirmation are recorded as one session.options_updated event and apply from the chat's next model request. Paired devices get 403 local_socket_required for a mode looser than the daemon default, and agent_client devices also for effort "xhigh"/"max". A model a person picks becomes the default for new chats; agent clients and `openside mcp` change only this chat. read marks the chat read or unread as a session.read event. Fields equal to the current value record nothing; 409 agent_home for a model or mode change of an agent's home chat. */
         patch: {
             parameters: {
                 query?: never;
@@ -4611,6 +7171,285 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{id}/attached-tabs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Person tabs attached to this chat: the agent may snapshot them and act on them under the chat's permission mode. Attachments last for the browser run. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AttachedTabList"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No such chat */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "not_found",
+                         *       "message": "not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** @description Attach one of the person's tabs (or, without tab_id, the selected tab of the focused window) to this chat, as an @ mention or Ask on this tab does. The person's own action needs no approval; incognito tabs, browser pages and the openside UI cannot be attached (400 invalid_value). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AttachTabRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AttachedTab"];
+                    };
+                };
+                /** @description A value the daemon or the browser refuses */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_value",
+                         *       "message": "invalid value"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No such tab, bookmark or session */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "tab_not_found",
+                         *       "message": "tab not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_not_connected",
+                         *       "message": "person browser not connected"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser reported a failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_failed",
+                         *       "message": "person browser failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The person's browser did not answer in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_browser_timeout",
+                         *       "message": "person browser timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/attached-tabs/{tab_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Detach a person tab from this chat; the agent can no longer read or act on it. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                    /** @description Chrome tab id of an attached person tab. */
+                    tab_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No such chat, or that tab is not attached to it */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "tab_not_found",
+                         *       "message": "tab not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions/{id}/browser/preview": {
         parameters: {
             query?: never;
@@ -4805,6 +7644,210 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{id}/computer-use": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The chat's connected desktop app, if any, with the cursor in pixels of the latest frame. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ComputerUseSessionState"];
+                    };
+                };
+                /** @description No such chat */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "not_found",
+                         *       "message": "not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/computer-use/frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Server-sent events for the chat's connected app: a `state` event now and on every change (connect, phase, cursor, stop), and a `frame` event with each frame the agent sees. Private chats are refused (409 private_session). The stream ends when the chat is deleted. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Last seen sequence in this stream; only later events are returned. */
+                    "Last-Event-ID"?: string;
+                };
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/event-stream": string;
+                    };
+                };
+                /** @description No such chat */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "not_found",
+                         *       "message": "not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Private chats never stream frames */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "private_session",
+                         *       "message": "private session"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/computer-use/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description End the chat's computer use now: an action in progress is cancelled, the virtual input device is removed, and later approvals for that connection no longer act. Audited. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ComputerUseStopResult"];
+                    };
+                };
+                /** @description No such chat */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "not_found",
+                         *       "message": "not found"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions/{id}/events": {
         parameters: {
             query?: never;
@@ -4902,6 +7945,108 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Choose where the chat works: project_id moves it into that project (its folder becomes the workspace), workspace attaches an absolute folder outside any project, and both null leaves the project and drops the folder. Recorded as one `session.folder_changed` event (none when nothing changes); the agent switches folders from its next start. 400 invalid_value when both are set; 404 project_not_found; 409 project_root_changed when the project's folder was moved or replaced since the project was made, or still needs confirming (needs_confirmation); 409 agent_home for an agent's home chat; 400 invalid_project_root for a workspace that is missing, not a folder, the file system root, the home folder or above it, inside openside's data, inside an operating-system folder or another person's home, or a credential folder such as ~/.ssh or above one. Attaching a workspace needs local access (403 local_access_required on other devices); moving into an existing project needs a person device or the local socket (403 person_device_required for agent_client devices); leaving needs neither. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SetSessionFolderRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Session"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Branch the chat at a reply: a new chat titled `<title> (branch)` holding the messages and replies up to and including the finished reply to `from_message`, with the same agent, model, effort, permission, confirmation, project, workspace and browser space (a branch of an agent's home chat is an ordinary chat of that agent). The agent receives that conversation as context; tool steps and attachments are not copied (attachments are named in the copied text). The copied events end with `session.branched`. 404 message_not_found; 409 message_not_finished while that message has no finished reply; 409 agent_retired; 409 project_root_changed when the project's folder was moved or replaced, or still needs confirming; 403 local_socket_required when a paired device could not create such a chat itself (a project's folder never counts against a person device; for an agent_client device, or when the project no longer exists, the branch keeps the folder as a plain workspace without the project). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ForkSessionRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Session"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -5259,6 +8404,135 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Live share links of the chat, newest first. Expired links are removed when listed. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShareLinkList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** @description Publish a read-only snapshot of the chat as it is now. Only a person may share: agent-client and channel callers get 403 person_required. The snapshot holds delivered messages and replies, optionally one line per step (tool name and failure only, never arguments or results), and copies of the chosen artifacts; tickets, thinking, queued messages and tool data are never included. Live vault and session secrets are masked, a line that still looks like a credential is replaced whole, and a chosen text artifact that still looks like one is refused (400 sensitive_artifact). Only UTF-8 text and PNG, JPEG, GIF or WebP images can be shared (400 unsupported_share_artifact otherwise); images are re-encoded without metadata. 409 private_session for private chats, 409 vault_locked while a set-up vault is locked (its values could not be masked), 409 too_many_shares beyond 50 live links per chat, 400 invalid_share_artifact for an unknown, working or transcript path, more than 20 artifacts or a duplicate, 400 invalid_expiry outside 60 s..365 days, 413 share_too_large beyond 4 MiB of conversation, 10 MiB per artifact or 25 MiB of artifacts. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateShareRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShareLink"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/shares/{share_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Revoke a link: the snapshot and its artifact copies are deleted and the link answers 404 at once. Deleting the chat revokes all of its links. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["schemas"]["SessionId"];
+                    /** @description Share id from ShareLink.id. */
+                    share_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -5855,6 +9129,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/cli": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The browser profile new CLI and MCP sessions on this computer use: the `profile` key of `cli.toml` beside config.toml, which `openside settings set-default-profile` also writes. profile_is_default is true when none is saved (new sessions use the account's first profile, `shared`). 500 cli_settings_invalid when the file is not valid TOML or names an unknown profile; the file is left as it is. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CliDefaults"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Save the default profile (`null` removes the key, back to the account's first profile). Only `profile` is rewritten; every other key and comment of cli.toml stays, and the file is created when missing. Requires local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret): 403 local_access_required otherwise. 500 cli_settings_invalid leaves an unreadable file untouched. Audited. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateCliDefaultsRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CliDefaults"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/v1/settings/config": {
         parameters: {
             query?: never;
@@ -5862,7 +9217,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable. */
+        /** @description The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key, except that preferences.mcp_server and preferences.computer_use change only for a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required, audited as `refused_agent`. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable. */
         get: {
             parameters: {
                 query?: never;
@@ -5895,7 +9250,7 @@ export interface paths {
                 };
             };
         };
-        /** @description The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable. */
+        /** @description The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key, except that preferences.mcp_server and preferences.computer_use change only for a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required, audited as `refused_agent`. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable. */
         put: {
             parameters: {
                 query?: never;
@@ -5993,7 +9348,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409. */
+        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on. */
         post: {
             parameters: {
                 query?: never;
@@ -6061,7 +9416,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409. */
+        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on. */
         put: {
             parameters: {
                 query?: never;
@@ -6117,7 +9472,7 @@ export interface paths {
             };
         };
         post?: never;
-        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409. */
+        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on. */
         delete: {
             parameters: {
                 query?: never;
@@ -6168,7 +9523,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409. */
+        /** @description Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on. */
         patch: {
             parameters: {
                 query?: never;
@@ -6232,7 +9587,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Local model readiness grouped by provider, from configured ids, source accounts and curated chat/tool-capable models. Credential values, email and upstream account identities are never included. Metadata is cached for at most five seconds; key/source/Vault lifecycle writes invalidate it. Readiness is not an upstream entitlement guarantee. */
+        /** @description Local model readiness grouped by provider, from configured ids, source accounts and curated chat/tool-capable models. Credential values, email and upstream account identities are never included. Metadata is cached for at most five seconds; key/source/Vault lifecycle writes invalidate it. Readiness is not an upstream entitlement guarantee. Each model's default_effort is the effort a chat runs at on it when no effort is picked (null: the provider's own default, or an image model); a create or PATCH without effort keeps it unset. */
         get: {
             parameters: {
                 query?: never;
@@ -6262,7 +9617,7 @@ export interface paths {
                 };
             };
         };
-        /** @description Set the default and ordered fallback ids without raw TOML editing. Requires admin; every id must be available in the current catalog (400 model_unavailable), at most16 distinct fallbacks and no default duplicate (400 invalid_models). Atomically persists selection without daemon restart. Ordinary sessions retain stored models; Team homes use their Agent override or the current default and reopen on the next idle/real turn when effective selection changes. Running requests finish their captured model. Response effective:new_sessions_and_home_next_turn. */
+        /** @description Set the role models without raw TOML editing: default, fast, ordered fallbacks, and optional standard, deep, visual and image (omitted keeps, null clears; unset roles use the session model). Requires admin; every id must be available in the current catalog (400 model_unavailable), chat roles need kind chat and image needs kind image (400 invalid_model_kind), at most16 distinct fallbacks and no default duplicate (400 invalid_models). Atomically persists selection without daemon restart. Ordinary sessions retain stored models; Team homes use their Agent override or the current default and reopen on the next idle/real turn when effective selection changes. Running requests finish their captured model. Response effective:new_sessions_and_home_next_turn. */
         put: {
             parameters: {
                 query?: never;
@@ -6296,6 +9651,51 @@ export interface paths {
                 };
             };
         };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/models/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Connected providers for the Providers list: one row per provider and connection kind (subscription or api_key) with a product display name and connected/needs_attention status. `accounts` carries the internal account references behind a row for Reconnect and Disconnect; it is not display text. Credential values and upstream identities are never included. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProviderConnectionList"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -6848,6 +10248,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Preferences"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Change some of the person's preferences; omitted fields keep their value and they apply at once. mcp_server and computer_use need local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret): 403 local_access_required otherwise, audited as `refused_remote`. They also need a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required even on the socket, audited as `refused_agent`. Agent clients without local access get 403 forbidden for every field. 400 invalid_preferences for a value the file would refuse, 400 invalid_value for an empty body. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Per-boot launcher proof that makes a loopback TCP caller local; only needed for mcp_server and computer_use. */
+                    "X-Openside-Local-Secret"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdatePreferencesRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Preferences"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/v1/settings/subscriptions": {
         parameters: {
             query?: never;
@@ -7058,6 +10538,124 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/shares/{share_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Public read-only snapshot behind a share link. No bearer token: the unguessable id is the credential. Unknown, revoked, expired and deleted-chat links all answer 404 share_not_found. Each link admits 120 requests per rolling minute and the daemon 60 failed lookups per rolling minute; beyond that 429 share_rate_limited with Retry-After 60. Responses are never cached and carry Referrer-Policy no-referrer and X-Robots-Tag noindex. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Share id from ShareLink.id. */
+                    share_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SharedChat"];
+                    };
+                };
+                /** @description share_not_found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description share_rate_limited */
+                429: {
+                    headers: {
+                        /** @description 60 seconds */
+                        "Retry-After"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shares/{share_id}/artifacts/{artifact}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Public bytes of an artifact copied into a share, under the same id credential, 404 and rate limit as GET /v1/shares/{share_id}. PNG, JPEG, GIF and WebP images are inline; anything else is an attachment. Every response has X-Content-Type-Options nosniff and a sandbox CSP with default-src 'none', so nothing renders in the daemon origin. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Share id from ShareLink.id. */
+                    share_id: string;
+                    /** @description SharedArtifact.index. */
+                    artifact: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/octet-stream": string;
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/skills": {
         parameters: {
             query?: never;
@@ -7264,6 +10862,204 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/v1/stt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Whether this caller can dictate right now. A caller that POST would refuse (agent clients: MCP/CLI agent tokens and marked socket clients) gets available false with reason person_device_required, without any transcriber lookup. Otherwise available is true when channels.stt_cmd is set or the openai account pool holds a first-party OpenAI API key (ChatGPT-plan sign-ins, relays and plugin accounts are never used), and false with reason stt_unavailable when neither is; nothing leaves the computer to answer. max_bytes is the largest decoded clip (8 MiB, or channels.max_audio_bytes when smaller); max_seconds is the longest clip a client should record (120). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SttStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** @description Transcribe one recorded clip (base64) for the person's composer. channels.stt_cmd runs locally first with the clip in a private temporary file that is deleted when the command ends; otherwise the clip goes to OpenAI's transcription API (gpt-4o-mini-transcribe) with the first usable OpenAI API key of the openai account pool. language only reaches OpenAI, as its primary subtag. The clip and the text are never stored, logged or added to a chat. At most two clips are transcribed at once and four more wait for a slot; beyond that the request is refused with 429 stt_busy before its clip is decoded. The request body may be at most the base64 size of max_bytes plus 64 KiB and must arrive within 30 seconds. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TranscribeRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Transcript"];
+                    };
+                };
+                /** @description A body that is not a TranscribeRequest, bad base64, an empty clip, a mime that is not audio/*, or a language that is not a short BCP-47 tag */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "invalid_audio",
+                         *       "message": "invalid audio"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Only the person's own device or the local socket dictates; agent clients (MCP/CLI agent tokens and marked socket clients) are refused */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "person_device_required",
+                         *       "message": "person device required"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The request body did not arrive within 30 seconds; its place is freed for others */
+                408: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "audio_timeout",
+                         *       "message": "audio timeout"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No transcriber: set channels.stt_cmd or add an OpenAI API key */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "stt_unavailable",
+                         *       "message": "stt unavailable"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The clip is larger than max_bytes from GET /v1/stt, or the body is larger than its base64 size plus 64 KiB */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "audio_too_large",
+                         *       "message": "audio too large"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The transcriber heard no speech */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "no_speech",
+                         *       "message": "no speech"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Two clips are being transcribed and four more are waiting; try again shortly */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "stt_busy",
+                         *       "message": "stt busy"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The transcriber failed or timed out; its output is never returned */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        /**
+                         * @example {
+                         *       "code": "stt_failed",
+                         *       "message": "stt failed"
+                         *     }
+                         */
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/sync": {
@@ -8109,6 +11905,149 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/vault/biometrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Whether this computer can verify a person biometrically (fprintd on Linux, Touch ID on macOS) without prompting; `reason` says why not. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VaultBiometrics"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/vault/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Delete every saved sign-in, authenticator and passkey; model keys, channel and MCP secrets stay. Same gate and codes as export (local socket, `confirm: true`, fresh authentication). Audited (`clear`: `allowed`, then `cleared` with the count; refusals `denied`). 500 vault_cleared_audit_incomplete (cleared). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VaultConfirmRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VaultClearResult"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/vault/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Every saved sign-in and authenticator as CSV (`name,url,username,password,otpauth`, one row per allowed origin; passkeys cannot be exported and are counted in `skipped`; model keys, channel and MCP secrets are never included). Local socket only, `confirm: true`, and fresh authentication: the passphrase in the body (passphrase vaults), `biometric: true`, or a person's unlock in the last 5 minutes; a keyring vault without biometric unlock needs only the confirmation. Wrong passphrases are throttled like unlock. Refusals are audited (`export`: `denied`); an export is audited `allowed`, then `exported`. Served with Cache-Control: no-store. 400 confirmation_required, wrong_passphrase, passphrase_not_used; 403 local_access_required, biometric_failed; 409 vault_unavailable, reauth_required, biometric_unavailable; 429 too_many_attempts; 500 audit_unavailable. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VaultConfirmRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VaultExport"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/vault/items": {
         parameters: {
             query?: never;
@@ -8147,7 +12086,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** @description Add a login (password, optional username and authenticator) or an authenticator alone (`totp`: otpauth:// URI or base32 key). Values only travel to the daemon, are masked in every later output before the save, are saved encrypted and audited (`item_add`, attributed to the caller: `device:<id>` or `local`); the response is value-free metadata. With a keyring backend the first item creates the vault. 400 invalid_item, invalid_origin, invalid_totp, empty_item; 409 item_exists, vault_unavailable; 500 item_added_audit_incomplete (saved). */
+        /** @description Add a login (password, optional username and authenticator) or an authenticator alone (`totp`: otpauth:// URI or base32 key). Values only travel to the daemon, are masked in every later output before the save, are saved encrypted and audited (`item_add`, attributed to the caller: `device:<id>` or `local`); the response is value-free metadata. With a keyring backend the first item creates the vault, unless biometric unlock is on (then a person sets it up first: 403 biometric_required). 400 invalid_item, invalid_origin, invalid_totp, empty_item; 403 biometric_required; 409 item_exists, vault_unavailable; 500 item_added_audit_incomplete (saved). */
         post: {
             parameters: {
                 query?: never;
@@ -8312,6 +12251,182 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/vault/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Open a locked vault with its recovery key and give it a new unlock key: `passphrase` (8+ characters) for a passphrase vault, the OS keyring's key (created when missing) for a keyring vault. The saved recovery key keeps working. Local socket only; wrong keys are throttled like passphrases. Audited (`recover`: `recovered`, `denied` with wrong_recovery_key, or `failed` with the code). 400 passphrase_required, passphrase_not_used, weak_passphrase; 403 local_access_required, wrong_recovery_key; 409 vault_already_unlocked, vault_not_set_up, recovery_not_configured; 429 too_many_attempts; 503 vault_unsupported, keyring_unavailable; 500 vault_recovered_audit_incomplete (recovered). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VaultRecoverRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VaultStatus"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/vault/recovery-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Generate a recovery key and return it once; any earlier key stops working. It is stored nowhere: only the vault key sealed with it is kept next to the vault file, and it is masked in later output. Same gate and codes as export (local socket, `confirm: true`, fresh authentication). Audited (`recovery_key`: `allowed`, then `generated`, both before the old key is replaced). Served with Cache-Control: no-store. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["VaultConfirmRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VaultRecoveryKey"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/vault/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Password settings: auto-lock idle time, biometric unlock (with whether this computer supports it), autofill rules, default access policy, the fixed incognito exclusion and recovery-key state. Never values. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VaultSettings"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Change password settings; absent fields keep their value. Saved to the config file and applied at once; every change is audited (`settings_update`, with the changed key names only). Tightening is open to every vault caller; loosening (longer auto-lock, biometric unlock off, autofill or auto-submit on, insecure pages allowed, fewer excluded domains, a less strict default policy) needs the local socket or a person's device. Turning biometric unlock on needs the local socket, a keyring vault and a passing biometric check. 400 invalid_value, invalid_domain, incognito_always_disabled; 403 local_access_required, person_access_required, biometric_failed; 409 biometric_unavailable; 500 settings_saved_audit_incomplete (saved). */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateVaultSettingsRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VaultSettings"];
+                    };
+                };
+                /** @description Sanitized error */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/v1/vault/setup": {
         parameters: {
             query?: never;
@@ -8321,7 +12436,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Create the vault file. Keyring backends take no body passphrase and keep a random wrapping key in the OS keyring; a passphrase vault needs `passphrase` (8+ characters), which is never stored or returned. Every attempt that reaches the vault is audited (`setup`: `completed` or `failed` with the code), attributed to the caller (`device:<id>` or `local`). 400 passphrase_required, passphrase_not_used, weak_passphrase; 409 vault_already_set_up; 500 vault_set_up_audit_incomplete (set up and unlocked); 503 keyring_unavailable, vault_unsupported. */
+        /** @description Create the vault file. Keyring backends take no body passphrase and keep a random wrapping key in the OS keyring; a passphrase vault needs `passphrase` (8+ characters), which is never stored or returned. With biometric unlock on, a keyring vault is created only from the local socket with `biometric: true` and a passing check. Every attempt that reaches the vault is audited (`setup`: `completed` or `failed` with the code), attributed to the caller (`device:<id>` or `local`). 400 passphrase_required, passphrase_not_used, weak_passphrase; 403 biometric_required, biometric_failed; 409 vault_already_set_up; 500 vault_set_up_audit_incomplete (set up and unlocked); 503 keyring_unavailable, vault_unsupported. */
         post: {
             parameters: {
                 query?: never;
@@ -8430,6 +12545,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * About
+         * @description Versions of what runs on this computer.
+         */
+        About: {
+            /** @description Where releases are published. */
+            releases_url: string;
+            /**
+             * @description The agent runtime version reported by the latest started chat since this service
+             *     started; null before any chat ran.
+             */
+            runtime_version?: string | null;
+            /** @description Agent runtime package versions this service accepts, in Cargo/npm comparator syntax. */
+            runtime_versions: string;
+            /** @description The background service (`opensided`) version. */
+            version: string;
+        };
         /** @description A device waiting for someone on the daemon's computer to allow more scopes. */
         AccessRequest: {
             /**
@@ -8820,6 +12952,12 @@ export interface components {
             /** @description Delivery classification; working observations are omitted from the list route. */
             purpose: components["schemas"]["ArtifactPurpose"];
             /**
+             * @description A browser download offered for download only: its bytes are unrecognised or its name
+             *     runs code or renders active content when opened. Clients never open or preview it, and
+             *     the daemon lists no `preview_url` for it.
+             */
+            quarantined?: boolean;
+            /**
              * Format: uint64
              * @description Byte size.
              */
@@ -8843,6 +12981,47 @@ export interface components {
         ArtifactPurpose: "output" | "working";
         /** @description Where an artifact came from. */
         ArtifactSource: "attachment" | "tool" | "transcript" | "visual";
+        /**
+         * AttachTabRequest
+         * @description Attach one of the person's tabs to a chat.
+         */
+        AttachTabRequest: {
+            /**
+             * Format: int64
+             * @description Tab to attach; omitted attaches the selected tab of the person's focused window.
+             */
+            tab_id?: number | null;
+        };
+        /** @description Who attached a tab to a chat. */
+        AttachedBy: "person" | "agent";
+        /** @description A person tab the chat's agent may read, and act on under the chat's permission mode. */
+        AttachedTab: {
+            /**
+             * Format: date-time
+             * @description When it was attached.
+             */
+            attached_at: string;
+            /** @description Who attached it. */
+            attached_by: components["schemas"]["AttachedBy"];
+            /**
+             * Format: int64
+             * @description Chrome tab id in the person's browser.
+             */
+            tab_id: number;
+            /** @description Title when attached; untrusted page data. */
+            title: string;
+            /** @description URL when attached; untrusted page data. */
+            url: string;
+        };
+        /**
+         * AttachedTabList
+         * @description Person tabs attached to one chat. Attachments last for the browser run: they are dropped
+         *     when the person's browser restarts, since Chrome reuses tab ids across runs.
+         */
+        AttachedTabList: {
+            /** @description In attach order. */
+            tabs: components["schemas"]["AttachedTab"][];
+        };
         /**
          * Attachment
          * @description Durable record of a stored attachment, carried by `message.queued`.
@@ -8972,6 +13151,77 @@ export interface components {
         };
         /** @description Agent activity in a tab. */
         BrowserPhase: "loading" | "reading" | "acting" | "waiting_human" | "done" | "error";
+        /**
+         * BrowserPrefValues
+         * @description Values as the browser reports them, never cached by the daemon.
+         */
+        BrowserPrefValues: {
+            /** @description Preferred page languages in order (`intl.accept_languages`). */
+            accept_languages: string[];
+            /**
+             * @description Whether playing video may enter picture-in-picture automatically when its tab is left;
+             *     null when the browser has no content settings for the profile.
+             */
+            auto_picture_in_picture?: boolean | null;
+            /**
+             * Format: uint16
+             * @description Default page zoom in percent; null when the profile has no zoom preferences.
+             */
+            default_zoom_percent?: number | null;
+            /**
+             * @description Whether Alt+Space (⌥Space on macOS) opens the mini popup from anywhere; null when the
+             *     openside extension is not enabled in the browser's profile.
+             */
+            mini_popup?: boolean | null;
+            /** @description Default search engine and the built-in engines it can be switched to. */
+            search_engine: components["schemas"]["BrowserSearchEngines"];
+            /** @description Spell check while typing (`browser.enable_spellchecking`). */
+            spell_check: boolean;
+            /** @description Third-party cookie blocking. */
+            third_party_cookies: components["schemas"]["ThirdPartyCookies"];
+        };
+        /**
+         * BrowserPrefs
+         * @description The person's browser settings that the patched browser applies to its own profile.
+         */
+        BrowserPrefs: {
+            /** @description Current values read back from the browser; present only when `status` is `available`. */
+            prefs?: components["schemas"]["BrowserPrefValues"] | null;
+            /** @description Whether the values below can be read and changed right now. */
+            status: components["schemas"]["BrowserPrefsStatus"];
+        };
+        /**
+         * BrowserPrefsStatus
+         * @description Why browser settings are or are not reachable.
+         */
+        BrowserPrefsStatus: "available" | "not_running" | "unsupported";
+        /**
+         * BrowserSearchEngine
+         * @description One built-in search engine.
+         */
+        BrowserSearchEngine: {
+            /**
+             * Format: uint32
+             * @description Chromium's prepopulated engine id.
+             */
+            id: number;
+            /** @description Display name. */
+            name: string;
+        };
+        /**
+         * BrowserSearchEngines
+         * @description Built-in search engines only; engines the person added themselves and every search URL stay
+         *     inside the browser.
+         */
+        BrowserSearchEngines: {
+            /**
+             * Format: uint32
+             * @description Id of the current default, or null when it is not a built-in engine.
+             */
+            current?: number | null;
+            /** @description Engines the default can be switched to, in the browser's order. */
+            options: components["schemas"]["BrowserSearchEngine"][];
+        };
         /** @description Where a session's agent tabs browse, fixed at creation. */
         BrowserSpace: "shared" | "isolated";
         /** @description Typed browser situation for one tab, rendered as a live card per Task. */
@@ -9022,6 +13272,8 @@ export interface components {
         };
         /** @description Browser tab provenance; only `agent` permits Agent Tabs grouping. */
         BrowserTabOwnership: "agent" | "user" | "external";
+        /** @description A kind of data the person can clear from their own browser. */
+        BrowsingDataType: "history" | "cookies" | "cache" | "downloads" | "passwords" | "form_data";
         /** @description Capability required to access an HTTP operation. */
         CapabilityScope: "read" | "steer" | "approve" | "human_step" | "admin" | "browse" | "vault_use" | "otp_ingest";
         /** @description Canonical Card wire contract; presentation never grants authority. */
@@ -9131,16 +13383,32 @@ export interface components {
             accounts: components["schemas"]["ModelAccount"][];
             /** @description Local credential readiness under source priority and broker fail-close. */
             available: boolean;
-            /** @description Explicit provider:model selector; image-only models are not chat defaults. */
+            /**
+             * @description Effort a chat's visible agent runs at on this model when the person picks none: the
+             *     front agent's request clamped to the model's ladder. Null for image models and where
+             *     the runtime sends no effort, leaving the level to the provider's own default.
+             */
+            default_effort?: components["schemas"]["ThinkingEffort"] | null;
+            /**
+             * @description Curated product name for the UI, e.g. "Claude Sonnet 5.5".
+             * @default
+             */
+            display_name: string;
+            /** @description Explicit provider:model selector; image models are never chat role choices. */
             id: string;
             /**
              * @description False for an explicitly configured id outside the current curated generations.
              * @default false
              */
             in_catalog: boolean;
+            /**
+             * @description Chat or image generation.
+             * @default chat
+             */
+            kind: components["schemas"]["ModelKind"];
             /** @description Model-name portion, never an account label or private identity. */
             label: string;
-            /** @description Credential-value-free readiness or refusal explanation. */
+            /** @description CLI diagnostic: credential-value-free readiness or refusal explanation. */
             reason: string;
             /** @description Curated family recommendation, not a routing restriction. */
             recommended_for?: components["schemas"]["ModelRole"] | null;
@@ -9187,7 +13455,8 @@ export interface components {
             /** @description Effective state of this account only. */
             status: components["schemas"]["ChannelAccountStatus"];
             /**
-             * @description Exact signed callback URL to paste into the platform; null for Telegram or legacy.
+             * @description Exact signed callback URL to paste into the platform; null for Telegram or legacy, and
+             *     while Remote Control is off (the platform could not reach this computer).
              * @default null
              */
             webhook_url: string | null;
@@ -9279,6 +13548,8 @@ export interface components {
             /** @description Bot credential supplied through a secure form or hidden stdin. */
             token: string;
         };
+        /** @description Whether a chat asks before it changes anything. */
+        ChatConfirmation: "ask_first" | "skip";
         /** @description Canonical ChoiceAnswerEncoding wire contract; presentation never grants authority. */
         ChoiceAnswerEncoding: "page_option" | "info_answer";
         /** @description Canonical ChoiceLayout wire contract; presentation never grants authority. */
@@ -9297,6 +13568,32 @@ export interface components {
             provider?: components["schemas"]["LoginProvider"] | null;
         };
         /**
+         * ClearBrowsingDataRequest
+         * @description Clear data from the person's own browser, as its "Delete browsing data" dialog does.
+         */
+        ClearBrowsingDataRequest: {
+            /**
+             * Format: int64
+             * @description Clear data from this time on (Unix milliseconds); 0 clears everything.
+             */
+            since_ms: number;
+            /** @description At least one kind; each at most once. */
+            types: components["schemas"]["BrowsingDataType"][];
+        };
+        /**
+         * CliDefaults
+         * @description `GET /v1/settings/cli`: the defaults `<config dir>/cli.toml` holds for new CLI and MCP
+         *     sessions on this computer.
+         */
+        CliDefaults: {
+            /** @description The saved default; `shared` (the account's first profile) when none is saved. */
+            profile: components["schemas"]["CliProfile"];
+            /** @description True when no profile is saved, so new sessions use the account's first profile. */
+            profile_is_default: boolean;
+        };
+        /** @description Browser profile new CLI and MCP sessions on this computer use. */
+        CliProfile: "shared" | "isolated" | "incognito";
+        /**
          * CloudflareStatus
          * @description Supervised `cloudflared` state.
          */
@@ -9313,6 +13610,145 @@ export interface components {
             /** @description Public HTTPS URL once known (quick tunnels change it on every restart). */
             url?: string | null;
         };
+        /** @description One chat's connected app. */
+        ComputerUseConnection: {
+            /** @description App name (Linux window class, macOS application name). */
+            app: string;
+            /** @description Pointer after the latest pointer action. */
+            cursor?: components["schemas"]["ComputerUseCursor"] | null;
+            /**
+             * Format: uint32
+             * @description Height of the frame the agent last saw.
+             */
+            frame_height?: number | null;
+            /**
+             * Format: uint32
+             * @description Width of the frame the agent last saw; cursor coordinates use it.
+             */
+            frame_width?: number | null;
+            /**
+             * Format: uint64
+             * @description Increases with every connect on this daemon.
+             */
+            generation: number;
+            /** @description Changes on every connect; approvals name it, so they never carry over. */
+            id: string;
+            /** @description Current activity. */
+            phase: components["schemas"]["ComputerUsePhase"];
+            /**
+             * Format: uint32
+             * @description Owning process id.
+             */
+            pid: number;
+            /** @description Window title at the latest check. */
+            title: string;
+        };
+        /** @description The agent's pointer, in pixels of the latest frame. */
+        ComputerUseCursor: {
+            /** @description A button is down right now. */
+            held: boolean;
+            /**
+             * Format: double
+             * @description Frame x.
+             */
+            x: number;
+            /**
+             * Format: double
+             * @description Frame y.
+             */
+            y: number;
+        };
+        /** @description Whether one part of computer use works on this computer. */
+        ComputerUseFeature: {
+            /** @description Usable now. */
+            available: boolean;
+            /** @description Why it is not usable, in plain language. */
+            reason?: string | null;
+            /** @description Mechanism in use, such as `grim`, `uinput`, `wtype` or `screencapturekit`. */
+            via?: string | null;
+        };
+        /**
+         * @description The `frame` event of `GET /v1/sessions/{id}/computer-use/frames`: the frame the agent
+         *     last saw of the connected window.
+         */
+        ComputerUseFrame: {
+            /** @description Connection the frame belongs to. */
+            connection: string;
+            /** @description Base64 image bytes. */
+            data: string;
+            /**
+             * Format: uint32
+             * @description Pixel height.
+             */
+            height: number;
+            /** @description Always `image/png`. */
+            mime: string;
+            /**
+             * Format: uint64
+             * @description Increases with every frame of this chat.
+             */
+            seq: number;
+            /**
+             * Format: uint32
+             * @description Pixel width.
+             */
+            width: number;
+        };
+        /** @description What a connection is doing. */
+        ComputerUsePhase: "connected" | "acting" | "capturing";
+        /** @description `GET /v1/sessions/{id}/computer-use` and the `state` event of the frames stream. */
+        ComputerUseSessionState: {
+            /** @description The connected app; null when none is connected. */
+            connection?: components["schemas"]["ComputerUseConnection"] | null;
+            /**
+             * Format: uint64
+             * @description Sequence of the latest frame, for matching `frame` events.
+             */
+            frame_seq?: number | null;
+        };
+        /**
+         * ComputerUseStatus
+         * @description `GET /v1/computer-use`: whether computer use is turned on and works here.
+         */
+        ComputerUseStatus: {
+            /** @description Desktop backend (`hyprland`, `macos`); null when this desktop is not supported. */
+            backend?: string | null;
+            /** @description Window frames. */
+            capture: components["schemas"]["ComputerUseFeature"];
+            /** @description Window frames and at least one kind of input work. */
+            eligible: boolean;
+            /** @description `preferences.computer_use`. */
+            enabled: boolean;
+            /** @description Typing and key presses. */
+            keyboard: components["schemas"]["ComputerUseFeature"];
+            /** @description `linux`, `macos` or another operating system name. */
+            platform: string;
+            /** @description Clicks, pointer moves and scrolling. */
+            pointer: components["schemas"]["ComputerUseFeature"];
+            /** @description Every reason a part does not work, deduplicated. */
+            reasons: string[];
+        };
+        /**
+         * ComputerUseStopResult
+         * @description `POST /v1/sessions/{id}/computer-use/stop`.
+         */
+        ComputerUseStopResult: {
+            /** @description The connection that ended. */
+            connection?: components["schemas"]["ComputerUseConnection"] | null;
+            /** @description A connection was ended. */
+            stopped: boolean;
+        };
+        /**
+         * ComputerUseStreamEvent
+         * @description One event of the frames stream; the SSE event name is the `type`.
+         */
+        ComputerUseStreamEvent: (components["schemas"]["ComputerUseSessionState"] & {
+            /** @constant */
+            type: "state";
+        }) | (components["schemas"]["ComputerUseFrame"] & {
+            /** @constant */
+            type: "frame";
+        });
         /**
          * ConfigureTailscaleRequest
          * @description Enable or disable openside's Tailscale Serve handler.
@@ -9544,6 +13980,19 @@ export interface components {
          * @description Broad media class of one content part; the runtime maps it to model input types.
          */
         ContentKind: "text" | "image" | "audio" | "file";
+        /** @description How full a chat's context window was at its latest model request. */
+        ContextUsage: {
+            /**
+             * Format: uint64
+             * @description Input tokens of the latest request by the chat's own agent (cache reads included).
+             */
+            used_tokens: number;
+            /**
+             * Format: uint64
+             * @description The model's context window; null when the runtime did not report one.
+             */
+            window_tokens?: number | null;
+        };
         /**
          * CreateAccountSpaceRequest
          * @description A person opts in to a separate persistent sign-in profile for this site.
@@ -9577,6 +14026,54 @@ export interface components {
             packet: components["schemas"]["HandoffPacket"];
             /** @description Review subject; never authorizes the subject's author to review itself. */
             subject_handoff_id?: string | null;
+        };
+        /**
+         * CreateMcpServerRequest
+         * @description `POST /v1/mcp/servers` body.
+         */
+        CreateMcpServerRequest: {
+            /**
+             * @description http: also reach private (10/8, 172.16/12, 192.168/16), CGNAT (100.64/10) and
+             *     unique-local IPv6 addresses; link-local and cloud metadata stay refused. Default false.
+             * @default false
+             */
+            allow_private_network: boolean;
+            /**
+             * @description stdio: program and arguments, run without a shell.
+             * @default null
+             */
+            command: string[] | null;
+            /**
+             * @description stdio: absolute working directory.
+             * @default null
+             */
+            cwd: string | null;
+            /**
+             * @description Defaults to true.
+             * @default null
+             */
+            enabled: boolean | null;
+            /**
+             * @description Stable id; derived from `label` when absent.
+             * @default null
+             */
+            id: string | null;
+            /** @description Display name, 1-80 characters. */
+            label: string;
+            /**
+             * @description Environment variables (stdio) or headers (http) to store in the Vault, by name.
+             * @default {}
+             */
+            secrets: {
+                [key: string]: string;
+            };
+            /** @description Transport. */
+            transport: components["schemas"]["McpServerTransport"];
+            /**
+             * @description http: `https://` endpoint, or `http://` on a loopback host.
+             * @default null
+             */
+            url: string | null;
         };
         /**
          * CreateMemoryRequest
@@ -9635,6 +14132,18 @@ export interface components {
             via: components["schemas"]["PairingTransport"] | null;
         };
         /**
+         * CreatePersonBookmarkRequest
+         * @description Bookmark a page.
+         */
+        CreatePersonBookmarkRequest: {
+            /** @description Folder to add to; omitted adds to the bookmarks bar. */
+            parent_id?: string | null;
+            /** @description Title (at most 1000 characters). */
+            title: string;
+            /** @description http(s) URL without credentials. */
+            url: string;
+        };
+        /**
          * CreatePinnedTabRequest
          * @description `POST /v1/pinned-tabs`. Pinning an already pinned URL updates its title.
          */
@@ -9646,6 +14155,24 @@ export interface components {
             title: string | null;
             /** @description http(s) URL. */
             url: string;
+        };
+        /**
+         * CreateProjectRequest
+         * @description Create a project from an existing folder, or (without `root`) from scratch in a new empty
+         *     folder the daemon makes. Only the computer running openside may create projects.
+         */
+        CreateProjectRequest: {
+            /** @description Instructions for every chat in the project, at most [`MAX_PROJECT_INSTRUCTIONS_BYTES`]. */
+            instructions?: string | null;
+            /** @description Non-blank display name, at most [`MAX_PROJECT_NAME_CHARS`] characters after trimming. */
+            name: string;
+            /**
+             * @description Absolute path of an existing folder; it must not be the file system root, the home
+             *     folder or a folder above it, inside openside's own data, inside an operating-system
+             *     folder or another person's home, or a credential folder (such as `~/.ssh`) or a folder
+             *     above one. Omitted: start from scratch.
+             */
+            root?: string | null;
         };
         /**
          * CreateProviderKeyRequest
@@ -9698,7 +14225,9 @@ export interface components {
              *     afterwards. Incognito sessions already have their own browser and refuse `isolated`.
              */
             browser_space?: components["schemas"]["BrowserSpace"];
-            /** @description Thinking effort, immutable afterwards; omission keeps the model's default. */
+            /** @description Confirmation behaviour; omission uses `preferences.confirmation`. Changeable later. */
+            confirmation?: components["schemas"]["ChatConfirmation"] | null;
+            /** @description Thinking effort; omission keeps the model's default. Changeable later per chat. */
             effort?: components["schemas"]["ThinkingEffort"] | null;
             /** @description Create a private session; immutable afterwards. Browsing history is not indexed. */
             incognito?: boolean;
@@ -9708,12 +14237,43 @@ export interface components {
             model?: string | null;
             /** @description Agent profile, immutable afterwards; omission means the daemon-wide profile. */
             profile?: components["schemas"]["SessionProfile"] | null;
+            /**
+             * @description Start the chat in this project; its folder becomes the workspace. Cannot be combined
+             *     with `workspace`.
+             */
+            project_id?: string | null;
             /** @description Service speed, immutable afterwards; omission means `default`. */
             speed?: components["schemas"]["SessionSpeed"] | null;
             /** @description Conversation title, or a daemon-generated title when omitted. */
             title?: string | null;
-            /** @description Absolute workspace path, canonicalized by the daemon before session creation. */
+            /**
+             * @description Absolute workspace path, canonicalized by the daemon before session creation. A paired
+             *     device needs local access (the computer running openside) to name one.
+             */
             workspace?: string | null;
+        };
+        /**
+         * CreateShareRequest
+         * @description Publish a snapshot of the chat as it is now.
+         */
+        CreateShareRequest: {
+            /**
+             * @description Artifact paths from `GET /v1/sessions/{id}/artifacts` to copy into the snapshot, in
+             *     the order given; none by default. The transcript and working files cannot be shared.
+             * @default []
+             */
+            artifacts: string[];
+            /**
+             * Format: uint64
+             * @description Seconds until the link stops working; omitted or null keeps it until revoked.
+             * @default null
+             */
+            expires_in_secs: number | null;
+            /**
+             * @description Include one line per step the agent took (the tool used, never its input or output).
+             * @default true
+             */
+            steps: boolean;
         };
         /**
          * CreateSkillRequest
@@ -9989,6 +14549,12 @@ export interface components {
             text: string;
         } | {
             /**
+             * Format: uint64
+             * @description The model's context window, 0 when unknown; present only on requests by the
+             *     session's own agent, so subagent usage never moves the chat's context meter.
+             */
+            context_window?: number | null;
+            /**
              * @description Thinking effort the request was sent with, after the runtime fitted its own
              *     default to the model; absent when the request carried none.
              */
@@ -10204,6 +14770,42 @@ export interface components {
             pinned?: boolean | null;
             /** @description Replacement title. */
             title?: string | null;
+        } | {
+            /** @description Replacement confirmation behaviour. */
+            confirmation?: components["schemas"]["ChatConfirmation"] | null;
+            /** @description Replacement thinking effort. */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
+            /** @constant */
+            kind: "session.options_updated";
+            /** @description Replacement permission ceiling. */
+            mode?: components["schemas"]["PolicyMode"] | null;
+            /** @description Replacement provider-qualified model. */
+            model?: string | null;
+        } | {
+            /** @constant */
+            kind: "session.read";
+            /** @description `true` marks every reply so far as seen. */
+            read: boolean;
+        } | {
+            /** @description The message whose reply ends the copied conversation. */
+            from_message: components["schemas"]["MessageId"];
+            /** @description The chat it was branched from. */
+            from_session: components["schemas"]["SessionId"];
+            /** @constant */
+            kind: "session.branched";
+        } | {
+            /** @constant */
+            kind: "session.folder_changed";
+            /**
+             * @description The project the chat now belongs to; `None` for none.
+             * @default null
+             */
+            project_id: string | null;
+            /**
+             * @description Canonical absolute workspace the chat now works in; `None` for none.
+             * @default null
+             */
+            workspace: string | null;
         } | {
             /** @constant */
             kind: "session.title_proposed";
@@ -10443,6 +15045,12 @@ export interface components {
             text: string;
         } | {
             /**
+             * Format: uint64
+             * @description The model's context window, 0 when unknown; present only on requests by the
+             *     session's own agent, so subagent usage never moves the chat's context meter.
+             */
+            context_window?: number | null;
+            /**
              * @description Thinking effort the request was sent with, after the runtime fitted its own
              *     default to the model; absent when the request carried none.
              */
@@ -10659,6 +15267,42 @@ export interface components {
             /** @description Replacement title. */
             title?: string | null;
         } | {
+            /** @description Replacement confirmation behaviour. */
+            confirmation?: components["schemas"]["ChatConfirmation"] | null;
+            /** @description Replacement thinking effort. */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
+            /** @constant */
+            kind: "session.options_updated";
+            /** @description Replacement permission ceiling. */
+            mode?: components["schemas"]["PolicyMode"] | null;
+            /** @description Replacement provider-qualified model. */
+            model?: string | null;
+        } | {
+            /** @constant */
+            kind: "session.read";
+            /** @description `true` marks every reply so far as seen. */
+            read: boolean;
+        } | {
+            /** @description The message whose reply ends the copied conversation. */
+            from_message: components["schemas"]["MessageId"];
+            /** @description The chat it was branched from. */
+            from_session: components["schemas"]["SessionId"];
+            /** @constant */
+            kind: "session.branched";
+        } | {
+            /** @constant */
+            kind: "session.folder_changed";
+            /**
+             * @description The project the chat now belongs to; `None` for none.
+             * @default null
+             */
+            project_id: string | null;
+            /**
+             * @description Canonical absolute workspace the chat now works in; `None` for none.
+             * @default null
+             */
+            workspace: string | null;
+        } | {
             /** @constant */
             kind: "session.title_proposed";
             /** @description Sanitized conversation title of at most six words, never a URL. */
@@ -10871,6 +15515,20 @@ export interface components {
         FieldAnswerEncoding: "login" | "form" | "scalar";
         /** @description Canonical FieldInitial wire contract; presentation never grants authority. */
         FieldInitial: string | boolean;
+        /**
+         * FollowUpMode
+         * @description How a message sent while a chat is working is delivered when the client does not choose.
+         */
+        FollowUpMode: "queue" | "steer";
+        /**
+         * ForkSessionRequest
+         * @description Branch a chat at one of its replies: a new chat with the conversation up to and including
+         *     the reply to `from_message`, which then continues on its own.
+         */
+        ForkSessionRequest: {
+            /** @description The message whose finished reply ends the copied conversation. */
+            from_message: components["schemas"]["MessageId"];
+        };
         /** @description Durable one-assignee handoff, independent of its timeline presentation. */
         Handoff: {
             /**
@@ -11501,8 +16159,21 @@ export interface components {
         LocalAccess: {
             /** @description Local person-device identifier. */
             device_id: string;
+            /**
+             * @description One-time pairing code (valid [`crate::PAIRING_TTL_SECS`] seconds) for the openside
+             *     extension in the launcher's browser profile. Only the extension's origin may redeem it,
+             *     and redeeming replaces the extension device the launcher paired before. Null without a
+             *     listener.
+             */
+            extension_code?: string | null;
             /** @description Fixed person-device identity. */
             kind: components["schemas"]["DeviceKind"];
+            /**
+             * @description Private directory (under the daemon's runtime directory) the launcher passes to the
+             *     person's browser as its gateway runtime directory, where the daemon looks for its
+             *     person-role gateway and launch record.
+             */
+            person_browser_runtime_dir: string;
             /** @description Token scopes. */
             scopes: components["schemas"]["CapabilityScope"][];
             /** @description Per-boot locality proof; keep only in browser sessionStorage. */
@@ -11518,6 +16189,61 @@ export interface components {
         LoginFieldKind: "identifier" | "password" | "text" | "checkbox";
         /** @description Identity provider behind an alternative sign-in control. */
         LoginProvider: "google" | "apple" | "kakao" | "naver" | "facebook" | "github" | "microsoft";
+        /** @description A configured MCP server. Secret values are never returned; `secrets` lists their names. */
+        McpServer: {
+            /** @description http: private, CGNAT and unique-local addresses are reachable too. */
+            allow_private_network: boolean;
+            /** @description stdio: program and arguments. */
+            command?: string[] | null;
+            /** @description stdio: working directory. */
+            cwd?: string | null;
+            /** @description Disabled servers are kept but not started. */
+            enabled: boolean;
+            /** @description Why the last start, handshake or listing failed; redacted, no secret values. */
+            error?: string | null;
+            /** @description Stable id: lowercase letters, digits, `-`, `_`. */
+            id: string;
+            /** @description Display name. */
+            label: string;
+            /** @description Names of Vault-held environment variables (stdio) or headers (http). */
+            secrets: string[];
+            /** @description Name the server reported during the handshake. */
+            server_name?: string | null;
+            /** @description Connection state. */
+            status: components["schemas"]["McpServerStatus"];
+            /** @description Tools agents can call; empty unless `status` is `connected`. */
+            tools: components["schemas"]["McpServerTool"][];
+            /** @description Transport. */
+            transport: components["schemas"]["McpServerTransport"];
+            /** @description http: endpoint. */
+            url?: string | null;
+        };
+        /**
+         * McpServerList
+         * @description Response of `GET /v1/mcp/servers`.
+         */
+        McpServerList: {
+            /** @description Servers in configuration order. */
+            servers: components["schemas"]["McpServer"][];
+        };
+        /** @description Connection state of a configured MCP server. */
+        McpServerStatus: "disabled" | "connecting" | "connected" | "vault_locked" | "failed";
+        /** @description One tool an MCP server offers, as agents see it. */
+        McpServerTool: {
+            /** @description The server's description, if any. */
+            description?: string | null;
+            /** @description Name agents call: `mcp__<server id>__<tool>`, reduced to `[A-Za-z0-9_-]`, at most 64. */
+            exposed_name: string;
+            /** @description The server's own tool name. */
+            name: string;
+            /**
+             * @description The server marks the tool as read-only. A hint only: every call still follows the
+             *     session's approval rules.
+             */
+            read_only_hint: boolean;
+        };
+        /** @description How openside reaches an external MCP server. */
+        McpServerTransport: "stdio" | "http";
         /** @description Canonical MediaRef wire contract; presentation never grants authority. */
         MediaRef: {
             /** @description Session-relative raster artifact; remote URLs and traversal are forbidden. */
@@ -11565,10 +16291,128 @@ export interface components {
              */
             version: number;
         };
+        /** @description One entry of the global memory change log. */
+        MemoryChange: {
+            /** @description Who made the change. */
+            actor: string;
+            /**
+             * Format: date-time
+             * @description When the change happened.
+             */
+            at: string;
+            /** @description Content after the change; absent once scrubbed by deletion or retention. */
+            content?: string | null;
+            /** @description Kind of the memory, while it still exists. */
+            kind?: components["schemas"]["MemoryKind"] | null;
+            /** @description Memory the change belongs to. */
+            memory_id: string;
+            /** @description Operation. */
+            op: components["schemas"]["MemoryOp"];
+            /**
+             * Format: int64
+             * @description Log position; pass as `before` to page to older entries.
+             */
+            seq: number;
+            /** @description Labels after the change; absent once scrubbed. */
+            tags?: string[] | null;
+            /**
+             * Format: uint32
+             * @description Version this change produced.
+             */
+            version: number;
+        };
         /**
-         * MemoryHealth
-         * @description Response of `GET /v1/memory/health`.
+         * MemoryChangeList
+         * @description Response of `GET /v1/memory/history`, newest first.
          */
+        MemoryChangeList: {
+            /** @description Changes, newest first. */
+            changes: components["schemas"]["MemoryChange"][];
+            /**
+             * Format: int64
+             * @description `before` value for the next page; absent on the last page.
+             */
+            next_before?: number | null;
+        };
+        /** @description Response of `GET /v1/memory/files/{name}`. */
+        MemoryFile: {
+            /** @description Whether edits are accepted. */
+            editable: boolean;
+            /**
+             * @description Markdown. In editable files each note starts with a `<!-- memory id=… -->` marker
+             *     line; keep markers to edit a note, delete a note's block to delete it, and add text
+             *     under a bare `<!-- memory -->` marker (or before the first marker) to add notes. An
+             *     optional `tags="a, b"` in a marker sets labels.
+             */
+            markdown: string;
+            /** @description File name. */
+            name: string;
+            /**
+             * Format: int64
+             * @description Change-log position this rendering reflects; send it back with the edit.
+             */
+            revision: number;
+            /**
+             * Format: date-time
+             * @description Latest write among the rendered notes.
+             */
+            updated_at?: string | null;
+            /** @description Which projection this file is. */
+            view: components["schemas"]["MemoryView"];
+        };
+        /** @description Listing entry of `GET /v1/memory/files`. */
+        MemoryFileInfo: {
+            /** @description Whether `PUT /v1/memory/files/{name}` accepts edits. */
+            editable: boolean;
+            /**
+             * Format: uint32
+             * @description Notes rendered into the file (for `TAXONOMY.md`, distinct tags).
+             */
+            items: number;
+            /** @description `MEMORY.md`, `USER.md` or `TAXONOMY.md`. */
+            name: string;
+            /**
+             * Format: date-time
+             * @description Latest write among the rendered notes; absent when the file is empty.
+             */
+            updated_at?: string | null;
+            /** @description Which projection this file is. */
+            view: components["schemas"]["MemoryView"];
+        };
+        /**
+         * MemoryFileList
+         * @description Response of `GET /v1/memory/files`.
+         */
+        MemoryFileList: {
+            /** @description The three files in display order. */
+            files: components["schemas"]["MemoryFileInfo"][];
+        };
+        /**
+         * MemoryFileSaved
+         * @description Response of `PUT /v1/memory/files/{name}`: the re-rendered file and what changed. All
+         *     changes apply in one transaction; a note edited elsewhere since the `GET` fails the whole
+         *     save with `memory_conflict` (409).
+         */
+        MemoryFileSaved: {
+            /**
+             * Format: uint32
+             * @description Notes added.
+             */
+            created: number;
+            /**
+             * Format: uint32
+             * @description Notes deleted.
+             */
+            deleted: number;
+            /** @description The file after saving. */
+            file: components["schemas"]["MemoryFile"];
+            /**
+             * Format: uint32
+             * @description Notes changed.
+             */
+            updated: number;
+        };
+        /** @description Response of `GET /v1/memory/health`. */
         MemoryHealth: {
             /**
              * Format: uint64
@@ -11673,6 +16517,24 @@ export interface components {
         };
         /** @description Change recorded in memory history. */
         MemoryOp: "create" | "update" | "delete" | "purge";
+        /**
+         * MemoryRebuild
+         * @description Response of `POST /v1/memory/rebuild`.
+         */
+        MemoryRebuild: {
+            /**
+             * Format: uint64
+             * @description Memories that received a fresh embedding (zero without a local model).
+             */
+            embedded: number;
+            /** @description Search status after the rebuild. */
+            health: components["schemas"]["MemoryHealth"];
+            /**
+             * Format: uint64
+             * @description Live memories whose full-text index entry was rebuilt.
+             */
+            reindexed: number;
+        };
         /** @description Search strategy in effect. */
         MemorySearchMode: "hybrid" | "lexical_only";
         /**
@@ -11711,6 +16573,11 @@ export interface components {
              */
             version: number;
         };
+        /**
+         * @description A file-shaped view of the memory store (Settings › Memory › Overview). The files do not
+         *     exist on disk; the daemon renders them from stored notes and parses edits back.
+         */
+        MemoryView: "memory" | "user" | "taxonomy";
         /**
          * Message
          * @description A message with durable lifecycle status.
@@ -11834,25 +16701,59 @@ export interface components {
              * @description Maximum metadata cache lifetime; managed writes invalidate it immediately.
              */
             cached_for_ms: number;
+            /**
+             * @description Deep role (hard reasoning, planning, judging, synthesis Tasks); null uses the session model.
+             * @default null
+             */
+            deep_model: string | null;
             /** @description Current default for new sessions and unoverridden Team homes on their next idle turn. */
             default_model?: string | null;
-            /** @description Running model fallback chain, independent of credential-source order. */
+            /**
+             * @description The image model `generate_image` uses right now; null when image generation is off or,
+             *     on automatic, no image model is available.
+             * @default null
+             */
+            effective_image_model: string | null;
+            /** @description CLI-only running fallback chain, independent of credential-source order. */
             fallback_models: string[];
-            /** @description Fast chief front-agent model; null uses the reasoning model. */
+            /** @description Fast role (front agent, titles, summaries, memory extraction); null uses the session model. */
             fast_model?: string | null;
+            /**
+             * @description Stored image generation choice: null picks the best available image model
+             *     automatically, "off" hides `generate_image`, otherwise a `provider:model` id.
+             * @default null
+             */
+            image_model: string | null;
             /** @description Provider groups sorted by identifier, with deduplicated model ids. */
             providers: components["schemas"]["ModelProvider"][];
+            /**
+             * @description Standard role (subagents and Tasks); null uses the session model.
+             * @default null
+             */
+            standard_model: string | null;
             /** @description An input or output metadata limit omitted entries. */
             truncated: boolean;
+            /**
+             * @description Visual role (requests carrying an image); null uses the requesting agent's model.
+             * @default null
+             */
+            visual_model: string | null;
         };
+        /** @description What a catalog model produces; only chat models serve conversation roles. */
+        ModelKind: "chat" | "image";
         /**
          * ModelProvider
          * @description Chat/tool-capable candidates for one SDK provider namespace.
          */
         ModelProvider: {
+            /**
+             * @description Product name for the UI, e.g. "Claude" or "ChatGPT".
+             * @default
+             */
+            display_name: string;
             /** @description Configured, curated and account-reported candidates, deduplicated by id. */
             models: components["schemas"]["CatalogModel"][];
-            /** @description Person-built ordered account membership; empty explicitly disables routing. */
+            /** @description CLI-only: person-built ordered account membership; empty explicitly disables routing. */
             pool: components["schemas"]["ProviderPool"];
             /** @description SDK provider namespace, not an upstream account identifier. */
             provider: string;
@@ -11864,16 +16765,36 @@ export interface components {
          * @description Result of a dedicated model-selection write, not raw config PUT semantics.
          */
         ModelSelection: {
+            /**
+             * @description Persisted deep model; null uses the session model.
+             * @default null
+             */
+            deep_model: string | null;
             /** @description The newly running default, after successful private-file persistence. */
             default_model: string;
             /** @description new_sessions_and_home_next_turn: ordinary sessions retain stored models; homes reopen idle. */
             effective: string;
             /** @description The newly running ordered fallback chain. */
             fallback_models: string[];
-            /** @description Persisted fast model; null uses the reasoning model. */
+            /** @description Persisted fast model; null uses the session model. */
             fast_model?: string | null;
+            /**
+             * @description Persisted image generation choice: null for automatic, "off", or a `provider:model` id.
+             * @default null
+             */
+            image_model: string | null;
             /** @description Always false: dedicated selection applies without restarting the daemon. */
             restart_required: boolean;
+            /**
+             * @description Persisted standard model; null uses the session model.
+             * @default null
+             */
+            standard_model: string | null;
+            /**
+             * @description Persisted visual model; null uses the requesting agent's model.
+             * @default null
+             */
+            visual_model: string | null;
         };
         /** @description Curated task-routing tier, not an entitlement or performance guarantee. */
         ModelTier: "fast" | "reasoning" | "frontier";
@@ -11933,6 +16854,11 @@ export interface components {
         NoticePlacement: "inline" | "bubble";
         /** @description Canonical NoticeTone wire contract; presentation never grants authority. */
         NoticeTone: "neutral" | "info" | "working" | "success" | "attention" | "danger";
+        /**
+         * NotificationKind
+         * @description What a task notification is about.
+         */
+        NotificationKind: "needs_attention" | "task_completed" | "routine_completed";
         /** @description An openside-held OAuth account; never tokens, identity, plan or project details. */
         OAuthAccount: {
             /** @description Opaque openside-assigned account id. */
@@ -12046,6 +16972,24 @@ export interface components {
         /** @description Sign-in transaction progress. */
         OAuthTransactionStatus: "starting" | "awaiting_browser" | "awaiting_code" | "exchanging" | "ready" | "failed" | "cancelled" | "expired";
         /**
+         * OnboardingAlreadySet
+         * @description `PUT /v1/onboarding` 409 body when the guide already ended: the `{code, message}` of
+         *     `ApiError` plus the stored outcome, so a client that lost the race can adopt it.
+         */
+        OnboardingAlreadySet: {
+            /** @description Always `onboarding_already_set`. */
+            code: string;
+            /** @description Sanitized human-facing detail. */
+            message: string;
+            /** @description The outcome already recorded: `completed` or `skipped`. */
+            state: components["schemas"]["OnboardingState"];
+            /**
+             * Format: date-time
+             * @description When that outcome was recorded.
+             */
+            updated_at: string;
+        };
+        /**
          * @description Where the first-run guide stands. `pending` until a person finishes or skips it once;
          *     the flag lives on the daemon, so every device and browser agrees.
          */
@@ -12062,6 +17006,14 @@ export interface components {
              * @description When the state last changed; `null` while pending.
              */
             updated_at?: string | null;
+        };
+        /**
+         * OpenPersonNativeToolRequest
+         * @description Open a native tool in the person's own browser.
+         */
+        OpenPersonNativeToolRequest: {
+            /** @description Which tool. */
+            tool: components["schemas"]["PersonNativeTool"];
         };
         /**
          * @description Where the site sends the one-time code a `request_otp` ticket asks for, as the agent read
@@ -12198,6 +17150,359 @@ export interface components {
         };
         /** @description How a paired device reaches the daemon from outside its network. */
         PairingTransport: "tailscale" | "cloudflare" | "relay";
+        /** @description A bookmark or bookmark folder. */
+        PersonBookmark: {
+            /** @description Folder contents in order; empty for a bookmark. */
+            children: components["schemas"]["PersonBookmark"][];
+            /** @description Chrome bookmark id. */
+            id: string;
+            /** @description Containing folder; null for the top folders. */
+            parent_id?: string | null;
+            /** @description Title; may be empty. */
+            title: string;
+            /** @description Page URL; null for a folder. */
+            url?: string | null;
+        };
+        /**
+         * PersonBookmarkTree
+         * @description The person's bookmarks.
+         */
+        PersonBookmarkTree: {
+            /** @description False when no openside extension is connected. */
+            connected: boolean;
+            /** @description The browser's top folders (bookmarks bar, other bookmarks, ...). */
+            roots: components["schemas"]["PersonBookmark"][];
+        };
+        /** @description A download in the person's browser. Only the file's base name is reported, never its folder. */
+        PersonDownload: {
+            /**
+             * Format: int64
+             * @description Chrome download id.
+             */
+            download_id: number;
+            /** @description File base name. */
+            filename: string;
+            /**
+             * Format: uint64
+             * @description Bytes received so far.
+             */
+            received_bytes: number;
+            /**
+             * Format: date-time
+             * @description When the download started, if known.
+             */
+            started_at?: string | null;
+            /** @description Progress. */
+            state: components["schemas"]["PersonDownloadState"];
+            /**
+             * Format: uint64
+             * @description Size, when the server reported it.
+             */
+            total_bytes?: number | null;
+            /** @description Address the file came from. */
+            url: string;
+        };
+        /**
+         * PersonDownloadList
+         * @description Recent downloads, newest first.
+         */
+        PersonDownloadList: {
+            /** @description False when no openside extension is connected. */
+            connected: boolean;
+            /** @description Newest first; incognito downloads are never included. */
+            downloads: components["schemas"]["PersonDownload"][];
+        };
+        /** @description Progress of a download. */
+        PersonDownloadState: "in_progress" | "complete" | "interrupted";
+        /** @description An extension installed in the person's browser. */
+        PersonExtension: {
+            /** @description Short description; may be empty. */
+            description: string;
+            /** @description Turned on. */
+            enabled: boolean;
+            /** @description Extension id. */
+            id: string;
+            /** @description Extension, theme or app. */
+            kind: components["schemas"]["PersonExtensionKind"];
+            /** @description Display name. */
+            name: string;
+            /** @description Version string. */
+            version: string;
+        };
+        /** @description What kind of item an installed extension is. */
+        PersonExtensionKind: "extension" | "theme" | "app";
+        /**
+         * PersonExtensionList
+         * @description Extensions installed in the person's browser.
+         */
+        PersonExtensionList: {
+            /** @description False when no openside extension is connected. */
+            connected: boolean;
+            /** @description In the browser's order. */
+            extensions: components["schemas"]["PersonExtension"][];
+        };
+        /** @description One page in the person's browsing history. */
+        PersonHistoryItem: {
+            /**
+             * Format: date-time
+             * @description Last visit, if known.
+             */
+            last_visit_at?: string | null;
+            /** @description Page title; may be empty. */
+            title: string;
+            /** @description Page URL. */
+            url: string;
+            /**
+             * Format: uint32
+             * @description Number of visits.
+             */
+            visit_count: number;
+        };
+        /**
+         * PersonHistoryList
+         * @description Browsing history matches, most recent first.
+         */
+        PersonHistoryList: {
+            /** @description False when no openside extension is connected. */
+            connected: boolean;
+            /** @description Most recent first. */
+            items: components["schemas"]["PersonHistoryItem"][];
+        };
+        /** @description A native tool of the person's own browser that openside's menus open. */
+        PersonNativeTool: "task_manager" | "devtools";
+        /** @description A tab or window the person closed recently. */
+        PersonRecentlyClosed: {
+            /**
+             * Format: date-time
+             * @description When it was closed, if the browser reports it.
+             */
+            closed_at?: string | null;
+            /** @description Tab favicon, if any. */
+            favicon_url?: string | null;
+            /** @description Tab or window. */
+            kind: components["schemas"]["PersonRecentlyClosedKind"];
+            /** @description Browser session id used to reopen it. */
+            session_id: string;
+            /**
+             * Format: uint32
+             * @description Number of tabs it reopens.
+             */
+            tab_count: number;
+            /** @description Tab title, or the window's first tab title. */
+            title: string;
+            /** @description Tab URL; null for a window. */
+            url?: string | null;
+        };
+        /** @description What a recently closed entry reopens. */
+        PersonRecentlyClosedKind: "tab" | "window";
+        /**
+         * PersonRecentlyClosedList
+         * @description Recently closed tabs and windows, newest first.
+         */
+        PersonRecentlyClosedList: {
+            /** @description False when no openside extension is connected. */
+            connected: boolean;
+            /** @description Newest first. */
+            entries: components["schemas"]["PersonRecentlyClosed"][];
+        };
+        /**
+         * @description One of the person's own (non-incognito) browser tabs, as the openside extension in their
+         *     browser reports it. Ids are Chrome's numbers and stay valid only for that browser run.
+         */
+        PersonTab: {
+            /** @description The selected tab of its window. */
+            active: boolean;
+            /** @description Playing sound. */
+            audible: boolean;
+            /** @description Unloaded by the browser to save memory. */
+            discarded: boolean;
+            /** @description Favicon the browser reports for the tab, if any. */
+            favicon_url?: string | null;
+            /**
+             * Format: int64
+             * @description Tab group, or null when ungrouped.
+             */
+            group_id?: number | null;
+            /**
+             * Format: uint32
+             * @description Position in its window's tab strip.
+             */
+            index: number;
+            /** @description Muted by the person. */
+            muted: boolean;
+            /** @description Pinned in its window. */
+            pinned: boolean;
+            /**
+             * Format: int64
+             * @description Chrome tab id.
+             */
+            tab_id: number;
+            /** @description Document title; untrusted page data. */
+            title: string;
+            /** @description Current URL; untrusted page data. */
+            url: string;
+            /**
+             * Format: int64
+             * @description Chrome window id.
+             */
+            window_id: number;
+        };
+        /**
+         * PersonTabCommand
+         * @description One tab operation the person asked for in openside's tab list or tab menu.
+         */
+        PersonTabCommand: {
+            /** @constant */
+            command: "activate";
+            /**
+             * Format: int64
+             * @description Tab to show.
+             */
+            tab_id: number;
+        } | {
+            /**
+             * Format: int64
+             * @description Open next to this tab, in its window.
+             */
+            after_tab_id?: number | null;
+            /** @constant */
+            command: "create";
+            /**
+             * @description http(s) URL without credentials or an allowed browser page; omitted opens the
+             *     new-tab page.
+             */
+            url?: string | null;
+        } | {
+            /** @constant */
+            command: "close";
+            /** @description 1-500 tabs. */
+            tab_ids: number[];
+        } | {
+            /** @constant */
+            command: "duplicate";
+            /**
+             * Format: int64
+             * @description Tab to copy.
+             */
+            tab_id: number;
+        } | {
+            /** @constant */
+            command: "reload";
+            /**
+             * Format: int64
+             * @description Tab to reload.
+             */
+            tab_id: number;
+        } | {
+            /** @constant */
+            command: "set_pinned";
+            /** @description New pinned state. */
+            pinned: boolean;
+            /**
+             * Format: int64
+             * @description Tab to change.
+             */
+            tab_id: number;
+        } | {
+            /** @constant */
+            command: "set_muted";
+            /** @description New muted state. */
+            muted: boolean;
+            /**
+             * Format: int64
+             * @description Tab to change.
+             */
+            tab_id: number;
+        } | {
+            /** @description Color to give the group. */
+            color?: components["schemas"]["PersonTabGroupColor"] | null;
+            /** @constant */
+            command: "group";
+            /**
+             * Format: int64
+             * @description Existing group to join.
+             */
+            group_id?: number | null;
+            /** @description 1-500 tabs. */
+            tab_ids: number[];
+            /** @description Name to give the group (at most 200 characters). */
+            title?: string | null;
+        } | {
+            /** @constant */
+            command: "ungroup";
+            /** @description 1-500 tabs. */
+            tab_ids: number[];
+        } | {
+            /** @constant */
+            command: "move_to_new_window";
+            /**
+             * Format: int64
+             * @description Tab to move.
+             */
+            tab_id: number;
+        } | {
+            /** @constant */
+            command: "new_incognito_window";
+        };
+        /**
+         * PersonTabCommandResult
+         * @description Result of a [`PersonTabCommand`] or a restore.
+         */
+        PersonTabCommandResult: {
+            /**
+             * Format: int64
+             * @description The group tabs were added to (`group`).
+             */
+            group_id?: number | null;
+            /** @description The created, moved or changed tab, when the command produces one. */
+            tab?: components["schemas"]["PersonTab"] | null;
+        };
+        /** @description One tab group in the person's browser. */
+        PersonTabGroup: {
+            /** @description Collapsed in the tab strip. */
+            collapsed: boolean;
+            /** @description Group color. */
+            color: components["schemas"]["PersonTabGroupColor"];
+            /**
+             * Format: int64
+             * @description Chrome tab-group id.
+             */
+            group_id: number;
+            /** @description Group name; may be empty. */
+            title: string;
+            /**
+             * Format: int64
+             * @description Window the group lives in.
+             */
+            window_id: number;
+        };
+        /** @description Chromium's fixed tab-group colors. */
+        PersonTabGroupColor: "grey" | "blue" | "red" | "yellow" | "green" | "pink" | "purple" | "cyan" | "orange";
+        /**
+         * PersonTabList
+         * @description The person's open tabs, read live from their browser on every request.
+         */
+        PersonTabList: {
+            /** @description False when no openside extension is connected; the lists are then empty. */
+            connected: boolean;
+            /**
+             * Format: int64
+             * @description The window the person last focused, when known.
+             */
+            focused_window_id?: number | null;
+            /** @description Tab groups of the listed windows. */
+            groups: components["schemas"]["PersonTabGroup"][];
+            /** @description Tabs ordered by window, then strip position. Incognito tabs are never included. */
+            tabs: components["schemas"]["PersonTab"][];
+        };
+        /**
+         * PickedFolder
+         * @description The folder a person chose in the native folder picker of the computer running openside.
+         */
+        PickedFolder: {
+            /** @description Canonical absolute path; null when the person closed the picker without choosing. */
+            path?: string | null;
+        };
         /** @description A tab the user pinned; synced between devices when sync is set up. */
         PinnedTab: {
             /** @description Stable id derived from the URL, identical on every device. */
@@ -12224,7 +17529,7 @@ export interface components {
          * @description What an action does; targets are absolute paths for `fs_*`/`exec`, URLs or origins
          *     otherwise.
          */
-        PolicyCapability: "fs_read" | "fs_write" | "exec" | "browse" | "fetch" | "vault_use" | "sensitive" | "privacy_read";
+        PolicyCapability: "fs_read" | "fs_write" | "exec" | "browse" | "fetch" | "vault_use" | "sensitive" | "privacy_read" | "person_browser" | "computer_use";
         /**
          * PolicyDecision
          * @description Result of a [`PolicyTestRequest`].
@@ -12315,6 +17620,41 @@ export interface components {
             valid: boolean;
         };
         /**
+         * Preferences
+         * @description The person's Settings choices, applied by the daemon as soon as they change.
+         */
+        Preferences: {
+            /**
+             * Format: uint32
+             * @description Tabs an agent opened close after this many idle minutes; 0 never closes them.
+             */
+            agent_tab_cleanup_minutes: number;
+            /** @description Play a sound in the app when a chat finishes. */
+            completion_sound: boolean;
+            /** @description Whether agents may ask to connect a desktop app (computer use). */
+            computer_use: boolean;
+            /** @description Confirmation for new chats that do not choose one. */
+            confirmation: components["schemas"]["ChatConfirmation"];
+            /** @description Delivery the app and channels use for a message sent while a chat is working. */
+            follow_up: components["schemas"]["FollowUpMode"];
+            /**
+             * @description Whether `openside mcp` serves MCP clients; while off the daemon refuses its requests
+             *     (403 `mcp_server_disabled`) except reading these preferences. On the local socket the
+             *     MCP client identifies itself, so this holds against agents only while their shell is
+             *     sandboxed; an unsandboxed shell runs as the person and can reach the socket directly.
+             */
+            mcp_server: boolean;
+            /** @description How the app addresses the person; null shows no name. */
+            name?: string | null;
+            /** @description Kinds of task notification pushed to subscribed browsers; empty sends none. */
+            notifications: components["schemas"]["NotificationKind"][];
+            /**
+             * @description Keep sessions started by the CLI or an MCP client in the chat list once they finish;
+             *     otherwise they are archived when their run ends.
+             */
+            save_sessions: boolean;
+        };
+        /**
          * PresentImage
          * @description Canonical PresentImage wire contract; presentation never grants authority.
          */
@@ -12396,6 +17736,81 @@ export interface components {
             /** @constant */
             type: "ended";
         };
+        /** @description One project. */
+        Project: {
+            /**
+             * Format: date-time
+             * @description When the project was created.
+             */
+            created_at: string;
+            /** @description Stable opaque id. */
+            id: string;
+            /**
+             * @description Instructions every chat in the project receives; empty for none.
+             * @default
+             */
+            instructions: string;
+            /** @description Display name. */
+            name: string;
+            /**
+             * @description The folder has no recorded identity, so openside cannot tell whether it is still the
+             *     folder the project was made with. A local person must confirm it
+             *     (`UpdateProjectRequest::confirm_root`) before chats can use it; until then starting or
+             *     moving a chat into the project fails with 409 project_root_changed.
+             * @default false
+             */
+            needs_confirmation: boolean;
+            /** @description Canonical absolute folder the project's chats work in; fixed at creation. */
+            root: string;
+            /**
+             * @description The daemon made the folder (Start from scratch) under `<data_dir>/projects/<id>`.
+             * @default false
+             */
+            scratch: boolean;
+            /**
+             * Format: date-time
+             * @description When the name or instructions last changed.
+             */
+            updated_at: string;
+        };
+        /**
+         * ProjectList
+         * @description Every project, by name.
+         */
+        ProjectList: {
+            /** @description Projects sorted by name, then id. */
+            projects: components["schemas"]["Project"][];
+        };
+        /**
+         * ProviderConnection
+         * @description One Providers row: every account of one provider and connection kind, collapsed.
+         */
+        ProviderConnection: {
+            /** @description Internal account references behind the row, for Reconnect/Disconnect; never shown. */
+            accounts: components["schemas"]["ModelAccountRef"][];
+            /** @description Product name for the UI, e.g. "Claude", "ChatGPT", "OpenAI API key". */
+            display_name: string;
+            /** @description Stable row id, `<provider>/<kind>`. */
+            id: string;
+            /** @description Subscription or API key. */
+            kind: components["schemas"]["ProviderConnectionKind"];
+            /** @description SDK provider namespace. */
+            provider: string;
+            /** @description Connected or needs attention. */
+            status: components["schemas"]["ProviderConnectionStatus"];
+        };
+        /** @description How a connected provider authenticates. */
+        ProviderConnectionKind: "subscription" | "api_key";
+        /**
+         * ProviderConnectionList
+         * @description Connected providers in display order.
+         */
+        ProviderConnectionList: {
+            /** @description One row per provider and connection kind with at least one account. */
+            providers: components["schemas"]["ProviderConnection"][];
+        };
+        /** @description Whether a connected provider can serve requests now. */
+        ProviderConnectionStatus: "connected" | "needs_attention";
         /** @description The only provider-key metadata allowed in public responses. */
         ProviderKeyInfo: {
             /**
@@ -12591,9 +18006,20 @@ export interface components {
             tailscale: components["schemas"]["TailscaleConfiguration"];
         };
         /**
-         * RemoteStatus
-         * @description Remote transports the daemon runs (`GET /v1/remote/status`).
+         * RemoteDisabled
+         * @description `POST /v1/remote/disable`: Remote Control is off; transports that could not be stopped.
          */
+        RemoteDisabled: {
+            /** @description The status after turning Remote Control off. */
+            status: components["schemas"]["RemoteStatus"];
+            /**
+             * @description Transports still running because stopping them failed (today only a Tailscale Serve
+             *     handler the `tailscale` command could not turn off). The daemon refuses their traffic
+             *     anyway; stop them by hand or try again.
+             */
+            still_on: components["schemas"]["PairingTransport"][];
+        };
+        /** @description Remote transports the daemon runs (`GET /v1/remote/status`). */
         RemoteStatus: {
             /** @description The supervised `cloudflared`, when enabled. */
             cloudflare?: components["schemas"]["CloudflareStatus"] | null;
@@ -12601,11 +18027,17 @@ export interface components {
             configuration: components["schemas"]["RemoteConfiguration"];
             /** @description This request proved local-person authority to change transport settings. */
             configure_allowed: boolean;
+            /**
+             * @description Remote Control is on (`remote.enabled`; unset counts as on only when a transport or
+             *     `public_url` is configured). While off no transport runs, `modes` is empty,
+             *     `public_url` is null and only requests made directly on this computer are served.
+             */
+            enabled: boolean;
             /** @description Enabled transports in pairing preference order. */
             modes: components["schemas"]["PairingTransport"][];
             /** @description This request proved local-person authority to issue an offer. */
             pairing_allowed: boolean;
-            /** @description `remote.public_url`. */
+            /** @description `remote.public_url`; null while Remote Control is off. */
             public_url?: string | null;
             /** @description The relay registration, when enabled. */
             relay?: components["schemas"]["RelayStatus"] | null;
@@ -12613,6 +18045,14 @@ export interface components {
             restart_required: boolean;
             /** @description Tailscale installation and the openside Serve handler. */
             tailscale: components["schemas"]["TailscaleStatus"];
+        };
+        /**
+         * RenameDeviceRequest
+         * @description New label for a paired device.
+         */
+        RenameDeviceRequest: {
+            /** @description Trimmed before saving; 1-100 characters. */
+            name: string;
         };
         /**
          * ReplRequest
@@ -12856,6 +18296,18 @@ export interface components {
             secs: number;
             /** @constant */
             type: "interval";
+        } | {
+            /** @description e.g. `FREQ=DAILY;BYHOUR=9;BYMINUTE=0`. */
+            rule: string;
+            /**
+             * Format: partial-date-time
+             * @description Local DTSTART; default: anchor.
+             */
+            start?: string | null;
+            /** @description IANA; UTC when omitted. */
+            timezone?: string | null;
+            /** @constant */
+            type: "rrule";
         };
         /**
          * RoutineSuggestionList
@@ -12930,7 +18382,14 @@ export interface components {
              * @default shared
              */
             browser_space: components["schemas"]["BrowserSpace"];
-            /** @description Thinking effort fixed at creation; absent keeps the model's default. */
+            /**
+             * @description Whether writing files and running commands ask first; changeable per chat.
+             * @default skip
+             */
+            confirmation: components["schemas"]["ChatConfirmation"];
+            /** @description How full the context window was at the chat's latest model request; absent before it. */
+            context?: components["schemas"]["ContextUsage"] | null;
+            /** @description Thinking effort, chosen at creation or changed later; absent keeps the model's default. */
             effort?: components["schemas"]["ThinkingEffort"] | null;
             /** @description Stable session identifier. */
             id: components["schemas"]["SessionId"];
@@ -12940,13 +18399,21 @@ export interface components {
              */
             incognito: boolean;
             /**
+             * Format: date-time
+             * @description Latest activity other than a metadata change; the list's "most recent" order uses it.
+             */
+            last_activity_at?: string | null;
+            /**
              * Format: uint64
              * @description Latest durable sequence, or zero before creation.
              */
             last_seq: number;
-            /** @description Permission ceiling selected when the session was created. */
+            /** @description Permission ceiling: the creation choice or a later per-chat change. */
             mode: components["schemas"]["PolicyMode"];
-            /** @description Provider-qualified model selected when the session was created, not its effective current model. */
+            /**
+             * @description Provider-qualified model the chat uses for its next request: the creation choice or a
+             *     later per-chat change. An agent home uses its agent's model instead.
+             */
             model: string;
             /**
              * @description Listed before unpinned sessions.
@@ -12955,6 +18422,11 @@ export interface components {
             pinned: boolean;
             /** @description Agent profile fixed at creation; absent means the daemon-wide profile. */
             profile?: components["schemas"]["SessionProfile"] | null;
+            /**
+             * @description Project the chat belongs to; null for none.
+             * @default null
+             */
+            project_id: string | null;
             /** @description Steering first, then follow-up messages. */
             queue: components["schemas"]["Message"][];
             /** @description Service speed fixed at creation; absent means `default`. */
@@ -12963,7 +18435,15 @@ export interface components {
             status: components["schemas"]["SessionStatus"];
             /** @description User-visible conversation title. */
             title: string;
-            /** @description Canonical absolute workspace path used as the Guard root and file-tool cwd. */
+            /**
+             * @description A reply arrived after the person last marked the chat read.
+             * @default false
+             */
+            unread: boolean;
+            /**
+             * @description Canonical absolute workspace path used as the Guard root and file-tool cwd: the
+             *     project's folder for a chat in a project.
+             */
             workspace?: string | null;
         };
         /**
@@ -13049,6 +18529,24 @@ export interface components {
             url?: string | null;
         };
         /**
+         * SetSessionFolderRequest
+         * @description Where a chat works: in a project's folder, in a folder of its own, or in none. At most one
+         *     of the two fields is set; both null leaves the project and drops the folder.
+         */
+        SetSessionFolderRequest: {
+            /**
+             * @description Move the chat into this project; its folder becomes the chat's workspace.
+             * @default null
+             */
+            project_id: string | null;
+            /**
+             * @description Attach this absolute folder to the chat outside any project. Only the computer running
+             *     openside may attach a folder (403 local_access_required elsewhere).
+             * @default null
+             */
+            workspace: string | null;
+        };
+        /**
          * Settings
          * @description Minimal daemon settings, with no credentials.
          */
@@ -13089,6 +18587,138 @@ export interface components {
             restart_required: boolean;
             /** @description JSON Schema of `config`, so a client can render and validate every key. */
             schema: unknown;
+        };
+        /** @description One published link, as its owner sees it. */
+        ShareLink: {
+            /** @description Artifacts copied into the snapshot. */
+            artifacts: components["schemas"]["SharedArtifact"][];
+            /**
+             * Format: date-time
+             * @description When the snapshot was taken.
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When the link stops working; null when it works until revoked.
+             */
+            expires_at?: string | null;
+            /** @description Unguessable id; whoever holds it can read the snapshot until it is revoked or expires. */
+            id: string;
+            /**
+             * Format: uint32
+             * @description Messages in the snapshot, the person's and the agent's.
+             */
+            messages: number;
+            /**
+             * @description App path of the read-only page, `/share#<id>`; the id stays in the fragment so it is
+             *     never sent in a Referer header.
+             */
+            path: string;
+            /** @description Chat the snapshot was taken from. */
+            session_id: components["schemas"]["SessionId"];
+            /** @description Whether step summaries were included. */
+            steps: boolean;
+            /** @description Chat title when the snapshot was taken. */
+            title: string;
+            /**
+             * @description Full link through remote access (Tailscale, Cloudflare or `remote.public_url`); null
+             *     when none is configured, so the link opens only on this computer at `path`.
+             */
+            url?: string | null;
+        };
+        /**
+         * ShareLinkList
+         * @description Live links of one chat, newest first.
+         */
+        ShareLinkList: {
+            /** @description Unexpired, unrevoked links. */
+            shares: components["schemas"]["ShareLink"][];
+        };
+        /**
+         * SharedArtifact
+         * @description A file copied into a snapshot.
+         */
+        SharedArtifact: {
+            /**
+             * Format: uint32
+             * @description Position in the snapshot; the `{artifact}` of its download route.
+             */
+            index: number;
+            /** @description MIME type. */
+            mime: string;
+            /** @description File name, without directories. */
+            name: string;
+            /**
+             * Format: uint64
+             * @description Bytes.
+             */
+            size: number;
+        };
+        /**
+         * SharedChat
+         * @description The public, read-only snapshot behind a link.
+         */
+        SharedChat: {
+            /**
+             * @description Files the person chose to include, fetched from
+             *     `GET /v1/shares/{share_id}/artifacts/{artifact}`.
+             */
+            artifacts: components["schemas"]["SharedArtifact"][];
+            /**
+             * Format: date-time
+             * @description When the link stops working; null when it works until revoked.
+             */
+            expires_at?: string | null;
+            /** @description Conversation in order. */
+            items: components["schemas"]["SharedItem"][];
+            /**
+             * Format: date-time
+             * @description When the snapshot was taken; later messages are not part of it.
+             */
+            shared_at: string;
+            /** @description Chat title when the snapshot was taken. */
+            title: string;
+        };
+        /**
+         * SharedItem
+         * @description One entry of a shared conversation. Text has live secrets masked as `[REDACTED]`, and a
+         *     line that still looks like a credential is replaced whole.
+         */
+        SharedItem: {
+            /**
+             * Format: date-time
+             * @description When it was delivered.
+             */
+            at: string;
+            /** @constant */
+            kind: "user";
+            /** @description Message text. */
+            text: string;
+        } | {
+            /**
+             * Format: date-time
+             * @description When it was written.
+             */
+            at: string;
+            /** @constant */
+            kind: "assistant";
+            /** @description Reply text (Markdown). */
+            text: string;
+        } | {
+            /** @constant */
+            kind: "steps";
+            /** @description In order. */
+            steps: components["schemas"]["SharedStep"][];
+        };
+        /**
+         * SharedStep
+         * @description One step: which tool ran, never its arguments or result.
+         */
+        SharedStep: {
+            /** @description Whether the step failed. */
+            failed: boolean;
+            /** @description Registered tool name. */
+            tool: string;
         };
         /**
          * SkillDetail
@@ -13184,6 +18814,39 @@ export interface components {
             /** @description Steering text. */
             text: string;
         };
+        /**
+         * SttStatus
+         * @description `GET /v1/stt`: whether this caller can dictate right now and how long a clip may be.
+         */
+        SttStatus: {
+            /**
+             * @description This caller may dictate and a transcriber is configured: `channels.stt_cmd`, or an
+             *     OpenAI API key in the `openai` account pool.
+             */
+            available: boolean;
+            /**
+             * Format: uint64
+             * @description Largest decoded clip `POST /v1/stt` accepts, in bytes.
+             */
+            max_bytes: number;
+            /**
+             * Format: uint32
+             * @description Longest clip a client should record, in seconds. The daemon cannot measure duration;
+             *     clients stop recording at this point.
+             */
+            max_seconds: number;
+            /**
+             * @description Why `available` is false; null when it is true.
+             * @default null
+             */
+            reason: components["schemas"]["SttUnavailable"] | null;
+        };
+        /**
+         * SttUnavailable
+         * @description Why dictation is unavailable to the caller; each value is the code `POST /v1/stt` would
+         *     answer with.
+         */
+        SttUnavailable: "person_device_required" | "stt_unavailable";
         /** @description One child agent started by the parent session's `delegate` tool. */
         Subagent: {
             /** @description A background Task started by the front agent (`create_task`). */
@@ -13664,6 +19327,8 @@ export interface components {
         TeamCardCommand: "undo_hire" | "retire";
         /** @description Per-session thinking effort, fixed at creation; omission keeps the model's default. */
         ThinkingEffort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+        /** @description Third-party cookie policy as chrome://settings offers it. */
+        ThirdPartyCookies: "allow" | "block";
         /** @description Durable human-intervention ticket correlated with the same deferred tool call. */
         Ticket: {
             /**
@@ -14082,6 +19747,29 @@ export interface components {
             scope: components["schemas"]["CapabilityScope"];
         };
         /**
+         * TranscribeRequest
+         * @description `POST /v1/stt`: one recorded clip.
+         */
+        TranscribeRequest: {
+            /** @description The clip, standard base64 with padding. */
+            audio_base64: string;
+            /** @description Spoken language as a BCP-47 tag (`ko`, `en-US`); null lets the transcriber detect it. */
+            language?: string | null;
+            /**
+             * @description The recorder's MIME type, such as `audio/webm;codecs=opus`, `audio/ogg`, `audio/mp4`,
+             *     `audio/wav` or `audio/mpeg`.
+             */
+            mime: string;
+        };
+        /**
+         * Transcript
+         * @description `POST /v1/stt` result.
+         */
+        Transcript: {
+            /** @description Recognized text, trimmed, never empty, at most 64 KiB. */
+            text: string;
+        };
+        /**
          * TransferRequest
          * @description Explicit cross-store ownership transaction, persisted as a recoverable saga.
          */
@@ -14138,6 +19826,33 @@ export interface components {
             skills?: string[] | null;
         };
         /**
+         * UpdateBrowserPrefsRequest
+         * @description Change browser settings; absent fields stay unchanged. Fields are applied in declaration
+         *     order, so on failure the earlier fields may already have been applied.
+         */
+        UpdateBrowserPrefsRequest: {
+            /** @description 1-32 distinct BCP 47 language tags, most preferred first. */
+            accept_languages?: string[] | null;
+            /** @description Automatic picture-in-picture. */
+            auto_picture_in_picture?: boolean | null;
+            /**
+             * Format: uint16
+             * @description One of 25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500.
+             */
+            default_zoom_percent?: number | null;
+            /** @description Global Alt+Space shortcut for the mini popup; needs the openside extension. */
+            mini_popup?: boolean | null;
+            /**
+             * Format: uint32
+             * @description An id from `search_engine.options`.
+             */
+            search_engine?: number | null;
+            /** @description Spell check while typing. */
+            spell_check?: boolean | null;
+            /** @description Third-party cookie blocking. */
+            third_party_cookies?: components["schemas"]["ThirdPartyCookies"] | null;
+        };
+        /**
          * UpdateChannelAccountRequest
          * @description Partial account change; credential replacement rotates only this identity.
          */
@@ -14169,6 +19884,31 @@ export interface components {
             options: components["schemas"]["ChannelAccountOptions"] | null;
         };
         /**
+         * UpdateCheck
+         * @description Result of asking the release feed for the newest version.
+         */
+        UpdateCheck: {
+            /** @description The installed version. */
+            current: string;
+            /** @description Newest published version; null when nothing is published yet. */
+            latest?: string | null;
+            /** @description `latest` is newer than `current`. */
+            update_available: boolean;
+            /** @description Release page to open; null when nothing is published. */
+            url?: string | null;
+        };
+        /**
+         * UpdateCliDefaultsRequest
+         * @description `PATCH /v1/settings/cli`; changing it needs local access.
+         */
+        UpdateCliDefaultsRequest: {
+            /**
+             * @description New default; `null` clears it (back to the account's first profile). Required: an
+             *     omitted field is refused rather than read as a clear.
+             */
+            profile: components["schemas"]["CliProfile"] | null;
+        };
+        /**
          * UpdateConnectionRequest
          * @description Admin metadata patch; omitted fields remain unchanged.
          */
@@ -14177,6 +19917,41 @@ export interface components {
             grants?: components["schemas"]["ConnectionGrant"][] | null;
             /** @description New HTTP(S) home URL, restricted to the connection's site. */
             home_url?: string | null;
+        };
+        /**
+         * UpdateMcpServerRequest
+         * @description `PATCH /v1/mcp/servers/{id}` body; absent fields are unchanged.
+         */
+        UpdateMcpServerRequest: {
+            /** @description http: allow or refuse private, CGNAT and unique-local addresses. */
+            allow_private_network?: boolean | null;
+            /** @description stdio: replacement program and arguments. */
+            command?: string[] | null;
+            /** @description stdio: replacement working directory; an empty string clears it. */
+            cwd?: string | null;
+            /** @description Start or stop the server. */
+            enabled?: boolean | null;
+            /** @description Display name. */
+            label?: string | null;
+            /** @description Secrets to set (a value) or remove (null), by name; others are unchanged. */
+            secrets?: {
+                [key: string]: string | null;
+            } | null;
+            /** @description http: replacement endpoint. */
+            url?: string | null;
+        };
+        /**
+         * UpdateMemoryFileRequest
+         * @description `PUT /v1/memory/files/{name}` body.
+         */
+        UpdateMemoryFileRequest: {
+            /** @description The edited markdown. */
+            markdown: string;
+            /**
+             * Format: int64
+             * @description `revision` of the `GET` the edit started from.
+             */
+            revision: number;
         };
         /**
          * UpdateMemoryRequest
@@ -14195,15 +19970,26 @@ export interface components {
          * @description Persist available catalog ids for new sessions and the next idle turn of Team homes.
          */
         UpdateModelsRequest: {
-            /** @description Available provider-qualified catalog id; must not be a fallback duplicate. */
+            /** @description Deep role chat model; null clears it, omission keeps the current value. */
+            deep_model?: string | null;
+            /** @description Available provider-qualified chat model id; must not be a fallback duplicate. */
             default_model: string;
             /** @description At most 16 distinct available catalog ids in fallback order. */
             fallback_models: string[];
             /**
-             * @description Fast chief front-agent model; null uses the reasoning model.
+             * @description Fast role chat model; null or omitted uses the session model.
              * @default null
              */
             fast_model: string | null;
+            /**
+             * @description Image generation: a `provider:model` id (kind image), "off" to hide `generate_image`, or
+             *     null for automatic (the best available image model); omission keeps the current value.
+             */
+            image_model?: string | null;
+            /** @description Standard role chat model; null clears it, omission keeps the current value. */
+            standard_model?: string | null;
+            /** @description Visual role chat model; null clears it, omission keeps the current value. */
+            visual_model?: string | null;
         };
         /**
          * UpdateNetworkPolicyRequest
@@ -14234,11 +20020,59 @@ export interface components {
         /**
          * UpdateOnboardingRequest
          * @description `PUT /v1/onboarding`: record how the guide ended. Only `completed` and `skipped` are
-         *     accepted; reopening the guide from Settings does not reset the flag.
+         *     accepted, and only while the state is `pending`; reopening the guide from Settings does not
+         *     reset the flag.
          */
         UpdateOnboardingRequest: {
             /** @description `completed` or `skipped`. */
             state: components["schemas"]["OnboardingState"];
+        };
+        /**
+         * UpdatePreferencesRequest
+         * @description Partial preference update; omitted fields keep their value.
+         */
+        UpdatePreferencesRequest: {
+            /**
+             * Format: uint32
+             * @description One of 0, 5, 10, 15, 30, 60, 120.
+             */
+            agent_tab_cleanup_minutes?: number | null;
+            /** @description Completion sound on or off. */
+            completion_sound?: boolean | null;
+            /**
+             * @description Allow computer use; changing it needs local access. Turning it off stops every
+             *     connected app at once.
+             */
+            computer_use?: boolean | null;
+            /** @description Default confirmation for new chats. */
+            confirmation?: components["schemas"]["ChatConfirmation"] | null;
+            /** @description Default follow-up delivery. */
+            follow_up?: components["schemas"]["FollowUpMode"] | null;
+            /** @description Allow `openside mcp`; changing it needs local access. */
+            mcp_server?: boolean | null;
+            /** @description 1-80 characters on one line; an empty string clears the name. */
+            name?: string | null;
+            /** @description Each kind at most once. */
+            notifications?: components["schemas"]["NotificationKind"][] | null;
+            /** @description Keep CLI and MCP sessions in the chat list. */
+            save_sessions?: boolean | null;
+        };
+        /**
+         * UpdateProjectRequest
+         * @description Rename a project, change its instructions or confirm its folder; omitted fields keep their
+         *     value. The folder is fixed at creation.
+         */
+        UpdateProjectRequest: {
+            /**
+             * @description Check the project's folder again and record it as the project's folder, clearing
+             *     `Project::needs_confirmation`. Only the computer running openside may confirm a folder
+             *     (403 local_access_required elsewhere).
+             */
+            confirm_root?: boolean;
+            /** @description Replacement instructions; an empty string removes them. */
+            instructions?: string | null;
+            /** @description New non-blank display name. */
+            name?: string | null;
         };
         /**
          * UpdateProviderKeyRequest
@@ -14289,15 +20123,33 @@ export interface components {
         };
         /**
          * UpdateSessionRequest
-         * @description Partial session metadata update; omitted fields keep their current value.
+         * @description Partial session update; omitted fields keep their current value.
          *
-         *     Applied as one durable `session.updated` event, so list state replays from the log.
+         *     Title, pinned and archived are applied as one durable `session.updated` event; model,
+         *     effort, mode and confirmation as one `session.options_updated` event; `read` as
+         *     `session.read`. Every change replays from the log.
          */
         UpdateSessionRequest: {
             /** @description Archived sessions are hidden from the default session list. */
             archived?: boolean | null;
+            /** @description Whether writing files and running commands ask first. */
+            confirmation?: components["schemas"]["ChatConfirmation"] | null;
+            /** @description Thinking effort for the chat's next requests. */
+            effort?: components["schemas"]["ThinkingEffort"] | null;
+            /**
+             * @description Permission ceiling. A paired device may not raise it above the daemon default
+             *     (`local_socket_required`); not for agent homes, whose agent sets it.
+             */
+            mode?: components["schemas"]["PolicyMode"] | null;
+            /**
+             * @description Provider-qualified model for the chat's next requests. Not for agent homes, which use
+             *     their agent's model.
+             */
+            model?: string | null;
             /** @description Pinned sessions are listed before unpinned ones. */
             pinned?: boolean | null;
+            /** @description `true` marks every reply so far as seen; `false` marks the chat unread. */
+            read?: boolean | null;
             /** @description New non-blank title, at most [`MAX_SESSION_TITLE_CHARS`] characters after trimming. */
             title?: string | null;
         };
@@ -14360,6 +20212,29 @@ export interface components {
             /** @description WebDAV username; its password is typed on unlock or read from `webdav_password_cmd`. */
             webdav_username?: string | null;
         };
+        /** @description Partial autofill update; absent fields keep their value. */
+        UpdateVaultAutofillSettings: {
+            /**
+             * @description New `allow_insecure`.
+             * @default null
+             */
+            allow_insecure: boolean | null;
+            /**
+             * @description New `auto_submit`.
+             * @default null
+             */
+            auto_submit: boolean | null;
+            /**
+             * @description New `enabled`.
+             * @default null
+             */
+            enabled: boolean | null;
+            /**
+             * @description Replacement list (domains or URLs; normalized to lowercase host names).
+             * @default null
+             */
+            excluded_domains: string[] | null;
+        };
         /**
          * UpdateVaultItemRequest
          * @description `PATCH /v1/vault/items/{id}`.
@@ -14367,6 +20242,41 @@ export interface components {
         UpdateVaultItemRequest: {
             /** @description New override. */
             policy: components["schemas"]["VaultPolicyOverride"];
+        };
+        /**
+         * UpdateVaultSettingsRequest
+         * @description `PATCH /v1/vault/settings`; absent fields keep their value. Loosening a setting (longer
+         *     auto-lock, biometric unlock off, autofill or auto-submit on, insecure pages allowed, fewer
+         *     excluded domains, a less strict default policy) needs the local socket or a person's
+         *     device; tightening is open to every caller with vault access. Turning biometric unlock on
+         *     needs the local socket and a passing check.
+         */
+        UpdateVaultSettingsRequest: {
+            /**
+             * @description New idle time.
+             * @default null
+             */
+            auto_lock: components["schemas"]["VaultAutoLock"] | null;
+            /**
+             * @description Autofill changes.
+             * @default null
+             */
+            autofill: components["schemas"]["UpdateVaultAutofillSettings"] | null;
+            /**
+             * @description Require biometrics to unlock.
+             * @default null
+             */
+            biometric_unlock: boolean | null;
+            /**
+             * @description New default policy.
+             * @default null
+             */
+            default_policy: components["schemas"]["VaultPolicy"] | null;
+            /**
+             * @description Only `true` is accepted.
+             * @default null
+             */
+            disable_in_incognito: boolean | null;
         };
         /**
          * ValidatePolicyRequest
@@ -14409,7 +20319,8 @@ export interface components {
             origin: string;
             /**
              * @description `allowed`, `denied`, `filled`, `fill-failed`, `completed`, `failed`, `updated`,
-             *     `registered`, `added`, `deleted`, `unlocked` or `locked`.
+             *     `registered`, `added`, `deleted`, `unlocked`, `locked`, `exported`, `cleared`,
+             *     `generated` or `recovered`.
              */
             result: string;
             /** @description Agent session (task) id for tool calls. */
@@ -14418,8 +20329,8 @@ export interface components {
             tool_call_id?: string | null;
             /**
              * @description `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `login_save`, `get`,
-             *     `policy_update`, `item_add`, `item_delete`, or the lifecycle steps `setup`, `unlock`
-             *     and `lock`.
+             *     `policy_update`, `item_add`, `item_delete`, `export`, `clear`, `recovery_key`,
+             *     `settings_update`, or the lifecycle steps `setup`, `unlock`, `lock` and `recover`.
              */
             what: string;
             /**
@@ -14428,8 +20339,95 @@ export interface components {
              */
             who: string;
         };
+        /** @description Idle time after which the vault locks itself (`vault.auto_lock`). */
+        VaultAutoLock: "immediately" | "one_minute" | "five_minutes" | "fifteen_minutes" | "one_hour" | "four_hours" | "one_day" | "one_week" | "never";
+        /** @description Where saved sign-ins may be filled (`vault.autofill`). */
+        VaultAutofillSettings: {
+            /**
+             * @description Also fill plain `http:` pages; `localhost` always counts as secure. Off refuses with
+             *     `insecure_origin`.
+             */
+            allow_insecure: boolean;
+            /** @description Click the submit button after filling when the caller names one. */
+            auto_submit: boolean;
+            /** @description Fill saved sign-ins at all; off refuses every fill with `autofill_off`. */
+            enabled: boolean;
+            /** @description Normalized domains never filled, subdomains included (`excluded_domain`). */
+            excluded_domains: string[];
+        };
         /** @description How the vault file is unlocked. */
         VaultBackend: "passphrase" | "secret_service" | "native";
+        /** @description `GET /v1/vault/biometrics`: whether this computer can verify a person biometrically. */
+        VaultBiometrics: {
+            /** @description A sensor with an enrolled finger (or Touch ID) is usable now. */
+            available: boolean;
+            /** @description `fprintd` (Linux) or `local_authentication` (macOS) when available. */
+            mechanism?: string | null;
+            /**
+             * @description Why not: `unsupported_platform`, `no_sensor`, `not_enrolled`, `service_unavailable`,
+             *     or `passphrase_vault` (biometric unlock applies to keyring vaults only).
+             */
+            reason?: string | null;
+        };
+        /**
+         * VaultClearResult
+         * @description `POST /v1/vault/clear` result.
+         */
+        VaultClearResult: {
+            /**
+             * Format: uint32
+             * @description Sign-ins, authenticators and passkeys deleted. Model keys, channel and MCP secrets
+             *     stay.
+             */
+            removed: number;
+        };
+        /**
+         * VaultConfirmRequest
+         * @description A confirmed, freshly authenticated step: `POST /v1/vault/export` and
+         *     `POST /v1/vault/recovery-key`. `confirm` must be true. Fresh authentication is the
+         *     passphrase (passphrase vaults), a biometric check (`biometric`), or a person's unlock in
+         *     the last 5 minutes.
+         */
+        VaultConfirmRequest: {
+            /**
+             * @description Verify with the OS biometric prompt.
+             * @default false
+             */
+            biometric: boolean;
+            /**
+             * @description The person confirmed this step.
+             * @default false
+             */
+            confirm: boolean;
+            /**
+             * @description Vault passphrase, re-entered.
+             * @default null
+             */
+            passphrase: string | null;
+        };
+        /**
+         * VaultExport
+         * @description `POST /v1/vault/export`: every saved sign-in and authenticator as CSV. Served with
+         *     `Cache-Control: no-store`; store it somewhere private and delete it after importing.
+         */
+        VaultExport: {
+            /** @description `name,url,username,password,otpauth` rows with a header line. */
+            content: string;
+            /**
+             * Format: uint32
+             * @description Items written.
+             */
+            exported: number;
+            /** @description Suggested file name. */
+            filename: string;
+            /** @description `csv`. */
+            format: string;
+            /**
+             * Format: uint32
+             * @description Items left out because CSV cannot carry them (passkey-only).
+             */
+            skipped: number;
+        };
         /**
          * @description Value-free metadata of one vault item. Usernames, passwords, TOTP seeds and passkey
          *     private keys are never part of the API.
@@ -14464,6 +20462,69 @@ export interface components {
         VaultPolicy: "always" | "while_unlocked" | "never";
         /** @description Per-item policy change; `default` removes the override so the vault default applies. */
         VaultPolicyOverride: "always" | "while_unlocked" | "never" | "default";
+        /**
+         * VaultRecoverRequest
+         * @description `POST /v1/vault/recover`: open the vault with its recovery key and set a new unlock key.
+         *     A passphrase vault needs `passphrase` (the new one, at least 8 characters); a keyring
+         *     vault takes none and is re-wrapped with the keyring's key.
+         */
+        VaultRecoverRequest: {
+            /**
+             * @description New passphrase (passphrase vaults).
+             * @default null
+             */
+            passphrase: string | null;
+            /** @description The saved recovery key; case, spaces and dashes are ignored. */
+            recovery_key: string;
+        };
+        /**
+         * VaultRecoveryKey
+         * @description `POST /v1/vault/recovery-key`: the new key, shown once. Any earlier key stops working.
+         */
+        VaultRecoveryKey: {
+            /**
+             * Format: date-time
+             * @description When it was generated.
+             */
+            created_at: string;
+            /** @description 52 base32 characters in dash-separated groups of four. */
+            recovery_key: string;
+        };
+        /** @description Recovery key state; never the key itself. */
+        VaultRecoveryStatus: {
+            /** @description A recovery file exists next to the vault. */
+            configured: boolean;
+            /**
+             * Format: date-time
+             * @description When the key was generated.
+             */
+            created_at?: string | null;
+            /**
+             * @description It still opens the vault (false after the vault was re-keyed elsewhere; generate a new
+             *     key).
+             */
+            current: boolean;
+        };
+        /**
+         * VaultSettings
+         * @description `GET /v1/vault/settings`.
+         */
+        VaultSettings: {
+            /** @description Idle time before the vault locks itself. */
+            auto_lock: components["schemas"]["VaultAutoLock"];
+            /** @description Autofill rules. */
+            autofill: components["schemas"]["VaultAutofillSettings"];
+            /** @description Unlocking a keyring vault requires a biometric check. */
+            biometric_unlock: boolean;
+            /** @description Whether biometric unlock can be turned on here. */
+            biometrics: components["schemas"]["VaultBiometrics"];
+            /** @description Policy for items without an override. */
+            default_policy: components["schemas"]["VaultPolicy"];
+            /** @description Incognito sessions never reach the vault. Always true; it cannot be turned off. */
+            disable_in_incognito: boolean;
+            /** @description Recovery key state. */
+            recovery: components["schemas"]["VaultRecoveryStatus"];
+        };
         /** @description Vault lifecycle state. */
         VaultState: "uninitialized" | "locked" | "unlocked" | "unavailable";
         /**
@@ -14478,6 +20539,7 @@ export interface components {
             /**
              * @description Why the vault is locked or unavailable: `keyring_unreachable`, `keyring_locked`,
              *     `keyring_key_mismatch`, `passphrase_cmd_failed` (from the daemon-start attempt),
+             *     `biometric_required` (a keyring vault with biometric unlock on waits for a person),
              *     `unsupported_platform`, `format_mismatch`, `unreadable` or `probe_timeout`.
              */
             reason?: string | null;
@@ -14491,6 +20553,11 @@ export interface components {
          *     which never returns, logs or stores it.
          */
         VaultUnlockRequest: {
+            /**
+             * @description Verify with the OS biometric prompt first (fingerprint, Touch ID). Required to unlock
+             *     a keyring vault while `biometric_unlock` is on; local callers only.
+             */
+            biometric?: boolean;
             /**
              * @description Vault passphrase (setup: at least 8 characters).
              * @default null

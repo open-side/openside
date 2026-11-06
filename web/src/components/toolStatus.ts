@@ -1,4 +1,5 @@
 import type { BrowserState } from "../api/types";
+import { t, tMaybe, type MessageKey } from "../i18n";
 import type { TimelineItem } from "../state/session";
 
 type ToolItem = Extract<TimelineItem, { type: "tool" }>;
@@ -23,7 +24,7 @@ function pageFacet(value: unknown): string | null {
     const periods = url.searchParams.getAll("since");
     if (periods.length !== 1) return null;
     const period = periods[0]!;
-    return ["daily", "weekly", "monthly"].includes(period) ? `${period} trending` : null;
+    return period === "daily" || period === "weekly" || period === "monthly" ? t(`timeline.status.trending.${period}`) : null;
   } catch {
     return null;
   }
@@ -58,20 +59,15 @@ function argOf(tool: ToolItem, key: string): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-const ON_PAGE: Record<string, string> = {
-  click: "Clicking on",
-  type: "Typing on",
-  press: "Pressing a key on",
-  select: "Choosing an option on",
-  scroll: "Scrolling",
-};
+/** `browser_act` / `browser_pointer` actions with a status line of their own; any other reads as looking. */
+const PAGE_VERBS = ["click", "type", "press", "select", "scroll"] as const;
 
-const TASK_TOOLS: Record<string, string> = {
-  create_task: "Starting a task",
-  steer_task: "Updating a task",
-  cancel_task: "Cancelling a task",
-  get_tasks: "Checking on tasks",
-  send_message: "Writing",
+const TASK_TOOLS: Record<string, MessageKey> = {
+  create_task: "timeline.status.startingTask",
+  steer_task: "timeline.status.updatingTask",
+  cancel_task: "timeline.status.cancellingTask",
+  get_tasks: "timeline.status.checkingTasks",
+  send_message: "timeline.status.writing",
 };
 
 /** Message id prefix the daemon gives a finished task's report to the front agent. */
@@ -87,30 +83,31 @@ export function toolPhrase(tool: ToolItem, host: string | null): string {
   const file = argOf(tool, "path")?.split(/[\\/]/).filter(Boolean).at(-1) ?? null;
   if (name === "browser_navigate" || name === "browser_open_tab") {
     const target = urlIn(tool.args);
-    return target ? `Opening ${target}` : "Loading a browser";
+    return target ? t("timeline.status.opening", { site: target }) : t("timeline.status.loadingBrowser");
   }
   if (name === "browser_act" || name === "browser_pointer") {
-    const verb = ON_PAGE[argOf(tool, "action") ?? ""];
-    if (verb) return site ? `${verb} ${site}` : `${verb} the page`;
-    return site ? `Looking at ${site}` : "Looking at the page";
+    const action = argOf(tool, "action");
+    const verb = PAGE_VERBS.find((candidate) => candidate === action) ?? "look";
+    return site ? t(`timeline.status.${verb}.site`, { site }) : t(`timeline.status.${verb}.page`);
   }
-  if (name === "browser_snapshot" || name === "browser_screenshot") return "Reading a page";
-  if (name === "browser_tabs") return "Checking open tabs";
-  if (name === "browser_close_tab") return "Closing a tab";
-  if (name.startsWith("browser")) return site ? `Working on ${site}` : "Using the browser";
-  if (/request_otp|request_human_step|ask_user|approval|takeover|register_authenticator/.test(name)) return "Waiting for you";
-  if (/fetch|web/.test(name)) return "Reading a page";
-  if (/search|grep|glob|find/.test(name)) return "Searching";
-  if (/write|edit|patch|create_file/.test(name)) return file ? `Editing ${file}` : "Editing files";
-  if (/^read|list|^ls/.test(name)) return file ? `Reading ${file}` : "Reading files";
-  if (/bash|shell|exec|command|terminal/.test(name)) return "Running a command";
-  if (/delegate|subagent/.test(name)) return "Delegating work";
+  if (name === "browser_snapshot" || name === "browser_screenshot") return t("timeline.status.readingPage");
+  if (name === "browser_tabs") return t("timeline.status.checkingTabs");
+  if (name === "browser_downloads") return t("timeline.status.checkingDownloads");
+  if (name === "browser_close_tab") return t("timeline.status.closingTab");
+  if (name.startsWith("browser")) return site ? t("timeline.status.workingOn", { site }) : t("timeline.status.usingBrowser");
+  if (/request_otp|request_human_step|ask_user|approval|takeover|register_authenticator/.test(name)) return t("timeline.status.waiting");
+  if (/fetch|web/.test(name)) return t("timeline.status.readingPage");
+  if (/search|grep|glob|find/.test(name)) return t("timeline.status.searching");
+  if (/write|edit|patch|create_file/.test(name)) return file ? t("timeline.status.editing", { file }) : t("timeline.status.editingFiles");
+  if (/^read|list|^ls/.test(name)) return file ? t("timeline.status.reading", { file }) : t("timeline.status.readingFiles");
+  if (/bash|shell|exec|command|terminal/.test(name)) return t("timeline.status.runningCommand");
+  if (/delegate|subagent/.test(name)) return t("timeline.status.delegating");
   const taskVerb = TASK_TOOLS[name];
-  if (taskVerb) return taskVerb;
-  if (/skill/.test(name)) return "Loading a skill";
-  if (/memory|remember|recall/.test(name)) return "Checking memory";
-  if (/vault|secret|credential/.test(name)) return "Using the vault";
-  return "Working";
+  if (taskVerb) return t(taskVerb);
+  if (/skill/.test(name)) return t("timeline.status.loadingSkill");
+  if (/memory|remember|recall/.test(name)) return t("timeline.status.checkingMemory");
+  if (/vault|secret|credential/.test(name)) return t("timeline.status.usingVault");
+  return t("timeline.status.working");
 }
 
 /**
@@ -122,8 +119,8 @@ export function statusPhrase(tools: readonly ToolItem[], host: string | null): s
   const running = tools.findLast((tool) => !tool.done);
   if (running) return toolPhrase(running, host);
   const last = tools.at(-1);
-  if (last?.name.toLowerCase().startsWith("browser")) return "Reading a page";
-  return "Thinking";
+  if (last?.name.toLowerCase().startsWith("browser")) return t("timeline.status.readingPage");
+  return t("timeline.status.thinking");
 }
 
 /**
@@ -131,31 +128,34 @@ export function statusPhrase(tools: readonly ToolItem[], host: string | null): s
  * nid.example.com", "Opening github.com", "Waiting for you".
  */
 export function browserLine(state: BrowserState): string {
-  const site = state.host || "a page";
+  const site = state.host || null;
   const facet = pageFacet(state.url);
   let line: string;
-  if (state.phase === "waiting_human") line = "Waiting for you";
-  else if (state.phase === "error") line = state.facts.error_text || `Couldn’t load ${site}`;
+  if (state.phase === "waiting_human") line = t("timeline.status.waiting");
+  else if (state.phase === "error") line = state.facts.error_text || (site ? t("timeline.browser.loadFailed", { site }) : t("timeline.browser.loadFailedAny"));
   else if (state.action) {
+    // The daemon words `phrase` itself (English); only the connective around it is ours.
     const { phrase, target } = state.action;
-    line = target ? `${phrase} ${target}` : /\s/.test(phrase) ? phrase : `${phrase} on ${site}`;
-  } else line = state.phase === "loading" ? `Opening ${site}` : `Reading ${site}`;
+    line = target ? `${phrase} ${target}` : /\s/.test(phrase) ? phrase : site ? t("timeline.browser.actionOn", { phrase, site }) : t("timeline.browser.actionOnAny", { phrase });
+  } else if (state.phase === "loading") line = site ? t("timeline.status.opening", { site }) : t("timeline.browser.openingAny");
+  else line = site ? t("timeline.browser.reading", { site }) : t("timeline.status.readingPage");
   return facet ? `${line} (${facet})` : line;
 }
 
-const OUTCOME_NOTES: Record<string, string> = {
-  "failed:interrupted": "Interrupted",
-  "failed:auth_unavailable": "Not sent: the model sign-in is unavailable",
-  "aborted:stopped": "Stopped",
-  "aborted:deleted": "Removed",
+const OUTCOME_NOTES: Record<string, MessageKey> = {
+  "failed:interrupted": "timeline.outcome.interrupted",
+  "failed:auth_unavailable": "timeline.outcome.authUnavailable",
+  "aborted:stopped": "timeline.outcome.stopped",
+  "aborted:deleted": "timeline.outcome.removed",
 };
 
 /** The small line under a message whose run did not complete; the daemon's reason codes read as sentences. */
 export function outcomeNote(outcome: string, reason: string | undefined): string {
   const known = OUTCOME_NOTES[`${outcome}:${reason}`];
-  if (known) return known;
-  const label = outcome.charAt(0).toUpperCase() + outcome.slice(1);
-  return reason ? `${label}: ${reason}` : label;
+  if (known) return t(known);
+  const label = tMaybe(`timeline.outcome.${outcome}`) ?? outcome.charAt(0).toUpperCase() + outcome.slice(1);
+  if (!reason) return label;
+  return tMaybe(`timeline.outcome.${outcome}Reason`, { reason }) ?? `${label}: ${reason}`;
 }
 
 /** A conversation titled with a bare URL reads as its site. */

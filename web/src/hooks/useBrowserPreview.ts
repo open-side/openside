@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { whilePageShown } from "../api/pageLifecycle";
 import type { PreviewServerMessage } from "../api/types";
 import { useClient } from "../context";
+import { t, tMaybe } from "../i18n";
 
 export type PreviewStatus = "idle" | "connecting" | "open" | "failed" | "ended";
 
@@ -9,12 +10,6 @@ export interface BrowserPreviewStream {
   status: PreviewStatus;
   message: PreviewServerMessage | null;
 }
-
-const ENDED: Record<string, string> = {
-  revoked: "This device's access was revoked.",
-  session_stopped: "The session stopped.",
-  session_deleted: "The session was deleted.",
-};
 
 /**
  * The session's read-only screencast (`/browser/preview`): the latest server message while the
@@ -66,15 +61,15 @@ export function useBrowserPreview(sessionId: string, enabled = true): BrowserPre
 
 /** Why there is no picture right now, in words; null while frames arrive. */
 export function previewNotice({ status, message }: BrowserPreviewStream): string | null {
-  if (status === "failed") return "Preview unavailable. A browse or steer device token is required.";
+  if (status === "failed") return t("browser.preview.unavailable");
   if (status === "connecting" || status === "idle") return null;
   switch (message?.type) {
     case "paused":
-      return "Preview paused while a person controls the browser.";
+      return t("browser.preview.paused");
     case "withheld":
-      return "The screen is hidden because this tab has held a secret value.";
+      return t("browser.preview.withheld");
     case "ended":
-      return ENDED[message.reason] ?? "The preview ended.";
+      return tMaybe(`browser.preview.ended.${message.reason}`) ?? t("browser.preview.ended");
     default:
       return null;
   }

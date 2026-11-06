@@ -1,12 +1,9 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Client } from "../api/client";
-import { ClientContext } from "../context";
-import { keyInfo, modelsDaemon } from "../models/testDaemon";
-import { fakeClient, json } from "../test/fakeDaemon";
-import { ModelPicker } from "./ModelPicker";
+import { COMPOSER_CATALOG } from "../test/composerDaemon";
+import { ModelPicker, type ModelPickerProps } from "./ModelPicker";
 
 afterEach(cleanup);
 
@@ -14,82 +11,84 @@ function Where() {
   return <p data-testid="where">{useLocation().pathname}</p>;
 }
 
-function open(client: Client, value = "", onChange: (model: string) => void = () => undefined) {
+function open(props: Partial<ModelPickerProps> = {}) {
+  const onChange = vi.fn();
   render(
-    <ClientContext.Provider value={client}>
-      <MemoryRouter>
-        <Where />
-        <Routes>
-          <Route path="/" element={<ModelPicker value={value} onChange={onChange} />} />
-          <Route path="/models" element={<p>models screen</p>} />
-        </Routes>
-      </MemoryRouter>
-    </ClientContext.Provider>,
+    <MemoryRouter>
+      <Where />
+      <Routes>
+        <Route path="/" element={<ModelPicker catalog={COMPOSER_CATALOG} value="openai:gpt-6.1" onChange={onChange} {...props} />} />
+        <Route path="/settings/models" element={<p>models screen</p>} />
+      </Routes>
+    </MemoryRouter>,
   );
+  return onChange;
 }
 
+/** Base UI mounts the popup a frame after the click; with a search row it is a dialog around the list. */
+async function openPicker(user: UserEvent, chip = "Model: GPT-6.1") {
+  await user.click(screen.getByRole("button", { name: chip }));
+  return screen.findByRole("dialog", { name: "Model" });
+}
+
+const rows = () => screen.getAllByRole("menuitemradio").map((row) => row.textContent);
+
 describe("ModelPicker", () => {
-  it("groups the catalog by provider and disables models that cannot run, saying why", async () => {
+  it("lists only the chat models that can be used now, by display name, with a ✓ on the current one", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
-    const daemon = modelsDaemon({ keys: [keyInfo("openai", "k1", "Main", "1111")], pools: { openai: [{ source: "vault", account_id: "k1" }] }, defaultModel: "openai:gpt-6.1-sol" });
-    open(daemon.client, "", onChange);
-    expect(await screen.findByRole("button", { name: /Default \(openai:gpt-6.1-sol\)/ })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Default/ }));
-    const dialog = screen.getByRole("dialog", { name: "Models" });
-
-    const openai = within(dialog).getByRole("group", { name: "OpenAI" });
-    expect(within(openai).getByRole("radio", { name: /GPT-6 Luna/ })).toBeEnabled();
-    const anthropic = within(dialog).getByRole("group", { name: "Anthropic" });
-    const sonnet = within(anthropic).getByRole("radio", { name: /Claude Sonnet 5.5/ });
-    expect(sonnet).toBeDisabled();
-    // Every Anthropic model shares one reason, so it is said once under the provider.
-    expect(within(anthropic).getAllByText(/No credential yet/)).toHaveLength(1);
-    await user.click(sonnet);
-    expect(onChange).not.toHaveBeenCalled();
-
-    expect(within(dialog).getByRole("radio", { name: /Default \(openai:gpt-6.1-sol\)/ })).toBeEnabled();
-    await user.click(within(openai).getByRole("radio", { name: /GPT-6 Luna/ }));
-    expect(onChange).toHaveBeenCalledWith("openai:gpt-6-luna");
+    const onChange = open();
+    await openPicker(user);
+    // The image model and the one without a usable account stay in Settings.
+    expect(rows()).toEqual(["GPT-6.1", "GPT-6 Luna", "Claude Sonnet 5.5"]);
+    expect(screen.getByRole("menuitemradio", { name: "GPT-6.1" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemradio", { name: "GPT-6 Luna" })).toHaveAttribute("aria-checked", "false");
+    await user.click(screen.getByRole("menuitemradio", { name: "Claude Sonnet 5.5" }));
+    expect(onChange).toHaveBeenCalledWith("anthropic:claude-sonnet-5.5");
   });
 
-  it("keeps free-text custom models", async () => {
+  it("filters the rows from its search field", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
-    open(modelsDaemon().client, "", onChange);
-    await user.click(await screen.findByRole("button", { name: /Default/ }));
-    await user.type(screen.getByLabelText("Custom model"), "x");
-    expect(onChange).toHaveBeenLastCalledWith("x");
+    open();
+    const menu = await openPicker(user);
+    const search = within(menu).getByRole("searchbox", { name: "Search models" });
+    await user.click(search);
+    await user.type(search, "luna");
+    expect(rows()).toEqual(["GPT-6 Luna"]);
+    await user.clear(search);
+    await user.type(search, "nothing like this");
+    expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
+    // Base UI appends a word joiner to the live-region text.
+    expect(within(menu).getByRole("status")).toHaveTextContent(/^No model matches\./);
   });
 
-  it("shows a typed custom model in the chip and in the field", async () => {
+  it("opens Settings › Models from its last row", async () => {
     const user = userEvent.setup();
-    open(modelsDaemon().client, "acme:big");
-    const chip = await screen.findByRole("button", { name: /acme:big/ });
-    await user.click(chip);
-    expect(screen.getByLabelText("Custom model")).toHaveValue("acme:big");
-  });
-
-  it("points a user with no usable model to Models & accounts", async () => {
-    const user = userEvent.setup();
-    open(modelsDaemon().client);
-    await user.click(await screen.findByRole("button", { name: /Default/ }));
-    expect(screen.getByText("No model is ready yet.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Models & accounts" }));
+    open();
+    await openPicker(user);
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
     expect(await screen.findByText("models screen")).toBeInTheDocument();
-    expect(screen.getByTestId("where")).toHaveTextContent("/models");
+    expect(screen.getByTestId("where")).toHaveTextContent("/settings/models");
   });
 
-  it("falls back to the configured default and fallbacks when the catalog is unreadable", async () => {
+  it("names the daemon default on the chip while nothing is chosen, and a configured id by its model part", () => {
+    open({ value: null });
+    expect(screen.getByRole("button", { name: "Model: GPT-6.1" })).toBeInTheDocument();
+    cleanup();
+    open({ value: "acme:big-model" });
+    expect(screen.getByRole("button", { name: "Model: big-model" })).toBeInTheDocument();
+  });
+
+  it("says so when no model is ready yet", async () => {
     const user = userEvent.setup();
-    const fake = fakeClient((call) => {
-      if (call.path === "/v1/settings/models") return json(500, { code: "internal", message: "x" });
-      if (call.path === "/v1/settings") return json(200, { default_model: "script", fallback_models: ["provider:big"], policy_mode: "guard" });
-      return json(404, { code: "not_found", message: "nope" });
-    });
-    open(fake.client);
-    await user.click(await screen.findByRole("button", { name: /Default \(script\)/ }));
-    const dialog = screen.getByRole("dialog", { name: "Models" });
-    expect(within(dialog).getByRole("radio", { name: /provider:big/ })).toBeEnabled();
+    open({ catalog: { ...COMPOSER_CATALOG, providers: [] }, value: null });
+    await openPicker(user, "Model: gpt-6.1");
+    expect(screen.getByRole("menuitem", { name: "No model is ready yet." })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps a disabled chip closed with its reason as the tooltip", () => {
+    open({ disabled: true, title: "An agent’s own chat keeps the agent’s model." });
+    const chip = screen.getByRole("button", { name: "Model: GPT-6.1" });
+    expect(chip).toBeDisabled();
+    expect(chip).toHaveAttribute("title", "An agent’s own chat keeps the agent’s model.");
   });
 });

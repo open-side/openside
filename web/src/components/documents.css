@@ -159,3 +159,67 @@
     max-height: none;
   }
 }
+
+/*
+ * A file the agent's browsing downloaded: a compact chip in the thread. It only ever offers the
+ * file for download; a quarantined one says so beneath its name.
+ */
+.download-row {
+  display: grid;
+  justify-items: start;
+  min-width: 0;
+}
+.download-chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  max-width: min(100%, 420px);
+  padding: 8px 8px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--muted);
+}
+.download-chip > svg,
+.download-chip > .ui-spinner,
+.download-chip > .ui-button {
+  flex: none;
+}
+.download-chip:not([data-state="saved"]) {
+  padding-right: 14px;
+}
+.download-chip[data-state="failed"] > svg {
+  color: var(--danger);
+}
+.download-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.download-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.875rem;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.download-meta {
+  overflow: hidden;
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.download-caution {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+.download-caution > svg {
+  flex: none;
+}

@@ -1,6 +1,7 @@
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { ChevronLeft, X } from "lucide-react";
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { t } from "../i18n";
 import { cx, ICON_STROKE, IconButton } from "./Button";
 
 export interface DialogProps {
@@ -113,7 +114,7 @@ export function Dialog({ open, onClose, title, description, back, size = "defaul
               </div>
               <BaseDialog.Close
                 render={
-                  <IconButton label="Close" size="small">
+                  <IconButton label={t("common.close")} size="small">
                     <X size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
                   </IconButton>
                 }

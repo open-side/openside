@@ -4,7 +4,8 @@
 // awaited; nothing is kept in app state.
 import { ApiError } from "../api/client";
 import type { Action, Card, InputField, TicketAnswer } from "../api/types";
-import { BAD_SETUP_KEY, KEY_REFUSED, SAVE_REFUSED, requiredMessage } from "./copy";
+import { t } from "../i18n";
+import { requiredMessage } from "./copy";
 import { parseAuthenticator, totpCode, type TotpParams } from "./totp";
 import { safeHref } from "./values";
 
@@ -71,7 +72,7 @@ export function fieldsOf(card: Card, blockIds: readonly string[]): InputField[] 
 }
 
 function requireTicket(card: Card): string {
-  if (!card.ticket_id) throw new Error("This card has no request to answer.");
+  if (!card.ticket_id) throw new Error(t("cards.error.noTicket"));
   return card.ticket_id;
 }
 
@@ -124,7 +125,7 @@ async function submitFields(answer: Extract<TicketAnswer, { type: "fields" }>, e
     // have reached the page: nothing is restored and nothing is retried.
     if (saving && isForbidden(cause)) {
       env.fields.restore(values);
-      throw new SaveRefused(SAVE_REFUSED, answer.save_field_id ?? null);
+      throw new SaveRefused(t("cards.error.saveRefused"), answer.save_field_id ?? null);
     }
     throw cause;
   }
@@ -137,7 +138,7 @@ async function submitAuthenticator(answer: Extract<TicketAnswer, { type: "otp_au
   env.fields.clear([answer.field_id]);
 
   const fillOnce = async (params: TotpParams | null): Promise<ActionOutcome> => {
-    if (!params) return { kind: "invalid", message: BAD_SETUP_KEY, focus: answer.field_id };
+    if (!params) return { kind: "invalid", message: t("cards.error.badSetupKey"), focus: answer.field_id };
     // The key is used for one computation in this page and never reaches the daemon.
     await env.port.resolveTicket(ticketId, await totpCode(params));
     return { kind: "settled", outcome: "resolved" };
@@ -145,7 +146,7 @@ async function submitAuthenticator(answer: Extract<TicketAnswer, { type: "otp_au
 
   if (!key) {
     const stored = env.transient.refusedKey;
-    if (!stored) return { kind: "invalid", message: "Paste the setup key or otpauth:// link.", focus: answer.field_id };
+    if (!stored) return { kind: "invalid", message: t("cards.error.setupKeyMissing"), focus: answer.field_id };
     env.transient.refusedKey = null;
     return fillOnce(stored);
   }
@@ -161,7 +162,7 @@ async function submitAuthenticator(answer: Extract<TicketAnswer, { type: "otp_au
     // 403 `forbidden` (no approve scope) and `vault_denied` (vault policy) refuse only the saving;
     // the key stays for the explicit "fill this one code" option and is dropped on any other error.
     if (cause instanceof ApiError && cause.status === 403) {
-      throw new SaveRefused(cause.code === "forbidden" ? KEY_REFUSED : `${cause.message} You can still fill this one code.`, answer.save_field_id);
+      throw new SaveRefused(cause.code === "forbidden" ? t("cards.error.keyRefused") : t("cards.error.keyRefusedWithReason", { reason: cause.message }), answer.save_field_id);
     }
     env.transient.refusedKey = null;
     throw cause;
@@ -194,14 +195,14 @@ async function resolveAnswer(answer: TicketAnswer, action: Action, env: ActionEn
     case "information": {
       const field = fieldsOf(card, card.blocks.map((block) => block.id)).find((candidate) => candidate.id === answer.field_id);
       const typed = typeof fields.peek(answer.field_id) === "string" ? (fields.peek(answer.field_id) as string).trim() : "";
-      if (!typed) return { kind: "invalid", message: field ? requiredMessage(field) : "Enter an answer.", focus: answer.field_id };
+      if (!typed) return { kind: "invalid", message: field ? requiredMessage(field) : t("cards.error.answerMissing"), focus: answer.field_id };
       fields.clear([answer.field_id]);
       await port.resolveTicket(ticketId, typed);
       return { kind: "settled", outcome: "resolved" };
     }
     case "selected_choice": {
       const picked = fields.choice(answer.block_id);
-      if (!picked) return { kind: "invalid", message: "Choose an option to continue." };
+      if (!picked) return { kind: "invalid", message: t("cards.error.choiceMissing") };
       await port.resolveTicket(ticketId, answer.encoding === "page_option" ? { option: picked } : picked);
       return { kind: "settled", outcome: "resolved" };
     }
@@ -215,7 +216,7 @@ async function resolveAnswer(answer: TicketAnswer, action: Action, env: ActionEn
       return { kind: "settled", outcome: "resolved" };
     case "otp_code": {
       const typed = typeof fields.peek(answer.field_id) === "string" ? stripCode(fields.peek(answer.field_id) as string) : "";
-      if (!typed) return { kind: "invalid", message: "Enter the code.", focus: answer.field_id };
+      if (!typed) return { kind: "invalid", message: t("cards.error.codeMissing"), focus: answer.field_id };
       fields.clear([answer.field_id]);
       await port.resolveTicket(ticketId, typed);
       return { kind: "settled", outcome: "resolved" };
@@ -238,7 +239,7 @@ export async function dispatchAction(action: Action, env: ActionEnv): Promise<Ac
       return { kind: "settled", outcome: "done" };
     case "link": {
       const href = safeHref(target.url);
-      if (!href) return { kind: "invalid", message: "That link can’t be opened." };
+      if (!href) return { kind: "invalid", message: t("cards.error.badLink") };
       // No opener and no referrer: the destination learns nothing about this page or the daemon.
       (env.openUrl ?? ((url: string) => void window.open(url, "_blank", "noopener,noreferrer")))(href);
       return { kind: "handled" };

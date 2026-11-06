@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { useSearchParams } from "react-router";
 import { AGENT_VIEWPORT as VIEWPORT } from "../hooks/useBrowserInput";
 import { previewNotice, useBrowserPreview } from "../hooks/useBrowserPreview";
+import { t } from "../i18n";
 import { pendingTickets, type BrowserStateView, type SessionView, type TimelineItem } from "../state/session";
 import { ICON_STROKE } from "../ui";
 import { useAgentTabsPanel } from "./agentTabsStore";
@@ -107,10 +108,11 @@ function Docked({ sessionId, view, onShowPending, onCancel }: BrowserPreviewProp
     );
   }, [linked, setSheet, setParams]);
 
-  const cardShown = browserCalls > dismissedAt && browserCalls > 0;
+  // The desktop Agent Tabs column already shows the tabs, so neither the inline card nor the PiP
+  // draws while it is open; both come back where the column does not fit.
+  const cardShown = !panel.shown && browserCalls > dismissedAt && browserCalls > 0;
   // The PiP stands in for the front agent's card. Where only Tasks browse, each Task unit already
   // shows its tab inline, so the PiP waits for Show browser instead of floating over the thread.
-  // The desktop Agent Tabs column already shows the tabs, so the PiP waits while it is open.
   const floatable =
     dock.pip !== "closed" && !panel.shown && (cardShown || (dock.summoned && Object.keys(view.browserStates).length > 0));
   // Nothing to show: keep the preview socket and the tab polling closed.
@@ -196,7 +198,7 @@ function Live({
   }, [element]);
 
   const { message, status } = stream;
-  const state = previewNotice(stream) ?? (status === "connecting" || status === "idle" ? "Connecting…" : message ? null : "Waiting for a frame…");
+  const state = previewNotice(stream) ?? (status === "connecting" || status === "idle" ? t("browser.takeover.connecting") : message ? null : t("browser.takeover.waitingFrame"));
   const frame = message?.type === "frame" && status === "open" ? message : null;
   const liveTabId = message && "tab_id" in message ? message.tab_id : null;
   const liveTab = tabs.tabs?.find((tab) => tab.tab_id === liveTabId);
@@ -206,7 +208,7 @@ function Live({
     .reduce<BrowserStateView | undefined>((latest, candidate) => (!latest || latest.seq < candidate.seq ? candidate : latest), undefined);
   const pageHost = pageState?.host || lastHost(view.items);
   const pageTitle = (liveTab?.title || pageState?.title)?.trim() ?? "";
-  const title = pageTitle || pageHost || "Browser";
+  const title = pageTitle || pageHost || t("browser.card.fallbackTitle");
   const favicon = pageState ? safeFavicon(pageState.favicon) : null;
   const siteIcon = favicon ? <img src={favicon} alt="" width={16} height={16} /> : <Globe size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />;
   const loading = currentTools(view.items).some((tool) => !tool.done && opensPage(tool));
@@ -246,19 +248,19 @@ function Live({
   if (message?.type === "no_tab" && status === "open") return takeover;
 
   const tone = waiting ? "warn" : running ? "running" : done ? "done" : "idle";
-  const activity = view.thinking ? "Thinking" : statusPhrase(currentTools(view.items), lastHost(view.items));
+  const activity = view.thinking ? t("browser.card.thinking") : statusPhrase(currentTools(view.items), lastHost(view.items));
   const reply = view.items.findLast((item): item is Extract<TimelineItem, { type: "assistant" }> => item.type === "assistant" && item.final)?.text;
-  const summary = (reply ? firstSentence(reply) : null) ?? "Done";
+  const summary = (reply ? firstSentence(reply) : null) ?? t("common.done");
   // Idle, the open card already names the page beside its icon, so the status adds the site;
   // the slim pill has no title of its own and names the page.
   const idleText = minimized ? title : pageTitle && pageHost ? pageHost : null;
-  const statusText = tone === "running" ? `${activity}…` : tone === "done" ? summary : idleText;
+  const statusText = tone === "running" ? t("browser.card.activity", { activity }) : tone === "done" ? summary : idleText;
 
   const statusLine =
     tone === "warn" ? (
       <button type="button" className="browser-card-action" onClick={onShowPending}>
         <TriangleAlert size={16} strokeWidth={2} aria-hidden="true" />
-        Action needed
+        {t("browser.card.actionNeeded")}
       </button>
     ) : statusText ? (
       <p className="browser-card-status" data-tone={tone} role="status">
@@ -286,8 +288,8 @@ function Live({
       <button
         type="button"
         className="browser-card-control"
-        aria-label={minimized ? "Restore" : "Minimize"}
-        title={minimized ? "Restore" : "Minimize"}
+        aria-label={minimized ? t("browser.pip.restore") : t("browser.pip.minimize")}
+        title={minimized ? t("browser.pip.restore") : t("browser.pip.minimize")}
         aria-expanded={!minimized}
         onClick={() => setMinimized(!minimized)}
       >
@@ -300,10 +302,10 @@ function Live({
       {running ? (
         <button type="button" className="browser-card-stop" onClick={onCancel}>
           <Square size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          Stop
+          {t("common.stop")}
         </button>
       ) : (
-        <button type="button" className="browser-card-control" aria-label="Close" title="Close" onClick={onDismiss}>
+        <button type="button" className="browser-card-control" aria-label={t("common.close")} title={t("common.close")} onClick={onDismiss}>
           <X size={17} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </button>
       )}
@@ -332,14 +334,14 @@ function Live({
     <section
       ref={setElement}
       className="browser-card"
-      aria-label="Live browser"
+      aria-label={t("browser.card.label")}
       data-tone={tone}
       data-minimized={minimized || undefined}
       data-loading={(loading && running) || undefined}
     >
       {minimized ? (
         <div className="browser-card-bar">
-          <button type="button" className="browser-card-thumb" aria-label={`Expand ${title}`} onClick={() => dock.setSheet(true)}>
+          <button type="button" className="browser-card-thumb" aria-label={t("browser.card.expand", { title })} onClick={() => dock.setSheet(true)}>
             {frame ? <BrowserFrame data={frame.data} /> : siteIcon}
           </button>
           {statusLine}
@@ -347,7 +349,7 @@ function Live({
         </div>
       ) : (
         <>
-          <button type="button" className="browser-card-screen" aria-label={`Expand ${title}`} onClick={() => dock.setSheet(true)}>
+          <button type="button" className="browser-card-screen" aria-label={t("browser.card.expand", { title })} onClick={() => dock.setSheet(true)}>
             {screen}
           </button>
           <div className="browser-card-bar">
@@ -370,7 +372,7 @@ function Live({
   const pip =
     floatable && !(cardShown && !away) && (!waiting || dock.summoned) ? (
       <BrowserPip
-        label="Live browser"
+        label={t("browser.card.label")}
         title={title}
         status={tone}
         live={!!frame}

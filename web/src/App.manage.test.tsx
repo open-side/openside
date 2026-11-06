@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { agentSummary } from "./test/agents";
 import { json } from "./test/fakeDaemon";
+import { LEGACY_SETTINGS_PATHS, settingsPath } from "./settings/nav";
 
 /** The daemon's live stream: open, nothing to replay. */
 const idleStream = () => new Response(new ReadableStream({ start() {} }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
@@ -59,19 +60,37 @@ const EMPTY_ADMIN: Record<string, unknown> = {
     bytes_total: 0,
     restart_required: false,
   },
+  "/v1/memory/files": { files: [{ name: "MEMORY.md", view: "memory", editable: true, items: 0, updated_at: null }] },
+  "/v1/memory/files/MEMORY.md": { name: "MEMORY.md", view: "memory", editable: true, updated_at: null, revision: 1, markdown: "# MEMORY\n" },
   "/v1/accounts": { sources: [], cached_for_ms: 0, truncated: false },
   "/v1/vault": { state: "unlocked", backend: "secret_service", reason: null, default_policy: "while_unlocked" },
   "/v1/vault/items": { available: true, default_policy: "while_unlocked", items: [{ id: "bank", origins: ["https://bank.example"], effective_policy: "while_unlocked", has_totp: false, passkey_rp_ids: [] }] },
-  "/v1/vault/audit": { records: [] },
-  "/v1/devices": { devices: [{ device_id: "d1", name: "Phone", scopes: ["read"] }] },
-  "/v1/settings/config": {
-    config: { tickets: { confirm_ttl_secs: 600 } },
-    file_only: ["credentials"],
-    restart_required: false,
-    schema: { type: "object", properties: { tickets: { type: "object", properties: { confirm_ttl_secs: { type: "integer", minimum: 1 } } } } },
-    remote_editable: ["tickets."],
-    remote: false,
+  "/v1/vault/settings": {
+    auto_lock: "one_week",
+    biometric_unlock: false,
+    biometrics: { available: false, mechanism: null, reason: "unsupported_platform" },
+    autofill: { enabled: true, auto_submit: true, allow_insecure: false, excluded_domains: [] },
+    default_policy: "while_unlocked",
+    disable_in_incognito: true,
+    recovery: { configured: false, current: false, created_at: null },
   },
+  "/v1/devices": { devices: [{ device_id: "d1", name: "Phone", scopes: ["read"] }] },
+  "/v1/sync": {
+    configured: false,
+    set_up: false,
+    unlocked: false,
+    records: 0,
+    pending: 0,
+    exhausted: false,
+    settings: false,
+    memory_tags: [],
+    passphrase_source: "entered",
+    last_run: null,
+    location: null,
+    password_source: null,
+    webdav_username: null,
+  },
+  "/v1/pinned-tabs": { tabs: [] },
 };
 
 describe("/pair deep link", () => {
@@ -86,7 +105,7 @@ describe("/pair deep link", () => {
         <App />
       </StrictMode>,
     );
-    expect(within(await screen.findByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ })).toBeInTheDocument();
+    expect(await within(await screen.findByRole("region", { name: "Chats" })).findByRole("link", { name: "Hello" })).toBeInTheDocument();
     const exchanges = requests.filter((r) => r.path === "/v1/pairing/exchange");
     expect(exchanges).toEqual([{ method: "POST", path: "/v1/pairing/exchange", auth: null, body: { code: "code-123" } }]);
     expect(localStorage.getItem("openside.token")).toBe("tok-7");
@@ -99,81 +118,93 @@ describe("/pair deep link", () => {
     window.history.pushState({}, "", "/pair#old-code");
     stubDaemon(() => json(410, { code: "pairing_expired", message: "expired" }));
     render(<App />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("This pairing code has expired. Make a new one in openside on your computer (Settings → Remote access).");
+    expect(await screen.findByRole("alert")).toHaveTextContent("This pairing code has expired. Make a new one in openside on your computer (Settings → Developers).");
     expect(window.location.hash).toBe("");
     expect(localStorage.getItem("openside.token")).toBeNull();
     expect(screen.getByRole("link", { name: "enter a device token instead" })).toHaveAttribute("href", "/");
   });
 });
 
-describe("management screens (PP-15: no feature flags)", () => {
-  it("every section opens from the nav with its controls usable and no gating", async () => {
+describe("Settings tab (PP-15: no feature flags)", () => {
+  it("every workspace page opens from the Settings nav with its controls usable and no gating", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "admin-token");
     stubDaemon((method, path) => (method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined));
+    window.history.pushState({}, "", "/settings");
     render(<App />);
-    const nav = await screen.findByRole("navigation", { name: "Sections" });
-    expect(within(await screen.findByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ })).toBeInTheDocument();
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/settings/general"));
+    const nav = await screen.findByRole("navigation", { name: "Settings sections" });
 
     const checks: Record<string, () => Promise<HTMLElement>> = {
-      Skills: () => screen.findByRole("switch", { name: /^Enable \// }),
+      "Plugins & MCPs": () => screen.findByRole("switch", { name: /^Enable \// }),
       Routines: () => screen.findByRole("switch", { name: /^Enable / }),
-      Memory: () => screen.findByPlaceholderText("Search memory"),
-      Vault: () => screen.findByLabelText("Use policy for bank"),
-      Devices: () => screen.findByRole("button", { name: "Revoke" }),
-      Configuration: () => screen.findByRole("spinbutton"),
+      Memory: async () => within(await screen.findByRole("region", { name: "MEMORY.md" })).findByRole("button", { name: "Edit" }),
+      // Item policies live in the Vaults sheet, as in Aside's Data management section.
+      Passwords: async () => {
+        await user.click(await screen.findByRole("button", { name: /^Vaults/ }));
+        const policy = await screen.findByLabelText("Use policy for bank");
+        expect(policy).toBeEnabled();
+        // Close the sheet so the next nav link is reachable.
+        await user.keyboard("{Escape}");
+        return policy;
+      },
+      Account: () => screen.findByRole("button", { name: /^Options for / }),
     };
-    await user.click(within(nav).getByRole("link", { name: "Workspace" }));
     for (const [label, control] of Object.entries(checks)) {
-      const workspace = await screen.findByRole("dialog", { name: "Workspace" });
-      await user.click(within(workspace).getByRole("link", { name: new RegExp(`^${label}`) }));
-      const dialog = await screen.findByRole("dialog", { name: label });
+      await user.click(within(nav).getByRole("link", { name: label }));
+      expect(await screen.findByRole("heading", { level: 1, name: label })).toBeInTheDocument();
       expect(await control(), label).toBeEnabled();
-      expect(screen.queryByRole("alert"), label).toBeNull();
+      expect(within(screen.getByRole("main", { name: label })).queryAllByRole("alert").map((alert) => alert.textContent), label).toEqual([]);
       expect(document.body.textContent, label).not.toMatch(/upgrade|premium|feature flag|not available in this/i);
-      // The people list stays underneath the dialog.
-      expect(within(screen.getByRole("list", { name: "Team", hidden: true })).getByRole("link", { name: /^openside/, hidden: true })).toBeInTheDocument();
-      await user.click(within(dialog).getByRole("button", { name: "Back to workspace" }));
     }
-    await user.click(within(await screen.findByRole("dialog", { name: "Workspace" })).getByRole("button", { name: "Close" }));
-    await vi.waitFor(() => expect(window.location.pathname).toBe("/"));
   });
 
-  it("deep links open their dialog over Home, and Close returns to it", async () => {
-    const user = userEvent.setup();
+  // Each old dialog address lands on the Settings page that now holds what it used to show.
+  const LEGACY: Record<string, string> = {
+    "/models": "/settings/models",
+    "/channels": "/settings/channels",
+    "/remote": "/settings/developers",
+    "/workspace": "/settings/general",
+    "/team": "/settings/general",
+    "/skills": "/settings/plugins",
+    "/routines": "/settings/routines",
+    "/memory": "/settings/memory",
+    "/vault": "/settings/passwords",
+    "/connections": "/settings/security",
+    "/devices": "/settings/account",
+    "/agents": "/settings/developers",
+    "/sync": "/settings/account",
+    "/policy": "/settings/agents",
+    "/diagnostics": "/settings/general",
+    "/config": "/settings/general",
+  };
+
+  it("covers every legacy address the app redirects", () => {
+    expect(LEGACY_SETTINGS_PATHS.map(([from, page]) => [from, settingsPath(page)])).toEqual(Object.entries(LEGACY));
+  });
+
+  it.each(Object.entries(LEGACY))("sends %s to %s", async (from, to) => {
     localStorage.setItem("openside.token", "admin-token");
     stubDaemon((method, path) => (method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined));
-    window.history.pushState({}, "", "/vault");
+    window.history.pushState({}, "", from);
     render(<App />);
-    const vault = await screen.findByRole("dialog", { name: "Vault" });
-    expect(await within(vault).findByLabelText("Use policy for bank")).toBeEnabled();
-    await user.click(within(vault).getByRole("button", { name: "Close" }));
-    await vi.waitFor(() => expect(window.location.pathname).toBe("/"));
-    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-
-    await user.click(within(screen.getByRole("navigation", { name: "Sections" })).getByRole("link", { name: "Settings" }));
-    const settings = await screen.findByRole("dialog", { name: "Settings" });
-    await user.click(within(settings).getByRole("button", { name: /^Workspace/ }));
-    expect(await screen.findByRole("dialog", { name: "Workspace" })).toBeInTheDocument();
-    expect(window.location.pathname).toBe("/workspace");
+    await vi.waitFor(() => expect(window.location.pathname).toBe(to));
+    expect(await screen.findByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
   });
 });
 
-describe("phone team drawer", () => {
-  it("closes when the person already open is picked again", async () => {
+describe("phone drawer", () => {
+  it("closes when the page already open is picked again", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openside.token", "phone-token");
     stubDaemon((method, path) => (method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined));
-    window.history.pushState({}, "", "/agents/chief");
+    window.history.pushState({}, "", "/chats");
     render(<App />);
-    await screen.findByRole("textbox", { name: "Message" });
-    await user.click(screen.getByRole("button", { name: "Open menu" }));
-    const drawer = await screen.findByRole("dialog", { name: "Team menu" });
-    expect(window.location.pathname).toBe("/agents/chief");
-    await user.click(within(within(drawer).getByRole("list", { name: "Team" })).getByRole("link", { name: /^openside/ }));
-    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Team menu" })).toBeNull());
-    expect(window.location.pathname).toBe("/agents/chief");
-    expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Open menu" }));
+    const drawer = await screen.findByRole("dialog", { name: "Menu" });
+    await user.click(await within(within(drawer).getByRole("region", { name: "Chats" })).findByRole("link", { name: "Show all" }));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Menu" })).toBeNull());
+    expect(window.location.pathname).toBe("/chats");
   });
 });
 
@@ -220,5 +251,30 @@ describe("owner sign-out", () => {
     expect(await screen.findByLabelText("Device token")).toBeInTheDocument();
     expect(localStorage.getItem("openside.token")).toBeNull();
     expect(sessionStorage.getItem("openside.local-secret")).toBeNull();
+  });
+});
+
+describe("mini popup window", () => {
+  it("shows only the message box, without the sidebar column or toolbar", async () => {
+    localStorage.setItem("openside.token", "owner-token");
+    stubDaemon((method, path) => (method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined));
+    window.history.pushState({}, "", "/mini");
+    const { container } = render(<App />);
+    const mini = await screen.findByRole("main", { name: "Mini popup" });
+    expect(within(mini).getByRole("textbox", { name: "Message" })).toBeInTheDocument();
+    expect(container.querySelector(".shell")).toHaveAttribute("data-mini", "true");
+    expect(container.querySelector(".shell-toolbar")).toBeNull();
+  });
+});
+
+describe("`#search` from the extension's palette command", () => {
+  it("opens the search palette and drops the hash", async () => {
+    localStorage.setItem("openside.token", "owner-token");
+    stubDaemon((method, path) => (method === "GET" && path in EMPTY_ADMIN ? json(200, EMPTY_ADMIN[path]) : undefined));
+    window.history.pushState({}, "", "/chats?view=all#search");
+    render(<App />);
+    expect(await screen.findByRole("dialog", { name: "Search" })).toBeInTheDocument();
+    await vi.waitFor(() => expect(window.location.hash).toBe(""));
+    expect(window.location.pathname + window.location.search).toBe("/chats?view=all");
   });
 });

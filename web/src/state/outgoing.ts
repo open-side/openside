@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { ApiError, type Client } from "../api/client";
 import type { AttachmentUpload } from "../api/types";
+import { t } from "../i18n";
 
 /**
  * A message this device has sent whose `message.queued` event has not come back yet. It is
@@ -62,8 +63,8 @@ export const outgoing = {
       patch(message.message_id, { state: "sent" });
       return null;
     } catch (cause) {
-      const failure = cause instanceof ApiError ? cause : new ApiError(0, "request_failed", "Request failed");
-      patch(message.message_id, { state: "failed", error: failure.status === 0 ? "Can’t reach openside" : failure.message });
+      const failure = cause instanceof ApiError ? cause : new ApiError(0, "request_failed", t("timeline.outgoing.requestFailed"));
+      patch(message.message_id, { state: "failed", error: failure.status === 0 ? t("timeline.outgoing.unreachable") : failure.message });
       return failure;
     }
   },

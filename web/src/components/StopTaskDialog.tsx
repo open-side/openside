@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { Button, Dialog, DialogActions } from "../ui";
 
 /**
@@ -10,15 +11,15 @@ export type StopScope = { kind: "all"; tasks: number } | { kind: "task"; name?: 
 function copy(scope: StopScope): { title: string; description: string; confirm: string } {
   if (scope.kind === "task") {
     return {
-      title: "Stop this task?",
-      description: `${scope.name ? `“${scope.name}” stops` : "This task stops"} where it is. The agent and any other tasks keep running, and anything already done stays done.`,
-      confirm: "Stop task",
+      title: t("thread.stop.task.title"),
+      description: scope.name ? t("thread.stop.task.descriptionNamed", { name: scope.name }) : t("thread.stop.task.description"),
+      confirm: t("thread.stop.task.confirm"),
     };
   }
   return {
-    title: "Stop everything?",
-    description: `${scope.tasks > 0 ? `Stops the agent and its ${scope.tasks === 1 ? "running task" : `${scope.tasks} running tasks`}` : "Stops the agent"} where ${scope.tasks > 0 ? "they are" : "it is"}. Anything already done stays done.`,
-    confirm: "Stop everything",
+    title: t("thread.stop.all.title"),
+    description: scope.tasks > 0 ? t("thread.stop.all.descriptionWithTasks", { count: scope.tasks }) : t("thread.stop.all.description"),
+    confirm: t("thread.stop.all.confirm"),
   };
 }
 
@@ -27,7 +28,7 @@ export function StopTaskDialog({ open, scope, onClose, onConfirm }: { open: bool
   return (
     <Dialog open={open} onClose={onClose} title={title} description={description} className="stop-task-dialog">
       <DialogActions>
-        <Button onClick={onClose}>Keep running</Button>
+        <Button onClick={onClose}>{t("thread.stop.keepRunning")}</Button>
         <Button
           variant="danger"
           onClick={() => {

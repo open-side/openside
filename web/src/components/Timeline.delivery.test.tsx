@@ -1,7 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Event } from "../api/types";
 import { ClientContext } from "../context";
@@ -29,7 +27,7 @@ function Harness({ events, client }: { events: Event[]; client: ReturnType<typeo
   );
 }
 
-function mount(payloads: Record<string, unknown>[], handler: (call: Call) => Response = () => json(202, {})) {
+function mount(payloads: Record<string, unknown>[], handler: (call: Call) => Response | Promise<Response> = () => json(202, {})) {
   const daemon = fakeClient(handler);
   const view = render(<Harness events={log(payloads)} client={daemon.client} />);
   return { ...daemon, rerender: (more: Record<string, unknown>[]) => view.rerender(<Harness events={log(more)} client={daemon.client} />) };
@@ -40,9 +38,7 @@ describe("delivery states in the transcript", () => {
     const person = { ...queued, message_id: "task-report-person" };
     const view = mount([person]);
     expect(screen.getByText("Hi there")).toBeInTheDocument();
-    expect(screen.getByText("Sent")).toBeInTheDocument();
     view.rerender([{ ...queued, message_id: "plain-internal", text: "Team delivery", author_kind: "internal", from_agent: "chief" }]);
-    expect(screen.queryByText("Sent")).toBeNull();
     expect(screen.queryByText("Team delivery")).toBeNull();
   });
 
@@ -56,38 +52,22 @@ describe("delivery states in the transcript", () => {
     expect(screen.queryByText("Read")).toBeNull();
   });
 
-  it("shows Sent, then Read and typing dots until a completed reply arrives", () => {
+  it("keeps a delivered message quiet, then shows Working and Thinking until the reply arrives", () => {
     const sent = mount([queued]);
     expect(screen.getByText("Hi there")).toBeInTheDocument();
-    expect(screen.getByText("Sent")).toBeInTheDocument();
-    expect(screen.queryByRole("status", { name: /working/i })).toBeNull();
-    expect(document.querySelector(".typing")).toBeNull();
-
-    sent.rerender([queued, injected]);
-    expect(screen.getByText("Read")).toBeInTheDocument();
-    expect(screen.queryByText("Sent")).toBeNull();
-    expect(document.querySelector(".typing")).toBeNull();
+    // Aside shows no Sent or Read receipts; the work line is the only sign of progress.
+    expect(document.querySelector(".receipt")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
 
     sent.rerender([queued, injected, started]);
-    expect(screen.getByText("Read")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Agent is working");
-    expect(document.querySelectorAll(".typing-dot")).toHaveLength(3);
+    expect(screen.getByRole("status")).toHaveTextContent("Thinking");
+    expect(document.querySelector("details.work[data-live] summary")).toHaveTextContent(/^Working/);
 
     sent.rerender([queued, injected, started, { kind: "assistant.delta", text: "Hello!" }]);
-    expect(document.querySelectorAll(".typing-dot")).toHaveLength(3);
-    // As in a messenger, the newest message keeps its receipt after the answer.
-    expect(screen.getByText("Read")).toBeInTheDocument();
     expect(screen.queryByText("Hello!")).toBeNull();
     sent.rerender([queued, injected, started, { kind: "assistant.final", text: "Hello!" }, { kind: "session.settled" }]);
-    expect(document.querySelector(".typing")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByText("Hello!")).toBeInTheDocument();
-  });
-
-  it("keeps one delivery note in the thread, under the person's newest bubble", () => {
-    mount([queued, injected, { kind: "assistant.final", text: "Hello!" }, { kind: "session.settled" }, { ...queued, message_id: "m2", text: "And another" }]);
-    const receipts = [...document.querySelectorAll(".receipt")];
-    expect(receipts.map((node) => node.textContent)).toEqual(["Sent"]);
-    expect(receipts[0]!.closest("li")).toHaveAttribute("data-message", "m2");
   });
 
   it("puts a Task started before the turn's words after them", () => {
@@ -120,10 +100,9 @@ describe("delivery states in the transcript", () => {
     expect(document.querySelector(".task-row")).not.toBeNull();
   });
 
-  it("leaves a message sent during a run to the Queued list, not a Sent bubble", () => {
+  it("leaves a message sent during a run to the Queued list, not a bubble", () => {
     mount([queued, injected, started, { kind: "message.queued", message_id: "m2", text: "and then", mode: "queue", author_kind: "person", from_agent: null }]);
     expect(screen.queryByText("and then")).toBeNull();
-    expect(screen.queryByText("Sent")).toBeNull();
   });
 
   it("shows a message that never reached the daemon as Not sent and retries under the same id", async () => {
@@ -136,7 +115,7 @@ describe("delivery states in the transcript", () => {
     expect(await screen.findByText(/Not sent/)).toBeInTheDocument();
     fail = false;
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("Sent")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/Not sent/)).toBeNull());
     expect(daemon.calls.map((call) => (call.body as { message_id: string }).message_id)).toEqual(["o1", "o1"]);
   });
 
@@ -145,7 +124,7 @@ describe("delivery states in the transcript", () => {
     await act(async () => {
       await outgoing.submit(daemon.client, { message_id: "m1", session_id: "s1", text: "Hi there", attachments: [] });
     });
-    expect(await screen.findByText("Sent")).toBeInTheDocument();
+    expect(await screen.findByText("Hi there")).toBeInTheDocument();
     daemon.rerender([queued]);
     expect(screen.getAllByText("Hi there")).toHaveLength(1);
   });
@@ -157,7 +136,39 @@ describe("delivery states in the transcript", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(daemon.calls[0]).toMatchObject({ method: "POST", path: "/v1/sessions/s1/messages", body: { text: "Hi there", mode: "queue" } }));
     expect((daemon.calls[0]?.body as { message_id: string }).message_id).not.toBe("m1");
-    expect(await screen.findByText("Sent")).toBeInTheDocument();
+  });
+});
+
+describe("retrying a failed message", () => {
+  it("sends a failed message with attachments again, rebuilding the files from the chat", async () => {
+    const user = userEvent.setup();
+    const withFile = { ...queued, attachments: [{ path: "attachments/m1/note.txt", kind: "file", mime: "text/plain", name: "note.txt", size: 2, sha256: "0" }] };
+    const daemon = mount(
+      [withFile, injected, { kind: "message.completed", message_id: "m1", outcome: "failed", reason: "provider_unavailable" }, { kind: "session.settled" }],
+      (call) => (call.method === "GET" ? new Response(new TextEncoder().encode("hi"), { status: 200 }) : json(202, {})),
+    );
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(daemon.calls.some((call) => call.method === "POST")).toBe(true));
+    expect(daemon.calls[0]).toMatchObject({ method: "GET", path: "/v1/sessions/s1/artifacts/attachments%2Fm1%2Fnote.txt" });
+    expect(daemon.calls.find((call) => call.method === "POST")).toMatchObject({
+      path: "/v1/sessions/s1/messages",
+      body: { text: "Hi there", attachments: [{ name: "note.txt", data_base64: btoa("hi") }] },
+    });
+  });
+
+  it("sends one retry however fast Retry is pressed", async () => {
+    const user = userEvent.setup();
+    const answer = Promise.withResolvers<Response>();
+    const daemon = mount(
+      [queued, injected, { kind: "message.completed", message_id: "m1", outcome: "failed", reason: "provider_unavailable" }, { kind: "session.settled" }],
+      () => answer.promise,
+    );
+    const retry = screen.getByRole("button", { name: "Retry" });
+    await user.click(retry);
+    await waitFor(() => expect(retry).toBeDisabled());
+    await user.click(retry);
+    expect(daemon.calls.filter((call) => call.method === "POST")).toHaveLength(1);
+    await act(async () => answer.resolve(json(202, {})));
   });
 });
 
@@ -172,24 +183,20 @@ describe("failed run next to the agent's own error row", () => {
     ]);
     expect(screen.getByText("Not finished")).toBeInTheDocument();
     expect(document.querySelector(".bubble.user .receipt-action")).toBeNull();
-  });
-});
-
-describe("typing dots styling", () => {
-  // vitest runs from web/; the stylesheet is the shipped source, not a processed copy.
-  const css = readFileSync(resolve(process.cwd(), "src/components/thread.css"), "utf8");
-
-  it("bounces vertically by default", () => {
-    expect(css).toMatch(/@keyframes typing-bounce[^}]*\{[\s\S]*?translateY\(-5px\)/);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
-  it("swaps the bounce for a movement-free fade under reduced motion", () => {
-    const block = /@media \(prefers-reduced-motion: reduce\) \{\s*\.typing-dot \{[^}]*\}/.exec(css)?.[0] ?? "";
-    expect(block).toContain("typing-pulse");
-    const pulse = /@keyframes typing-pulse \{[\s\S]*?\n\}/.exec(css)?.[0] ?? "";
-    expect(pulse).toContain("opacity");
-    expect(pulse).not.toContain("transform");
-    // The global reduced-motion rule must not cut the pulse after one iteration.
-    expect(css).toMatch(/\*:not\([^)]*\.typing-dot\)/);
+  it("holds the error row's Retry while a follow-up is still queued", () => {
+    mount([
+      queued,
+      injected,
+      started,
+      { kind: "message.queued", message_id: "m2", text: "and then", mode: "queue", author_kind: "person", from_agent: null },
+      { kind: "message.completed", message_id: "m1", outcome: "failed", reason: "interrupted" },
+      { kind: "runtime.error", code: "interrupted", message: "Agent process interrupted" },
+      { kind: "session.settled" },
+    ]);
+    expect(document.querySelector(".runtime-error")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

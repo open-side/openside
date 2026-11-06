@@ -1,6 +1,7 @@
 import { Menu as BaseMenu } from "@base-ui/react/menu";
-import { Copy, TextQuote, TextSelect } from "lucide-react";
-import { useEffect, useRef, useState, type HTMLAttributes, type MouseEvent, type PointerEvent, type ReactNode, type SyntheticEvent } from "react";
+import { Copy, GitBranch, TextQuote, TextSelect } from "lucide-react";
+import { useEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type SyntheticEvent } from "react";
+import { formatDate, t } from "../i18n";
 import { haptic } from "../pwa/haptics";
 import { ICON_STROKE, IconButton, MenuItem, copyText, useToast } from "../ui";
 
@@ -35,7 +36,7 @@ function coarsePointer(): boolean {
 function useCopy(text: string): () => void {
   const toast = useToast();
   return () =>
-    void copyText(text).then((copied) => (copied ? toast.notify("Copied") : toast.notify("Couldn’t copy the message", "error")));
+    void copyText(text).then((copied) => (copied ? toast.notify(t("common.copied")) : toast.notify(t("thread.message.copyFailed"), "error")));
 }
 
 export interface MessageMenuProps extends HTMLAttributes<HTMLElement> {
@@ -51,8 +52,9 @@ export interface MessageMenuProps extends HTMLAttributes<HTMLElement> {
 }
 
 /**
- * A message that opens its actions on a right click or a long press: Copy, Quote, and whatever
- * this kind of message adds. Links, images and selected text keep the browser's own menu.
+ * A message that opens its actions on a right click, a long press, or Shift+F10 / the Menu key
+ * once focused: Copy, Quote, and whatever this kind of message adds. Links, images and selected
+ * text keep the browser's own menu.
  */
 export function MessageMenu({ element: Tag = "li", text, onQuote, extra, children, ...props }: MessageMenuProps) {
   const [open, setOpen] = useState(false);
@@ -137,6 +139,18 @@ export function MessageMenu({ element: Tag = "li", text, onQuote, extra, childre
           event.preventDefault();
           event.stopPropagation();
         },
+        // Keyboard users reach the same menu from the focused message, opened at its corner.
+        tabIndex: 0,
+        "aria-haspopup": "menu" as const,
+        "aria-keyshortcuts": "Shift+F10",
+        onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
+          props.onKeyDown?.(event);
+          if (event.target !== event.currentTarget || selectable) return;
+          if (!(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return;
+          event.preventDefault();
+          const box = event.currentTarget.getBoundingClientRect();
+          show(box.left, box.top + Math.min(box.height, 24));
+        },
       }
     : {};
 
@@ -164,18 +178,18 @@ export function MessageMenu({ element: Tag = "li", text, onQuote, extra, childre
               sideOffset={4}
               collisionPadding={8}
             >
-              <BaseMenu.Popup className="ui-menu surface-overlay" aria-label="Message actions">
+              <BaseMenu.Popup className="ui-menu surface-overlay" aria-label={t("thread.message.actions")}>
                 <MenuItem icon={<Copy {...icon} />} onClick={copy}>
-                  Copy
+                  {t("common.copy")}
                 </MenuItem>
                 {onQuote ? (
                   <MenuItem icon={<TextQuote {...icon} />} onClick={() => onQuote(text)}>
-                    Quote
+                    {t("thread.message.quote")}
                   </MenuItem>
                 ) : null}
                 {offerSelect ? (
                   <MenuItem icon={<TextSelect {...icon} />} onClick={selectText}>
-                    Select text
+                    {t("thread.message.selectText")}
                   </MenuItem>
                 ) : null}
                 {extra}
@@ -188,14 +202,35 @@ export function MessageMenu({ element: Tag = "li", text, onQuote, extra, childre
   );
 }
 
-/** The quiet row under a finished reply on a pointer device: Copy without opening a menu. */
-export function MessageActions({ text }: { text: string }) {
+/**
+ * The row under a reply: Copy, Branch (a new chat holding the conversation up to this reply) and
+ * the reply's time. Always shown under the newest reply, on hover under older ones.
+ */
+export function ReplyFooter({ text, at, onFork }: { text: string; at?: string | undefined; onFork?: () => Promise<void> }) {
   const copy = useCopy(text);
+  const [forking, setForking] = useState(false);
+  const time = at && !Number.isNaN(Date.parse(at)) ? at : null;
   return (
-    <div className="message-actions">
-      <IconButton label="Copy message" size="small" onClick={copy}>
-        <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </IconButton>
+    <div className="message-footer">
+      {text ? (
+        <IconButton label={t("thread.message.copy")} size="small" onClick={copy}>
+          <Copy size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        </IconButton>
+      ) : null}
+      {onFork ? (
+        <IconButton
+          label={t("thread.message.branch")}
+          size="small"
+          disabled={forking}
+          onClick={() => {
+            setForking(true);
+            void onFork().finally(() => setForking(false));
+          }}
+        >
+          <GitBranch size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        </IconButton>
+      ) : null}
+      {time ? <time dateTime={time}>{formatDate(new Date(time), { hour: "numeric", minute: "2-digit" })}</time> : null}
     </div>
   );
 }

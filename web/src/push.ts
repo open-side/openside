@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ApiError, type Client } from "./api/client";
 import { desktopRequested, disableDesktop, enableDesktop, extensionAvailable } from "./desktopNotify";
+import { t } from "./i18n";
 
 /** The daemon's id for this browser's push subscription; the keys stay in the browser. */
 const SUBSCRIPTION_KEY = "openside.push.subscription";
@@ -40,11 +41,6 @@ async function registration(): Promise<ServiceWorkerRegistration> {
   return navigator.serviceWorker.ready;
 }
 
-export const PERMISSION_BLOCKED =
-  "Notifications are blocked for this site. Click the lock icon in the address bar, set Notifications to Allow, then try again.";
-const PUSH_SERVICE_UNAVAILABLE =
-  "This browser's push service is not available, and the openside extension is not installed. Install the openside extension to get desktop notifications, or use a browser with Web Push.";
-
 /** Web Push cannot work in this browser; the desktop path may still. Carries the text for when it cannot. */
 class PushUnavailable extends Error {}
 
@@ -52,17 +48,17 @@ class PushUnavailable extends Error {}
 export function describeFailure(cause: unknown): string {
   // Duck-typed: a DOMException from another realm is not `instanceof Error`.
   if (typeof cause === "object" && cause !== null && "message" in cause && typeof cause.message === "string" && cause.message) return cause.message;
-  return "Notifications could not be changed. Reload openside and try again.";
+  return t("settings.notifications.error.changeFailed");
 }
 
 async function subscribePush(client: Client): Promise<string> {
-  if ((await Notification.requestPermission()) !== "granted") throw new PushUnavailable(PERMISSION_BLOCKED);
+  if ((await Notification.requestPermission()) !== "granted") throw new PushUnavailable(t("settings.notifications.error.blocked"));
   const worker = await registration();
   let publicKey: string;
   try {
     publicKey = (await client.vapidKey()).public_key;
   } catch (cause) {
-    throw cause instanceof ApiError ? new Error(`The daemon could not provide its push key: ${cause.message}`) : cause;
+    throw cause instanceof ApiError ? new Error(t("settings.notifications.error.pushKey", { message: cause.message })) : cause;
   }
   let subscription = await worker.pushManager.getSubscription();
   if (!subscription) {
@@ -70,13 +66,15 @@ async function subscribePush(client: Client): Promise<string> {
       subscription = await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlBytes(publicKey) });
     } catch (cause) {
       // The patched openside browser has no push-service key, so subscribe() rejects with AbortError.
-      if (cause instanceof DOMException && cause.name === "NotAllowedError") throw new PushUnavailable(PERMISSION_BLOCKED);
-      if (cause instanceof DOMException && ["AbortError", "NotSupportedError", "InvalidStateError"].includes(cause.name)) throw new PushUnavailable(PUSH_SERVICE_UNAVAILABLE);
+      if (cause instanceof DOMException && cause.name === "NotAllowedError") throw new PushUnavailable(t("settings.notifications.error.blocked"));
+      if (cause instanceof DOMException && ["AbortError", "NotSupportedError", "InvalidStateError"].includes(cause.name)) {
+        throw new PushUnavailable(t("settings.notifications.error.pushServiceUnavailable"));
+      }
       throw cause;
     }
   }
   const { endpoint, keys } = subscription.toJSON();
-  if (!endpoint || !keys?.p256dh || !keys.auth) throw new Error("The browser returned an incomplete push subscription.");
+  if (!endpoint || !keys?.p256dh || !keys.auth) throw new Error(t("settings.notifications.error.incompleteSubscription"));
   const stored = await client.createPushSubscription({ endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } });
   localStorage.setItem(SUBSCRIPTION_KEY, stored.id);
   // The shell's presence loop only reports every 30 s; without this a push for the screen the

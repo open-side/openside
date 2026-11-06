@@ -14,9 +14,6 @@ const TONE: Record<string, string> = {
   "#888888": "gray",
 };
 
-/** Mirrors the daemon's `ACCENT_COLORS`; the profile's colour choices. */
-export const ACCENT_COLORS = Object.keys(TONE);
-
 export function avatarTone(color: string | null | undefined): string {
   return TONE[(color ?? "").toLowerCase()] ?? "gray";
 }

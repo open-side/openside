@@ -1,6 +1,7 @@
 import { CircleAlert, CircleCheck, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { t } from "../i18n";
 import { ICON_STROKE } from "./Button";
 
 export type ToastTone = "success" | "error";
@@ -85,7 +86,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   <CircleCheck size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
                 )}
                 <span className="ui-toast-message">{toast.message}</span>
-                <button type="button" className="ui-toast-close" aria-label="Dismiss notification" onClick={() => dismiss(toast.id)}>
+                <button type="button" className="ui-toast-close" aria-label={t("shell.toast.dismiss")} onClick={() => dismiss(toast.id)}>
                   <X size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
                 </button>
               </div>

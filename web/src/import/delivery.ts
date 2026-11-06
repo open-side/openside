@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ApiError, type Client } from "../api/client";
 import { EXTENSION_ID } from "../desktopNotifyProtocol";
+import { t } from "../i18n";
 import { IMPORT_APPLY, IMPORT_STATUS, IMPORT_PERMISSION_OPEN, IMPORT_PERMISSION_STATUS, type ImportPermissionReply, type ImportReply, type ImportStatusReply } from "./protocol";
 
 type DeliveryResult = { delivered: number; pending: number; extensionMissing: boolean; skipped?: number };
@@ -45,7 +46,7 @@ function askImportExtension(message: unknown): Promise<ImportReply | ImportPermi
 }
 
 function pairingRequired(): ApiError {
-  return new ApiError(0, "import_delivery_pairing_required", "Connect the openside extension to bring your saved data into this browser.");
+  return new ApiError(0, "import_delivery_pairing_required", t("onboarding.delivery.pairingRequired"));
 }
 
 async function device(): Promise<string | null> {
@@ -73,9 +74,7 @@ export function deliverImport(client: Client, onProgress?: (done: number, total:
       if (!reply || (reply.ok && (!("id" in reply) || reply.id !== batch.id || !("bookmarks" in reply)))) return { delivered, pending: batches.length - delivered, extensionMissing: true };
       if (!reply.ok) {
         if (reply.reason === "needs_pairing") throw pairingRequired();
-        throw new ApiError(0, reply.reason === "permission" ? "import_delivery_permission_required" : "import_delivery_failed", reply.reason === "permission"
-          ? "The import is saved. Choose “Sign in to your sites in openside” to allow access only to the imported sites."
-          : "The import is saved, but this browser could not apply it. Reload the openside extension and retry.");
+        throw new ApiError(0, reply.reason === "permission" ? "import_delivery_permission_required" : "import_delivery_failed", reply.reason === "permission" ? t("onboarding.delivery.permissionRequired") : t("onboarding.delivery.applyFailed"));
       }
       await client.acknowledgeImportDelivery(batch.id);
       delivered++;
@@ -109,7 +108,7 @@ export async function requestImportPermissions(client: Client, onProgress?: (don
     if (!reply) return { delivered: 0, pending: batches.length, extensionMissing: true };
     if (!reply.ok && reply.reason === "needs_pairing") throw pairingRequired();
     if (!reply.ok || !("granted" in reply) || !reply.granted) {
-      throw new ApiError(0, "import_delivery_permission_required", "Site access was not allowed. Your import is saved; you can retry whenever you are ready.");
+      throw new ApiError(0, "import_delivery_permission_required", t("onboarding.delivery.permissionDenied"));
     }
   }
   return deliverImport(client, onProgress);

@@ -6,6 +6,7 @@ import { useClient } from "../context";
 import { useBrowserControl } from "../hooks/useBrowserControl";
 import { AGENT_VIEWPORT, MAX_TEXT_BYTES, useBrowserInput, utf8Chunks } from "../hooks/useBrowserInput";
 import { originOf, useFavicon } from "../hooks/useFavicon";
+import { t, tMaybe } from "../i18n";
 import { Button, Dialog, ICON_STROKE, IconButton } from "../ui";
 import { BrowserFrame } from "./BrowserFrame";
 import { ImageViewer } from "./ImageViewer";
@@ -116,33 +117,18 @@ function useMyDevice(): MyDevice | "unknown" | null {
 function accessOf(device: MyDevice | "unknown" | null, scope: "human_step" | "steer"): Access {
   if (device === null) return { kind: "checking" };
   if (device === "unknown") return { kind: "allowed" };
-  if (device.kind === "agent_client") return { kind: "blocked", reason: "Only a device you paired as yourself can take control of the browser." };
+  if (device.kind === "agent_client") return { kind: "blocked", reason: t("browser.sheet.access.agentClient") };
   if (Array.isArray(device.scopes) && !device.scopes.includes(scope) && !device.scopes.includes("admin"))
-    return { kind: "blocked", reason: "This device wasn't given permission to take control of the browser." };
+    return { kind: "blocked", reason: t("browser.sheet.access.noScope") };
   return { kind: "allowed" };
 }
 
-const END_LABEL: Record<string, string> = {
-  idle: "Handed back to the agent after inactivity.",
-  revoked: "This device's access was revoked.",
-  tab_unavailable: "The tab was closed.",
-};
-
-const INPUT_ERROR: Record<string, string> = {
-  invalid_url: "Only http and https addresses can be opened here.",
-  policy_denied: "Your browsing policy blocks that site.",
-  approval_required: "That site needs approval. Type its address to open it.",
-  connection_denied: "That site isn't allowed in this conversation.",
-  navigation_failed: "The page didn't load.",
-  no_history: "There's no page to go to.",
-};
-
-/** An address as typed: a bare host gets `https://`; anything but http(s) is refused here. */
-function addressOf(text: string): string | null {
+/** An address as typed: a bare host (with or without a port) gets `https://`; any other scheme is sent as typed. */
+export function addressOf(text: string): string | null {
   const value = text.trim();
   if (!value) return null;
-  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`;
-  return /^https?:\/\//i.test(url) ? url : null;
+  const schemed = /^[a-z][a-z0-9+.-]*:/i.test(value) && !/^[^/:]+:\d+(?:[/?#]|$)/.test(value);
+  return schemed ? value : `https://${value}`;
 }
 
 function TabRow({
@@ -162,7 +148,7 @@ function TabRow({
   const name = tab.title || tab.url;
   return (
     <li aria-current={selected || undefined}>
-      <button type="button" className="browser-sheet-tab" aria-pressed={selected} aria-label={`Show ${name}`} onClick={onSelect}>
+      <button type="button" className="browser-sheet-tab" aria-pressed={selected} aria-label={t("browser.sheet.tab.show", { name })} onClick={onSelect}>
         <span className="browser-sheet-favicon" aria-hidden="true">
           {icon ? <img src={icon} alt="" width={16} height={16} /> : <Globe size={16} strokeWidth={ICON_STROKE} />}
         </span>
@@ -173,12 +159,12 @@ function TabRow({
         {live ? (
           <span className="browser-sheet-live">
             <span className="live-dot" aria-hidden="true" />
-            Live
+            {t("browser.sheet.tab.live")}
           </span>
         ) : null}
       </button>
       {onCloseTab ? (
-        <IconButton label={`Close ${name}`} onClick={onCloseTab}>
+        <IconButton label={t("browser.sheet.tab.close", { name })} onClick={onCloseTab}>
           <X size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
         </IconButton>
       ) : null}
@@ -211,7 +197,7 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
   const tabId = (picked && (tabs.tabs === null || list.some((tab) => tab.tab_id === picked)) ? picked : null) ?? liveTabId;
   const shown = list.find((tab) => tab.tab_id === tabId) ?? null;
   const device = useMyDevice();
-  const takeoverAccess: Access = takeover && (!takeover.origin || originOf(takeover.origin) === null) ? { kind: "blocked", reason: "This request doesn't say which page to take over." } : accessOf(device, "human_step");
+  const takeoverAccess: Access = takeover && (!takeover.origin || originOf(takeover.origin) === null) ? { kind: "blocked", reason: t("browser.sheet.access.noOrigin") } : accessOf(device, "human_step");
   const controlAccess = accessOf(device, "steer");
   const control = useBrowserControl(sessionId, tabId);
   // A takeover request owns its tab; the daemon refuses control of it until the request ends.
@@ -233,7 +219,7 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
   }, [tabId, start, send]);
 
   const url = control.page?.url ?? shown?.url ?? null;
-  const title = control.page?.title || shown?.title || (tabId === liveTabId ? fallback.title || fallback.host : "") || "Browser";
+  const title = control.page?.title || shown?.title || (tabId === liveTabId ? fallback.title || fallback.host : "") || t("browser.card.fallbackTitle");
   const host = (url ? hostOf(url) : null) ?? fallback.host;
   const src = picture ? `data:image/jpeg;base64,${picture}` : null;
 
@@ -258,7 +244,7 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
     event.preventDefault();
     const target = addressOf(address ?? url ?? "");
     if (!target) {
-      setAddressError(INPUT_ERROR.invalid_url ?? null);
+      setAddressError(t("browser.sheet.inputError.invalid_url"));
       return;
     }
     setAddressError(null);
@@ -273,21 +259,21 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
   }
 
   const note = tabs.disconnected
-    ? "The browser is disconnected."
+    ? t("browser.sheet.note.disconnected")
     : control.status === "connecting"
-      ? "Taking control…"
+      ? t("browser.sheet.note.connecting")
       : control.status === "open"
-        ? "You're in control. The agent waits until you hand the tab back."
+        ? t("browser.sheet.note.inControl")
         : control.status === "failed"
-          ? "Couldn't connect to take control. Another device may be using this tab, the agent may be waiting on a request for you, or this conversation browses privately."
+          ? t("browser.sheet.note.failed")
           : control.status === "ended"
-            ? (END_LABEL[control.ended ?? ""] ?? "Control ended. The agent can use the tab again.")
+            ? (tMaybe(`browser.sheet.ended.${control.ended ?? ""}`) ?? t("browser.sheet.ended"))
             : controllable && running
-              ? "The agent is using this tab. Take control to use it yourself; the agent waits until you hand it back."
+              ? t("browser.sheet.note.agentUsing")
               : interactive
-                ? "Tap the page or use the address bar. The agent waits while you browse."
-                : "Read-only live view. The agent keeps control.";
-  const refused = control.inputError ? (INPUT_ERROR[control.inputError] ?? "That didn't work.") : null;
+                ? t("browser.sheet.note.interactive")
+                : t("browser.sheet.note.readOnly");
+  const refused = control.inputError ? (tMaybe(`browser.sheet.inputError.${control.inputError}`) ?? t("browser.sheet.inputError")) : null;
   const canGoBack = interactive && (control.page ? control.page.can_go_back : true);
   const canGoForward = interactive && (control.page ? control.page.can_go_forward : true);
 
@@ -295,14 +281,14 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
     <Dialog open size="wide" title={title} description={host && host !== title ? host : undefined} onClose={onClose} className="browser-sheet">
       <div className="browser-sheet-body">
         {controllable ? (
-          <form className="browser-sheet-toolbar" onSubmit={navigate} aria-label="Address bar">
-            <IconButton label="Back" disabled={!canGoBack} onClick={() => control.send({ type: "back" })}>
+          <form className="browser-sheet-toolbar" onSubmit={navigate} aria-label={t("browser.sheet.addressBar")}>
+            <IconButton label={t("common.back")} disabled={!canGoBack} onClick={() => control.send({ type: "back" })}>
               <ArrowLeft size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </IconButton>
-            <IconButton label="Forward" disabled={!canGoForward} onClick={() => control.send({ type: "forward" })}>
+            <IconButton label={t("browser.sheet.forward")} disabled={!canGoForward} onClick={() => control.send({ type: "forward" })}>
               <ArrowRight size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </IconButton>
-            <IconButton label="Reload" disabled={!interactive} onClick={() => control.send({ type: "reload" })}>
+            <IconButton label={t("browser.sheet.reload")} disabled={!interactive} onClick={() => control.send({ type: "reload" })}>
               <RotateCw size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </IconButton>
             <input
@@ -313,8 +299,8 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
               autoCorrect="off"
               spellCheck={false}
               enterKeyHint="go"
-              aria-label="Address"
-              placeholder="Search or type an address"
+              aria-label={t("browser.sheet.address")}
+              placeholder={t("browser.sheet.addressPlaceholder")}
               disabled={!interactive}
               value={address ?? url ?? ""}
               onChange={(event) => setAddress(event.target.value)}
@@ -337,38 +323,38 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
             className="browser-sheet-screen"
             data-interactive={(interactive && !!picture) || undefined}
             tabIndex={interactive && picture ? 0 : -1}
-            aria-label={interactive ? "Remote browser screen; tap to interact, type to send keys" : "Browser preview"}
+            aria-label={interactive ? t("browser.sheet.screenLabel") : t("browser.preview.label")}
             style={control.frame ? ({ "--frame-aspect": control.frame.width / control.frame.height } as CSSProperties) : undefined}
           >
             {picture ? (
               <BrowserFrame data={picture} />
             ) : (
               <span className="pip-state" role="status">
-                {control.active ? "Waiting for a frame…" : control.withheld ? null : tabId === liveTabId ? state : "Take control to see this tab."}
+                {control.active ? t("browser.takeover.waitingFrame") : control.withheld ? null : tabId === liveTabId ? state : t("browser.sheet.takeControlToSee")}
               </span>
             )}
           </div>
-          <IconButton label="Zoom browser preview" className="browser-sheet-zoom" disabled={!src} onClick={() => setZoomed(true)}>
+          <IconButton label={t("browser.sheet.zoom")} className="browser-sheet-zoom" disabled={!src} onClick={() => setZoomed(true)}>
             <Maximize2 size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </IconButton>
         </div>
-        {control.withheld ? <p className="browser-sheet-takeover-note">The screen is hidden because the page holds a secret value. Input still works.</p> : null}
+        {control.withheld ? <p className="browser-sheet-takeover-note">{t("browser.takeover.withheld")}</p> : null}
         {control.status === "open" ? (
-          <form className="browser-sheet-type" onSubmit={sendText} aria-label="Type into the page">
+          <form className="browser-sheet-type" onSubmit={sendText} aria-label={t("browser.sheet.typeForm")}>
             <input
               type="text"
-              aria-label="Text to type"
-              placeholder="Type into the page"
+              aria-label={t("browser.sheet.typeLabel")}
+              placeholder={t("browser.sheet.typeForm")}
               autoCapitalize="off"
               autoCorrect="off"
               value={typed}
               onChange={(event) => setTyped(event.target.value)}
             />
             <Button type="submit" className="browser-sheet-action" disabled={!typed}>
-              Type
+              {t("browser.sheet.type")}
             </Button>
             <IconButton
-              label="Press Enter"
+              label={t("browser.sheet.pressEnter")}
               onClick={() => {
                 control.send({ type: "key", event: "down", key: "Enter", code: "Enter", modifiers: 0 });
                 control.send({ type: "key", event: "up", key: "Enter", code: "Enter", modifiers: 0 });
@@ -385,33 +371,33 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
           {takeover && takeoverAccess.kind === "allowed" ? (
             <Button variant="primary" className="browser-sheet-action" onClick={takeover.onStart}>
               <Hand size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              Take control
+              {t("browser.sheet.takeControl")}
             </Button>
           ) : null}
           {takeover && takeoverAccess.kind === "blocked" ? <p className="browser-sheet-takeover-note">{takeoverAccess.reason}</p> : null}
           {controllable && running && !control.active ? (
             <Button variant="primary" className="browser-sheet-action" onClick={control.start}>
               <Hand size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              Take control
+              {t("browser.sheet.takeControl")}
             </Button>
           ) : null}
           {control.active ? (
             <Button variant="primary" className="browser-sheet-action" onClick={control.release}>
-              Hand back
+              {t("browser.sheet.handBack")}
             </Button>
           ) : null}
           {!takeover && controlAccess.kind === "blocked" ? <p className="browser-sheet-takeover-note">{controlAccess.reason}</p> : null}
           {url && /^https?:\/\//i.test(url) ? (
             <a className="ui-button ui-button--secondary browser-sheet-action browser-sheet-open" href={url} target="_blank" rel="noopener noreferrer external">
               <ExternalLink size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              Open in your browser
+              {t("browser.sheet.openExternal")}
             </a>
           ) : null}
         </div>
         {list.length ? (
           <section className="browser-sheet-tabs" aria-labelledby="browser-sheet-tabs-heading">
             <h4 id="browser-sheet-tabs-heading" className="section-heading">
-              Tabs in this conversation
+              {t("browser.sheet.tabsHeading")}
             </h4>
             <ul>
               {list.map((tab) => (
@@ -429,7 +415,7 @@ export function BrowserSheet({ sessionId, running, tabs, liveTabId, selectedTabI
         ) : null}
       </div>
       {zoomed && src ? (
-        <ImageViewer label="Live browser preview" title={title} subtitle={url ?? undefined} src={src} alt="Remote browser tab" onClose={() => setZoomed(false)} />
+        <ImageViewer label={t("browser.sheet.zoomLabel")} title={title} subtitle={url ?? undefined} src={src} alt={t("browser.sheet.zoomAlt")} onClose={() => setZoomed(false)} />
       ) : null}
     </Dialog>
   );

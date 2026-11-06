@@ -5,21 +5,30 @@ import type { AccessRequest } from "../api/types";
 import { mayUse } from "../auth";
 import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
+import { formatList, t, type MessageKey } from "../i18n";
 import { Button, ICON_STROKE } from "../ui";
 import "./access.css";
 
 const POLL_MS = 5_000;
 
-const SCOPE_LABEL: Record<string, string> = {
-  read: "read",
-  steer: "start conversations",
-  browse: "use the browser",
-  approve: "approve requests",
-  human_step: "take over steps",
-  admin: "manage openside",
+const SCOPE_LABEL: Record<string, MessageKey> = {
+  read: "shell.access.scope.read",
+  steer: "shell.access.scope.steer",
+  browse: "shell.access.scope.browse",
+  approve: "shell.access.scope.approve",
+  human_step: "shell.access.scope.human_step",
+  admin: "shell.access.scope.admin",
 };
 
-const describe = (request: AccessRequest) => request.scopes.map((scope) => SCOPE_LABEL[scope] ?? scope).join(", ");
+// A "unit" list joins with commas and no "and", so English keeps its original "a, b, c" wording.
+const describe = (request: AccessRequest) =>
+  formatList(
+    request.scopes.map((scope) => {
+      const key = SCOPE_LABEL[scope];
+      return key ? t(key) : scope;
+    }),
+    { type: "unit", style: "short" },
+  );
 
 /**
  * A paired device that hit a screen it has no permission for asks to be allowed. The person sees
@@ -66,15 +75,15 @@ export function AccessRequestDock() {
 
   if (requests.length === 0) return null;
   return (
-    <section className="access-dock" aria-label="Access requests">
+    <section className="access-dock" aria-label={t("shell.access.label")}>
       {requests.slice(0, 3).map((request) => (
         <article key={request.id} className="access-card surface-overlay">
           <span className="access-card-icon" aria-hidden="true">
             <ShieldCheck size={18} strokeWidth={ICON_STROKE} />
           </span>
           <div className="access-card-copy">
-            <strong>{request.name || "A paired device"} is asking for access</strong>
-            <span>Wants to {describe(request)}. Allow it only if it is yours.</span>
+            <strong>{request.name ? t("shell.access.title", { name: request.name }) : t("shell.access.titleUnnamed")}</strong>
+            <span>{t("shell.access.body", { scopes: describe(request) })}</span>
             {error ? (
               <span className="access-card-error" role="alert">
                 {error}
@@ -82,11 +91,11 @@ export function AccessRequestDock() {
             ) : null}
           </div>
           <div className="access-card-actions">
-            <Button size="compact" variant="primary" disabled={busy !== null} onClick={() => void decide(request, true)}>
-              Allow
+            <Button variant="primary" disabled={busy !== null} onClick={() => void decide(request, true)}>
+              {t("shell.access.allow")}
             </Button>
-            <Button size="compact" variant="ghost" disabled={busy !== null} onClick={() => void decide(request, false)}>
-              Decline
+            <Button variant="ghost" disabled={busy !== null} onClick={() => void decide(request, false)}>
+              {t("shell.access.decline")}
             </Button>
           </div>
         </article>

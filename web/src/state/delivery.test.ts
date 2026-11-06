@@ -31,7 +31,7 @@ describe("message delivery state", () => {
     expect(states).toEqual([
       { delivering: "m1", userItems: 0, engaged: false }, // Sent
       { delivering: null, userItems: 1, engaged: false }, // Read
-      { delivering: null, userItems: 1, engaged: true }, // working: typing dots
+      { delivering: null, userItems: 1, engaged: true }, // working: the live work line
       { delivering: null, userItems: 1, engaged: true }, // output has arrived; the log shows it
     ]);
   });

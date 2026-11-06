@@ -300,6 +300,32 @@
     scale: 1.5;
   }
 }
+/* The agent's pointer over the connected app's frame; moves smoothly between actions. */
+.computer-use-cursor {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  background: rgb(0 122 255 / 0.85);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.18),
+    0 2px 8px rgb(0 0 0 / 0.3);
+  pointer-events: none;
+  transition:
+    left 180ms ease-out,
+    top 180ms ease-out,
+    scale 120ms ease-out;
+}
+.computer-use-cursor[data-held] {
+  scale: 0.8;
+}
+@media (prefers-reduced-motion: reduce) {
+  .computer-use-cursor {
+    transition: none;
+  }
+}
 .browser-card-bar {
   display: flex;
   align-items: center;
@@ -1080,6 +1106,10 @@
 .files-open > svg {
   flex: none;
 }
+/* A quarantined download is never opened here, so its row is not a button. */
+.files-static {
+  cursor: default;
+}
 .files-text {
   display: flex;
   flex: 1;
@@ -1101,6 +1131,16 @@
   font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.files-caution {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+.files-caution > svg {
+  flex: none;
 }
 .files-download {
   flex: none;

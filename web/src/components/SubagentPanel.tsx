@@ -1,17 +1,18 @@
 import { Ban, Bot, Check, ChevronRight, CircleAlert } from "lucide-react";
 import { useState } from "react";
+import { t, type MessageKey } from "../i18n";
 import type { SubagentView } from "../state/session";
 import { Dialog, ICON_STROKE, Spinner } from "../ui";
 import { taskLine, taskSteps } from "./taskStatus";
 import "./browser.css";
 import "./tasks.css";
 
-export const STATUS_LABEL: Record<SubagentView["status"], string> = {
-  running: "Running",
-  waiting_human: "Needs you",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Cancelled",
+export const STATUS_LABEL: Record<SubagentView["status"], MessageKey> = {
+  running: "timeline.agents.status.running",
+  waiting_human: "timeline.agents.status.waiting_human",
+  completed: "timeline.agents.status.completed",
+  failed: "timeline.agents.status.failed",
+  cancelled: "timeline.agents.status.cancelled",
 };
 
 export function StatusMark({ status }: { status: SubagentView["status"] }) {
@@ -34,7 +35,7 @@ function TaskStepList({ progress }: { progress: readonly unknown[] }) {
   const steps = taskSteps(progress);
   if (!steps.length) return null;
   return (
-    <ol className="task-steps" aria-label="Steps">
+    <ol className="task-steps" aria-label={t("timeline.agents.steps")}>
       {steps.map((step) => (
         <li key={step.id} data-state={step.state}>
           <span className="task-step-mark" aria-hidden="true">
@@ -65,7 +66,7 @@ function SubagentRow({ child }: { child: SubagentView }) {
           <span className="subagent-heading">
             <span className="subagent-task">{child.task}</span>
             <span className="subagent-meta">
-              <span className={`subagent-status status-${child.status}`}>{STATUS_LABEL[child.status]}</span>
+              <span className={`subagent-status status-${child.status}`}>{t(STATUS_LABEL[child.status])}</span>
               {child.status === "running" ? <span> · {taskLine(child)}</span> : null}
             </span>
           </span>
@@ -99,18 +100,18 @@ export function AgentsTray({ subagents }: { subagents: SubagentView[] }) {
     <>
       <button type="button" className={`ui-chip agents-pill${waiting ? " waiting-pill" : ""}`} aria-haspopup="dialog" onClick={() => setOpen(true)}>
         <Bot size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        <span className="ui-chip-label">{`${delegated.length} ${delegated.length === 1 ? "agent" : "agents"}`}</span>
+        <span className="ui-chip-label">{t("timeline.agents.count", { count: delegated.length })}</span>
       </button>
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
         size="wide"
         className="tray-sheet"
-        title="Agents"
-        description={active ? `${active} working` : `${delegated.length} finished`}
+        title={t("timeline.agents.title")}
+        description={active ? t("timeline.agents.working", { count: active }) : t("timeline.agents.finished", { count: delegated.length })}
       >
         <div className="tray-scroll thin-scroll">
-          <ul className="subagent-list" aria-label="Subagents">
+          <ul className="subagent-list" aria-label={t("timeline.agents.list")}>
             {delegated.map((child) => (
               <SubagentRow key={child.id} child={child} />
             ))}

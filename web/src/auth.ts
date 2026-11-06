@@ -1,4 +1,5 @@
 import type { RelayTarget } from "./api/relay/transport";
+import { t } from "./i18n";
 
 /*
  * Token storage decision: the device token lives in localStorage so an installed
@@ -101,10 +102,10 @@ export function loadTransport(storage: Storage = localStorage): RelayTarget | nu
   try {
     value = JSON.parse(stored) as Partial<RelayTarget>;
   } catch {
-    throw new Error("Invalid saved relay connection. Pair this device again.");
+    throw new Error(t("connections.auth.invalidTransport"));
   }
   if (value?.kind !== "relay" || typeof value.relay !== "string" || typeof value.daemon_id !== "string" || typeof value.daemon_key !== "string") {
-    throw new Error("Invalid saved relay connection. Pair this device again.");
+    throw new Error(t("connections.auth.invalidTransport"));
   }
   return value as RelayTarget;
 }

@@ -15,7 +15,7 @@ describe("API client", () => {
     const { client } = fakeClient(() => json(409, { code: "auth_unavailable", message: "auth unavailable" }));
     const error = await client.resolveTicket("t1", true).catch((e: unknown) => e);
     expect(error).toMatchObject({ status: 409, code: "auth_unavailable" });
-    expect((error as ApiError).message).toMatch(/Models & accounts/);
+    expect((error as ApiError).message).toMatch(/Settings → Models/);
   });
 
   it("keeps the daemon message for unknown codes and tolerates non-JSON bodies", async () => {
@@ -84,6 +84,53 @@ describe("API client", () => {
       "POST /v1/memory/model/download per-boot",
       "PUT /v1/sync/config per-boot",
       "POST /v1/sync/run -",
+    ]);
+  });
+
+  it("sends the local-access secret on the vault's local-only writes and not on its reads", async () => {
+    const seen: string[] = [];
+    const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const secret = (init?.headers as Record<string, string>)["X-Openside-Local-Secret"];
+      seen.push(`${init?.method ?? "GET"} ${String(url).replace(/^https?:\/\/[^/]+/, "")} ${secret ?? "-"} ${typeof init?.body === "string" ? init.body : ""}`.trimEnd());
+      return json(200, {});
+    }) as typeof fetch;
+    const client = createClient({ token: () => "t", fetch: fetchImpl, localSecret: () => "per-boot" });
+    const confirm = { confirm: true, passphrase: null, biometric: false };
+    await client.vaultStatus();
+    await client.vaultSettings();
+    await client.vaultBiometrics();
+    await client.vaultItems();
+    await client.updateVaultSettings({ auto_lock: "one_hour", autofill: null, biometric_unlock: null, default_policy: null, disable_in_incognito: null });
+    await client.exportVault(confirm);
+    await client.clearVault(confirm);
+    await client.createVaultRecoveryKey(confirm);
+    await client.recoverVault({ recovery_key: "k", passphrase: null });
+    await client.unlockVault(undefined, true);
+    await client.unlockVault("pass phrase");
+    expect(seen).toEqual([
+      "GET /v1/vault -",
+      "GET /v1/vault/settings -",
+      "GET /v1/vault/biometrics -",
+      "GET /v1/vault/items -",
+      'PATCH /v1/vault/settings per-boot {"auto_lock":"one_hour","autofill":null,"biometric_unlock":null,"default_policy":null,"disable_in_incognito":null}',
+      'POST /v1/vault/export per-boot {"confirm":true,"passphrase":null,"biometric":false}',
+      'POST /v1/vault/clear per-boot {"confirm":true,"passphrase":null,"biometric":false}',
+      'POST /v1/vault/recovery-key per-boot {"confirm":true,"passphrase":null,"biometric":false}',
+      'POST /v1/vault/recover per-boot {"recovery_key":"k","passphrase":null}',
+      'POST /v1/vault/unlock per-boot {"biometric":true}',
+      'POST /v1/vault/unlock - {"passphrase":"pass phrase"}',
+    ]);
+
+    // Through a relay the page is another device: the computer's own secret never travels.
+    seen.length = 0;
+    const viaRelay = createClient({ token: () => "t", fetch: fetchImpl, relay: true, localSecret: () => "per-boot" });
+    await viaRelay.exportVault(confirm);
+    await viaRelay.updateVaultSettings({ auto_lock: "never", autofill: null, biometric_unlock: null, default_policy: null, disable_in_incognito: null });
+    await viaRelay.createVaultRecoveryKey(confirm);
+    expect(seen.map((line) => line.split(" ").slice(0, 3).join(" "))).toEqual([
+      "POST /v1/vault/export -",
+      "PATCH /v1/vault/settings -",
+      "POST /v1/vault/recovery-key -",
     ]);
   });
 

@@ -1,5 +1,6 @@
 import { ApiError, type Client } from "../api/client";
 import type { AttachmentUpload, CreateSessionRequest } from "../api/types";
+import { t } from "../i18n";
 import { idbStore, OUTBOX_STORE, type RecordStore } from "./idb";
 
 /**
@@ -97,7 +98,7 @@ export function createOutbox(store: RecordStore<OutboxEntry>, channel?: Broadcas
       });
     } catch (cause) {
       if (transient(cause)) return "stop";
-      await save({ ...entry, failure: cause instanceof ApiError ? cause.message : "Request failed" });
+      await save({ ...entry, failure: cause instanceof ApiError ? cause.message : t("shell.requestFailed") });
       result.failed++;
       return "next";
     }

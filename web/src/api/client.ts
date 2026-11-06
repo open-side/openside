@@ -1,8 +1,9 @@
 import type {
-  AccountsResponse,
   ApiErrorBody,
   ArtifactList,
   BrowserTabList,
+  CreatePersonBookmarkRequest,
+  CreateProjectRequest,
   CreateSessionRequest,
   Health,
   Message,
@@ -10,30 +11,32 @@ import type {
   ModelCatalog,
   ModelsSaved,
   ModelsUpdate,
+  PickedFolder,
+  Project,
+  ProjectList,
   ProviderKeyInfo,
-  ProviderKeyList,
   ProviderPool,
   ProviderPoolList,
   Session,
   SessionList,
+  SetSessionFolderRequest,
   Settings,
   SkillList,
   Subagent,
-  SessionAccountSelection,
-  SubscriptionAccount,
-  SubscriptionList,
-  OAuthAccount,
-  OAuthAccountList,
   OAuthMethod,
   OAuthProviderList,
   OAuthTransaction,
-  UpdateOAuthAccountRequest,
   SubmitMessageRequest,
   Ticket,
   TicketList,
+  UpdateProjectRequest,
   UpdateSessionRequest,
+  ForkSessionRequest,
   VisualList,
-  CreateMemoryRequest,
+  CreateShareRequest,
+  ShareLink,
+  ShareLinkList,
+  SharedChat,
   CreatePushSubscriptionRequest,
   CreateRoutineRequest,
   CreateSkillRequest,
@@ -51,15 +54,12 @@ import type {
   ImportCategoryReport,
   ImportRequest,
   InstalledAgentSkill,
-  Memory,
   MemoryHealth,
-  MemoryHistory,
-  MemoryKind,
-  MemorySearchResponse,
   OnboardingState,
   OnboardingStatus,
   PairDeviceResponse,
   PairingOffer,
+  RemoteDisabled,
   RemoteStatus,
   SetCloudflareRequest,
   SetRelayRequest,
@@ -70,28 +70,34 @@ import type {
   RoutineSuggestionList,
   RunList,
   RunRecord,
-  SettingsDocument,
   SkillDetail,
-  UpdateMemoryRequest,
   UpdateRoutineRequest,
   UpdateSkillRequest,
   VapidPublicKey,
   CreateVaultItemRequest,
-  VaultAuditList,
   VaultItem,
   VaultItemList,
   VaultPolicyOverride,
   VaultStatus,
   DaemonStatus,
-  DoctorReport,
   MemoryModelStatus,
   NetworkPolicy,
   PairSyncRequest,
+  PersonBookmark,
+  PersonBookmarkTree,
+  PersonDownloadList,
+  PersonExtensionList,
+  PersonHistoryList,
+  PersonRecentlyClosedList,
+  PersonTabCommand,
+  PersonTabCommandResult,
+  ClearBrowsingDataRequest,
+  PersonNativeTool,
+  PersonTabList,
   PinnedTab,
   PinnedTabList,
-  PolicyDecision,
+  Preferences,
   PolicySettings,
-  PolicyTestRequest,
   PolicyValidation,
   RestartDaemonResponse,
   StartMemoryModelRequest,
@@ -104,15 +110,12 @@ import type {
   ExternalAgent,
   Agent,
   AgentList,
-  HireDraft,
-  UpdateAgentRequest,
   RetireAgentRequest,
   ChannelAccountList,
   ChannelAccount,
   ChannelAccountTest,
   AddChannelAccountRequest,
   UpdateChannelAccountRequest,
-  SuppressedProposalList,
   Connection,
   ConnectionAuditAction,
   ConnectionAuditList,
@@ -123,152 +126,26 @@ import type {
   RevokeConnectionRequest,
   UpdateConnectionRequest,
 } from "./types";
+import type { CliDefaults, ComputerUseStatus, ComputerUseStopResult, UpdateCliDefaultsRequest, UpdatePreferencesRequest } from "./types";
+import type { About, BrowserPrefs, UpdateBrowserPrefsRequest, UpdateCheck } from "./types";
+import type { AttachedTab, AttachedTabList, McpServerList, SttStatus, TranscribeRequest, Transcript } from "./types";
+import type { CreateMcpServerRequest, McpServer, ProviderConnectionList, UpdateMcpServerRequest } from "./types";
+import type { UpdateVaultSettingsRequest, VaultBiometrics, VaultClearResult, VaultConfirmRequest, VaultExport, VaultRecoverRequest, VaultRecoveryKey, VaultSettings } from "./types";
+import type { MemoryChangeList, MemoryFile, MemoryFileList, MemoryFileSaved, MemoryRebuild, SettingsDocument, UpdateMemoryFileRequest } from "./types";
 import type { ImportDeliveryList } from "../import/protocol";
+import { t, tMaybe } from "../i18n";
 
-/** Daemon error codes with a dedicated explanation; anything else shows the daemon message. */
-export const MESSAGES: Record<string, string> = {
-  network_error: "Cannot reach the openside daemon. Check the connection and try again.",
-  unauthorized: "The token was rejected. Paste a valid device token.",
-  forbidden: "This token does not have permission for that action.",
-  not_found: "Not found. It may have been deleted.",
-  invalid_transition: "That action is no longer possible; the item already changed.",
-  storage_full: "The computer running openside is out of disk space. Free some space and try again.",
-  invalid_value: "The daemon rejected that value.",
-  invalid_title: "Titles must be 1–200 characters.",
-  empty_message: "Write a message or attach a file first.",
-  model_not_configured: "No model is configured. Pick or type a model.",
-  auth_unavailable: "No account is available for the configured models. Check Settings → Models & accounts, then retry.",
-  runtime_unavailable: "The agent could not start on the computer running openside. Your message is kept; send again to retry, and run openside doctor there if it keeps failing.",
-  secret_input_unavailable: "Secret input is not available on this daemon right now.",
-  origin_mismatch: "The page changed origin, so the secret was not filled.",
-  needs_desktop: "This step must be completed on the desktop.",
-  use_done: "Mark this step as done instead of answering it.",
-  attachments_too_large: "The attachments are too large. Remove some and try again.",
-  unsupported_attachment: "That file type cannot be attached.",
-  takeover_in_use: "Another device is already controlling this step.",
-  control_in_use: "Another device is already controlling this tab.",
-  takeover_active: "The agent asked you to finish a step on this tab. Take control from that request instead.",
-  tab_unavailable: "The browser tab for this step is gone.",
-  local_socket_required:
-    "Only the computer running openside can make this change (local socket); paired devices cannot.",
-  local_access_required: "Reopen openside using the desktop launcher on the computer it runs on. Other devices can view these settings but cannot change them.",
-  scope_ceiling_exceeded: "This browser cannot grant a phone more access than it has itself. Remove a permission and try again.",
-  person_approval_required: "Only people’s devices can be connected here.",
-  transport_unavailable: "That connection cannot start yet. Check the hint on its card and try again.",
-  transport_not_enabled: "Turn that connection on before connecting a phone through it.",
-  tailscale_serve_conflict: "Another app on this computer already uses that Tailscale address. The Tailscale card names a free port to set under Configuration → remote.",
-  invalid_config: "The daemon rejected these settings: a value is out of range or conflicts with another key.",
-  file_only_section: "That section can only be edited in config.toml.",
-  config_file_invalid: "config.toml on the daemon is invalid; fix it on the computer running openside.",
-  invalid_code: "This pairing link is malformed. Scan the QR code again.",
-  too_many_attempts: "Too many failed pairing attempts. Wait a minute and try again.",
-  pairing_expired: "This pairing code has expired. Make a new one in openside on your computer (Settings → Remote access).",
-  pairing_not_found: "This pairing code was already used or is unknown. Make a new one in openside on your computer (Settings → Remote access).",
-  secret_detected: "That text looks like a secret, so it was not stored.",
-  unknown_subscription: "This device's notification subscription is no longer registered.",
-  vault_unavailable: "The vault is locked or not set up. Unlock it first.",
-  invalid_models: "Pick a reasoning model, an optional fast model and up to 16 different fallback models.",
-  model_unavailable: "That model is not available right now. Connect its provider first.",
-  key_id_conflict: "A vault item already uses the name this key is stored under. Rename that item in the Vault, then try again.",
-  invalid_provider: "Keys can be stored for Anthropic, OpenAI and Google.",
-  key_not_found: "That key no longer exists. Reload the list.",
-  invalid_source: "That subscription is not one openside can use.",
-  person_device_required: "Only the computer running openside or a device you paired as yourself can make this change.",
-  oauth_provider_unknown: "openside cannot sign in to that provider.",
-  oauth_flow_unsupported: "That sign-in method is not available for this provider.",
-  oauth_manual_input_not_allowed: "This sign-in is not waiting for a code right now.",
-  oauth_transaction_finished: "This sign-in already finished. Start a new one if you still need it.",
-  oauth_transaction_unknown: "This sign-in is no longer running. Start a new one.",
-  oauth_busy: "Too many sign-ins are running, or this account is already signing in. Finish or cancel one, then try again.",
-  unknown_account: "That account no longer exists. Reload the list.",
-  vault_already_set_up: "The vault is already set up.",
-  vault_not_set_up: "The vault is not set up yet.",
-  vault_unsupported: "This computer cannot keep a vault with the configured unlock method. Choose another unlock method under Configuration → vault.",
-  keyring_unavailable: "The computer's keyring is locked or unreachable. Unlock it on the computer and try again.",
-  passphrase_required: "Enter the vault passphrase.",
-  passphrase_not_used: "This vault is unlocked by the computer's keyring, not a passphrase.",
-  wrong_passphrase: "Wrong passphrase.",
-  weak_passphrase: "Use a passphrase of at least 8 characters.",
-  invalid_origin: "Each origin must look like https://example.com.",
-  invalid_totp: "That is not a valid authenticator setup key or otpauth:// link.",
-  empty_item: "Add a password or an authenticator.",
-  invalid_item: "Item ids use lowercase letters, digits, ':', '_' or '-' (up to 64).",
-  item_exists: "An item with that id already exists.",
-  unknown_item: "That item no longer exists.",
-  unknown_agent: "That agent is not in the list.",
-  skills_dir_unknown: "openside does not know where this agent keeps its skills. Add its skills folder in Agents.",
-  invalid_agent: "Agent names use lowercase letters, digits and hyphens, and cannot reuse the name of a built-in agent.",
-  invalid_skills_dir: "Use the full path of a folder inside your home folder, or one starting with ~/. It cannot contain “..”.",
-  exists: "Already installed.",
-  unknown_profile: "That browser profile is no longer there. Reload the list.",
-  import_in_progress: "Another import is running. Wait for it to finish.",
-  browser_unavailable: "No Chromium-compatible browser was found, so cookies cannot be written. History and bookmarks can still be imported.",
-  vault_setup_required: "Set up the openside Vault before importing saved passwords.",
-  vault_locked: "Unlock the openside Vault before importing saved passwords.",
-  invalid_password_csv: "Choose a browser-exported CSV file with URL, username and password columns.",
-  unknown_import_job: "That import is no longer available. Start a new import to finish.",
-  import_write_failed: "The import did not finish. Data already imported is kept. Try again to finish.",
-  import_interrupted: "The import stopped when openside restarted. Data already imported is kept. Import again to finish.",
-  import_failed: "The import did not finish. Data already imported is kept. Check the summary, then try again.",
-  invalid_model_source: "That model source is not valid. Use a repository like owner/name and an https address.",
-  download_in_progress: "A model download is already running.",
-  checksum_mismatch: "The downloaded model did not match its checksum, so it was discarded. Try again.",
-  checksum_unavailable: "The model source did not publish checksums, so openside would not trust the download.",
-  egress_refused: "The network allow-list does not include the model source. Add it under Policy → Network, restart openside, and try again.",
-  download_failed: "The download did not finish. Check the connection and try again.",
-  unsupported_model: "That repository does not hold a model openside can load.",
-  invalid_policy: "The policy has an entry openside cannot use. Check the marked rows.",
-  invalid_network_allow: "Each address must look like host, *.domain, host:port or https://host.",
-  invalid_sync_config: "Choose a folder or a WebDAV address (https, or http on this computer), not both.",
-  sync_already_set_up: "This device already joined a sync account, so its storage location cannot change.",
-  sync_not_configured: "Choose where to sync first.",
-  invalid_sync_secret: "That passphrase or password is empty or has characters openside cannot use. Type it again.",
-  sync_not_set_up: "Start a sync account or join one first.",
-  sync_wrong_passphrase: "Wrong sync passphrase.",
-  sync_passphrase_unavailable: "Type the sync passphrase to unlock sync.",
-  sync_password_unavailable: "Type the WebDAV password to unlock sync.",
-  sync_backend_unavailable: "The sync storage cannot be reached right now.",
-  sync_unauthorized: "The sync storage rejected the username or password.",
-  sync_busy: "A sync is already running.",
-  sync_counter_exhausted: "This sync account cannot take more changes. Start a new account on this device.",
-  invalid_pairing_code: "That sync code is not valid. Copy it again from the first device.",
-  invalid_url: "Use a full web address starting with http:// or https://.",
-  agent_not_found: "That teammate no longer exists. Reload the list.",
-  agent_retired: "That teammate is retired. Restore them first.",
-  name_taken: "Someone on your team already has that name. Pick another.",
-  roster_full: "Your team is full. Give the work to someone already on it, or retire a teammate first.",
-  responsibility_taken: "A teammate already owns that responsibility. Give the work to them instead.",
-  already_assigned: "Someone is already working on that.",
-  channel_binding_conflict: "That channel already belongs to another teammate. Unassign it there first.",
-  invalid_channel_kind: "That service is not supported. Choose Telegram, Slack or Discord.",
-  invalid_channel_account: "Check the account: use a short id of lowercase letters, digits, - or _, a name, and at least one allowed chat, channel or user before turning it on.",
-  channel_account_not_found: "That account no longer exists. Reload the list.",
-  channel_account_exists: "An account with that id already exists. Pick another id.",
-  channel_account_limit: "openside cannot connect more accounts. Remove one first.",
-  channel_secret_conflict: "A vault item already uses the name this account's credentials are stored under. Rename that item in the Vault, then try again.",
-  channel_ok: "The service accepted this account's credentials.",
-  channel_credentials_expired: "The service refused these credentials. Replace them to reconnect.",
-  channel_unavailable: "openside could not reach the service. Check the connection and test again.",
-  chief_immutable: "Your assistant can be renamed, but not retired or replaced.",
-  invalid_persona: "Check the profile: name up to 24 characters, a specific role up to 60, at least one responsibility for a teammate.",
-  invalid_packet: "A handoff needs a goal and what done looks like.",
-  invalid_account_pool: "Pick at least one account, or use the default accounts.",
-  not_requested: "Only you can ask for a new teammate.",
-  reviewer_is_author: "The reviewer must be someone other than the person who did the work.",
-  connection_not_found: "That sign-in is no longer recorded. Reload the list.",
-  connection_denied: "That agent is not allowed to use this sign-in.",
-  connection_needs_login: "The site asked to sign in again before it could be used.",
-  connection_cross_site: "That address belongs to a different site than this sign-in.",
-  connection_browser_unavailable: "The agent browser is not running, so openside cannot check or sign in to sites right now.",
-  connection_write_needs_approval: "That change on the site needs your approval first.",
-};
+/** Explanation for a daemon error code that has a dedicated one; callers fall back to the daemon message. */
+export function apiErrorMessage(code: string): string | undefined {
+  return tMaybe(`api.error.${code}`);
+}
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
 
   constructor(status: number, code: string, message?: string) {
-    super(MESSAGES[code] ?? message ?? `Request failed (${status})`);
+    super(apiErrorMessage(code) ?? message ?? t("api.requestFailed", { status }));
     this.name = "ApiError";
     this.status = status;
     this.code = code;
@@ -311,11 +188,9 @@ export interface ListSessionsQuery {
   archived?: boolean;
   /** `none` lists conversations from before the team (History); an agent id lists that agent's threads. */
   agent?: string;
-}
-
-export interface MemoryQuery {
-  q?: string;
-  kind?: MemoryKind;
+  /** A project id lists that project's chats; `none` lists chats outside every project. */
+  project?: string;
+  /** Only the first N after ordering, for a "recent chats" view. */
   limit?: number;
 }
 
@@ -329,14 +204,6 @@ export interface ConnectionAuditQuery {
   connection?: string;
   agent?: string;
   action?: ConnectionAuditAction;
-  limit?: number;
-}
-
-export interface VaultAuditQuery {
-  /** RFC 3339 lower bound. */
-  since?: string;
-  item?: string;
-  session?: string;
   limit?: number;
 }
 
@@ -356,31 +223,20 @@ export interface Client {
   headers(extra?: Record<string, string>): Record<string, string>;
   fetch: typeof fetch;
   health(): Promise<Health>;
-  accounts(): Promise<AccountsResponse>;
   settings(): Promise<Settings>;
   /** Every model by provider with availability, plus the default, fallbacks and subscription logins. */
   modelCatalog(): Promise<ModelCatalog>;
+  /** Connected providers, one row per provider and connection kind, for Settings › Models. */
+  modelProviders(): Promise<ProviderConnectionList>;
   setModels(request: ModelsUpdate): Promise<ModelsSaved>;
-  /** Metadata only (label, last four characters, state); key values never come back. */
-  listApiKeys(): Promise<ProviderKeyList>;
   addApiKey(provider: string, request: { label: string; key: string }): Promise<ProviderKeyInfo>;
   replaceApiKey(provider: string, keyId: string, request: { key: string; label?: string }): Promise<ProviderKeyInfo>;
-  updateApiKey(provider: string, keyId: string, patch: AccountPatch): Promise<ProviderKeyInfo>;
   deleteApiKey(provider: string, keyId: string): Promise<void>;
-  listSubscriptions(): Promise<SubscriptionList>;
-  addSubscriptionAccount(source: string, label: string): Promise<SubscriptionAccount>;
-  /** Polled while the person signs in from a terminal. */
-  subscriptionAccount(source: string, accountId: string): Promise<SubscriptionAccount>;
-  updateSubscriptionAccount(source: string, accountId: string, patch: AccountPatch): Promise<SubscriptionAccount>;
   deleteSubscriptionAccount(source: string, accountId: string): Promise<void>;
   /** Providers openside can sign in to itself, with their sign-in methods. */
   oauthProviders(): Promise<OAuthProviderList>;
-  /** Accounts openside signed in to; label, provider and readiness only. */
-  oauthAccounts(): Promise<OAuthAccountList>;
   /** 202: starts a sign-in; the account exists only once the transaction is `ready`. */
   createOAuthAccount(provider: string, request: { label: string; join_pool: boolean; method?: OAuthMethod }): Promise<OAuthTransaction>;
-  oauthAccount(provider: string, accountId: string): Promise<OAuthAccount>;
-  updateOAuthAccount(provider: string, accountId: string, patch: UpdateOAuthAccountRequest): Promise<OAuthAccount>;
   deleteOAuthAccount(provider: string, accountId: string): Promise<void>;
   reloginOAuthAccount(provider: string, accountId: string, request?: { method?: OAuthMethod }): Promise<OAuthTransaction>;
   /** Polled while the person signs in. */
@@ -390,22 +246,11 @@ export interface Client {
   cancelOAuthTransaction(transactionId: string): Promise<void>;
   listPools(): Promise<ProviderPoolList>;
   setPool(provider: string, accounts: ModelAccountRef[]): Promise<ProviderPool>;
-  /** Preferred account for a conversation's later requests; `null` returns to automatic rotation. */
-  setSessionAccount(id: string, account: ModelAccountRef | null): Promise<SessionAccountSelection>;
   /** `signal` cancels a search the person has already typed past. */
   listSessions(query?: ListSessionsQuery, signal?: AbortSignal): Promise<SessionList>;
   /** The team: the chief and every teammate, with live thread state for the sidebar. */
   listAgents(): Promise<AgentList>;
-  /** Admin from a person's device: hires directly, without a proposal card. */
-  createAgent(draft: HireDraft): Promise<Agent>;
-  /** Omitted fields stay; `null` on skills, model, account_pool or channel returns to the default. */
-  updateAgent(id: string, patch: UpdateAgentRequest): Promise<Agent>;
   retireAgent(id: string, request: RetireAgentRequest): Promise<Agent>;
-  restoreAgent(id: string): Promise<Agent>;
-  /** Hire suggestions the person turned off with Never. */
-  suppressedProposals(): Promise<SuppressedProposalList>;
-  /** Lets the assistant suggest that teammate again. */
-  clearSuppressedProposal(key: string): Promise<void>;
   /** Messaging identities (Telegram, Slack, Discord) a teammate can answer on; no credentials. */
   channelAccounts(): Promise<ChannelAccountList>;
   /** Admin from a person's device or the local socket. Credentials are write-only and never come back. */
@@ -415,12 +260,36 @@ export interface Client {
   deleteChannelAccount(kind: string, accountId: string): Promise<void>;
   /** A read-only identity check with the service; never posts a message. */
   testChannelAccount(kind: string, accountId: string): Promise<ChannelAccountTest>;
+  /** One chat's options and context use; the timeline itself comes from the event stream. */
+  session(id: string): Promise<Session>;
   createSession(request: CreateSessionRequest): Promise<Session>;
   updateSession(id: string, request: UpdateSessionRequest): Promise<Session>;
+  /** Branches the chat at the finished reply to `from_message` into a new chat (201). */
+  forkSession(id: string, request: ForkSessionRequest): Promise<Session>;
   deleteSession(id: string): Promise<void>;
+  /**
+   * Moves the chat into a project, attaches a folder of its own, or (both null) leaves both. A
+   * folder can only be attached from the computer running openside (403 local_access_required).
+   */
+  setSessionFolder(id: string, request: SetSessionFolderRequest): Promise<Session>;
+  /** Every project, by name. */
+  listProjects(): Promise<ProjectList>;
+  /** Only from the computer running openside; without `root` the daemon makes an empty folder. */
+  createProject(request: CreateProjectRequest): Promise<Project>;
+  /** Name and instructions only; the folder is fixed at creation. */
+  updateProject(id: string, request: UpdateProjectRequest): Promise<Project>;
+  /** The project's chats leave it; its folder stays on disk. Returns the projects left. */
+  deleteProject(id: string): Promise<ProjectList>;
+  /** Opens the folder picker on the computer running openside; `path` is null when cancelled. */
+  pickFolder(): Promise<PickedFolder>;
   stopSession(id: string): Promise<Session>;
   /** Start the session's agent process, browser and a blank agent tab ahead of a message. */
   prewarmSession(id: string): Promise<void>;
+  /** The person's tabs the chat's agent may read; answers from the daemon's memory, so it works without the extension. */
+  attachedTabs(id: string): Promise<AttachedTabList>;
+  /** Without `tabId` the person's active tab is attached; 409 person_browser_not_connected without the extension. */
+  attachTab(id: string, tabId?: number): Promise<AttachedTab>;
+  detachTab(id: string, tabId: number): Promise<void>;
   submitMessage(id: string, request: SubmitMessageRequest): Promise<Message>;
   editQueued(id: string, messageId: string, text: string): Promise<Message>;
   deleteQueued(id: string, messageId: string): Promise<Message>;
@@ -432,12 +301,33 @@ export interface Client {
   rejectTicket(id: string, reason?: string): Promise<Ticket>;
   ticketDone(id: string): Promise<Ticket>;
   cancelSubagent(id: string, subagentId: string): Promise<Subagent>;
-  /** `/` mention candidates: enabled skills visible to the session. */
-  searchSkills(sessionId: string, q: string): Promise<SkillList>;
+  /** `/` mention candidates: enabled skills, scoped to the session when there is one. */
+  searchSkills(sessionId: string | undefined, q: string): Promise<SkillList>;
+  mcpServers(): Promise<McpServerList>;
+  createMcpServer(request: CreateMcpServerRequest): Promise<McpServer>;
+  updateMcpServer(id: string, patch: UpdateMcpServerRequest): Promise<McpServer>;
+  deleteMcpServer(id: string): Promise<McpServer>;
+  /** Reconnects and lists the tools again; needs local access because it runs a stdio server's program. */
+  refreshMcpServer(id: string): Promise<McpServer>;
+  /** Whether the composer's microphone can be transcribed; person devices only. */
+  sttStatus(): Promise<SttStatus>;
+  /**
+   * One recorded clip to text; the daemon keeps neither. 409 stt_unavailable, 413 audio_too_large,
+   * 422 no_speech. `signal` drops a clip the person stopped waiting for (Stop while transcribing,
+   * or the composer went away).
+   */
+  transcribe(request: TranscribeRequest, signal?: AbortSignal): Promise<Transcript>;
   listArtifacts(id: string): Promise<ArtifactList>;
   listVisuals(id: string): Promise<VisualList>;
   /** Raw artifact bytes through the authenticated download route. */
   artifactBlob(id: string, path: string): Promise<Blob>;
+  listShares(id: string): Promise<ShareLinkList>;
+  /** Snapshot the chat as it is now; only a person can publish one. */
+  createShare(id: string, request: CreateShareRequest): Promise<ShareLink>;
+  revokeShare(id: string, shareId: string): Promise<void>;
+  /** The public snapshot behind a link; sent without a token, since the id is the credential. */
+  sharedChat(shareId: string): Promise<SharedChat>;
+  sharedArtifactBlob(shareId: string, index: number): Promise<Blob>;
   /** The daemon's normalized PNG for an exact site origin (cache read only; 404 when it has none). */
   faviconBlob(origin: string): Promise<Blob>;
   /** Fetch a signed preview through the selected transport without losing its network restrictions. */
@@ -458,6 +348,24 @@ export interface Client {
   browserThumbnail(sessionId: string, thumbnailId: string, signal?: AbortSignal): Promise<Blob>;
   /** Agent-owned, non-private tabs with sanitized URLs; 503 `browser_disconnected` when the controller is gone. */
   browserTabs(): Promise<BrowserTabList>;
+  /** The person's own browser through the paired extension; `connected: false` with empty lists while it is not attached. */
+  personTabs(): Promise<PersonTabList>;
+  /** Mutations answer 409 `person_browser_not_connected` while the extension is not attached. */
+  personTabCommand(command: PersonTabCommand): Promise<PersonTabCommandResult>;
+  /** 409 `person_browser_not_connected` while the extension is not attached; `since_ms: 0` clears all time. */
+  clearBrowsingData(request: ClearBrowsingDataRequest): Promise<void>;
+  /** Opens the Task manager or DevTools in the person's own browser. 409 `browser_not_running` while it is closed; 409 `native_tools_unsupported` for a stock browser or when a policy turns DevTools off. */
+  openBrowserTool(tool: PersonNativeTool): Promise<void>;
+  personBookmarks(signal?: AbortSignal): Promise<PersonBookmarkTree>;
+  createPersonBookmark(request: CreatePersonBookmarkRequest): Promise<PersonBookmark>;
+  deletePersonBookmark(id: string): Promise<void>;
+  personHistory(query?: { q?: string; limit?: number }, signal?: AbortSignal): Promise<PersonHistoryList>;
+  personDownloads(limit?: number): Promise<PersonDownloadList>;
+  personExtensions(signal?: AbortSignal): Promise<PersonExtensionList>;
+  /** Recently closed tabs and windows, newest first (daemon default 10, at most 25). */
+  personRecentlyClosed(limit?: number, signal?: AbortSignal): Promise<PersonRecentlyClosedList>;
+  /** Reopens one; 409 `person_browser_not_connected` while the extension is not attached. */
+  restorePersonRecentlyClosed(sessionId: string): Promise<PersonTabCommandResult>;
   listSkills(): Promise<SkillList>;
   getSkill(name: string): Promise<SkillDetail>;
   createSkill(request: CreateSkillRequest): Promise<SkillDetail>;
@@ -470,24 +378,43 @@ export interface Client {
   runRoutine(id: string): Promise<RunRecord>;
   routineRuns(id: string): Promise<RunList>;
   routineSuggestions(): Promise<RoutineSuggestionList>;
-  searchMemory(query?: MemoryQuery): Promise<MemorySearchResponse>;
   memoryHealth(): Promise<MemoryHealth>;
-  createMemory(request: CreateMemoryRequest): Promise<Memory>;
-  updateMemory(id: string, request: UpdateMemoryRequest): Promise<Memory>;
-  deleteMemory(id: string): Promise<Memory>;
-  memoryHistory(id: string): Promise<MemoryHistory>;
+  /** MEMORY.md, USER.md and TAXONOMY.md: the memory store as three files. */
+  memoryFiles(): Promise<MemoryFileList>;
+  memoryFile(name: string): Promise<MemoryFile>;
+  /** 409 memory_conflict when a note changed after `revision`; TAXONOMY.md is read-only. */
+  updateMemoryFile(name: string, request: UpdateMemoryFileRequest): Promise<MemoryFileSaved>;
+  /** Every memory change, newest first; pass `next_before` as `before` for older ones. */
+  memoryChanges(query?: { limit?: number; before?: number }): Promise<MemoryChangeList>;
+  rebuildMemory(): Promise<MemoryRebuild>;
+  /** Writes a copy of the three files and opens it in this computer's file manager; 403 local_access_required elsewhere. */
+  revealMemoryFolder(): Promise<void>;
+  /** The whole config.toml as JSON; changes apply when the daemon restarts. */
   settingsConfig(): Promise<SettingsDocument>;
   updateSettingsConfig(config: unknown): Promise<SettingsDocument>;
   vaultStatus(): Promise<VaultStatus>;
-  /** The passphrase is only for a passphrase vault; a keyring vault takes none. */
-  setupVault(passphrase?: string): Promise<VaultStatus>;
-  unlockVault(passphrase?: string): Promise<VaultStatus>;
+  /**
+   * The passphrase is only for a passphrase vault; a keyring vault takes none. `biometric` asks
+   * this computer's fingerprint or Touch ID check first, which a keyring vault with biometric
+   * unlock needs; only the computer's own browser can do it.
+   */
+  setupVault(passphrase?: string, biometric?: boolean): Promise<VaultStatus>;
+  unlockVault(passphrase?: string, biometric?: boolean): Promise<VaultStatus>;
   lockVault(): Promise<VaultStatus>;
   createVaultItem(request: CreateVaultItemRequest): Promise<VaultItem>;
   deleteVaultItem(id: string): Promise<void>;
   vaultItems(): Promise<VaultItemList>;
   updateVaultItem(id: string, policy: VaultPolicyOverride): Promise<VaultItem>;
-  vaultAudit(query?: VaultAuditQuery): Promise<VaultAuditList>;
+  vaultSettings(): Promise<VaultSettings>;
+  /** Loosening a setting needs a person's device; turning biometric unlock on needs this computer. */
+  updateVaultSettings(patch: UpdateVaultSettingsRequest): Promise<VaultSettings>;
+  vaultBiometrics(): Promise<VaultBiometrics>;
+  /** The next four need this computer (403 local_access_required elsewhere) and `confirm: true`. */
+  exportVault(request: VaultConfirmRequest): Promise<VaultExport>;
+  clearVault(request: VaultConfirmRequest): Promise<VaultClearResult>;
+  /** The key is in this response only; the daemon keeps no copy it could show again. */
+  createVaultRecoveryKey(request: VaultConfirmRequest): Promise<VaultRecoveryKey>;
+  recoverVault(request: VaultRecoverRequest): Promise<VaultStatus>;
   connections(query?: ConnectionsQuery): Promise<ConnectionList>;
   /** Upserts the given agents' access without touching the others. */
   updateConnection(id: string, request: UpdateConnectionRequest): Promise<Connection>;
@@ -521,12 +448,25 @@ export interface Client {
   acknowledgeImportDelivery(id: string): Promise<void>;
   listDevices(): Promise<DeviceList>;
   revokeDevice(id: string): Promise<void>;
+  /** Admin; an agent-client token may rename only itself. */
+  renameDevice(id: string, name: string): Promise<Device>;
   /** Public route: the one-time code is the credential, so no bearer token is needed. */
   exchangePairing(code: string): Promise<PairDeviceResponse>;
   /** Admin, and only from the computer running the daemon: issues a one-time code for a phone or agent. */
   createPairing(request: CreatePairingRequest): Promise<PairingOffer>;
   /** This device's own record (scopes included) and its pending request for more access, if any. */
   myDevice(): Promise<MyDevice>;
+  preferences(): Promise<Preferences>;
+  /** `name: ""` clears the person's name. `mcp_server` and `computer_use` need local access. */
+  updatePreferences(patch: UpdatePreferencesRequest): Promise<Preferences>;
+  /** The browser profile new CLI and MCP sessions on this computer use. */
+  cliDefaults(): Promise<CliDefaults>;
+  /** Local access only; `profile: null` goes back to the account's first profile. */
+  updateCliDefaults(patch: UpdateCliDefaultsRequest): Promise<CliDefaults>;
+  /** Whether this computer can run computer use, and whether the person turned it on. */
+  computerUse(): Promise<ComputerUseStatus>;
+  /** Ends the chat's desktop connection at once, cancelling an action in flight. */
+  stopComputerUse(sessionId: string): Promise<ComputerUseStopResult>;
   /** Any person's device: ask for scopes it lacks. Someone on the computer running openside approves it there. */
   requestAccess(scopes: CapabilityScope[]): Promise<AccessRequest>;
   /** Admin: requests waiting for a person on this computer. */
@@ -539,6 +479,10 @@ export interface Client {
   setTailscale(enabled: boolean): Promise<RemoteStatus>;
   setCloudflare(request: SetCloudflareRequest): Promise<RemoteStatus>;
   setRelay(request: SetRelayRequest): Promise<RemoteStatus>;
+  /** Local person only: stops every connection, keeps its settings, and lists what could not be stopped. */
+  disableRemote(): Promise<RemoteDisabled>;
+  /** Local person only: turns Remote Control back on with the saved connections. */
+  enableRemote(): Promise<RemoteStatus>;
   vapidKey(): Promise<VapidPublicKey>;
   listPushSubscriptions(): Promise<PushSubscriptionList>;
   createPushSubscription(request: CreatePushSubscriptionRequest): Promise<PushSubscription>;
@@ -548,8 +492,6 @@ export interface Client {
   daemonStatus(): Promise<DaemonStatus>;
   /** Computer-only. 202: the restart is requested, not finished. */
   restartDaemon(): Promise<RestartDaemonResponse>;
-  /** The daemon's own diagnostics, grouped by area, each finding with a fix the screen can offer. */
-  doctor(): Promise<DoctorReport>;
   memoryModel(): Promise<MemoryModelStatus>;
   /** An empty request fetches the default model; naming a source needs the computer's authority. */
   downloadMemoryModel(request?: StartMemoryModelRequest): Promise<MemoryModelStatus>;
@@ -557,7 +499,6 @@ export interface Client {
   policy(): Promise<PolicySettings>;
   /** Computer-only: the policy decides what agents may do. */
   setPolicy(policy: PolicySettings): Promise<PolicySettings>;
-  testPolicy(request: PolicyTestRequest): Promise<PolicyDecision>;
   /** Checks an edit without saving; problems name the list and row to fix. */
   validatePolicy(request: ValidatePolicyRequest): Promise<PolicyValidation>;
   networkPolicy(): Promise<NetworkPolicy>;
@@ -572,6 +513,14 @@ export interface Client {
   pinnedTabs(): Promise<PinnedTabList>;
   pinTab(url: string, title?: string): Promise<PinnedTab>;
   unpinTab(id: string): Promise<void>;
+  /** Installed background service version and where releases are published. */
+  about(): Promise<About>;
+  /** Asks the release feed for a newer version; the only request that leaves the computer, so only on a click. */
+  checkForUpdates(): Promise<UpdateCheck>;
+  /** The person's browser settings; `status` says whether they can be read and changed right now. */
+  browserPrefs(): Promise<BrowserPrefs>;
+  /** Writes the given browser settings and returns the values read back. */
+  updateBrowserPrefs(patch: UpdateBrowserPrefsRequest): Promise<BrowserPrefs>;
 }
 
 export function createClient(options: ClientOptions): Client {
@@ -614,11 +563,21 @@ export function createClient(options: ClientOptions): Client {
     return (await response.json()) as T;
   }
 
+  /** A cancellable GET: the palette drops a read the person has typed past or closed. */
+  async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+    const response = await send(path, { headers: headers(), signal });
+    return (await response.json()) as T;
+  }
+
   const enc = encodeURIComponent;
 
   function local(): Record<string, string> | undefined {
     const secret = options.relay === true ? null : options.localSecret?.();
     return secret ? { "X-Openside-Local-Secret": secret } : undefined;
+  }
+
+  function unlockBody(passphrase: string | undefined, biometric: boolean): { passphrase?: string; biometric?: true } {
+    return { ...(passphrase ? { passphrase } : {}), ...(biometric ? { biometric: true as const } : {}) };
   }
 
   function resolve(path: string): string {
@@ -639,26 +598,16 @@ export function createClient(options: ClientOptions): Client {
     headers,
     fetch: doFetch,
     health: () => json<Health>("GET", "/v1/health"),
-    accounts: () => json<AccountsResponse>("GET", "/v1/accounts"),
     settings: () => json<Settings>("GET", "/v1/settings"),
     modelCatalog: () => json<ModelCatalog>("GET", "/v1/settings/models"),
+    modelProviders: () => json<ProviderConnectionList>("GET", "/v1/settings/models/providers"),
     setModels: (request: ModelsUpdate) => json<ModelsSaved>("PUT", "/v1/settings/models", request),
-    listApiKeys: () => json<ProviderKeyList>("GET", "/v1/settings/keys"),
     addApiKey: (provider, request) => json<ProviderKeyInfo>("POST", `/v1/settings/keys/${enc(provider)}`, request),
     replaceApiKey: (provider, keyId, request) => json<ProviderKeyInfo>("PUT", `/v1/settings/keys/${enc(provider)}/${enc(keyId)}`, request),
-    updateApiKey: (provider, keyId, patch) => json<ProviderKeyInfo>("PATCH", `/v1/settings/keys/${enc(provider)}/${enc(keyId)}`, patch),
     deleteApiKey: (provider, keyId) => json<void>("DELETE", `/v1/settings/keys/${enc(provider)}/${enc(keyId)}`),
-    listSubscriptions: () => json<SubscriptionList>("GET", "/v1/settings/subscriptions"),
-    addSubscriptionAccount: (source, label) => json<SubscriptionAccount>("POST", `/v1/settings/subscriptions/${enc(source)}`, { label }),
-    subscriptionAccount: (source, accountId) => json<SubscriptionAccount>("GET", `/v1/settings/subscriptions/${enc(source)}/${enc(accountId)}`),
-    updateSubscriptionAccount: (source, accountId, patch) =>
-      json<SubscriptionAccount>("PATCH", `/v1/settings/subscriptions/${enc(source)}/${enc(accountId)}`, patch),
     deleteSubscriptionAccount: (source, accountId) => json<void>("DELETE", `/v1/settings/subscriptions/${enc(source)}/${enc(accountId)}`),
     oauthProviders: () => json<OAuthProviderList>("GET", "/v1/settings/oauth/providers"),
-    oauthAccounts: () => json<OAuthAccountList>("GET", "/v1/settings/oauth/accounts"),
     createOAuthAccount: (provider, request) => json<OAuthTransaction>("POST", `/v1/settings/oauth/accounts/${enc(provider)}`, request),
-    oauthAccount: (provider, accountId) => json<OAuthAccount>("GET", `/v1/settings/oauth/accounts/${enc(provider)}/${enc(accountId)}`),
-    updateOAuthAccount: (provider, accountId, patch) => json<OAuthAccount>("PATCH", `/v1/settings/oauth/accounts/${enc(provider)}/${enc(accountId)}`, patch),
     deleteOAuthAccount: (provider, accountId) => json<void>("DELETE", `/v1/settings/oauth/accounts/${enc(provider)}/${enc(accountId)}`),
     reloginOAuthAccount: (provider, accountId, request = {}) =>
       json<OAuthTransaction>("POST", `/v1/settings/oauth/accounts/${enc(provider)}/${enc(accountId)}/relogin`, request),
@@ -667,38 +616,46 @@ export function createClient(options: ClientOptions): Client {
     cancelOAuthTransaction: (transactionId) => json<void>("POST", `/v1/settings/oauth/transactions/${enc(transactionId)}/cancel`),
     listPools: () => json<ProviderPoolList>("GET", "/v1/settings/pools"),
     setPool: (provider, accounts) => json<ProviderPool>("PUT", `/v1/settings/pools/${enc(provider)}`, { accounts }),
-    setSessionAccount: (id, account) => json<SessionAccountSelection>("PUT", `/v1/sessions/${enc(id)}/account`, { account }),
     listSessions: async (query: ListSessionsQuery = {}, signal?: AbortSignal) => {
       const params = new URLSearchParams();
       if (query.q?.trim()) params.set("q", query.q.trim());
       if (query.archived) params.set("archived", "true");
       if (query.agent) params.set("agent", query.agent);
+      if (query.project) params.set("project", query.project);
+      if (query.limit !== undefined) params.set("limit", String(query.limit));
       const suffix = params.size ? `?${params}` : "";
       const response = await send(`/v1/sessions${suffix}`, { headers: headers(), signal });
       return (await response.json()) as SessionList;
     },
     listAgents: () => json<AgentList>("GET", "/v1/agents"),
-    createAgent: (draft) => json<Agent>("POST", "/v1/agents", draft),
-    updateAgent: (id, patch) => json<Agent>("PATCH", `/v1/agents/${enc(id)}`, patch),
     retireAgent: (id, request) => json<Agent>("POST", `/v1/agents/${enc(id)}/retire`, request),
-    restoreAgent: (id) => json<Agent>("POST", `/v1/agents/${enc(id)}/restore`),
-    suppressedProposals: () => json<SuppressedProposalList>("GET", "/v1/team/proposals/suppressed"),
-    clearSuppressedProposal: async (key) => {
-      await send(`/v1/team/proposals/${enc(key)}`, { method: "DELETE", headers: headers() });
-    },
     channelAccounts: () => json<ChannelAccountList>("GET", "/v1/settings/channels"),
     addChannelAccount: (kind, request) => json<ChannelAccount>("POST", `/v1/settings/channels/${enc(kind)}/accounts`, request),
     updateChannelAccount: (kind, accountId, patch) => json<ChannelAccount>("PATCH", `/v1/settings/channels/${enc(kind)}/accounts/${enc(accountId)}`, patch),
     deleteChannelAccount: (kind, accountId) => json<void>("DELETE", `/v1/settings/channels/${enc(kind)}/accounts/${enc(accountId)}`),
     testChannelAccount: (kind, accountId) => json<ChannelAccountTest>("POST", `/v1/settings/channels/${enc(kind)}/accounts/${enc(accountId)}/test`),
-    createSession: (request: CreateSessionRequest) => json<Session>("POST", "/v1/sessions", request),
+    // Local-aware: a folder named in the request is accepted only from the computer running openside.
+    createSession: (request: CreateSessionRequest) => json<Session>("POST", "/v1/sessions", request, local()),
+    session: (id: string) => json<Session>("GET", `/v1/sessions/${enc(id)}`),
     updateSession: (id: string, request: UpdateSessionRequest) =>
       json<Session>("PATCH", `/v1/sessions/${enc(id)}`, request),
+    forkSession: (id: string, request: ForkSessionRequest) => json<Session>("POST", `/v1/sessions/${enc(id)}/fork`, request),
     deleteSession: (id: string) => json<void>("DELETE", `/v1/sessions/${enc(id)}`),
+    setSessionFolder: (id, request) => json<Session>("PUT", `/v1/sessions/${enc(id)}/folder`, request, local()),
+    listProjects: () => json<ProjectList>("GET", "/v1/projects"),
+    createProject: (request) => json<Project>("POST", "/v1/projects", request, local()),
+    updateProject: (id, request) => json<Project>("PATCH", `/v1/projects/${enc(id)}`, request),
+    deleteProject: (id) => json<ProjectList>("DELETE", `/v1/projects/${enc(id)}`),
+    pickFolder: () => json<PickedFolder>("POST", "/v1/folders/pick", undefined, local()),
     stopSession: (id: string) => json<Session>("POST", `/v1/sessions/${enc(id)}/stop`),
     prewarmSession: async (id: string) => {
       await send(`/v1/sessions/${enc(id)}/prewarm`, { method: "POST", headers: headers() });
     },
+    attachedTabs: (id: string) => json<AttachedTabList>("GET", `/v1/sessions/${enc(id)}/attached-tabs`),
+    attachTab: (id: string, tabId?: number) =>
+      json<AttachedTab>("POST", `/v1/sessions/${enc(id)}/attached-tabs`, tabId === undefined ? {} : { tab_id: tabId }),
+    detachTab: (id: string, tabId: number) =>
+      json<void>("DELETE", `/v1/sessions/${enc(id)}/attached-tabs/${enc(String(tabId))}`),
     submitMessage: (id: string, request: SubmitMessageRequest) =>
       json<Message>("POST", `/v1/sessions/${enc(id)}/messages`, request),
     editQueued: (id: string, messageId: string, text: string) =>
@@ -716,15 +673,42 @@ export function createClient(options: ClientOptions): Client {
     ticketDone: (id: string) => json<Ticket>("POST", `/v1/tickets/${enc(id)}/done`),
     cancelSubagent: (id: string, subagentId: string) =>
       json<Subagent>("POST", `/v1/sessions/${enc(id)}/subagents/${enc(subagentId)}/cancel`),
-    searchSkills: (sessionId: string, q: string) => {
-      const params = new URLSearchParams({ q, session: sessionId, enabled: "true" });
+    searchSkills: (sessionId: string | undefined, q: string) => {
+      const params = new URLSearchParams({ q, enabled: "true" });
+      if (sessionId) params.set("session", sessionId);
       return json<SkillList>("GET", `/v1/skills?${params}`);
+    },
+    mcpServers: () => json<McpServerList>("GET", "/v1/mcp/servers"),
+    createMcpServer: (request: CreateMcpServerRequest) => json<McpServer>("POST", "/v1/mcp/servers", request, local()),
+    updateMcpServer: (id: string, patch: UpdateMcpServerRequest) => json<McpServer>("PATCH", `/v1/mcp/servers/${enc(id)}`, patch, local()),
+    deleteMcpServer: (id: string) => json<McpServer>("DELETE", `/v1/mcp/servers/${enc(id)}`, undefined, local()),
+    refreshMcpServer: (id: string) => json<McpServer>("POST", `/v1/mcp/servers/${enc(id)}/refresh`, undefined, local()),
+    sttStatus: () => json<SttStatus>("GET", "/v1/stt"),
+    transcribe: async (request: TranscribeRequest, signal?: AbortSignal) => {
+      const response = await send("/v1/stt", {
+        method: "POST",
+        headers: headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify(request),
+        signal,
+      });
+      return (await response.json()) as Transcript;
     },
     listArtifacts: (id: string) => json<ArtifactList>("GET", `/v1/sessions/${enc(id)}/artifacts`),
     listVisuals: (id: string) => json<VisualList>("GET", `/v1/sessions/${enc(id)}/visuals`),
     artifactBlob: async (id: string, path: string) => {
       // The artifact path is one percent-encoded segment (`/` as %2F).
       const response = await send(`/v1/sessions/${enc(id)}/artifacts/${enc(path)}`, { headers: headers() });
+      return response.blob();
+    },
+    listShares: (id: string) => json<ShareLinkList>("GET", `/v1/sessions/${enc(id)}/shares`),
+    createShare: (id: string, request: CreateShareRequest) => json<ShareLink>("POST", `/v1/sessions/${enc(id)}/shares`, request),
+    revokeShare: (id: string, shareId: string) => json<void>("DELETE", `/v1/sessions/${enc(id)}/shares/${enc(shareId)}`),
+    sharedChat: async (shareId: string) => {
+      const response = await send(`/v1/shares/${enc(shareId)}`, { headers: { Accept: "application/json" } });
+      return (await response.json()) as SharedChat;
+    },
+    sharedArtifactBlob: async (shareId: string, index: number) => {
+      const response = await send(`/v1/shares/${enc(shareId)}/artifacts/${index}`);
       return response.blob();
     },
     faviconBlob: async (origin: string) => {
@@ -758,6 +742,23 @@ export function createClient(options: ClientOptions): Client {
       return response.blob();
     },
     browserTabs: () => json<BrowserTabList>("GET", "/v1/browser/tabs"),
+    personTabs: () => json<PersonTabList>("GET", "/v1/browser/person/tabs"),
+    personTabCommand: (command: PersonTabCommand) => json<PersonTabCommandResult>("POST", "/v1/browser/person/tabs/command", command),
+    clearBrowsingData: (request: ClearBrowsingDataRequest) => json<void>("POST", "/v1/browser/person/clear-data", request),
+    openBrowserTool: (tool: PersonNativeTool) => json<void>("POST", "/v1/browser/person/native-tools", { tool }),
+    personBookmarks: (signal?: AbortSignal) => getJson<PersonBookmarkTree>("/v1/browser/person/bookmarks", signal),
+    createPersonBookmark: (request: CreatePersonBookmarkRequest) => json<PersonBookmark>("POST", "/v1/browser/person/bookmarks", request),
+    deletePersonBookmark: (id: string) => json<void>("DELETE", `/v1/browser/person/bookmarks/${enc(id)}`),
+    personHistory: (query = {}, signal?: AbortSignal) => {
+      const params = new URLSearchParams();
+      if (query.q?.trim()) params.set("q", query.q.trim());
+      if (query.limit !== undefined) params.set("limit", String(query.limit));
+      return getJson<PersonHistoryList>(`/v1/browser/person/history${params.size ? `?${params}` : ""}`, signal);
+    },
+    personDownloads: (limit?: number) => json<PersonDownloadList>("GET", `/v1/browser/person/downloads${limit === undefined ? "" : `?limit=${limit}`}`),
+    personExtensions: (signal?: AbortSignal) => getJson<PersonExtensionList>("/v1/browser/person/extensions", signal),
+    personRecentlyClosed: (limit?: number, signal?: AbortSignal) => getJson<PersonRecentlyClosedList>(`/v1/browser/person/recently-closed${limit === undefined ? "" : `?limit=${limit}`}`, signal),
+    restorePersonRecentlyClosed: (sessionId: string) => json<PersonTabCommandResult>("POST", `/v1/browser/person/recently-closed/${enc(sessionId)}/restore`),
     listSkills: () => json<SkillList>("GET", "/v1/skills"),
     getSkill: (name: string) => json<SkillDetail>("GET", `/v1/skills/${enc(name)}`),
     createSkill: (request: CreateSkillRequest) => json<SkillDetail>("POST", "/v1/skills", request),
@@ -772,41 +773,38 @@ export function createClient(options: ClientOptions): Client {
     runRoutine: (id: string) => json<RunRecord>("POST", `/v1/routines/${enc(id)}/run`),
     routineRuns: (id: string) => json<RunList>("GET", `/v1/routines/${enc(id)}/runs`),
     routineSuggestions: () => json<RoutineSuggestionList>("GET", "/v1/routines/suggestions"),
-    searchMemory: (query: MemoryQuery = {}) => {
-      const params = new URLSearchParams();
-      if (query.q?.trim()) params.set("q", query.q.trim());
-      if (query.kind) params.set("kind", query.kind);
-      if (query.limit) params.set("limit", String(query.limit));
-      const suffix = params.size ? `?${params}` : "";
-      return json<MemorySearchResponse>("GET", `/v1/memory${suffix}`);
-    },
     memoryHealth: () => json<MemoryHealth>("GET", "/v1/memory/health"),
-    createMemory: (request: CreateMemoryRequest) => json<Memory>("POST", "/v1/memory", request),
-    updateMemory: (id: string, request: UpdateMemoryRequest) =>
-      json<Memory>("PATCH", `/v1/memory/${enc(id)}`, request),
-    deleteMemory: (id: string) => json<Memory>("DELETE", `/v1/memory/${enc(id)}`),
-    memoryHistory: (id: string) => json<MemoryHistory>("GET", `/v1/memory/${enc(id)}/history`),
-    settingsConfig: () => json<SettingsDocument>("GET", "/v1/settings/config"),
-    updateSettingsConfig: (config: unknown) =>
-      json<SettingsDocument>("PUT", "/v1/settings/config", { config }),
+    memoryFiles: () => json<MemoryFileList>("GET", "/v1/memory/files"),
+    memoryFile: (name: string) => json<MemoryFile>("GET", `/v1/memory/files/${enc(name)}`),
+    updateMemoryFile: (name: string, request: UpdateMemoryFileRequest) =>
+      json<MemoryFileSaved>("PUT", `/v1/memory/files/${enc(name)}`, request),
+    memoryChanges: (query?: { limit?: number; before?: number }) => {
+      const params = new URLSearchParams();
+      if (query?.limit !== undefined) params.set("limit", String(query.limit));
+      if (query?.before !== undefined) params.set("before", String(query.before));
+      const suffix = params.size ? `?${params}` : "";
+      return json<MemoryChangeList>("GET", `/v1/memory/history${suffix}`);
+    },
+    rebuildMemory: () => json<MemoryRebuild>("POST", "/v1/memory/rebuild"),
+    revealMemoryFolder: () => json<void>("POST", "/v1/memory/reveal", undefined, local()),
+    settingsConfig: () => json<SettingsDocument>("GET", "/v1/settings/config", undefined, local()),
+    updateSettingsConfig: (config: unknown) => json<SettingsDocument>("PUT", "/v1/settings/config", { config }, local()),
     vaultStatus: () => json<VaultStatus>("GET", "/v1/vault"),
-    setupVault: (passphrase?: string) => json<VaultStatus>("POST", "/v1/vault/setup", passphrase ? { passphrase } : {}),
-    unlockVault: (passphrase?: string) => json<VaultStatus>("POST", "/v1/vault/unlock", passphrase ? { passphrase } : {}),
+    setupVault: (passphrase?: string, biometric = false) => json<VaultStatus>("POST", "/v1/vault/setup", unlockBody(passphrase, biometric), biometric ? local() : undefined),
+    unlockVault: (passphrase?: string, biometric = false) => json<VaultStatus>("POST", "/v1/vault/unlock", unlockBody(passphrase, biometric), biometric ? local() : undefined),
     lockVault: () => json<VaultStatus>("POST", "/v1/vault/lock"),
     createVaultItem: (request: CreateVaultItemRequest) => json<VaultItem>("POST", "/v1/vault/items", request),
     deleteVaultItem: (id: string) => json<void>("DELETE", `/v1/vault/items/${enc(id)}`),
     vaultItems: () => json<VaultItemList>("GET", "/v1/vault/items"),
     updateVaultItem: (id: string, policy: VaultPolicyOverride) =>
       json<VaultItem>("PATCH", `/v1/vault/items/${enc(id)}`, { policy }),
-    vaultAudit: (query: VaultAuditQuery = {}) => {
-      const params = new URLSearchParams();
-      if (query.since) params.set("since", query.since);
-      if (query.item?.trim()) params.set("item", query.item.trim());
-      if (query.session?.trim()) params.set("session", query.session.trim());
-      if (query.limit) params.set("limit", String(query.limit));
-      const suffix = params.size ? `?${params}` : "";
-      return json<VaultAuditList>("GET", `/v1/vault/audit${suffix}`);
-    },
+    vaultSettings: () => json<VaultSettings>("GET", "/v1/vault/settings"),
+    updateVaultSettings: (patch: UpdateVaultSettingsRequest) => json<VaultSettings>("PATCH", "/v1/vault/settings", patch, local()),
+    vaultBiometrics: () => json<VaultBiometrics>("GET", "/v1/vault/biometrics"),
+    exportVault: (request: VaultConfirmRequest) => json<VaultExport>("POST", "/v1/vault/export", request, local()),
+    clearVault: (request: VaultConfirmRequest) => json<VaultClearResult>("POST", "/v1/vault/clear", request, local()),
+    createVaultRecoveryKey: (request: VaultConfirmRequest) => json<VaultRecoveryKey>("POST", "/v1/vault/recovery-key", request, local()),
+    recoverVault: (request: VaultRecoverRequest) => json<VaultStatus>("POST", "/v1/vault/recover", request, local()),
     onboarding: () => json<OnboardingStatus>("GET", "/v1/onboarding"),
     setOnboarding: (state: Exclude<OnboardingState, "pending">) =>
       json<OnboardingStatus>("PUT", "/v1/onboarding", { state }),
@@ -825,10 +823,17 @@ export function createClient(options: ClientOptions): Client {
     acknowledgeImportDelivery: (id: string) => json<void>("POST", `/v1/import/delivery/${enc(id)}/ack`, { target: "user" }, local()),
     listDevices: () => json<DeviceList>("GET", "/v1/devices"),
     revokeDevice: (id: string) => json<void>("DELETE", `/v1/devices/${enc(id)}`),
+    renameDevice: (id: string, name: string) => json<Device>("PATCH", `/v1/devices/${enc(id)}`, { name }),
     exchangePairing: (code: string) =>
       json<PairDeviceResponse>("POST", "/v1/pairing/exchange", { code }),
     createPairing: (request: CreatePairingRequest) => json<PairingOffer>("POST", "/v1/pairing", request, local()),
     myDevice: () => json<MyDevice>("GET", "/v1/devices/me"),
+    preferences: () => json<Preferences>("GET", "/v1/settings/preferences"),
+    updatePreferences: (patch: UpdatePreferencesRequest) => json<Preferences>("PATCH", "/v1/settings/preferences", patch, local()),
+    cliDefaults: () => json<CliDefaults>("GET", "/v1/settings/cli"),
+    updateCliDefaults: (patch: UpdateCliDefaultsRequest) => json<CliDefaults>("PATCH", "/v1/settings/cli", patch, local()),
+    computerUse: () => json<ComputerUseStatus>("GET", "/v1/computer-use"),
+    stopComputerUse: (sessionId: string) => json<ComputerUseStopResult>("POST", `/v1/sessions/${enc(sessionId)}/computer-use/stop`),
     requestAccess: (scopes: CapabilityScope[]) => json<AccessRequest>("POST", "/v1/devices/me/access-requests", { scopes }),
     accessRequests: () => json<AccessRequestList>("GET", "/v1/access-requests"),
     approveAccessRequest: (id: string) => json<Device>("POST", `/v1/access-requests/${enc(id)}/approve`, undefined, local()),
@@ -837,6 +842,8 @@ export function createClient(options: ClientOptions): Client {
     setTailscale: (enabled: boolean) => json<RemoteStatus>("PUT", "/v1/remote/tailscale", { enabled }, local()),
     setCloudflare: (request: SetCloudflareRequest) => json<RemoteStatus>("PUT", "/v1/remote/cloudflare", request, local()),
     setRelay: (request: SetRelayRequest) => json<RemoteStatus>("PUT", "/v1/remote/relay", request, local()),
+    disableRemote: () => json<RemoteDisabled>("POST", "/v1/remote/disable", undefined, local()),
+    enableRemote: () => json<RemoteStatus>("POST", "/v1/remote/enable", undefined, local()),
     vapidKey: () => json<VapidPublicKey>("GET", "/v1/push/vapid"),
     listPushSubscriptions: () => json<PushSubscriptionList>("GET", "/v1/push/subscriptions"),
     createPushSubscription: (request: CreatePushSubscriptionRequest) =>
@@ -846,13 +853,11 @@ export function createClient(options: ClientOptions): Client {
       json<void>("POST", "/v1/push/presence", { subscription_id: subscriptionId, focused }),
     daemonStatus: () => json<DaemonStatus>("GET", "/v1/daemon"),
     restartDaemon: () => json<RestartDaemonResponse>("POST", "/v1/daemon/restart", undefined, local()),
-    doctor: () => json<DoctorReport>("GET", "/v1/doctor"),
     memoryModel: () => json<MemoryModelStatus>("GET", "/v1/memory/model"),
     downloadMemoryModel: (request = {}) => json<MemoryModelStatus>("POST", "/v1/memory/model/download", request, local()),
     cancelMemoryModel: () => json<MemoryModelStatus>("POST", "/v1/memory/model/cancel"),
     policy: () => json<PolicySettings>("GET", "/v1/policy"),
     setPolicy: (policy) => json<PolicySettings>("PUT", "/v1/policy", policy, local()),
-    testPolicy: (request) => json<PolicyDecision>("POST", "/v1/policy/test", request),
     validatePolicy: (request) => json<PolicyValidation>("POST", "/v1/policy/validate", request),
     networkPolicy: () => json<NetworkPolicy>("GET", "/v1/policy/network"),
     setNetworkPolicy: (allow) => json<NetworkPolicy>("PUT", "/v1/policy/network", { allow }, local()),
@@ -887,5 +892,9 @@ export function createClient(options: ClientOptions): Client {
       const suffix = params.size ? `?${params}` : "";
       return json<ConnectionAuditList>("GET", `/v1/connections/audit${suffix}`);
     },
+    about: () => json<About>("GET", "/v1/about"),
+    checkForUpdates: () => json<UpdateCheck>("POST", "/v1/about/update-check"),
+    browserPrefs: () => json<BrowserPrefs>("GET", "/v1/browser/prefs"),
+    updateBrowserPrefs: (patch) => json<BrowserPrefs>("PATCH", "/v1/browser/prefs", patch),
   };
 }

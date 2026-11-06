@@ -186,8 +186,10 @@ describe("a failed turn", () => {
       { kind: "message.queued", message_id: "m1", text: "Hi", mode: "queue", author_kind: "person", from_agent: null },
       { kind: "message.injected", message_id: "m1" },
       { kind: "runtime.error", code: "auth_unavailable", message: "pool exhausted", user_message: "Your model connection needs attention. Check Settings.", retryable: false },
+      // Retry waits for the run to settle, as the daemon does right after a failed turn.
+      { kind: "session.settled" },
     ]);
-    expect(screen.getByText(/Models & accounts/)).toBeInTheDocument();
+    expect(screen.getByText(/Settings → Models/)).toBeInTheDocument();
     expect(document.querySelector(".runtime-error button")).not.toBeNull();
   });
 });

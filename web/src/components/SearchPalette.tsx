@@ -1,16 +1,18 @@
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
-import { Globe, MessageSquare, Search } from "lucide-react";
-import { useEffect, useId, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { AppWindow, ArrowUpRight, MessagesSquare, Puzzle, Search } from "lucide-react";
+import { useCallback, useContext, useEffect, useId, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router";
-import type { AgentSummary, Session } from "../api/types";
+import type { PersonBookmark, PersonExtension, PersonHistoryItem, PersonRecentlyClosed, PersonTab, Session } from "../api/types";
 import { useClient } from "../context";
-import type { OwnedTab } from "../hooks/useAgentTabs";
-import { recency, useTeam } from "../hooks/useAgents";
-import { originOf, useFavicon } from "../hooks/useFavicon";
-import { keyLabel, searchKeys } from "../shortcuts";
-import { cx, ICON_STROKE } from "../ui";
-import { Avatar } from "./Avatar";
-import { tabTarget } from "./SidebarTabs";
+import { AgentTabsSettledContext, type OwnedTab } from "../hooks/useAgentTabs";
+import { originOf } from "../hooks/useFavicon";
+import { AGENT_TAB_GROUP_TITLE, bookmarkableUrl, openInBrowser, usePersonBrowser } from "../hooks/usePersonBrowser";
+import { formatDate, t, type MessageKey } from "../i18n";
+import { markTabUsed, tabsByUse, useSidebarPrefs, type SidebarPrefs } from "../shell";
+import { keyLabel, shortcutKeys } from "../shortcuts";
+import { BrandMark, cx, ICON_STROKE, useToast } from "../ui";
+import { browserFailure } from "./SidebarChats";
+import { Favicon, ourPage, PageLabel, tabTarget } from "./SidebarTabs";
 import { displayTitle } from "./toolStatus";
 import "../shortcuts.css";
 import "./searchPalette.css";
@@ -18,15 +20,15 @@ import "./searchPalette.css";
 const SECTION_LIMIT = 6;
 const SEARCH_DEBOUNCE_MS = 150;
 
-const DATE = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-const DATE_YEAR = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric" });
+const DATE: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+const DATE_YEAR: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric" };
 // Local calendar date as a UTC day number: whole days with no DST hour to round away.
 const dayNumber = (at: Date) => Date.UTC(at.getFullYear(), at.getMonth(), at.getDate()) / 86_400_000;
 
 /**
- * "Just now", "5 min ago", "3 h ago" within a day, then calendar days: "Yesterday", "4 days ago",
- * "Oct 3". A time ahead of this device's clock (skew) reads "Just now"; a missing or unreadable
- * time is `null`.
+ * "Just now", "7 minutes ago", "3 hours ago" within a day, then calendar days: "Yesterday",
+ * "4 days ago", "Oct 3". A time ahead of this device's clock (skew) reads "Just now"; a missing or
+ * unreadable time is `null`.
  */
 export function relativeTime(at: string | null | undefined, now = new Date()): string | null {
   if (!at) return null;
@@ -34,19 +36,33 @@ export function relativeTime(at: string | null | undefined, now = new Date()): s
   const ms = now.getTime() - date.getTime();
   if (Number.isNaN(ms)) return null;
   const minutes = Math.floor(Math.max(0, ms) / 60_000);
-  if (minutes < 1) return "Just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  if (minutes < 1) return t("shell.time.justNow");
+  if (minutes < 60) return t("shell.time.minutesAgo", { count: minutes });
+  if (minutes < 24 * 60) return t("shell.time.hoursAgo", { count: Math.floor(minutes / 60) });
   const days = dayNumber(now) - dayNumber(date);
-  if (days <= 1) return "Yesterday";
-  if (days < 7) return `${days} days ago`;
-  return (date.getFullYear() === now.getFullYear() ? DATE : DATE_YEAR).format(date);
+  if (days <= 1) return t("shell.time.yesterday");
+  if (days < 7) return t("shell.time.daysAgo", { count: days });
+  return formatDate(date, date.getFullYear() === now.getFullYear() ? DATE : DATE_YEAR);
 }
 
+type OpenTab = { source: "person"; tab: PersonTab } | { source: "agent"; tab: OwnedTab };
+
 type Item =
-  | { kind: "tab"; key: string; to: string; title: string; detail: string; tab: OwnedTab }
-  | { kind: "chat"; key: string; to: string; title: string; detail: string; agent: AgentSummary; time: string | null }
-  | { kind: "conversation"; key: string; to: string; title: string; detail: string };
+  | { kind: "tab"; key: string; title: string; page: boolean; url: string; favicon: string | null; open: OpenTab }
+  | { kind: "chat"; key: string; title: string; session: Session; time: string | null }
+  | { kind: "closed"; key: string; title: string; entry: PersonRecentlyClosed }
+  | { kind: "history"; key: string; title: string; url: string; detail: string; time: string | null }
+  | { kind: "bookmark"; key: string; title: string; url: string; detail: string }
+  | { kind: "extension"; key: string; title: string; detail: string };
+
+const SECTIONS: readonly { kind: Item["kind"]; heading: MessageKey }[] = [
+  { kind: "tab", heading: "shell.search.openTabs" },
+  { kind: "chat", heading: "shell.search.recentChat" },
+  { kind: "closed", heading: "shell.search.recentlyClosed" },
+  { kind: "history", heading: "shell.search.history" },
+  { kind: "bookmark", heading: "shell.search.bookmarks" },
+  { kind: "extension", heading: "shell.search.extensions" },
+];
 
 function matches(query: string, ...fields: string[]): boolean {
   const haystack = fields.join(" ").toLowerCase();
@@ -57,93 +73,124 @@ function matches(query: string, ...fields: string[]): boolean {
     .every((word) => haystack.includes(word));
 }
 
-function tabItems(tabs: readonly OwnedTab[], agents: readonly AgentSummary[], query: string): Item[] {
-  return tabs
-    .filter((tab) => matches(query, tab.title, tab.url))
-    .slice(0, SECTION_LIMIT)
-    .map((tab) => {
-      const origin = originOf(tab.url);
-      const host = origin ? new URL(origin).host : "";
-      return { kind: "tab", key: `tab:${tab.tab_id}`, to: tabTarget(tab, agents), title: tab.title.trim() || host || tab.url, detail: host, tab };
-    });
+const hostOf = (url: string) => {
+  const origin = originOf(url);
+  return origin ? new URL(origin).host : "";
+};
+
+/**
+ * Every open tab once: the agents' tabs from the ownership ledger, then the person's own in strip
+ * order (the focused window first). "Recently used" puts the current tab first, then the most
+ * recently switched to (`markTabUsed`), then the rest in that same order.
+ */
+function openTabs(agentTabs: readonly OwnedTab[], person: readonly PersonTab[], current: PersonTab | undefined, order: SidebarPrefs["tabSwitcherOrder"]): OpenTab[] {
+  const focused = current?.window_id;
+  const strip = [...person].sort((a, b) => Number(b.window_id === focused) - Number(a.window_id === focused) || a.window_id - b.window_id || a.index - b.index);
+  const all: OpenTab[] = [...agentTabs.map((tab) => ({ source: "agent" as const, tab })), ...strip.map((tab) => ({ source: "person" as const, tab }))];
+  if (order === "tabs") return all;
+  const used = tabsByUse(all.map((entry) => ({ tab_id: entry.tab.tab_id, entry }))).map(({ entry }) => entry);
+  const first = used.findIndex((entry) => entry.source === "person" && entry.tab.tab_id === current?.tab_id);
+  return first > 0 ? [used[first]!, ...used.slice(0, first), ...used.slice(first + 1)] : used;
 }
 
-function chatItems(agents: readonly AgentSummary[], query: string, now: Date): Item[] {
-  return agents
-    .filter((agent) => matches(query, agent.name, agent.persona.role))
-    .sort((a, b) => recency(b) - recency(a) || a.name.localeCompare(b.name))
-    .slice(0, SECTION_LIMIT)
-    .map((agent) => ({
-      kind: "chat",
-      key: `chat:${agent.id}`,
-      // Retired teammates keep only their thread, the way History opens it.
-      to: agent.status === "retired" ? `/sessions/${encodeURIComponent(agent.home_session_id)}` : `/agents/${encodeURIComponent(agent.id)}`,
-      title: agent.name,
-      detail: agent.status === "retired" ? "Retired" : agent.persona.role,
-      agent,
-      time: relativeTime(agent.last_message_at, now),
-    }));
-}
-
-function conversationItems(sessions: readonly Session[]): Item[] {
-  return sessions.slice(0, SECTION_LIMIT).map((session) => ({
-    kind: "conversation",
-    key: `conversation:${session.id}`,
-    to: `/sessions/${encodeURIComponent(session.id)}`,
-    title: displayTitle(session.title),
-    detail: session.status === "waiting_human" ? "Needs you" : "",
-  }));
+function flattenBookmarks(nodes: readonly PersonBookmark[]): PersonBookmark[] {
+  return nodes.flatMap((node) => (node.url ? [node] : flattenBookmarks(node.children)));
 }
 
 /**
- * The daemon's own conversation search (the History list: conversations outside the team),
- * debounced while typing; `null` until the first answer for this query arrives. A request the
- * person has typed past, or that is still out when the palette closes, is aborted.
+ * The answer for `key`, fetched after a short debounce while typing (at once for an empty key);
+ * `null` until it arrives, `fallback` when `key` is `null` (nothing to ask) or the request fails.
+ * A request for a key typed past, or still out when the palette closes, is aborted.
  */
-function useConversationSearch(query: string): Session[] | null {
-  const client = useClient();
-  const [result, setResult] = useState<{ query: string; sessions: Session[] } | null>(null);
+function useAnswer<T>(key: string | null, ask: (key: string, signal: AbortSignal) => Promise<T>, fallback: T): T | null {
+  const [result, setResult] = useState<{ key: string; value: T } | null>(null);
   useEffect(() => {
+    if (key === null) return;
     const controller = new AbortController();
     const timer = window.setTimeout(
       () => {
-        client.listSessions({ q: query, agent: "none" }, controller.signal).then(
-          (list) => {
-            if (!controller.signal.aborted) setResult({ query, sessions: list.sessions });
+        ask(key, controller.signal).then(
+          (value) => {
+            if (!controller.signal.aborted) setResult({ key, value });
           },
           () => {
-            // An unreachable daemon is announced by the shell's banner; the section just stays empty.
-            if (!controller.signal.aborted) setResult({ query, sessions: [] });
+            // An unreachable daemon or browser is announced elsewhere; the section just stays empty.
+            if (!controller.signal.aborted) setResult({ key, value: fallback });
           },
         );
       },
-      query ? SEARCH_DEBOUNCE_MS : 0,
+      key ? SEARCH_DEBOUNCE_MS : 0,
     );
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [client, query]);
-  return result && result.query === query ? result.sessions : null;
+  }, [key, ask, fallback]);
+  if (key === null) return fallback;
+  return result && result.key === key ? result.value : null;
 }
 
-const SECTIONS = [
-  { kind: "tab", heading: "Open tabs" },
-  { kind: "chat", heading: "Chats" },
-  { kind: "conversation", heading: "Conversations" },
-] as const;
+const NO_SESSIONS: Session[] = [];
+const NO_CLOSED: PersonRecentlyClosed[] = [];
+const NO_HISTORY: PersonHistoryItem[] = [];
+const NO_BOOKMARKS: PersonBookmark[] = [];
+const NO_EXTENSIONS: PersonExtension[] = [];
 
-function Results({ tabs, onDone }: { tabs: readonly OwnedTab[]; onDone: () => void }) {
+function Results({ agentTabs, pageLabel, onDone }: { agentTabs: readonly OwnedTab[]; pageLabel: (pathname: string) => string | null; onDone: () => void }) {
+  const client = useClient();
   const navigate = useNavigate();
-  const team = useTeam();
-  const agents = useMemo(() => team.agents ?? [], [team.agents]);
+  const toast = useToast();
+  const browser = usePersonBrowser();
+  const agentTabsSettled = useContext(AgentTabsSettledContext);
+  const [{ tabSwitcherOrder }] = useSidebarPrefs();
   const [query, setQuery] = useState("");
   const trimmed = query.trim();
-  const sessions = useConversationSearch(trimmed);
+  const now = useMemo(() => new Date(), []);
+
+  const sessions = useAnswer(trimmed, useCallback((q: string, signal: AbortSignal) => client.listSessions({ q, limit: SECTION_LIMIT }, signal).then((list) => list.sessions), [client]), NO_SESSIONS);
+  const closed = useAnswer("", useCallback((_: string, signal: AbortSignal) => client.personRecentlyClosed(SECTION_LIMIT, signal).then((list) => list.entries), [client]), NO_CLOSED);
+  const history = useAnswer(trimmed || null, useCallback((q: string, signal: AbortSignal) => client.personHistory({ q, limit: SECTION_LIMIT }, signal).then((list) => list.items), [client]), NO_HISTORY);
+  const bookmarks = useAnswer(trimmed ? "" : null, useCallback((_: string, signal: AbortSignal) => client.personBookmarks(signal).then((tree) => flattenBookmarks(tree.roots)), [client]), NO_BOOKMARKS);
+  const extensions = useAnswer(trimmed ? "" : null, useCallback((_: string, signal: AbortSignal) => client.personExtensions(signal).then((list) => list.extensions), [client]), NO_EXTENSIONS);
+
   const items = useMemo(() => {
-    const now = new Date();
-    return [...tabItems(tabs, agents, trimmed), ...chatItems(agents, trimmed, now), ...conversationItems(sessions ?? [])];
-  }, [tabs, agents, trimmed, sessions]);
+    const groups = new Map(browser.groups.map((group) => [group.group_id, group]));
+    // As in the sidebar: agent tabs come from the ledger once it has answered, not twice.
+    const person = agentTabsSettled ? browser.tabs.filter((tab) => tab.group_id == null || groups.get(tab.group_id)?.title !== AGENT_TAB_GROUP_TITLE) : browser.tabs;
+    const current = browser.tabs.find((tab) => tab.active && tab.window_id === browser.focusedWindow);
+    const tabs: Item[] = openTabs(agentTabs, person, current, tabSwitcherOrder)
+      .map((open): Item => {
+        const page = open.source === "person" ? ourPage(open.tab.url) : null;
+        const title = page !== null ? (pageLabel(page) ?? t("shell.tabs.newTabTitle")) : open.tab.title.trim() || hostOf(open.tab.url) || open.tab.url;
+        return { kind: "tab", key: `tab:${open.source}:${open.tab.tab_id}`, title, page: page !== null, url: open.tab.url, favicon: open.source === "person" ? (open.tab.favicon_url ?? null) : null, open };
+      })
+      .filter((item) => item.kind === "tab" && matches(trimmed, item.title, item.url))
+      .slice(0, SECTION_LIMIT);
+    const chats: Item[] = (sessions ?? []).slice(0, SECTION_LIMIT).map((session) => ({ kind: "chat", key: `chat:${session.id}`, title: displayTitle(session.title), session, time: relativeTime(session.last_activity_at, now) }));
+    const reopen: Item[] = (closed ?? [])
+      .filter((entry) => matches(trimmed, entry.title, entry.url ?? ""))
+      .slice(0, SECTION_LIMIT)
+      .map((entry) => ({ kind: "closed", key: `closed:${entry.session_id}`, title: entry.title.trim() || entry.url || t("shell.bookmarks.untitled"), entry }));
+    // Only web pages become rows: a synced javascript:, data: or file: entry must not be one Enter away.
+    const visited: Item[] = (history ?? [])
+      .filter((item) => bookmarkableUrl(item.url) !== null)
+      .slice(0, SECTION_LIMIT)
+      .map((item) => ({ kind: "history", key: `history:${item.url}`, title: item.title.trim() || item.url, url: item.url, detail: hostOf(item.url), time: relativeTime(item.last_visit_at, now) }));
+    const saved: Item[] = trimmed
+      ? (bookmarks ?? [])
+          .filter((bookmark) => bookmark.url !== null && bookmark.url !== undefined && bookmarkableUrl(bookmark.url) !== null && matches(trimmed, bookmark.title, bookmark.url))
+          .slice(0, SECTION_LIMIT)
+          .map((bookmark) => ({ kind: "bookmark", key: `bookmark:${bookmark.id}`, title: bookmark.title.trim() || bookmark.url || t("shell.bookmarks.untitled"), url: bookmark.url ?? "", detail: hostOf(bookmark.url ?? "") }))
+      : [];
+    const installed: Item[] = trimmed
+      ? (extensions ?? [])
+          .filter((extension) => matches(trimmed, extension.name, extension.description))
+          .slice(0, SECTION_LIMIT)
+          .map((extension) => ({ kind: "extension", key: `extension:${extension.id}`, title: extension.name, detail: extension.enabled ? "" : t("shell.search.extensionOff") }))
+      : [];
+    return [...tabs, ...chats, ...reopen, ...visited, ...saved, ...installed];
+  }, [browser.groups, browser.tabs, browser.focusedWindow, agentTabsSettled, agentTabs, tabSwitcherOrder, pageLabel, trimmed, sessions, closed, history, bookmarks, extensions, now]);
+
   const [active, setActive] = useState(0);
   const listId = useId();
   const current = Math.min(active, items.length - 1);
@@ -153,10 +200,38 @@ function Results({ tabs, onDone }: { tabs: readonly OwnedTab[]; onDone: () => vo
     if (current >= 0) document.getElementById(`${listId}-option-${current}`)?.scrollIntoView?.({ block: "nearest" });
   }, [listId, current]);
 
+  // A page or bookmark already open in a tab switches to it, as the sidebar's bookmarks do.
+  const openUrl = async (url: string) => {
+    const tab = browser.tabs.find((candidate) => candidate.url === url);
+    if (tab) await browser.command({ command: "activate", tab_id: tab.tab_id });
+    // A web address opens in this window's browser when the person's is not connected; a browser page cannot.
+    else if (!(await openInBrowser(client, url)) && !/^https?:/i.test(url)) toast.notify(t("shell.browser.notConnected"), "error");
+  };
+
   const activate = (item: Item | undefined) => {
     if (!item) return;
     onDone();
-    navigate(item.to);
+    const run = (work: Promise<unknown>) => void work.catch((cause: unknown) => toast.notify(browserFailure(cause), "error"));
+    switch (item.kind) {
+      case "tab":
+        markTabUsed(item.open.tab.tab_id);
+        if (item.open.source === "agent") navigate(tabTarget(item.open.tab));
+        else run(browser.command({ command: "activate", tab_id: item.open.tab.tab_id }));
+        return;
+      case "chat":
+        navigate(`/sessions/${encodeURIComponent(item.session.id)}`);
+        return;
+      case "closed":
+        run(client.restorePersonRecentlyClosed(item.entry.session_id));
+        return;
+      case "history":
+      case "bookmark":
+        run(openUrl(item.url));
+        return;
+      case "extension":
+        run(openUrl("chrome://extensions"));
+        return;
+    }
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -172,22 +247,22 @@ function Results({ tabs, onDone }: { tabs: readonly OwnedTab[]; onDone: () => vo
     }
   };
 
-  const loading = sessions === null;
+  const loading = sessions === null || closed === null || history === null || bookmarks === null || extensions === null;
   let index = 0;
   return (
     <>
       <div className="search-palette-field">
-        <Search className="search-palette-icon" size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        <Search className="search-palette-icon" size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
         <input
           className="search-palette-input"
           type="text"
           role="combobox"
-          aria-label="Search tabs and chats"
+          aria-label={t("shell.search.inputLabel")}
           aria-expanded="true"
           aria-controls={listId}
           aria-autocomplete="list"
           aria-activedescendant={current >= 0 ? optionId(current) : undefined}
-          placeholder="Search tabs, chats and conversations"
+          placeholder={t("shell.search.placeholder")}
           autoComplete="off"
           spellCheck={false}
           value={query}
@@ -198,9 +273,9 @@ function Results({ tabs, onDone }: { tabs: readonly OwnedTab[]; onDone: () => vo
           }}
           onKeyDown={onKeyDown}
         />
-        <kbd className="key-chip search-palette-key">{keyLabel(searchKeys())}</kbd>
+        <kbd className="key-chip search-palette-key">{keyLabel(shortcutKeys("search"))}</kbd>
       </div>
-      <div className="search-palette-results thin-scroll" id={listId} role="listbox" aria-label="Results">
+      <div className="search-palette-results thin-scroll" id={listId} role="listbox" aria-label={t("shell.search.results")}>
         {SECTIONS.map(({ kind, heading }) => {
           const group = items.filter((item) => item.kind === kind);
           if (group.length === 0) return null;
@@ -208,27 +283,18 @@ function Results({ tabs, onDone }: { tabs: readonly OwnedTab[]; onDone: () => vo
           return (
             <div key={kind} role="group" aria-labelledby={headingId} className="search-palette-group">
               <div id={headingId} className="search-palette-heading" role="presentation">
-                {heading}
+                {t(heading)}
               </div>
               {group.map((item) => {
                 const position = index++;
-                return (
-                  <ResultRow
-                    key={item.key}
-                    id={optionId(position)}
-                    item={item}
-                    selected={position === current}
-                    onHover={() => setActive(position)}
-                    onChoose={() => activate(item)}
-                  />
-                );
+                return <ResultRow key={item.key} id={optionId(position)} item={item} selected={position === current} onHover={() => setActive(position)} onChoose={() => activate(item)} />;
               })}
             </div>
           );
         })}
         {items.length === 0 ? (
           <p className="search-palette-empty" role="status">
-            {loading ? "Searching…" : trimmed ? `Nothing matches “${trimmed}”.` : "No open tabs or chats yet."}
+            {loading ? t("shell.search.searching") : trimmed ? t("shell.search.noMatch", { query: trimmed }) : t("shell.search.empty")}
           </p>
         ) : null}
       </div>
@@ -236,13 +302,51 @@ function Results({ tabs, onDone }: { tabs: readonly OwnedTab[]; onDone: () => vo
   );
 }
 
-function TabIcon({ tab }: { tab: OwnedTab }) {
-  const icon = useFavicon(originOf(tab.url));
-  return icon ? <img className="search-palette-favicon" src={icon} alt="" width={16} height={16} /> : <Globe size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />;
+function Action({ label }: { label: string }) {
+  return (
+    <>
+      {label}
+      <ArrowUpRight className="search-palette-arrow" size={10} strokeWidth={ICON_STROKE} aria-hidden="true" />
+    </>
+  );
+}
+
+function lead(item: Item): ReactNode {
+  switch (item.kind) {
+    case "tab":
+      return item.page ? <BrandMark size={16} /> : <Favicon url={item.url} favicon={item.favicon} />;
+    case "chat":
+      return <MessagesSquare size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />;
+    case "closed":
+      return item.entry.kind === "window" ? <AppWindow size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> : <Favicon url={item.entry.url ?? ""} favicon={item.entry.favicon_url} />;
+    case "history":
+    case "bookmark":
+      return <Favicon url={item.url} />;
+    case "extension":
+      return <Puzzle size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />;
+  }
+}
+
+function trailing(item: Item): ReactNode {
+  switch (item.kind) {
+    case "tab":
+      return <Action label={t("shell.search.switchToTab")} />;
+    case "chat":
+      return item.time;
+    case "closed":
+      return <Action label={t("shell.search.reopen")} />;
+    case "history":
+      return item.time;
+    case "bookmark":
+      return <Action label={t("shell.search.open")} />;
+    case "extension":
+      return <Action label={t("shell.search.manage")} />;
+  }
 }
 
 function ResultRow({ id, item, selected, onHover, onChoose }: { id: string; item: Item; selected: boolean; onHover: () => void; onChoose: () => void }) {
-  const trailing = item.kind === "tab" ? "Switch" : item.kind === "chat" ? item.time : null;
+  const detail = item.kind === "history" || item.kind === "bookmark" || item.kind === "extension" ? item.detail : "";
+  const after = trailing(item);
   return (
     <div
       id={id}
@@ -255,30 +359,23 @@ function ResultRow({ id, item, selected, onHover, onChoose }: { id: string; item
       onMouseMove={selected ? undefined : onHover}
       onClick={onChoose}
     >
-      <span className="search-palette-lead">
-        {item.kind === "tab" ? (
-          <TabIcon tab={item.tab} />
-        ) : item.kind === "chat" ? (
-          <Avatar chief={item.agent.kind === "chief"} initials={item.agent.initials} color={item.agent.color} size={24} />
-        ) : (
-          <MessageSquare size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        )}
-      </span>
+      <span className="search-palette-lead">{lead(item)}</span>
       <span className="search-palette-text">
-        <span className="search-palette-title">{item.title}</span>
-        {item.detail ? <span className="search-palette-detail">{item.detail}</span> : null}
+        <span className="search-palette-title">{item.kind === "tab" && item.page ? <PageLabel label={item.title} /> : item.title}</span>
+        {detail ? <span className="search-palette-detail">{detail}</span> : null}
       </span>
-      {trailing ? <span className="search-palette-trailing">{trailing}</span> : null}
+      {after ? <span className="search-palette-trailing">{after}</span> : null}
     </div>
   );
 }
 
 /**
- * Mod+Shift+A (or the sidebar's Search button): one field over the agents' open tabs, the
- * team's chats and the daemon's conversation search. A centered panel on wide screens, a bottom
- * sheet on phones; Base UI owns focus trapping, Escape, outside press and scroll lock.
+ * Mod+Shift+A (or the sidebar's Search button): one field over open tabs (the agents' and the
+ * person's own), recent chats, recently closed tabs and, once something is typed, browsing history,
+ * bookmarks and extensions. Centred in the window on wide screens, a bottom sheet on phones; Base
+ * UI owns focus trapping, Escape, outside press and scroll lock.
  */
-export function SearchPalette({ open, onClose, tabs }: { open: boolean; onClose: () => void; tabs: readonly OwnedTab[] }) {
+export function SearchPalette({ open, onClose, tabs, pageLabel }: { open: boolean; onClose: () => void; tabs: readonly OwnedTab[]; pageLabel: (pathname: string) => string | null }) {
   return (
     <BaseDialog.Root
       open={open}
@@ -287,11 +384,11 @@ export function SearchPalette({ open, onClose, tabs }: { open: boolean; onClose:
       }}
     >
       <BaseDialog.Portal>
-        <BaseDialog.Backdrop className="ui-backdrop" />
+        <BaseDialog.Backdrop className="search-palette-backdrop" />
         <BaseDialog.Viewport className="search-palette-viewport">
-          <BaseDialog.Popup className="search-palette surface-overlay" aria-label="Search">
+          <BaseDialog.Popup className="search-palette" aria-label={t("common.search")}>
             {/* Mounted only while open, so every opening starts from an empty field. */}
-            {open ? <Results tabs={tabs} onDone={onClose} /> : null}
+            {open ? <Results agentTabs={tabs} pageLabel={pageLabel} onDone={onClose} /> : null}
           </BaseDialog.Popup>
         </BaseDialog.Viewport>
       </BaseDialog.Portal>

@@ -2,11 +2,15 @@ import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 
 export const ICON_STROKE = 1.8;
 
+/**
+ * `secondary` is Aside's outline button, `primary` the black one, `danger` the red-tint
+ * destructive one (Delete, Clear). `small` is the 22px outline button of dense rows.
+ */
 export type ButtonVariant = "secondary" | "primary" | "danger" | "ghost";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
-  size?: "default" | "compact";
+  size?: "default" | "small";
   ref?: Ref<HTMLButtonElement>;
 }
 
@@ -19,7 +23,7 @@ export function Button({ variant = "secondary", size = "default", className, typ
     <button
       {...props}
       type={type}
-      className={cx("ui-button", `ui-button--${variant}`, size === "compact" && "ui-button--compact", className)}
+      className={cx("ui-button", `ui-button--${variant}`, size === "small" && "ui-button--small", className)}
     />
   );
 }

@@ -3,6 +3,8 @@ import { ApiError } from "../api/client";
 import type { ExternalAgent } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
+import { t } from "../i18n";
+import { tNodes } from "../i18n/react";
 import { LocalOnlyNotice } from "../remote/LocalOnlyNotice";
 import { Button, Dialog, DialogActions } from "../ui";
 import { ErrorNote } from "./blocks";
@@ -37,7 +39,7 @@ export function AgentFolderDialog({
     setError(null);
     setLocalOnly(false);
     if (!NAME.test(id)) {
-      setError("Name the agent with lowercase letters, digits and hyphens, like my-agent.");
+      setError(t("agents.folder.invalidName"));
       return;
     }
     setBusy(true);
@@ -53,10 +55,15 @@ export function AgentFolderDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title={agent ? `Skills folder of ${agent.label}` : "Add an agent"} description="openside installs its browser skill into this folder when you ask it to.">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={agent ? t("agents.folder.title", { name: agent.label }) : t("agents.folder.titleNew")}
+      description={t("agents.folder.description")}
+    >
       <form className="dialog-form" onSubmit={(event) => void save(event)}>
         <label className="field">
-          <span>Agent name</span>
+          <span>{t("agents.field.agentName")}</span>
           <input
             value={agent?.id ?? name}
             readOnly={agent !== undefined}
@@ -68,17 +75,15 @@ export function AgentFolderDialog({
           />
         </label>
         <label className="field">
-          <span>Skills folder</span>
+          <span>{t("agents.field.skillsFolder")}</span>
           <input value={folder} placeholder="~/.my-agent/skills" spellCheck={false} onChange={(event) => setFolder(event.target.value)} />
         </label>
-        <p className="settings-text">
-          Use the full path, or start with <code>~/</code>. The folder must be inside your home folder.
-        </p>
-        {localOnly ? <LocalOnlyNotice what="change an agent" onChanged={() => void save()} /> : error ? <ErrorNote>{error}</ErrorNote> : null}
+        <p className="settings-text">{tNodes("agents.folder.pathHint", { home: <code>~/</code> })}</p>
+        {localOnly ? <LocalOnlyNotice what={t("agents.folder.localOnly")} onChanged={() => void save()} /> : error ? <ErrorNote>{error}</ErrorNote> : null}
         <DialogActions>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("common.cancel")}</Button>
           <Button type="submit" variant="primary" disabled={busy || !id || !folder.trim()}>
-            {busy ? "Saving…" : "Save"}
+            {busy ? t("common.saving") : t("common.save")}
           </Button>
         </DialogActions>
       </form>

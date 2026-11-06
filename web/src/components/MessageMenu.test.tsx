@@ -1,9 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MenuItem, ToastProvider } from "../ui";
-import { MessageActions, MessageMenu, quoteText } from "./MessageMenu";
+import { MessageMenu, quoteText, ReplyFooter } from "./MessageMenu";
 
 function mount(onQuote?: (text: string) => void, extra?: ReactNode) {
   return render(
@@ -93,18 +93,51 @@ describe("MessageMenu", () => {
     expect(quoteText("First\n\nSecond\n")).toBe("> First\n>\n> Second\n\n");
   });
 
-  it("copies from the hover row under a finished reply", async () => {
+  it("opens the menu from the keyboard on a focused message, so Quote is reachable without a pointer", async () => {
+    const user = userEvent.setup();
+    const onQuote = vi.fn();
+    mount(onQuote);
+    const message = document.querySelector<HTMLElement>(".bubble.assistant")!;
+    await user.tab();
+    expect(message).toHaveFocus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    const menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Quote" }));
+    expect(onQuote).toHaveBeenCalledWith("It rained.\n\nTake an umbrella.");
+  });
+
+  it("copies, branches and shows the time from the footer under a reply", async () => {
     // userEvent installs its own clipboard on setup; spy on that one.
     const user = userEvent.setup();
     vi.stubGlobal("isSecureContext", true);
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    const fork = Promise.withResolvers<void>();
+    const onFork = vi.fn(() => fork.promise);
     render(
       <ToastProvider>
-        <MessageActions text="Done." />
+        <ReplyFooter text="Done." at="2026-01-01T21:03:00" onFork={onFork} />
       </ToastProvider>,
     );
     await user.click(screen.getByRole("button", { name: "Copy message" }));
     expect(writeText).toHaveBeenCalledWith("Done.");
+    const branch = screen.getByRole("button", { name: "Branch from here" });
+    await user.click(branch);
+    expect(onFork).toHaveBeenCalledTimes(1);
+    // One branch per click: the button waits for the new chat.
+    expect(branch).toBeDisabled();
+    fork.resolve();
+    await waitFor(() => expect(branch).toBeEnabled());
+    expect(document.querySelector(".message-footer time")).toHaveAttribute("dateTime", "2026-01-01T21:03:00");
+  });
+
+  it("offers no branch where the chat cannot branch", () => {
+    render(
+      <ToastProvider>
+        <ReplyFooter text="Done." />
+      </ToastProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "Branch from here" })).toBeNull();
+    expect(document.querySelector(".message-footer time")).toBeNull();
   });
 });
 

@@ -1,10 +1,139 @@
-import { Check, Copy, Image as ImageIcon } from "lucide-react";
-import { memo, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { Check, Copy, FileText, Globe, Image as ImageIcon } from "lucide-react";
+import { createContext, memo, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useFavicon } from "../hooks/useFavicon";
+import { t } from "../i18n";
 import { copyText, ICON_STROKE, IconButton } from "../ui";
+import { ArtifactImage } from "./ArtifactImage";
 import { BlockScanner, type OpenCode } from "./markdownBlocks";
 import { imageChip, safeUrl } from "./markdownPolicy";
+import { useSplitPane } from "./splitPaneState";
+
+/** A page a web search or web read of this chat returned: the link in a reply that names it gets its icon. */
+export interface Citation {
+  title: string | null;
+  /** The daemon's normalized PNG data URL, drawn as is. */
+  favicon: string | null;
+  /** An origin the daemon has the icon of, loaded through the client. */
+  origin: string | null;
+}
+
+export interface MarkdownScope {
+  /** The chat whose files relative links and images name; null where there is none (a shared copy). */
+  sessionId: string | null;
+  /** Keyed by {@link citationKey}. */
+  citations: ReadonlyMap<string, Citation>;
+}
+
+export const MarkdownContext = createContext<MarkdownScope>({ sessionId: null, citations: new Map() });
+
+/** One key for the same page however the model wrote it: no fragment, no trailing slash. */
+export function citationKey(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    parsed.hash = "";
+    return parsed.href.replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A file of the chat named by a relative link ("chart.png", "out/report.md"): no scheme, not
+ * rooted, no way out of the chat's artifact folder. Segments are checked after decoding, so an
+ * encoded "%2e%2e" or "%2f" cannot smuggle a parent step past the check. Returns the decoded
+ * path without a leading "./".
+ */
+export function artifactPath(href: string | undefined): string | null {
+  if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+  let path: string;
+  try {
+    path = decodeURIComponent(href.split(/[?#]/)[0] ?? "");
+  } catch {
+    return null;
+  }
+  path = path.replace(/^\.\//, "");
+  if (!path || /^[/\\]/.test(path) || path.includes("\\") || path.includes("\0")) return null;
+  if (path.split("/").some((part) => part === "" || part === "." || part === "..")) return null;
+  return path;
+}
+
+function CitationIcon({ citation }: { citation: Citation }) {
+  const fetched = useFavicon(citation.favicon ? null : citation.origin);
+  const src = citation.favicon ?? fetched;
+  return src ? <img className="citation-icon" src={src} alt="" width={13} height={13} /> : <Globe className="citation-icon" size={13} strokeWidth={ICON_STROKE} aria-hidden="true" />;
+}
+
+function MarkdownLink({ href, children, ...props }: ComponentProps<"a">) {
+  const scope = useContext(MarkdownContext);
+  const split = useSplitPane();
+  const file = scope.sessionId ? artifactPath(href) : null;
+  if (file) {
+    // A file of this chat opens beside it; without the pane (a phone, a shared copy) it is plain text.
+    if (!split) return <span className="md-file">{children}</span>;
+    return (
+      <a
+        {...props}
+        href={href}
+        className="md-file"
+        onClick={(event) => {
+          event.preventDefault();
+          split.show({ kind: "file", path: file });
+        }}
+      >
+        <FileText size={13} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        {children}
+      </a>
+    );
+  }
+  const key = href ? citationKey(href) : null;
+  const citation = key ? scope.citations.get(key) : undefined;
+  if (citation) {
+    return (
+      <a {...props} href={href} className="citation" target="_blank" rel="noopener noreferrer" title={citation.title ?? href}>
+        <CitationIcon citation={citation} />
+        {children}
+      </a>
+    );
+  }
+  return (
+    <a {...props} href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  );
+}
+
+function MarkdownImage({ src, alt }: { src: string | undefined; alt: string | undefined }) {
+  const { sessionId } = useContext(MarkdownContext);
+  const file = sessionId ? artifactPath(src) : null;
+  // An image the agent made or was given in this chat loads through the client, like attachments.
+  if (file && sessionId) {
+    return (
+      <span className="md-artifact-image">
+        <ArtifactImage sessionId={sessionId} path={file} alt={alt?.trim() || file.split("/").pop() || file} />
+      </span>
+    );
+  }
+  // Everything else never loads: see imageChip.
+  const { label, href } = imageChip(src, alt, window.location.origin, t("thread.markdown.image"));
+  const content = (
+    <>
+      <ImageIcon size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      <span>{label}</span>
+    </>
+  );
+  return href ? (
+    <a className="md-image" href={href} target="_blank" rel="noopener noreferrer" title={href}>
+      {content}
+    </a>
+  ) : (
+    <span className="md-image" role="img" aria-label={label}>
+      {content}
+    </span>
+  );
+}
 
 const REMARK_PLUGINS = [remarkGfm];
 /** "1,234", "-3.5", "$12", "42%": a cell that is only a number, perhaps with a currency or percent sign. */
@@ -28,7 +157,7 @@ function CopyCode({ text }: { text: () => string }) {
   const [copied, setCopied] = useState(false);
   return (
     <IconButton
-      label={copied ? "Copied" : "Copy code"}
+      label={copied ? t("common.copied") : t("thread.markdown.copyCode")}
       size="small"
       onClick={() =>
         void copyText(text().replace(/\n$/, "")).then((ok) => {
@@ -71,31 +200,15 @@ const components: Components = {
     );
   },
   a({ node: _node, ...props }: ComponentProps<"a"> & { node?: unknown }) {
-    return <a {...props} target="_blank" rel="noopener noreferrer" />;
+    return <MarkdownLink {...props} />;
   },
-  // Images never load: see imageChip.
   img({ node: _node, src, alt }: ComponentProps<"img"> & { node?: unknown }) {
-    const { label, href } = imageChip(typeof src === "string" ? src : undefined, alt, window.location.origin);
-    const content = (
-      <>
-        <ImageIcon size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        <span>{label}</span>
-      </>
-    );
-    return href ? (
-      <a className="md-image" href={href} target="_blank" rel="noopener noreferrer" title={href}>
-        {content}
-      </a>
-    ) : (
-      <span className="md-image" role="img" aria-label={label}>
-        {content}
-      </span>
-    );
+    return <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />;
   },
   table({ node: _node, ...props }: ComponentProps<"table"> & { node?: unknown }) {
     return (
       // Focusable so a keyboard user can scroll a table wider than the bubble.
-      <div className="table-scroll" tabIndex={0} role="group" aria-label="Table">
+      <div className="table-scroll" tabIndex={0} role="group" aria-label={t("thread.markdown.table")}>
         <table {...props} />
       </div>
     );

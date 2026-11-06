@@ -1,6 +1,7 @@
 import { ApiError, type Client } from "../api/client";
 import type { Attachment, AttachmentUpload } from "../api/types";
 import { newMessageId } from "../context";
+import { t } from "../i18n";
 import { outgoing } from "./outgoing";
 
 async function blobBase64(blob: Blob): Promise<string> {
@@ -29,7 +30,7 @@ export async function retryMessage(
       })),
     );
   } catch (cause) {
-    return cause instanceof ApiError ? cause : new ApiError(0, "request_failed", "Request failed");
+    return cause instanceof ApiError ? cause : new ApiError(0, "request_failed", t("timeline.outgoing.requestFailed"));
   }
   return outgoing.submit(client, { message_id: newMessageId(), session_id: sessionId, text: message.text, attachments });
 }

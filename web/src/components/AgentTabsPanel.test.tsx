@@ -9,6 +9,7 @@ import { AgentTabsContext, AgentTabsSettledContext, type OwnedTab } from "../hoo
 import { emptySessionView, type BrowserStateView, type SessionView } from "../state/session";
 import { json } from "../test/fakeDaemon";
 import { AgentTabsPanel, AgentTabsToggle } from "./AgentTabsPanel";
+import { BrowserPreview } from "./BrowserPreview";
 import { AGENT_TABS_MIN_WIDTH } from "./agentTabsStore";
 import { useBrowserDock } from "./browserDock";
 
@@ -69,7 +70,7 @@ function DockProbe() {
   return <output data-testid="dock">{dock.sheet ? `sheet:${dock.sheetTab ?? "live"}` : "closed"}</output>;
 }
 
-function Screen({ tabs, view, settled = true }: { tabs: OwnedTab[]; view: SessionView; settled?: boolean }) {
+function Screen({ tabs, view, settled = true, preview = false }: { tabs: OwnedTab[]; view: SessionView; settled?: boolean; preview?: boolean }) {
   const main = useRef<HTMLElement>(null);
   return (
     <MemoryRouter>
@@ -78,6 +79,7 @@ function Screen({ tabs, view, settled = true }: { tabs: OwnedTab[]; view: Sessio
           <AgentTabsSettledContext.Provider value={settled}>
           <main ref={main}>
             <AgentTabsToggle sessionId="s1" view={view} />
+            {preview ? <BrowserPreview sessionId="s1" view={view} onShowPending={() => {}} onCancel={() => {}} /> : null}
             <AgentTabsPanel sessionId="s1" view={view} container={main} />
             <DockProbe />
           </main>
@@ -137,7 +139,7 @@ describe("AgentTabsPanel", () => {
     expect(titles()).toEqual(["Setup guide"]);
   });
 
-  it("shows the live frame on the agent's tab and the last picture placeholder elsewhere; a card opens the sheet on its tab", async () => {
+  it("shows the live frame on the agent's tab and a blank card under the title band elsewhere; a card opens the sheet on its tab", async () => {
     const user = userEvent.setup();
     setup([SHOP, DOCS]);
     const socket = FakeSocket.last!;
@@ -147,11 +149,16 @@ describe("AgentTabsPanel", () => {
       socket.receive({ type: "frame", data: "/9j/frame", width: 720, height: 450, tab_id: "shop" });
     });
     const [docs, shop] = cards();
+    // The picture fills the card and the title band sits over it, not above it.
+    expect(within(shop!).getByRole("button", { name: "Open Checkout · Shop" })).toContainElement(within(shop!).getByRole("img", { name: "Remote browser tab" }));
     expect(within(shop!).getByRole("img", { name: "Remote browser tab" })).toHaveAttribute("src", "data:image/jpeg;base64,/9j/frame");
+    expect(shop!.querySelector(".agent-tab-bar")).toHaveTextContent("Checkout · Shop");
+    expect(shop).not.toHaveAttribute("data-empty");
+    // No picture of its own yet: the same card with a blank body and only the title band.
     expect(within(docs!).queryByRole("img", { name: "Remote browser tab" })).toBeNull();
-    // No picture of its own yet: a quiet favicon-and-host line instead of a screen-sized block.
-    expect(docs!.querySelector(".agent-tab-screen")).toHaveAttribute("data-empty");
-    expect(docs).toHaveTextContent("docs.test");
+    expect(docs).toHaveAttribute("data-empty");
+    expect(docs!.querySelector(".agent-tab-screen")).toBeEmptyDOMElement();
+    expect(docs).toHaveTextContent(/^Setup guide$/);
 
     await user.click(screen.getByRole("button", { name: "Open Setup guide" }));
     expect(screen.getByTestId("dock")).toHaveTextContent("sheet:docs");
@@ -168,7 +175,7 @@ describe("AgentTabsPanel", () => {
     setup([DOCS], view);
     await waitFor(() => expect(cards()[0]!.querySelector(".agent-tab-screen img")).toHaveAttribute("src", "blob:thumb"));
     expect(thumbnailRequests).toEqual(["/v1/sessions/s1/browser/thumbnails/thumb-5"]);
-    expect(cards()[0]!.querySelector(".agent-tab-screen")).not.toHaveAttribute("data-empty");
+    expect(cards()[0]).not.toHaveAttribute("data-empty");
   });
 
   it("ranks tabs that arrive before the log only once the log has loaded", () => {
@@ -256,5 +263,22 @@ describe("AgentTabsPanel", () => {
     update([SHOP], { ...LOADED, incognito: true });
     expect(screen.queryByRole("complementary", { name: "Agent tabs" })).toBeNull();
     expect(screen.queryByRole("button", { name: /agent tabs/ })).toBeNull();
+  });
+
+  it("takes over from the conversation's inline browser card while the column is shown, and gives it back where the column does not fit", () => {
+    width = AGENT_TABS_MIN_WIDTH - 1;
+    render(<Screen tabs={[SHOP]} view={{ ...LOADED, items: [opening("t1", "shop")] }} preview />);
+    expect(screen.queryByRole("complementary", { name: "Agent tabs" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Live browser" })).toBeInTheDocument();
+
+    width = AGENT_TABS_MIN_WIDTH;
+    act(() => observers.forEach((callback) => callback()));
+    expect(titles()).toEqual(["Checkout · Shop"]);
+    expect(screen.queryByRole("region", { name: "Live browser" })).toBeNull();
+
+    width = AGENT_TABS_MIN_WIDTH - 1;
+    act(() => observers.forEach((callback) => callback()));
+    expect(screen.queryByRole("complementary", { name: "Agent tabs" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Live browser" })).toBeInTheDocument();
   });
 });

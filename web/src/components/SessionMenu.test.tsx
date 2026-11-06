@@ -14,7 +14,7 @@ import { SessionMenu } from "./SessionMenu";
 afterEach(cleanup);
 
 const help = readFileSync(resolve(__dirname, "../../../docs/specs/app-help.md"), "utf8");
-const session = { id: "ordinary/thread", title: "My conversation", pinned: false, archived: false };
+const session = { id: "ordinary/thread", title: "My conversation", archived: false };
 
 function setup({ agents = [], failure = false, archived = false }: { agents?: AgentSummary[] | null; failure?: boolean; archived?: boolean } = {}) {
   const daemon = fakeClient(() => failure ? json(403, { code: "forbidden", message: "Permission denied" }) : new Response(null, { status: 204 }));
@@ -43,7 +43,7 @@ describe("SessionMenu", () => {
     setup();
     const menu = await openMenu(user);
     const actions = within(menu).getAllByRole("menuitem").map((item) => item.textContent);
-    expect(actions).toEqual(["Pin conversation", "Rename", "Archive", "Model account…", "Copy link", "Copy session ID", "Delete conversation"]);
+    expect(actions).toEqual(["Rename", "Send feedback", "Copy session ID", "Archive", "Delete conversation"]);
     for (const action of actions) expect(help).toContain(action);
     expect(within(menu).queryByRole("menuitem", { name: "Clear" })).toBeNull();
   });

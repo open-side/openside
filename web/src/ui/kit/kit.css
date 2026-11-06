@@ -1,0 +1,95 @@
+/* Dev-only /__kit page (KitPage.tsx). */
+
+.kit {
+  display: grid;
+  gap: 24px;
+  max-width: var(--settings-column);
+  margin: 0 auto;
+  padding: 32px 16px 96px;
+  background: var(--settings-sheet-bg);
+  color: var(--text);
+}
+html:has(.kit),
+html:has(.kit) body,
+html:has(.kit-fixture),
+html:has(.kit-fixture) body {
+  background: var(--settings-sheet-bg);
+}
+/* The app shell locks body scrolling; the catalogue is a long document. */
+html:has(.kit) body {
+  overflow: auto;
+}
+html:has(.kit) #root {
+  height: auto;
+}
+.kit-frame {
+  display: grid;
+  gap: 12px;
+}
+.kit-heading {
+  margin: 0;
+  color: var(--settings-title);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+.kit-body {
+  display: grid;
+  gap: 12px;
+}
+.kit-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.kit-field {
+  width: 280px;
+}
+.kit-dots {
+  font-size: var(--text-md);
+  letter-spacing: -1px;
+}
+.kit-chip {
+  height: 22px;
+  min-height: 0;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  font-size: var(--text-sm);
+}
+.kit-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 100dvh;
+}
+.kit-split iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+/* Aside's model picker is 194px wide (`L 15`). */
+.kit-model-menu {
+  width: 194px;
+}
+.kit-fixture {
+  position: relative;
+  width: 1920px;
+  height: 960px;
+  overflow: hidden;
+  background: var(--settings-sheet-bg);
+}
+.kit-at {
+  position: absolute;
+  display: flex;
+  justify-content: flex-end;
+}
+.kit-column {
+  left: 886px;
+  display: block;
+  justify-content: normal;
+  width: var(--settings-column);
+}
+.kit-stack {
+  display: grid;
+  gap: 8px;
+}

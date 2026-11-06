@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Artifact } from "../api/types";
 import { ClientContext } from "../context";
 import { fakeClient } from "../test/fakeDaemon";
-import { FilesTray, TEXT_LIMIT } from "./FilesTray";
+import { ArtifactPreview, FilesTray, TEXT_LIMIT } from "./FilesTray";
 
 function artifact(path: string, mime: string, source: Artifact["source"], preview: boolean, extra: Partial<Artifact> = {}): Artifact {
   return {
@@ -124,5 +124,40 @@ describe("FilesTray (A-12)", () => {
     await user.click(screen.getByRole("button", { name: "Source" }));
     await waitFor(() => expect(document.querySelector(".visual-source")?.textContent).toHaveLength(TEXT_LIMIT));
     expect(screen.getByRole("note")).toHaveTextContent("Showing the first 200,000 of 200,004 bytes.");
+  });
+
+  it("lists a quarantined download for download only, with nothing to open or preview", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    // Even a listed preview URL is ignored for a quarantined file.
+    const quarantined = artifact("downloads/G/install.sh", "text/plain", "tool", true, { tool: "browser_download", quarantined: true });
+    const { calls } = setup([quarantined]);
+    await user.click(screen.getByRole("button", { name: "1 file" }));
+    const row = within(screen.getByRole("list", { name: "Files" })).getByRole("listitem");
+    expect(row).toHaveTextContent("Download only — this file type isn’t opened here");
+    expect(within(row).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["Download install.sh"]);
+
+    await user.click(screen.getByText("install.sh"));
+    expect(screen.getByRole("list", { name: "Files" })).toBeInTheDocument();
+    expect(document.querySelector("iframe, img, embed, object, .visual-source")).toBeNull();
+    expect(calls).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Download install.sh" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({ method: "GET", path: "/v1/sessions/s1/artifacts/downloads%2FG%2Finstall.sh" });
+  });
+
+  it("opens a quarantined download elsewhere with no source view or preview frame", () => {
+    const daemon = fakeClient(() => new Response("#!/bin/sh\n", { status: 200 }));
+    render(
+      <ClientContext.Provider value={daemon.client}>
+        <ArtifactPreview sessionId="s1" artifact={artifact("downloads/G/page.html", "text/plain", "tool", true, { quarantined: true })} />
+      </ClientContext.Provider>,
+    );
+    expect(screen.getByText("Download only — this file type isn’t opened here")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+    expect(document.querySelector("iframe, img, embed, object")).toBeNull();
+    expect(daemon.calls).toHaveLength(0);
   });
 });

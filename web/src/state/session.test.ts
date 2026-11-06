@@ -350,6 +350,17 @@ describe("conversation metadata", () => {
     expect(replaySession(proposals).title).toBe("My plans");
   });
 
+  it("follows the chat into a project and out again, and knows nothing before it moves", () => {
+    const moves = log([
+      { kind: "session.created", title: "New session", model: "script" },
+      { kind: "session.folder_changed", project_id: "p1", workspace: "/home/me/code/website" },
+      { kind: "session.folder_changed", project_id: null, workspace: null },
+    ]);
+    expect(replaySession(moves.slice(0, 1)).folder).toBeUndefined();
+    expect(replaySession(moves.slice(0, 2)).folder).toEqual({ projectId: "p1", workspace: "/home/me/code/website" });
+    expect(replaySession(moves).folder).toEqual({ projectId: null, workspace: null });
+  });
+
   it("keeps a page favicon during its next action and drops it on navigation", () => {
     const page = {
       kind: "browser.state", tab_id: "tab", url: "https://example.test/plans",

@@ -1,284 +1,394 @@
-import { Menu } from "@base-ui/react/menu";
-import { Check, ChevronDown, Lock, Paperclip, Plus, Settings2 } from "lucide-react";
-import { useState, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
-import { Link, useLocation } from "react-router";
-import type { ModelCatalog, PolicyMode } from "../api/types";
-import { providerLabel } from "../models/providers";
-import { manageLinkState } from "../pages/manageRoutes";
-import { ICON_STROKE } from "../ui";
+import { Tooltip } from "@base-ui/react/tooltip";
+import { ArrowUpRight, Asterisk, BookOpen, ChevronDown, Folder, FolderOpen, FolderX, Hand, HatGlasses, LoaderCircle, Mic, Paperclip, Plus, Shield, ShieldCheck, SkipForward, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type ReactElement } from "react";
+import { useNavigate } from "react-router";
+import type { ChatConfirmation, ContextUsage, PolicyMode, Project } from "../api/types";
+import { formatNumber, t } from "../i18n";
+import { cx, ICON_STROKE, MenuGroupLabel, MenuItem, MenuSeparator, PopoverMenu, SubmenuItem } from "../ui";
+import { settingsPath } from "../settings/nav";
+import { keyLabel } from "../shortcuts";
 import {
+  CONFIRMATION_OPTIONS,
   EFFORT_OPTIONS,
   effortLabel,
   MODE_OPTIONS,
   modeBlock,
   modeLabel,
   type SessionOptions,
-  type SessionProfile,
-  type SessionSpeed,
   type ThinkingEffort,
 } from "./sessionOptions";
-
-// Base UI radio groups treat `null` as "nothing selected"; the request's "leave it out" needs a value.
-const DEFAULT = "default";
-const fromRadio = <T extends string>(value: string): T | null => (value === DEFAULT ? null : (value as T));
+import type { Dictation } from "./useDictation";
 
 export type ChangeOptions = (patch: Partial<SessionOptions>) => void;
 
-/** One toolbar popup: a compact text trigger above the composer, a bottom sheet on phones (thread.css). */
-function OptionMenu({
-  trigger,
-  label,
-  align = "start",
-  onOpenChange,
-  children,
-}: {
-  trigger: ReactElement;
-  label: string;
-  align?: "start" | "end";
-  onOpenChange?: (open: boolean) => void;
-  children: ReactNode;
-}) {
-  return (
-    <Menu.Root onOpenChange={onOpenChange}>
-      <Menu.Trigger render={trigger} />
-      <Menu.Portal>
-        <Menu.Backdrop className="composer-menu-backdrop" />
-        <Menu.Positioner className="ui-menu-positioner composer-menu-positioner" side="top" align={align} sideOffset={8} collisionPadding={8}>
-          <Menu.Popup className="ui-menu composer-menu surface-overlay thin-scroll" aria-label={label}>
-            {children}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
-  );
-}
-
-function OptionTrigger({ label, value, icon, ...rest }: { label: string; value: string; icon?: ReactNode; title?: string }) {
-  return (
-    <button type="button" className="composer-option" aria-label={`${label}: ${value}`} {...rest}>
-      {icon}
-      <span className="composer-option-label">{value}</span>
-      <ChevronDown size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
-    </button>
-  );
-}
-
-function Choice({ value, label, detail, disabled }: { value: string; label: string; detail?: string; disabled?: boolean }) {
-  return (
-    <Menu.RadioItem value={value} label={label} disabled={disabled} closeOnClick className="ui-menu-item composer-menu-item">
-      <span className="composer-menu-copy">
-        <span>{label}</span>
-        {detail ? <small>{detail}</small> : null}
-      </span>
-      <Menu.RadioItemIndicator className="composer-menu-check">
-        <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-      </Menu.RadioItemIndicator>
-    </Menu.RadioItem>
-  );
-}
-
-function PermissionChoices({ mode, ceiling, deviceLimit, agentName, onChange }: PermissionProps & { mode: PolicyMode | null }) {
-  return (
-    <Menu.RadioGroup className="composer-menu-group" value={mode ?? DEFAULT} onValueChange={(value: string) => onChange({ mode: fromRadio<PolicyMode>(value) })}>
-      <Menu.GroupLabel className="ui-menu-title">Permission</Menu.GroupLabel>
-      <Choice value={DEFAULT} label="Default" detail={modeLabel(ceiling)} />
-      {MODE_OPTIONS.map((option) => {
-        const blocked = modeBlock(option.value, ceiling, deviceLimit, agentName);
-        return <Choice key={option.value} value={option.value} label={option.label} disabled={blocked !== null} detail={blocked ?? undefined} />;
-      })}
-    </Menu.RadioGroup>
-  );
-}
-
-interface PermissionProps {
-  onChange: ChangeOptions;
-  ceiling: PolicyMode;
-  /** The daemon default: paired devices cannot start a task looser than it. `null` until known. */
-  deviceLimit: PolicyMode | null;
-  agentName: string;
-}
-
-export interface PlusMenuProps {
-  onUpload: () => void;
-  /** New task only: the creation-time choices that have no trigger of their own. */
-  task?: PermissionProps & { options: SessionOptions };
-}
-
-/** `+`: permission and private mode for a new task, and files for any message. */
-export function PlusMenu({ onUpload, task }: PlusMenuProps) {
-  return (
-    <OptionMenu
-      label="Add to this task"
-      trigger={
-        <button type="button" className="ui-icon-button composer-attach" aria-label="Add files and options">
-          <Plus size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        </button>
-      }
-    >
-      {task ? (
-        <>
-          <PermissionChoices {...task} mode={task.options.mode} />
-          <Menu.Separator className="ui-menu-separator" />
-          <Menu.CheckboxItem
-            className="ui-menu-item composer-menu-item"
-            checked={task.options.incognito}
-            onCheckedChange={(checked) => task.onChange({ incognito: checked })}
-          >
-            <span className="ui-menu-icon" aria-hidden="true">
-              <Lock size={18} strokeWidth={ICON_STROKE} />
-            </span>
-            <span className="composer-menu-copy">
-              <span>Private task</span>
-              <small>Not saved to browsing history; opens from History</small>
-            </span>
-            <Menu.CheckboxItemIndicator className="composer-menu-check">
-              <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            </Menu.CheckboxItemIndicator>
-          </Menu.CheckboxItem>
-          <Menu.Separator className="ui-menu-separator" />
-        </>
-      ) : null}
-      <Menu.Item className="ui-menu-item composer-menu-item" onClick={onUpload}>
-        <span className="ui-menu-icon" aria-hidden="true">
-          <Paperclip size={18} strokeWidth={ICON_STROKE} />
-        </span>
-        <span>Upload photos &amp; files</span>
-      </Menu.Item>
-    </OptionMenu>
-  );
-}
-
-export function PermissionMenu({ options, ...permission }: PermissionProps & { options: SessionOptions }) {
-  return (
-    <OptionMenu label="Permission" trigger={<OptionTrigger label="Permission" value={modeLabel(options.mode ?? permission.ceiling)} />}>
-      <PermissionChoices {...permission} mode={options.mode} />
-    </OptionMenu>
-  );
-}
-
-/** The catalog's label for a model id; ids the catalog does not know stay as typed. */
-export function catalogLabel(catalog: ModelCatalog | null, id: string): string {
-  for (const provider of catalog?.providers ?? []) {
-    const found = provider.models.find((model) => model.id === id);
-    if (found) return found.label;
-  }
-  return id;
-}
+/** Menus open above the card in a thread and below the Home pill, as in Aside (`L 14`, `L 37`). */
+export type MenuSide = "top" | "bottom";
 
 /**
- * The model for this one task. Unlike `ModelSheet` it never changes the person: the pick only
- * goes into the new session's create request.
+ * Aside's dark tooltip over a toolbar control. Extra props come from a menu trigger wrapping this
+ * element and are passed on, so one button can be both a tooltip and a menu trigger.
  */
-export function ModelMenu({ catalog, model, fallback, onChange }: { catalog: ModelCatalog | null; model: string | null; fallback: string | null; onChange: ChangeOptions }) {
-  const location = useLocation();
-  const [query, setQuery] = useState("");
-  const current = model ?? fallback;
-  const needle = query.trim().toLowerCase();
-  const matches = (...texts: string[]) => !needle || texts.some((text) => text.toLowerCase().includes(needle));
-  const groups = (catalog?.providers ?? [])
-    .map((provider) => ({
-      provider: provider.provider,
-      models: provider.models.filter((entry) => matches(entry.label, entry.id, providerLabel(provider.provider))),
-    }))
-    .filter((group) => group.models.length > 0);
-  const showDefault = matches("Default", fallback ?? "");
-  // Typing goes to the field: the menu's own type-to-select and Home/End would take the keys.
-  const keepKeys = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== "Escape" && event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Tab") event.stopPropagation();
-  };
+export function Hint({ text, children, ...rest }: { text: string; children: ReactElement } & Record<string, unknown>) {
   return (
-    <OptionMenu
-      label="Model"
-      align="end"
-      onOpenChange={(open) => !open && setQuery("")}
-      trigger={<OptionTrigger label="Model" value={current ? catalogLabel(catalog, current) : "Model"} title={current ?? undefined} />}
-    >
-      <input
-        type="search"
-        className="composer-menu-search"
-        aria-label="Search models"
-        placeholder="Search models"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        onKeyDown={keepKeys}
-      />
-      <div className="composer-menu-list thin-scroll">
-        <Menu.RadioGroup className="composer-menu-group" value={model ?? DEFAULT} onValueChange={(value: string) => onChange({ model: fromRadio<string>(value) })}>
-          {showDefault ? <Choice value={DEFAULT} label="Default" detail={fallback ? catalogLabel(catalog, fallback) : undefined} /> : null}
-          {groups.map((group) => (
-            <Menu.Group key={group.provider} className="composer-menu-group">
-              <Menu.GroupLabel className="ui-menu-title">{providerLabel(group.provider)}</Menu.GroupLabel>
-              {group.models.map((entry) => (
-                <Choice
-                  key={entry.id}
-                  value={entry.id}
-                  label={entry.label}
-                  disabled={!entry.available}
-                  detail={entry.available ? undefined : entry.reason || "Not available right now"}
-                />
-              ))}
-            </Menu.Group>
-          ))}
-        </Menu.RadioGroup>
-        {!showDefault && groups.length === 0 ? <p className="composer-menu-empty">No model matches.</p> : null}
-      </div>
-      <Menu.Separator className="ui-menu-separator" />
-      <Menu.LinkItem className="ui-menu-item composer-menu-item" render={<Link to="/models" state={manageLinkState(location)} />}>
-        <span className="ui-menu-icon" aria-hidden="true">
-          <Settings2 size={18} strokeWidth={ICON_STROKE} />
-        </span>
-        <span>Manage models &amp; accounts</span>
-      </Menu.LinkItem>
-    </OptionMenu>
+    <Tooltip.Root>
+      <Tooltip.Trigger render={children} delay={400} {...rest} />
+      <Tooltip.Portal>
+        <Tooltip.Positioner side="top" sideOffset={6} collisionPadding={8}>
+          <Tooltip.Popup className="composer-tooltip">{text}</Tooltip.Popup>
+        </Tooltip.Positioner>
+      </Tooltip.Portal>
+    </Tooltip.Root>
   );
 }
+
+const caret = <ChevronDown className="composer-chip-caret" strokeWidth={ICON_STROKE} aria-hidden="true" />;
 
 // The daemon's cost gate: an agent client gets 403 local_socket_required for these.
 const COSTLY_EFFORT: readonly ThinkingEffort[] = ["xhigh", "max"];
-const AGENT_CLIENT_REASON = "Not available to an agent client";
 
-/** Thinking effort, plus the Ultrabrowse profile: both say how hard this task works, but the profile is its own field. */
-export function EffortMenu({ options, onChange, agentClient }: { options: SessionOptions; onChange: ChangeOptions; agentClient: boolean }) {
-  const effort = options.effort ? effortLabel(options.effort) : "Effort";
-  const value = options.profile === "ultrabrowse" ? `${effort} · Ultrabrowse` : effort;
+const MODE_ICON: Record<PolicyMode, LucideIcon> = { "read-only": BookOpen, guard: ShieldCheck, full: Asterisk };
+
+/** What the Projects rows and Attach folder need from the composer. */
+export interface ProjectControls {
+  /** Every project, by name; empty until read. */
+  projects: readonly Project[];
+  /**
+   * This browser has the computer's local authority, so it may open the folder picker and create
+   * projects; null until the daemon says. Remote devices can only pick an existing project.
+   */
+  local: boolean | null;
+  /** Moves the chat into this project, or out of every project and folder with null. */
+  onPick: (projectId: string | null) => void;
+  /** Makes a project from a folder chosen in the picker, or from scratch, and picks it. */
+  onCreate: (from: "folder" | "scratch") => void;
+  /** Gives the chat a folder chosen in the picker, outside any project. */
+  onAttachFolder: () => void;
+}
+
+/** Last segment of an absolute path, for a folder named in a chip. */
+export function folderName(path: string): string {
+  return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+}
+
+/** The chip's words: the chosen project, else the attached folder, else "Project". */
+function projectLabel(options: SessionOptions, projects: readonly Project[]): string | null {
+  if (options.projectId) return projects.find((project) => project.id === options.projectId)?.name ?? null;
+  return options.workspace ? folderName(options.workspace) : null;
+}
+
+/**
+ * Header, divider, the existing projects (the current one checked) and No project, then the two
+ * ways to make one (`L 18`). Making one needs the folder picker or a new folder on the computer
+ * running openside, so other devices see both rows disabled with the reason. A project whose
+ * folder needs confirming is disabled too: the daemon refuses chats in it until then.
+ */
+function ProjectRows({ options, controls }: { options: SessionOptions; controls: ProjectControls }) {
+  const { projects, local, onPick, onCreate } = controls;
+  const remote = local === false ? t("thread.project.localOnly") : undefined;
+  const chosen = options.projectId !== null || options.workspace !== null;
   return (
-    <OptionMenu label="Effort" align="end" trigger={<OptionTrigger label="Effort" value={value} />}>
-      <Menu.RadioGroup className="composer-menu-group" value={options.effort ?? DEFAULT} onValueChange={(next: string) => onChange({ effort: fromRadio<ThinkingEffort>(next) })}>
-        <Menu.GroupLabel className="ui-menu-title">Effort</Menu.GroupLabel>
-        <Choice value={DEFAULT} label="Default" detail="The model’s own setting" />
-        {EFFORT_OPTIONS.map((option) => {
-          const blocked = agentClient && COSTLY_EFFORT.includes(option.value);
-          return <Choice key={option.value} value={option.value} label={option.label} disabled={blocked} detail={blocked ? AGENT_CLIENT_REASON : undefined} />;
-        })}
-      </Menu.RadioGroup>
-      <Menu.Separator className="ui-menu-separator" />
-      <Menu.RadioGroup className="composer-menu-group" value={options.profile ?? DEFAULT} onValueChange={(next: string) => onChange({ profile: fromRadio<SessionProfile>(next) })}>
-        <Menu.GroupLabel className="ui-menu-title">Profile</Menu.GroupLabel>
-        <Choice value={DEFAULT} label="Standard" />
-        <Choice
-          value="ultrabrowse"
-          label="Ultrabrowse"
-          disabled={agentClient}
-          detail={agentClient ? AGENT_CLIENT_REASON : "Tools and instructions tuned for long browsing tasks"}
-        />
-      </Menu.RadioGroup>
-    </OptionMenu>
+    <>
+      <MenuGroupLabel>{t("thread.project.title")}</MenuGroupLabel>
+      <MenuSeparator />
+      {projects.map((project) => (
+        <MenuItem
+          key={project.id}
+          icon={<Folder strokeWidth={ICON_STROKE} />}
+          checked={options.projectId === project.id}
+          disabled={project.needs_confirmation}
+          description={project.needs_confirmation ? t("thread.project.needsConfirming") : undefined}
+          onClick={() => onPick(project.id)}
+        >
+          {project.name}
+        </MenuItem>
+      ))}
+      {projects.length || chosen ? (
+        <>
+          <MenuItem icon={<FolderX strokeWidth={ICON_STROKE} />} checked={!chosen} onClick={() => onPick(null)}>
+            {t("thread.project.none")}
+          </MenuItem>
+          <MenuSeparator />
+        </>
+      ) : null}
+      <MenuItem icon={<FolderOpen strokeWidth={ICON_STROKE} />} disabled={local !== true} description={remote} onClick={() => onCreate("folder")}>
+        {t("thread.project.existingFolder")}
+      </MenuItem>
+      <MenuItem icon={<Plus strokeWidth={ICON_STROKE} />} disabled={local !== true} description={remote} onClick={() => onCreate("scratch")}>
+        {t("thread.project.scratch")}
+      </MenuItem>
+    </>
   );
 }
 
-export function SpeedMenu({ options, onChange, agentClient }: { options: SessionOptions; onChange: ChangeOptions; agentClient: boolean }) {
+export interface PlusMenuProps {
+  options: SessionOptions;
+  /** The chat exists: incognito is fixed, the rest is changed in place. */
+  existing: boolean;
+  /** This device's ceiling (the daemon default); looser modes are refused to paired devices. */
+  deviceLimit: PolicyMode | null;
+  onChange: ChangeOptions;
+  onUpload: () => void;
+  project: ProjectControls;
+  side: MenuSide;
+}
+
+/** `+` (`L 14`): Permission ▸, Projects ▸, Incognito mode, then Upload photos & files and Attach folder. */
+export function PlusMenu({ options, existing, deviceLimit, onChange, onUpload, project, side }: PlusMenuProps) {
+  const navigate = useNavigate();
+  const mode = options.mode ?? deviceLimit ?? "guard";
+  const projectName = projectLabel(options, project.projects);
   return (
-    <OptionMenu label="Speed" align="end" trigger={<OptionTrigger label="Speed" value={options.speed === "fast" ? "Fast" : "Speed"} />}>
-      <Menu.RadioGroup className="composer-menu-group" value={options.speed ?? DEFAULT} onValueChange={(next: string) => onChange({ speed: fromRadio<SessionSpeed>(next) })}>
-        <Menu.GroupLabel className="ui-menu-title">Speed</Menu.GroupLabel>
-        <Choice value={DEFAULT} label="Default" />
-        <Choice
-          value="fast"
-          label="Fast"
-          disabled={agentClient}
-          detail={agentClient ? AGENT_CLIENT_REASON : "Priority service where the provider offers it"}
-        />
-      </Menu.RadioGroup>
-    </OptionMenu>
+    <PopoverMenu
+      label={t("thread.options.plusMenu")}
+      side={side}
+      align="start"
+      sideOffset={5}
+      popupClassName="composer-plus-menu"
+      trigger={
+        <button type="button" className="composer-plus" aria-label={t("thread.options.plusTrigger")}>
+          <Plus strokeWidth={ICON_STROKE} aria-hidden="true" />
+        </button>
+      }
+    >
+      <SubmenuItem icon={<Shield strokeWidth={ICON_STROKE} />} label={t("thread.options.permission")} value={<span className="composer-menu-value">{modeLabel(mode)}</span>} popupClassName="composer-permission-menu">
+        {MODE_OPTIONS.map((option) => {
+          const blocked = modeBlock(option.value, deviceLimit);
+          const Icon = MODE_ICON[option.value];
+          return (
+            <MenuItem key={option.value} icon={<Icon strokeWidth={ICON_STROKE} />} checked={mode === option.value} disabled={blocked !== null} onClick={() => onChange({ mode: option.value })}>
+              {t(option.labelKey)}
+            </MenuItem>
+          );
+        })}
+        <MenuSeparator />
+        <MenuItem trailing={<ArrowUpRight strokeWidth={ICON_STROKE} aria-hidden="true" />} onClick={() => navigate(settingsPath("agents"))}>
+          {t("thread.options.globalSetting")}
+        </MenuItem>
+      </SubmenuItem>
+      <SubmenuItem
+        icon={<Folder strokeWidth={ICON_STROKE} />}
+        label={t("thread.project.title")}
+        value={
+          projectName ? (
+            <span className="composer-menu-value" title={projectName}>
+              {projectName}
+            </span>
+          ) : undefined
+        }
+        popupClassName="composer-project-menu"
+      >
+        <ProjectRows options={options} controls={project} />
+      </SubmenuItem>
+      <MenuItem icon={<HatGlasses strokeWidth={ICON_STROKE} />} checked={options.incognito} disabled={existing} onClick={() => onChange({ incognito: !options.incognito })}>
+        {t("thread.options.incognito")}
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem icon={<Paperclip strokeWidth={ICON_STROKE} />} onClick={onUpload}>
+        {t("thread.options.upload")}
+      </MenuItem>
+      {/* The attached folder, if any, is named in the row's tooltip. */}
+      <MenuItem
+        icon={<FolderOpen strokeWidth={ICON_STROKE} />}
+        disabled={project.local !== true}
+        description={project.local === false ? t("thread.project.localOnly") : (options.workspace ?? undefined)}
+        onClick={project.onAttachFolder}
+      >
+        {t("thread.options.attachFolder")}
+      </MenuItem>
+    </PopoverMenu>
+  );
+}
+
+/** Home's Project chip (`L 18`): the same rows as the `+` menu's Projects ▸, named after the pick. */
+export function ProjectMenu({ options, project, side }: { options: SessionOptions; project: ProjectControls; side: MenuSide }) {
+  return (
+    <PopoverMenu
+      label={t("thread.project.title")}
+      side={side}
+      align="start"
+      sideOffset={5}
+      popupClassName="composer-project-menu"
+      trigger={
+        <Hint text={t("thread.project.hint")}>
+          <button type="button" className="composer-chip">
+            <Folder className="composer-chip-icon" strokeWidth={ICON_STROKE} aria-hidden="true" />
+            <span className="composer-chip-label">{projectLabel(options, project.projects) ?? t("thread.project.chip")}</span>
+            {caret}
+          </button>
+        </Hint>
+      }
+    >
+      <ProjectRows options={options} controls={project} />
+    </PopoverMenu>
+  );
+}
+
+/** Whether file writes and commands ask first (`L 16`); the default comes from Preferences. */
+export function ConfirmationMenu({ value, onChange, side }: { value: ChatConfirmation; onChange: ChangeOptions; side: MenuSide }) {
+  const label = t(CONFIRMATION_OPTIONS.find((option) => option.value === value)?.labelKey ?? "thread.confirmation.askFirst");
+  const Icon = value === "skip" ? SkipForward : Hand;
+  return (
+    <PopoverMenu
+      label={t("thread.confirmation.title")}
+      side={side}
+      align="start"
+      sideOffset={5}
+      popupClassName="composer-confirmation-menu"
+      trigger={
+        <button type="button" className="composer-chip" aria-label={t("thread.options.trigger", { label: t("thread.confirmation.title"), value: label })}>
+          <Icon className="composer-chip-icon" strokeWidth={ICON_STROKE} aria-hidden="true" />
+          <span className="composer-chip-label">{label}</span>
+          {caret}
+        </button>
+      }
+    >
+      {CONFIRMATION_OPTIONS.map((option) => (
+        <MenuItem key={option.value} checked={value === option.value} onClick={() => onChange({ confirmation: option.value })}>
+          {t(option.labelKey)}
+        </MenuItem>
+      ))}
+    </PopoverMenu>
+  );
+}
+
+export interface EffortMenuProps {
+  options: SessionOptions;
+  /** The level the chat's model runs at when no effort is picked; null when the provider decides. */
+  defaultEffort: ThinkingEffort | null;
+  existing: boolean;
+  agentClient: boolean;
+  onChange: ChangeOptions;
+  side: MenuSide;
+}
+
+/**
+ * Effort (`L 17`): Low to Max, then Ultrabrowse, the browsing profile shown as the top rung. The
+ * profile is fixed when a chat is created, so an existing chat only shows whether it has it.
+ * Mod+Shift+. opens the menu.
+ */
+export function EffortMenu({ options, defaultEffort, existing, agentClient, onChange, side }: EffortMenuProps) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.code === "Period") {
+        event.preventDefault();
+        setOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const isUltrabrowse = options.profile === "ultrabrowse";
+  // An unset effort stays unset (the request names none, so a model that cannot serve a pinned
+  // level never fails the chat); the chip shows the level the model then runs at. A level outside
+  // the composer's ladder, or one the provider decides, reads as the default.
+  const unpicked = defaultEffort !== null && EFFORT_OPTIONS.some((option) => option.value === defaultEffort) ? effortLabel(defaultEffort) : t("thread.options.default");
+  const value = isUltrabrowse ? t("thread.effort.ultrabrowse") : options.effort ? effortLabel(options.effort) : unpicked;
+  return (
+    <PopoverMenu
+      label={t("thread.options.effort")}
+      side={side}
+      align="end"
+      sideOffset={5}
+      open={open}
+      onOpenChange={setOpen}
+      popupClassName="composer-effort-menu"
+      trigger={
+        <Hint text={t("thread.options.effortHint", { keys: keyLabel(["Mod", "Shift", "."]) })}>
+          <button type="button" className="composer-chip composer-effort-chip" aria-label={t("thread.options.trigger", { label: t("thread.options.effort"), value })}>
+            <span className={cx("composer-chip-label", isUltrabrowse && "composer-ultrabrowse")}>{value}</span>
+            {caret}
+          </button>
+        </Hint>
+      }
+    >
+      {EFFORT_OPTIONS.map((option) => (
+        <MenuItem
+          key={option.value}
+          checked={!isUltrabrowse && options.effort === option.value}
+          disabled={agentClient && COSTLY_EFFORT.includes(option.value)}
+          onClick={() => onChange(existing ? { effort: option.value } : { effort: option.value, profile: null })}
+        >
+          {t(option.labelKey)}
+        </MenuItem>
+      ))}
+      <MenuItem
+        checked={isUltrabrowse}
+        disabled={agentClient || (existing && !isUltrabrowse)}
+        textValue={t("thread.effort.ultrabrowse")}
+        onClick={() => !existing && onChange({ profile: "ultrabrowse", effort: null })}
+      >
+        <span className="composer-ultrabrowse">{t("thread.effort.ultrabrowse")}</span>
+      </MenuItem>
+    </PopoverMenu>
+  );
+}
+
+const RING = 14;
+const RING_STROKE = 1.5;
+const RING_RADIUS = (RING - RING_STROKE) / 2;
+const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
+
+/** How full the chat's model context is (`L 21`): a 14px ring, the numbers in its tooltip. */
+export function ContextRing({ context }: { context: ContextUsage | null | undefined }) {
+  const limit = context?.window_tokens ?? null;
+  const used = context?.used_tokens ?? 0;
+  const share = limit ? Math.min(1, used / limit) : 0;
+  const text = limit
+    ? t("thread.context.usage", { percent: Math.round(share * 100), used: formatNumber(used, { notation: "compact" }), window: formatNumber(limit, { notation: "compact" }) })
+    : t("thread.context.usageUnknown");
+  return (
+    <Hint text={text}>
+      <span className={cx("composer-ring", share >= 0.9 && "is-full")} role="img" aria-label={text} tabIndex={0}>
+        <svg width={RING} height={RING} viewBox={`0 0 ${RING} ${RING}`} aria-hidden="true">
+          <circle className="composer-ring-track" cx={RING / 2} cy={RING / 2} r={RING_RADIUS} strokeWidth={RING_STROKE} fill="none" />
+          <circle
+            className="composer-ring-fill"
+            cx={RING / 2}
+            cy={RING / 2}
+            r={RING_RADIUS}
+            strokeWidth={RING_STROKE}
+            fill="none"
+            strokeDasharray={RING_LENGTH}
+            strokeDashoffset={RING_LENGTH * (1 - share)}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${RING / 2} ${RING / 2})`}
+          />
+        </svg>
+      </span>
+    </Hint>
+  );
+}
+
+/**
+ * The microphone (`L 13`, `L 21`): a filled circle while the box is empty, a grey glyph beside
+ * Send once something is typed or a run can be stopped. Unavailable dictation stays visible with
+ * a tooltip that says why, so it is `aria-disabled` rather than `disabled` (which drops hover).
+ */
+export function MicButton({ dictation, variant }: { dictation: Dictation; variant: "circle" | "glyph" }) {
+  const { state, reason, toggle } = dictation;
+  const off = state === "unavailable" || state === "checking";
+  const transcribing = state === "transcribing";
+  // While a clip is being turned into text the button cancels it; its description says what is happening.
+  const label = state === "recording" ? t("thread.mic.stop") : transcribing ? t("thread.mic.cancel") : t("thread.mic.start");
+  return (
+    <Hint text={reason ?? label}>
+      <button
+        type="button"
+        className={cx(variant === "circle" ? "composer-send composer-mic-circle" : "composer-mic", state === "recording" && "is-recording")}
+        aria-label={label}
+        // The tooltip only shows on hover; a screen reader hears why the microphone is off here.
+        aria-description={reason ?? (transcribing ? t("thread.mic.transcribing") : undefined)}
+        aria-pressed={state === "recording"}
+        aria-disabled={off || undefined}
+        onClick={() => !off && toggle()}
+      >
+        {transcribing ? (
+          <LoaderCircle className="composer-spin" strokeWidth={2} aria-hidden="true" />
+        ) : (
+          <Mic strokeWidth={variant === "circle" ? 2 : ICON_STROKE} aria-hidden="true" />
+        )}
+      </button>
+    </Hint>
   );
 }

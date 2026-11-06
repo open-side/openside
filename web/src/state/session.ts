@@ -35,6 +35,22 @@ export type TimelineItem =
       endedAt?: string;
     }
   | { type: "card"; id: string }
+  /**
+   * A file the agent's browsing downloaded, keyed by the browser's download guid. It has no
+   * `tool.started`; its lifecycle arrives as `browser_event` payloads on that guid.
+   */
+  | {
+      type: "download";
+      id: string;
+      url: string;
+      state: "in_progress" | "saving" | "saved" | "failed";
+      error?: string;
+      artifact?: string;
+      fileName?: string;
+      size?: number;
+      mime?: string;
+      quarantined?: boolean;
+    }
   | { type: "error"; id: string; code: string; message: string; userMessage?: string; retryable?: boolean };
 
 export interface SessionView {
@@ -71,6 +87,11 @@ export interface SessionView {
   browserStates: Record<string, BrowserStateView>;
   /** Files tools saved into the artifact directory, latest write per path, in first-save order. */
   artifacts: SavedArtifact[];
+  /**
+   * Where the chat works after its latest `session.folder_changed`; undefined when none was seen,
+   * since `session.created` does not carry the project and the chat itself has to be read for it.
+   */
+  folder?: { projectId: string | null; workspace: string | null };
 }
 
 export interface SubagentView {
@@ -146,6 +167,41 @@ function patchItem<T extends TimelineItem["type"]>(
   );
 }
 
+type DownloadItem = Extract<TimelineItem, { type: "download" }>;
+
+/**
+ * Applies a browser download's lifecycle payload, or returns null when the event belongs to a
+ * real tool call or is not a download event. Only `download.started` creates the row; anything
+ * else for an unknown guid is dropped.
+ */
+function reduceDownload(items: TimelineItem[], id: string, payload: unknown, isError = false): TimelineItem[] | null {
+  if (!payload || typeof payload !== "object" || items.some((item) => item.type === "tool" && item.id === id)) return null;
+  const update = payload as Record<string, unknown>;
+  const known = items.some((item) => item.type === "download" && item.id === id);
+  const patch = (change: (item: DownloadItem) => DownloadItem) => (known ? patchItem(items, "download", id, change) : items);
+  switch (update.browser_event) {
+    case "download.started":
+      return known ? items : [...items, { type: "download", id, url: typeof update.url === "string" ? update.url : "", state: "in_progress" }];
+    case "download.finished":
+      // Replays and late duplicates must not pull a settled download back to an earlier state.
+      return patch((item) => (item.state !== "in_progress" ? item : isError ? { ...item, state: "failed", error: item.error ?? "canceled" } : { ...item, state: "saving" }));
+    case "download.saved":
+      return patch((item) => ({
+        ...item,
+        state: "saved",
+        ...(typeof update.artifact === "string" ? { artifact: update.artifact } : {}),
+        ...(typeof update.file_name === "string" ? { fileName: update.file_name } : {}),
+        ...(typeof update.size === "number" ? { size: update.size } : {}),
+        ...(typeof update.mime === "string" ? { mime: update.mime } : {}),
+        quarantined: update.quarantined === true,
+      }));
+    case "download.failed":
+      return patch((item) => ({ ...item, state: "failed", error: typeof update.error === "string" ? update.error : (item.error ?? "unavailable") }));
+    default:
+      return null;
+  }
+}
+
 /** A card and the seq it first appeared at (a later update patches the card and keeps this). */
 export interface CardEntry {
   card: Card;
@@ -202,6 +258,8 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
     case "session.title_proposed":
       if (state.titleLocked || state.titleProposed) return next;
       return { ...next, title: event.title, titleProposed: true };
+    case "session.folder_changed":
+      return { ...next, folder: { projectId: event.project_id, workspace: event.workspace } };
     case "message.queued": {
       const attachments = event.attachments?.length ? { attachments: event.attachments } : {};
       // An idle session starts on this message; say so now rather than after the agent
@@ -360,7 +418,9 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
         items: [...items, { type: "tool", id: event.tool_call_id, name: event.name, args: event.args, updates: [], done: false, startedAt: event.ts }],
       };
     }
-    case "tool.updated":
+    case "tool.updated": {
+      const downloads = reduceDownload(state.items, event.tool_call_id, event.update);
+      if (downloads) return { ...next, items: downloads };
       return {
         ...next,
         items: patchItem(state.items, "tool", event.tool_call_id, (item) => ({
@@ -368,7 +428,10 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
           updates: [...item.updates, event.update],
         })),
       };
-    case "tool.ended":
+    }
+    case "tool.ended": {
+      const downloads = reduceDownload(state.items, event.tool_call_id, event.result, event.is_error);
+      if (downloads) return { ...next, items: downloads };
       return {
         ...next,
         items: patchItem(state.items, "tool", event.tool_call_id, (item) => ({
@@ -379,6 +442,7 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
           endedAt: event.ts,
         })),
       };
+    }
     case "ticket.opened":
       return {
         ...next,

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ApiError, createClient } from "../api/client";
+import { t } from "../i18n";
 import { CliHint } from "../pages/CliHint";
 import "../pages/pages.css";
 import "../pages/signin.css";
@@ -22,7 +23,7 @@ export function TokenEntry({ onToken, reason, pairingRequired = false }: { onTok
       await createClient({ token: () => candidate }).health();
       onToken(candidate);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not verify the token");
+      setError(cause instanceof ApiError ? cause.message : t("shell.token.verifyFailed"));
     } finally {
       setBusy(false);
     }
@@ -35,26 +36,24 @@ export function TokenEntry({ onToken, reason, pairingRequired = false }: { onTok
           <BrandMark size={24} />
           <span>openside</span>
         </div>
-        <h1>Connect this device</h1>
-        <p>{relay
-          ? "Pair this device using a QR code or link from the computer running openside. A token alone cannot identify the computer or its encryption key."
-          : "Paste a device token paired on the computer running the openside daemon."}</p>
+        <h1>{t("shell.token.title")}</h1>
+        <p>{relay ? t("shell.token.relayIntro") : t("shell.token.intro")}</p>
         {relay ? (
           <>
           {error ? <p role="alert" className="error-note">{error}</p> : null}
           <p className="token-help">
-            On that computer, open openside and go to Settings → Remote access → Connect a phone, then scan the QR code or open the full pairing link on this device.
+            {t("shell.token.relayHelp")}
           </p>
           <CliHint command="openside pair --via relay" />
           </>
         ) : <form onSubmit={submit}>
           <label className="field">
-            <span>Device token</span>
+            <span>{t("shell.token.label")}</span>
             <input
               type="password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
-              placeholder="Paste your device token"
+              placeholder={t("shell.token.placeholder")}
               autoComplete="off"
               autoCapitalize="off"
               spellCheck={false}
@@ -68,12 +67,12 @@ export function TokenEntry({ onToken, reason, pairingRequired = false }: { onTok
             </p>
           ) : null}
           <Button type="submit" variant="primary" disabled={busy || !token.trim()}>
-            {busy ? "Connecting…" : "Connect"}
+            {busy ? t("shell.token.connecting") : t("shell.token.connect")}
           </Button>
         </form>}
         {!relay ? <>
           <p className="token-help">
-            No token yet? On that computer, open openside and go to Settings → Remote access → Connect a phone, then scan the QR code with this device.
+            {t("shell.token.help")}
           </p>
           <CliHint command="openside pair" />
         </> : null}

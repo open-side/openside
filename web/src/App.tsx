@@ -1,10 +1,10 @@
 import { AccessRequestDock } from "./access/AccessRequestDock";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { BrowserRouter, Link, Outlet, Route, Routes, useLocation, type Location } from "react-router";
+import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router";
 import { createClient } from "./api/client";
 import { relayTransport, type RelayTransport } from "./api/relay/transport";
 import { clearLocalSecret, clearToken, loadLocalSecret, loadToken, loadTransport, saveToken } from "./auth";
-import { AppHeader } from "./components/AppHeader";
+import { AppHeader, pageLabel, ShellToolbar } from "./components/AppHeader";
 import { CardAttention } from "./components/CardAttention";
 import { SearchPalette } from "./components/SearchPalette";
 import { Sidebar } from "./components/Sidebar";
@@ -13,22 +13,26 @@ import { TokenEntry } from "./components/TokenEntry";
 import { ClientContext, useClient } from "./context";
 import { AgentTabsContext, AgentTabsSettledContext, useAgentTabs } from "./hooks/useAgentTabs";
 import { AgentsContext, useAgents } from "./hooks/useAgents";
+import { PersonBrowserContext, usePersonBrowserState } from "./hooks/usePersonBrowser";
 import { useSessionList } from "./hooks/useSessionList";
 import { useDeliverPending } from "./import/delivery";
 import { Landing, OnboardingGate } from "./onboarding/OnboardingGate";
 import { OnboardingPage } from "./onboarding/OnboardingPage";
-import { AgentPage } from "./pages/AgentPage";
-import { HistoryPage } from "./pages/HistoryPage";
+import { ChatsPage } from "./pages/ChatsPage";
 import { HomePage } from "./pages/HomePage";
-import { ManageDialogs } from "./pages/ManageDialogs";
-import { backgroundOf, manageTarget } from "./pages/manageRoutes";
+import { MiniPage } from "./pages/MiniPage";
+import { LEGACY_SETTINGS_PATHS, settingsPath } from "./settings/nav";
+import { SettingsLayout } from "./settings/SettingsLayout";
 import { PairPage } from "./pages/PairPage";
+import { SharePage } from "./pages/SharePage";
 import { SessionPage } from "./pages/SessionPage";
 import { useDesktopResync } from "./desktopNotify";
+import { useCompletionSound } from "./completionSound";
 import { usePushPresence } from "./push";
 import { PwaRuntime } from "./pwa/PwaRuntime";
 import { ShellContext, type Shell } from "./shell";
 import { useShortcuts } from "./shortcuts";
+import { t, type MessageKey } from "./i18n";
 import { Drawer, Spinner, ToastProvider } from "./ui";
 
 /**
@@ -49,22 +53,34 @@ function useVisualViewportHeight(root: RefObject<HTMLDivElement | null>) {
 
 const SIDEBAR_KEY = "openside.sidebar";
 
-function Layout({ onSignOut, location }: { onSignOut: () => void; location: Location }) {
+function Layout() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const client = useClient();
   usePushPresence(client);
   useDesktopResync(client);
-  // Every conversation, for requests that float over another screen; the sidebar shows people.
+  // Every conversation: the sidebar's Chats, and requests that float over another screen.
   const list = useSessionList(client);
+  useCompletionSound(client, list.sessions);
   const team = useAgents(client);
-  // One poller for both sidebars: the desktop column stays mounted while the phone drawer is open.
+  // One poller each for both sidebars: the desktop column stays mounted while the phone drawer is open.
   const { tabs, settled: tabsSettled } = useAgentTabs(client);
+  const personBrowser = usePersonBrowserState(client);
   const [drawer, setDrawer] = useState(false);
   const [search, setSearch] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === "collapsed");
   const root = useRef<HTMLDivElement>(null);
-  // The real location: inside a dialog route, the routes below render the background one.
-  const { pathname } = location;
+  const { pathname, search: query, hash } = location;
+  const mini = pathname === "/mini";
   useVisualViewportHeight(root);
+
+  // The extension's palette command lands here as `#search`; open the palette and drop the hash so
+  // a reload or Back does not open it again.
+  useEffect(() => {
+    if (hash !== "#search") return;
+    setSearch(true);
+    navigate({ pathname, search: query }, { replace: true });
+  }, [hash, pathname, query, navigate]);
 
   // Picking a person in the phone drawer can keep the same pathname; any navigation closes it.
   useEffect(() => setDrawer(false), [location.key]);
@@ -81,6 +97,7 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
   const openDrawer = useCallback(() => setDrawer(true), []);
   const openSearch = useCallback(() => setSearch(true), []);
   useShortcuts({ toggleSidebar, openDrawer, openSearch });
+  const needsYou = (list.sessions ?? []).filter((session) => session.status === "waiting_human" && !session.archived).length;
   const shell = useMemo<Shell>(
     () => ({
       openDrawer,
@@ -89,17 +106,15 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
         refresh();
         refreshTeam();
       },
+      needsYou,
       sidebarCollapsed,
       toggleSidebar,
     }),
-    [openDrawer, openSearch, refresh, refreshTeam, sidebarCollapsed, toggleSidebar],
+    [openDrawer, openSearch, refresh, refreshTeam, needsYou, sidebarCollapsed, toggleSidebar],
   );
-  const openAgent = /^\/agents\/([^/]+)/.exec(pathname)?.[1];
-  const visibleSession = manageTarget(pathname)
-    ? null
-    : openAgent
-      ? (team.agents?.find((agent) => agent.id === decodeURIComponent(openAgent))?.home_session_id ?? null)
-      : (/^\/sessions\/([^/]+)/.exec(pathname)?.[1] ?? null);
+  const visibleSession = /^\/sessions\/([^/]+)/.exec(pathname)?.[1] ?? null;
+  const sessions = list.sessions;
+  const labelOf = useCallback((path: string) => pageLabel(path, sessions), [sessions]);
 
   return (
     <ToastProvider>
@@ -107,33 +122,35 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
         <AgentsContext.Provider value={team}>
           <AgentTabsContext.Provider value={tabs}>
           <AgentTabsSettledContext.Provider value={tabsSettled}>
+          <PersonBrowserContext.Provider value={personBrowser}>
           <TeamActionsProvider>
-            <div className="shell" ref={root} data-sidebar={sidebarCollapsed ? "collapsed" : "open"} data-focus={pathname === "/welcome" || undefined}>
-              <aside className="shell-sidebar" aria-label="Team sidebar">
-                <Sidebar team={team} tabs={tabs} sessions={list.sessions ?? undefined} />
+            <div className="shell" ref={root} data-sidebar={sidebarCollapsed ? "collapsed" : "open"} data-focus={pathname === "/welcome" || undefined} data-mini={mini || undefined}>
+              <aside className="shell-sidebar" aria-label={t("shell.app.sidebarLabel")}>
+                <Sidebar team={team} tabs={tabs} sessions={list.sessions} pageLabel={labelOf} />
               </aside>
               <div className="shell-content">
+                {pathname === "/welcome" || mini ? null : <ShellToolbar label={labelOf(pathname)} />}
                 <OnboardingGate>
                   <Outlet />
                 </OnboardingGate>
                 {list.offline || team.offline ? (
                   <p className="connection-banner" role="status">
                     <Spinner size={14} />
-                    Can’t reach openside. Reconnecting…
+                    {t("shell.app.offlineBanner")}
                   </p>
                 ) : null}
                 <PwaRuntime />
                 <AccessRequestDock />
               </div>
-              <Drawer open={drawer} onClose={() => setDrawer(false)} label="Team menu">
-                <Sidebar team={team} tabs={tabs} sessions={list.sessions ?? undefined} onClose={() => setDrawer(false)} />
+              <Drawer open={drawer} onClose={() => setDrawer(false)} label={t("shell.app.drawerLabel")}>
+                <Sidebar team={team} tabs={tabs} sessions={list.sessions} pageLabel={labelOf} onClose={() => setDrawer(false)} />
               </Drawer>
-              <ManageDialogs location={location} onSignOut={onSignOut} />
-              <SearchPalette open={search} onClose={() => setSearch(false)} tabs={tabs} />
-              {/* A conversation under a Settings or Workspace dialog is not visible, so its code request floats too. */}
+              <SearchPalette open={search} onClose={() => setSearch(false)} tabs={tabs} pageLabel={labelOf} />
+              {/* Every other conversation's request floats over the screen. */}
               <CardAttention visibleSession={visibleSession} sessions={list.sessions} />
             </div>
           </TeamActionsProvider>
+          </PersonBrowserContext.Provider>
           </AgentTabsSettledContext.Provider>
           </AgentTabsContext.Provider>
         </AgentsContext.Provider>
@@ -145,27 +162,22 @@ function Layout({ onSignOut, location }: { onSignOut: () => void; location: Loca
 function NotFound() {
   return (
     <div className="page-frame">
-      <AppHeader title="Not found" />
+      <AppHeader title={t("shell.notFound.title")} />
       <main className="not-found">
-        <p>Page not found.</p>
+        <p>{t("shell.notFound.body")}</p>
         <Link to="/" className="action-link">
-          Back to home
+          {t("shell.notFound.backHome")}
         </Link>
       </main>
     </div>
   );
 }
 
-/** Stands in underneath a deep-linked dialog route that has no screen to return to. */
-const HOME: Location = { pathname: "/", search: "", hash: "", state: null, key: "home" };
-
 /** Screens are added here; every screen talks to the daemon only through the API client. */
 function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
-  const location = useLocation();
-  const screen = manageTarget(location.pathname) ? (backgroundOf(location) ?? HOME) : location;
   return (
-    <Routes location={screen}>
-      <Route element={<Layout onSignOut={onSignOut} location={location} />}>
+    <Routes>
+      <Route element={<Layout />}>
         <Route
           index
           element={
@@ -175,9 +187,14 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
           }
         />
         <Route path="welcome" element={<OnboardingPage />} />
-        <Route path="agents/:id" element={<AgentPage />} />
-        <Route path="history" element={<HistoryPage />} />
+        <Route path="mini" element={<MiniPage />} />
+        <Route path="chats" element={<ChatsPage />} />
         <Route path="sessions/:id" element={<SessionPage />} />
+        <Route path="settings/*" element={<SettingsLayout onSignOut={onSignOut} />} />
+        {/* Deep links from before Settings became a tab, from bookmarks, notifications and the CLI. */}
+        {LEGACY_SETTINGS_PATHS.map(([from, page]) => (
+          <Route key={from} path={from} element={<Navigate to={settingsPath(page)} replace />} />
+        ))}
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
@@ -186,7 +203,7 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
 
 export function App() {
   const [token, setToken] = useState<string | null>(loadToken);
-  const [reason, setReason] = useState<string | undefined>();
+  const [reason, setReason] = useState<MessageKey | undefined>();
   // `/pair#<code>` works with or without a saved token: pairing replaces it.
   const [pairing, setPairing] = useState(() => window.location.pathname === "/pair");
   // A relay-paired device talks to the daemon through the relay that served this page;
@@ -218,7 +235,7 @@ export function App() {
           // Another launcher tab may already have stored the newly rotated owner token.
           if (loadToken() === token) clearToken();
           else clearLocalSecret();
-          setReason(localOwner ? "This local browser session ended. Reopen openside-browser." : transport ? "The saved token was rejected. Pair this device again using a new QR code." : "The saved token was rejected. Paste a valid device token.");
+          setReason(localOwner ? "shell.auth.localSessionEnded" : transport ? "shell.auth.relayTokenRejected" : "shell.auth.tokenRejected");
           setToken(null);
         },
       }),
@@ -230,13 +247,15 @@ export function App() {
     setPairing(false);
   }, []);
 
+  // A shared chat is public: it never asks for or uses this browser's device token.
+  if (window.location.pathname === "/share") return <SharePage />;
   if (pairing) return <PairPage onPaired={onPaired} />;
 
   if (!token || connection.invalid) {
     return (
       <TokenEntry
         pairingRequired={connection.invalid}
-        reason={connection.invalid ? "The saved relay connection is incomplete. Pair this device again using a new QR code." : reason}
+        reason={connection.invalid ? t("shell.auth.relayIncomplete") : reason && t(reason)}
         onToken={(value) => {
           saveToken(value);
           setReason(undefined);

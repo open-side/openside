@@ -1,4 +1,5 @@
 import type { InputField } from "../api/types";
+import { t } from "../i18n";
 import { attachSuggestions } from "../ui/suggest";
 import { fieldAutocomplete, fieldLabel } from "./copy";
 import { element, uid } from "./dom";
@@ -158,12 +159,12 @@ export function renderField(field: InputField, ctx: FieldContext): HTMLElement {
 
   const wrap = element("div", { class: "oc-control" }, control);
   if (field.kind === "password" && !field.otp) {
-    const eye = element("button", { type: "button", class: "oc-eye", "aria-label": "Show password", "aria-pressed": "false" }, glyph("eye", 18));
+    const eye = element("button", { type: "button", class: "oc-eye", "aria-label": t("cards.field.showPassword"), "aria-pressed": "false" }, glyph("eye", 18));
     eye.addEventListener("click", () => {
       const shown = (control as HTMLInputElement).type === "text";
       (control as HTMLInputElement).type = shown ? "password" : "text";
       eye.setAttribute("aria-pressed", String(!shown));
-      eye.setAttribute("aria-label", shown ? "Show password" : "Hide password");
+      eye.setAttribute("aria-label", shown ? t("cards.field.showPassword") : t("cards.field.hidePassword"));
       eye.replaceChildren(glyph(shown ? "eye" : "eye-off", 18));
     });
     wrap.append(eye);
@@ -172,7 +173,7 @@ export function renderField(field: InputField, ctx: FieldContext): HTMLElement {
   const root = element("div", { class: "oc-field", "data-card-field": field.card ?? "", "data-otp": String(field.otp) }, element("label", { for: id }, fieldLabel(field)), wrap);
   if (field.target_origin && field.target_origin !== ctx.cardOrigin) {
     const hintId = `${id}-to`;
-    root.append(element("p", { class: "oc-hint", id: hintId }, `Sent to ${field.target_origin}`));
+    root.append(element("p", { class: "oc-hint", id: hintId }, t("cards.field.sentTo", { origin: field.target_origin })));
     control.setAttribute("aria-describedby", hintId);
   }
   if (!neverFilled && field.suggestions.length > 0) attachSuggestions(control, field.suggestions);

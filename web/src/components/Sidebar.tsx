@@ -1,155 +1,70 @@
-import { ChevronRight, History, LayoutGrid, PanelLeftClose, Settings2, SquarePen, X } from "lucide-react";
-import { useState } from "react";
-import { Link, useLocation, useMatch } from "react-router";
-import type { AgentSummary, Session } from "../api/types";
-import { isUnread, people, type AgentsState } from "../hooks/useAgents";
-import { manageLinkState } from "../pages/manageRoutes";
-import { useShell } from "../shell";
-import { useSeen } from "../state/seen";
-import { BrandMark, cx, ICON_STROKE, IconButton } from "../ui";
-import { SidebarAccount } from "./SidebarAccount";
-import { SidebarPinned } from "./SidebarPinned";
+import { PanelLeft, X } from "lucide-react";
+import type { KeyboardEvent } from "react";
+import type { Session } from "../api/types";
 import type { OwnedTab } from "../hooks/useAgentTabs";
+import type { AgentsState } from "../hooks/useAgents";
+import { t } from "../i18n";
+import { useShell, useSidebarPrefs } from "../shell";
+import { ICON_STROKE, IconButton } from "../ui";
+import { SidebarAccount } from "./SidebarAccount";
+import { SidebarBookmarks } from "./SidebarBookmarks";
+import { SidebarChats } from "./SidebarChats";
 import { SidebarTabs } from "./SidebarTabs";
-import "./team.css";
-
-const icon = { size: 18, strokeWidth: ICON_STROKE, "aria-hidden": true } as const;
 
 export interface SidebarProps {
   team: AgentsState;
   /** The agents' open tabs, polled once for the shell. */
   tabs: readonly OwnedTab[];
-  /** The shell's loaded conversation list, to attribute tabs from a teammate's other sessions. */
-  sessions?: readonly Session[];
+  /** The shell's chat list; `null` while loading. */
+  sessions: readonly Session[] | null;
+  /** Names openside's own pages in the Tabs list. */
+  pageLabel: (pathname: string) => string | null;
   /** Present when rendered inside the phone drawer. */
   onClose?: () => void;
 }
 
-export function Sidebar({ team, tabs, sessions, onClose }: SidebarProps) {
-  // Dialog routes render the shell with their background location, so this is the screen
-  // underneath and links opened from here never stack dialogs.
-  const location = useLocation();
+/** Rows the arrow keys walk, in reading order; a row's own trailing buttons stay on Tab. */
+const ROWS = ".sidebar-row:not(:disabled)";
+
+/** ArrowUp/ArrowDown/Home/End move between rows, as in a list; Tab still visits every control. */
+function moveFocus(event: KeyboardEvent<HTMLElement>) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || event.altKey || event.metaKey || event.ctrlKey) return;
+  if (!(event.target instanceof HTMLElement) || !event.target.matches(ROWS)) return;
+  const rows = [...event.currentTarget.querySelectorAll<HTMLElement>(ROWS)];
+  const at = rows.indexOf(event.target);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : at + (event.key === "ArrowDown" ? 1 : -1);
+  const row = rows[Math.max(0, Math.min(rows.length - 1, next))];
+  if (!row) return;
+  event.preventDefault();
+  row.focus();
+}
+
+/** The window's left column (`L 10`, `L 20`): Bookmarks, Chats and Tabs over the account bar. */
+export function Sidebar({ team, tabs, sessions, pageLabel, onClose }: SidebarProps) {
   const shell = useShell();
-  const openAgentId = useMatch("/agents/:id")?.params.id ?? null;
-  const onHome = useMatch("/") !== null;
-  const cursors = useSeen();
-  const [showHidden, setShowHidden] = useState(false);
-  const { chief, teammates, hidden } = people(team.agents ?? []);
-  const row = (agent: AgentSummary) => <PersonRow key={agent.id} agent={agent} current={agent.id === openAgentId} unread={isUnread(agent, cursors, openAgentId)} />;
+  const [prefs] = useSidebarPrefs();
+  // Delete is offered only once the roster says which chats are agents' homes.
+  const homes = team.agents === null ? null : new Set(team.agents.flatMap((agent) => (agent.home_session_id ? [agent.home_session_id] : [])));
 
   return (
     <div className="sidebar">
       <div className="sidebar-head">
-        <Link to="/" className="brand">
-          <BrandMark size={20} />
-          <span>openside</span>
-        </Link>
         {onClose ? (
-          <IconButton label="Close menu" size="small" onClick={onClose}>
-            <X {...icon} />
+          <IconButton label={t("shell.sidebar.closeMenu")} size="small" onClick={onClose}>
+            <X size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </IconButton>
         ) : (
-          <IconButton label="Collapse sidebar" size="small" onClick={shell.toggleSidebar}>
-            <PanelLeftClose {...icon} />
+          <IconButton label={t("shell.sidebar.collapse")} title={t("shell.sidebar.collapse")} size="small" className="sidebar-toggle" onClick={shell.toggleSidebar}>
+            <PanelLeft size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </IconButton>
         )}
       </div>
-
-      <Link to="/" className="sidebar-row sidebar-new-task" aria-current={onHome ? "page" : undefined}>
-        <SquarePen {...icon} />
-        <span>New task</span>
-      </Link>
-
-      <div className="session-list people-list thin-scroll">
-        <SidebarPinned />
-        <section className="sidebar-section" aria-labelledby="sidebar-chats-heading">
-          <h2 id="sidebar-chats-heading" className="section-heading">
-            Chats
-          </h2>
-          {/* An unreachable daemon is announced once, by the shell's connection banner. */}
-          {team.error && !team.offline && (
-            <p role="alert" className="sidebar-note error">
-              {team.error}
-            </p>
-          )}
-          {team.agents === null ? (
-            team.offline ? null : <p className="sidebar-note">Loading your team…</p>
-          ) : (
-            <>
-              <ul className="people" aria-label="Team">
-                {chief ? row(chief) : null}
-                {teammates.map(row)}
-              </ul>
-              {hidden.length > 0 ? (
-                <div className="people-hidden">
-                  <button type="button" className="sidebar-row people-hidden-toggle" aria-expanded={showHidden} onClick={() => setShowHidden((open) => !open)}>
-                    <ChevronRight size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                    Hidden · {hidden.length}
-                  </button>
-                  {showHidden ? (
-                    <ul className="people" aria-label="Hidden teammates">
-                      {hidden.map(row)}
-                    </ul>
-                  ) : null}
-                </div>
-              ) : null}
-              <Link to="/history" className="sidebar-row sidebar-show-all">
-                Show all
-              </Link>
-            </>
-          )}
-        </section>
-        <SidebarTabs tabs={tabs} agents={team.agents ?? []} sessions={sessions} />
-      </div>
-
-      <SidebarAccount onClose={onClose} />
-
-      <nav className="manage-nav" aria-label="Sections">
-        <Link to="/history" className="sidebar-row sidebar-nav-item">
-          <History {...icon} />
-          <span>History</span>
-        </Link>
-        <Link to="/workspace" state={manageLinkState(location)} className="sidebar-row sidebar-nav-item">
-          <LayoutGrid {...icon} />
-          <span>Workspace</span>
-        </Link>
-        <Link to="/settings" state={manageLinkState(location)} className="sidebar-row sidebar-nav-item">
-          <Settings2 {...icon} />
-          <span>Settings</span>
-        </Link>
+      <nav className="sidebar-scroll thin-scroll" aria-label={t("shell.sidebar.sections")} onKeyDown={moveFocus}>
+        {prefs.bookmarks ? <SidebarBookmarks onPicked={onClose} /> : null}
+        {prefs.chats ? <SidebarChats sessions={sessions} count={prefs.recentChats} homes={homes} /> : null}
+        <SidebarTabs agentTabs={tabs} pageLabel={pageLabel} onPicked={onClose} />
       </nav>
+      <SidebarAccount onClose={onClose} />
     </div>
-  );
-}
-
-/** Phrases the daemon leaves in `activity` once a run is over. */
-const FINISHED_ACTIVITY: ReadonlySet<string> = new Set(["Done", "Stopped", "Couldn’t finish", "Couldn't finish"]);
-
-function PersonRow({ agent, current, unread }: { agent: AgentSummary; current: boolean; unread: boolean }) {
-  const working = agent.session_status === "running";
-  const activity = working && !FINISHED_ACTIVITY.has(agent.activity) ? agent.activity.trim() : "";
-  // One line per person: what they are doing (or said last) moves into the tooltip.
-  const detail = activity || agent.last_activity.trim() || agent.persona.role;
-  const state = agent.needs_you ? "Needs you" : working ? "Working" : unread ? "Unread" : null;
-  return (
-    <li className={cx("person-row", current && "current", unread && "unread")} data-agent={agent.id}>
-      <Link
-        to={`/agents/${encodeURIComponent(agent.id)}`}
-        className="sidebar-row person-link"
-        aria-current={current ? "page" : undefined}
-        aria-label={[agent.name, state].filter(Boolean).join(", ")}
-        title={detail ? `${agent.name} · ${detail}` : agent.name}
-      >
-        {/* No per-chat avatar: names start where tab rows do, and only state marks trail. */}
-        <span className="person-name">{agent.name}</span>
-        {agent.needs_you ? (
-          <span className="row-badge">Needs you</span>
-        ) : working ? (
-          <span className="live-dot" />
-        ) : unread ? (
-          <span className="unread-dot" />
-        ) : null}
-      </Link>
-    </li>
   );
 }

@@ -1,11 +1,12 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { ApiError } from "../api/client";
-import type { Action, Card, HireDraft } from "../api/types";
+import type { Action, Agent, Card, HireDraft } from "../api/types";
 import { useClient } from "../context";
-import { useTeam } from "../hooks/useAgents";
-import { useToast } from "../ui";
-import { RetireDialog } from "./AgentProfileSheet";
+import { CHIEF_ID, useTeam } from "../hooks/useAgents";
+import { ErrorNote } from "../pages/blocks";
+import { t } from "../i18n";
+import { Button, Dialog, DialogActions, Segmented, Select, useToast } from "../ui";
 
 /** Edited card fields, keyed by field id. */
 export interface CardActionPayload {
@@ -32,8 +33,6 @@ export function mergeHireDraft(draft: HireDraft, values: CardActionPayload["valu
 }
 
 interface TeamActions {
-  /** Opens the retire flow (successor picker) for a teammate, over whatever screen is showing. */
-  retire: (agentId: string) => void;
   /**
    * The card renderer's handler for team targets: `open_thread`, `team_command` and a hire
    * ticket's resolution. Returns `false` for targets it does not own, so the renderer falls
@@ -43,12 +42,6 @@ interface TeamActions {
 }
 
 const TeamActionsContext = createContext<TeamActions | null>(null);
-
-export function useTeamActions(): TeamActions {
-  const actions = useContext(TeamActionsContext);
-  if (!actions) throw new Error("useTeamActions outside TeamActionsProvider");
-  return actions;
-}
 
 /** For renderers that also mount outside the shell (tests, previews): no provider, no team targets. */
 export function useOptionalTeamActions(): TeamActions | null {
@@ -68,7 +61,9 @@ export function TeamActionsProvider({ children }: { children: ReactNode }) {
     (action: Action, card: Card, payload?: CardActionPayload): boolean | Promise<void> => {
       const target = action.target;
       if (target.type === "open_thread") {
-        navigate(`/agents/${encodeURIComponent(target.agent_id)}`);
+        // Every conversation is a chat now; a teammate's thread is its home session.
+        const home = agents?.find((agent) => agent.id === target.agent_id)?.home_session_id;
+        navigate(home ? `/sessions/${encodeURIComponent(home)}` : "/chats");
         return true;
       }
       if (target.type === "ticket_resolve" && target.answer.type === "hire") {
@@ -82,7 +77,7 @@ export function TeamActionsProvider({ children }: { children: ReactNode }) {
           }
           // The card carries only what it shows; the authoritative draft lives on the ticket.
           const ticket = (await client.listTickets("pending")).tickets.find((candidate) => candidate.id === ticketId);
-          if (!ticket?.hire) throw new Error("This proposal is no longer open.");
+          if (!ticket?.hire) throw new Error(t("agents.hire.closed"));
           await client.resolveTicket(ticketId, decision, { hire: mergeHireDraft(ticket.hire, payload?.values) });
           refresh();
         };
@@ -100,20 +95,84 @@ export function TeamActionsProvider({ children }: { children: ReactNode }) {
         .retireAgent(target.agent_id, { successor: null, pause_routines: false, revert_hire: true })
         .then((agent) => {
           refresh();
-          toast.notify(`Undid hiring ${agent.name}`, "success");
+          toast.notify(t("agents.hire.undone", { name: agent.name }), "success");
         })
         .catch((cause: unknown) => {
-          throw new Error(cause instanceof ApiError ? cause.message : `Could not undo hiring ${agents?.find((agent) => agent.id === target.agent_id)?.name ?? "them"}`);
+          if (cause instanceof ApiError) throw new Error(cause.message);
+          const name = agents?.find((agent) => agent.id === target.agent_id)?.name;
+          throw new Error(name ? t("agents.hire.undoFailed", { name }) : t("agents.hire.undoFailedUnknown"));
         });
     },
     [client, navigate, refresh, toast, agents],
   );
 
-  const value = useMemo<TeamActions>(() => ({ retire: setRetiringId, onCardAction }), [onCardAction]);
+  const value = useMemo<TeamActions>(() => ({ onCardAction }), [onCardAction]);
   return (
     <TeamActionsContext.Provider value={value}>
       {children}
       {retiring ? <RetireDialog agent={retiring} open onClose={() => setRetiringId(null)} /> : null}
     </TeamActionsContext.Provider>
+  );
+}
+
+/** Retire hands a teammate's work to someone else, or pauses it; the thread moves to History. */
+function RetireDialog({ agent, open, onClose }: { agent: Agent; open: boolean; onClose: () => void }) {
+  const client = useClient();
+  const team = useTeam();
+  const toast = useToast();
+  const [successor, setSuccessor] = useState(CHIEF_ID);
+  const [pause, setPause] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const others = (team.agents ?? []).filter((candidate) => candidate.status === "active" && candidate.id !== agent.id);
+
+  async function retire() {
+    setBusy(true);
+    setError(null);
+    try {
+      await client.retireAgent(agent.id, { successor: pause ? null : successor, pause_routines: pause, revert_hire: false });
+      team.refresh();
+      toast.notify(t("agents.retire.done", { name: agent.name }), "success");
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : t("agents.retire.failed", { name: agent.name }));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title={t("agents.retire.title", { name: agent.name })} description={t("agents.retire.description", { name: agent.name })}>
+      <div className="dialog-form">
+        <Segmented
+          label={t("agents.retire.routines")}
+          options={[
+            { value: "hand", label: t("agents.retire.handOver") },
+            { value: "pause", label: t("agents.retire.pause") },
+          ]}
+          value={pause ? "pause" : "hand"}
+          onChange={(value) => setPause(value === "pause")}
+        />
+        {pause ? null : (
+          <label className="field">
+            <span>{t("agents.retire.successor")}</span>
+            <Select
+              value={successor}
+              onChange={setSuccessor}
+              variant="field"
+              aria-label={t("agents.retire.successor")}
+              options={others.map((candidate) => ({ value: candidate.id, label: candidate.name, detail: candidate.persona.role }))}
+            />
+          </label>
+        )}
+        {error ? <ErrorNote>{error}</ErrorNote> : null}
+        <DialogActions>
+          <Button onClick={onClose}>{t("agents.retire.keep", { name: agent.name })}</Button>
+          <Button variant="danger" disabled={busy} onClick={() => void retire()}>
+            {t("agents.retire.confirm")}
+          </Button>
+        </DialogActions>
+      </div>
+    </Dialog>
   );
 }

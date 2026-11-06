@@ -1,9 +1,10 @@
-import { Globe, PanelRight, X } from "lucide-react";
+import { Globe, LayoutList, X } from "lucide-react";
 import { useContext, useEffect, useMemo, type RefObject } from "react";
 import { AgentTabsContext, AgentTabsSettledContext, type OwnedTab } from "../hooks/useAgentTabs";
-import { previewNotice, useBrowserPreview } from "../hooks/useBrowserPreview";
+import { useBrowserPreview } from "../hooks/useBrowserPreview";
 import { originOf, useFavicon } from "../hooks/useFavicon";
 import { useTaskThumbnail } from "../hooks/useTaskThumbnail";
+import { t } from "../i18n";
 import type { BrowserStateView, SessionView } from "../state/session";
 import { ICON_STROKE, IconButton } from "../ui";
 import { AGENT_TABS_MIN_WIDTH, setAgentTabsFit, syncAgentTabs, useAgentTabsPanel } from "./agentTabsStore";
@@ -85,9 +86,8 @@ export function AgentTabsPanel({ sessionId, view, container }: AgentTabsPanelPro
   const message = stream.status === "open" ? stream.message : null;
   const frame = message?.type === "frame" ? message : null;
   const liveTabId = message && "tab_id" in message ? message.tab_id : null;
-  const notice = previewNotice(stream);
   return (
-    <aside className="agent-tabs-panel thin-scroll" aria-label="Agent tabs">
+    <aside className="agent-tabs-panel thin-scroll" aria-label={t("shell.tabs.agentTabs")}>
       <ul className="agent-tabs-list">
         {panel.cards.map((tab) => (
           <li key={tab.tab_id}>
@@ -96,7 +96,6 @@ export function AgentTabsPanel({ sessionId, view, container }: AgentTabsPanelPro
               tab={tab}
               {...tabStates(view, tab.tab_id)}
               frame={liveTabId === tab.tab_id ? (frame?.data ?? null) : null}
-              notice={liveTabId === tab.tab_id ? notice : null}
               onOpen={() => setSheet(true, tab.tab_id)}
               onHide={() => panel.dismiss(tab.tab_id)}
             />
@@ -113,7 +112,6 @@ function TabCard({
   latest,
   pictured,
   frame,
-  notice,
   onOpen,
   onHide,
 }: {
@@ -122,7 +120,6 @@ function TabCard({
   latest?: BrowserStateView;
   pictured?: BrowserStateView;
   frame: string | null;
-  notice: string | null;
   onOpen: () => void;
   onHide: () => void;
 }) {
@@ -134,34 +131,24 @@ function TabCard({
   // The newest picture the log has for the tab, kept while the screencast is on it so it is ready
   // the moment the agent moves to another tab.
   const thumbnail = useTaskThumbnail(sessionId, pictured?.thumbnail ?? undefined, true);
-  const favicon = icon ? <img className="agent-tab-favicon" src={icon} alt="" width={16} height={16} /> : <Globe className="agent-tab-favicon" size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />;
-  const picture = frame ? (
-    <BrowserFrame data={frame} />
-  ) : thumbnail ? (
-    <img src={thumbnail} alt="" draggable={false} />
-  ) : (
-    // No picture yet: a quiet line rather than an empty screen-sized block.
-    <span className="agent-tab-empty">
-      {favicon}
-      <span className="agent-tab-empty-text">{notice ?? (host || "No preview yet")}</span>
-    </span>
-  );
-  const empty = !frame && !thumbnail;
+  const picture = frame ? <BrowserFrame data={frame} /> : thumbnail ? <img src={thumbnail} alt="" draggable={false} /> : null;
   return (
-    <article className="agent-tab-card" data-live={!!frame || undefined}>
-      <div className="agent-tab-bar">
-        {favicon}
-        <span className="agent-tab-title" title={tab.url}>
-          {title}
-        </span>
-        {frame ? <span className="live-dot" data-live aria-hidden="true" /> : null}
-        <IconButton label={`Hide ${title}`} size="small" className="agent-tab-hide" onClick={onHide}>
-          <X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        </IconButton>
-      </div>
-      <button type="button" className="agent-tab-screen" data-empty={empty || undefined} aria-label={`Open ${title}`} onClick={onOpen}>
+    <article className="agent-tab-card" data-live={!!frame || undefined} data-empty={!picture || undefined}>
+      <button type="button" className="agent-tab-screen" aria-label={t("shell.agentTabs.open", { title })} title={tab.url} onClick={onOpen}>
         {picture}
       </button>
+      {/* Drawn over the picture; clicks other than the close button fall through to the screen. */}
+      <div className="agent-tab-bar">
+        {icon ? (
+          <img className="agent-tab-favicon" src={icon} alt="" width={14} height={14} />
+        ) : (
+          <Globe className="agent-tab-favicon" data-fallback size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        )}
+        <span className="agent-tab-title">{title}</span>
+        <IconButton label={t("shell.agentTabs.hide", { title })} className="agent-tab-hide" onClick={onHide}>
+          <X size={16} strokeWidth={2.5} aria-hidden="true" />
+        </IconButton>
+      </div>
     </article>
   );
 }
@@ -174,8 +161,8 @@ export function AgentTabsToggle({ sessionId, view }: { sessionId: string; view: 
   const { available, shown, toggle } = useAgentTabsPanel(sessionId);
   if (!available || view.incognito) return null;
   return (
-    <IconButton label={shown ? "Hide agent tabs" : "Show agent tabs"} aria-pressed={shown} className="agent-tabs-toggle" onClick={toggle}>
-      <PanelRight size={20} strokeWidth={ICON_STROKE} aria-hidden="true" />
+    <IconButton label={shown ? t("shell.agentTabs.hidePanel") : t("shell.agentTabs.showPanel")} aria-pressed={shown} className="agent-tabs-toggle" onClick={toggle}>
+      <LayoutList size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
     </IconButton>
   );
 }

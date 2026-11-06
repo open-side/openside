@@ -1,10 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ApiError, type Client } from "../api/client";
 import type { AgentSummary } from "../api/types";
-import { seen, type SeenCursors } from "../state/seen";
+import { t } from "../i18n";
 
 const SYNC_MS = 5000;
 export const CHIEF_ID = "chief";
+/** The role the daemon seeds for the assistant (opensided `agents.rs`); stored data, not copy. */
+const CHIEF_DEFAULT_ROLE = "Your assistant";
+
+/** The role line to show: the assistant's untouched default role follows the page language. */
+export function roleOf(agent: Pick<AgentSummary, "id" | "persona">): string {
+  return agent.id === CHIEF_ID && agent.persona.role === CHIEF_DEFAULT_ROLE ? t("agents.profile.titleChief") : agent.persona.role;
+}
 
 export interface AgentsState {
   /** `null` until the first response. */
@@ -30,13 +37,12 @@ export function useAgents(client: Client): AgentsState {
     try {
       const list = await client.listAgents();
       if (mine !== generation.current) return;
-      seen.seed(Object.fromEntries(list.agents.map((agent) => [agent.id, agent.last_seq])));
       setAgents(list.agents);
       setError(null);
       setOffline(false);
     } catch (cause) {
       if (mine !== generation.current) return;
-      setError(cause instanceof ApiError ? cause.message : "Request failed");
+      setError(cause instanceof ApiError ? cause.message : t("browser.requestFailed"));
       setOffline(cause instanceof ApiError && cause.status === 0);
     }
   }, [client]);
@@ -68,7 +74,7 @@ export interface People {
   chief: AgentSummary | null;
   /** Active, visible teammates: pinned first, then the most recent conversation first. */
   teammates: AgentSummary[];
-  /** Removed from the sidebar but still working. */
+  /** Removed from view but still working. */
   hidden: AgentSummary[];
 }
 
@@ -78,7 +84,7 @@ export const recency = (agent: AgentSummary) => {
   return Number.isNaN(at) ? 0 : at;
 };
 
-/** Sidebar order. Retired teammates live in History, never here. */
+/** Roster order. Retired teammates live in History, never here. */
 export function people(agents: readonly AgentSummary[]): People {
   const active = agents.filter((agent) => agent.status === "active");
   const chief = active.find((agent) => agent.kind === "chief") ?? null;
@@ -88,8 +94,3 @@ export function people(agents: readonly AgentSummary[]): People {
   return { chief, teammates: teammates.filter((agent) => !agent.hidden), hidden: teammates.filter((agent) => agent.hidden) };
 }
 
-/** Unread on this device: the thread moved past the cursor, and the person is not looking at it. */
-export function isUnread(agent: AgentSummary, cursors: SeenCursors, openAgentId?: string | null): boolean {
-  if (agent.id === openAgentId) return false;
-  return agent.last_seq > (cursors[agent.id] ?? 0);
-}
