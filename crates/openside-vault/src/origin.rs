@@ -63,6 +63,20 @@ impl AllowedOrigin {
             self.port
         )
     }
+
+    /// The rule as a page URL for a CSV export: `https://example.com/`, the port only when
+    /// it is not the scheme's default, and a wildcard rule written as its base host.
+    pub(crate) fn export_url(&self) -> String {
+        let default_port = matches!(
+            (self.scheme.as_str(), self.port),
+            ("https", 443) | ("http", 80)
+        );
+        if default_port {
+            format!("{}://{}/", self.scheme, self.host)
+        } else {
+            format!("{}://{}:{}/", self.scheme, self.host, self.port)
+        }
+    }
 }
 
 fn parse_exact(value: &str) -> Result<AllowedOrigin, Error> {

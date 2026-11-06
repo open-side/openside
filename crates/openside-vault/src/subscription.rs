@@ -120,6 +120,7 @@ impl Entry {
             registration: None,
             provider_key: None,
             channel_secret: None,
+            mcp_secret: None,
             subscription: Some(info),
             subscription_tokens,
             oauth: None,

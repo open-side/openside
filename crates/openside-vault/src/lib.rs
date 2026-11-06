@@ -43,18 +43,27 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod audit;
+mod autofill;
+mod biometric;
 mod channel;
+mod export;
+mod mcp;
 mod oauth;
 mod origin;
 mod passkey;
 mod platform;
 mod provider;
+mod recovery;
 mod secret;
 mod subscription;
 mod sync;
 
 pub use audit::{read_audit, AuditAction, AuditContext, AuditQuery, AuditRecord};
+pub use autofill::{normalize_domain, AutofillRules};
+pub use biometric::{biometric_probe, biometric_verify, BiometricError, BiometricMechanism};
 pub use channel::ChannelSecretInfo;
+pub use export::CsvExport;
+pub use mcp::McpSecretInfo;
 pub use oauth::OAuthInfo;
 pub use origin::AllowedOrigin;
 pub use passkey::{PasskeyCredential, PasskeyRelease, SignCount};
@@ -64,6 +73,7 @@ pub use platform::native::NativeKeyringLock;
 pub use platform::secret_service::SecretServiceLock;
 pub use platform::{keyring_reachable, PassphraseLock, PlatformLock, WrappingKey};
 pub use provider::ProviderKeyInfo;
+pub use recovery::{recovery_info, recovery_path, RecoveryInfo, RecoveryKey};
 pub use secret::{parse_base32_seed, Redactor, Secret, Totp, TotpAlgorithm, TotpParams, TotpSeed};
 pub use subscription::SubscriptionInfo;
 #[cfg(target_os = "macos")]
@@ -195,6 +205,12 @@ pub enum Denial {
     NoPasskey,
     /// An item accepting the origin already holds an authenticator; it is never replaced.
     AlreadyRegistered,
+    /// The person turned autofill off.
+    AutofillOff,
+    /// The page's domain is on the person's excluded list.
+    ExcludedDomain,
+    /// The page is plain `http:` and the person did not allow insecure sites.
+    InsecureOrigin,
 }
 
 impl Denial {
@@ -209,6 +225,9 @@ impl Denial {
             Self::RpMismatch => "rp_mismatch",
             Self::NoPasskey => "no_passkey",
             Self::AlreadyRegistered => "already_registered",
+            Self::AutofillOff => "autofill_off",
+            Self::ExcludedDomain => "excluded_domain",
+            Self::InsecureOrigin => "insecure_origin",
         }
     }
 }
@@ -239,6 +258,7 @@ pub struct Entry {
     registration: Option<String>,
     provider_key: Option<ProviderKeyInfo>,
     channel_secret: Option<ChannelSecretInfo>,
+    mcp_secret: Option<McpSecretInfo>,
     subscription: Option<SubscriptionInfo>,
     subscription_tokens: Vec<Secret>,
     oauth: Option<OAuthInfo>,
@@ -308,6 +328,7 @@ impl Entry {
             registration: None,
             provider_key: None,
             channel_secret: None,
+            mcp_secret: None,
             subscription: None,
             subscription_tokens: Vec::new(),
             oauth: None,
@@ -475,6 +496,7 @@ pub struct Vault<L: PlatformLock = PassphraseLock> {
     audit_path: PathBuf,
     platform: L,
     default_policy: AccessPolicy,
+    autofill: AutofillRules,
     state: Option<State>,
 }
 impl<L: PlatformLock> fmt::Debug for Vault<L> {
@@ -537,6 +559,7 @@ impl<L: PlatformLock> Vault<L> {
             audit_path: audit_path.to_owned(),
             platform,
             default_policy: AccessPolicy::WhileUnlocked,
+            autofill: AutofillRules::default(),
             state: Some(State {
                 key,
                 salt,
@@ -581,21 +604,22 @@ impl<L: PlatformLock> Vault<L> {
             audit_path: audit_path.to_owned(),
             platform,
             default_policy: AccessPolicy::WhileUnlocked,
+            autofill: AutofillRules::default(),
             state: None,
         })
     }
 
     /// Authenticate a version-1 file and reload it; failure leaves the handle fully locked.
     pub fn unlock(&mut self, passphrase: &Secret) -> Result<(), Error> {
-        self.load(Some(passphrase))
+        self.load(KeySource::Passphrase(passphrase))
     }
 
     /// Reload a version-2 file with the platform wrapping key; failure leaves it locked.
     pub fn unlock_with_platform_key(&mut self) -> Result<(), Error> {
-        self.load(None)
+        self.load(KeySource::Platform)
     }
 
-    fn load(&mut self, passphrase: Option<&Secret>) -> Result<(), Error> {
+    fn load(&mut self, source: KeySource<'_>) -> Result<(), Error> {
         self.lock();
         let mut bytes = Vec::new();
         File::open(&self.path)
@@ -609,15 +633,18 @@ impl<L: PlatformLock> Vault<L> {
         let version = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
         let mut salt = [0; 16];
         salt.copy_from_slice(&bytes[12..28]);
-        let key = match (version, passphrase) {
-            (VERSION_PASSPHRASE, Some(passphrase)) => derive_key(passphrase, &salt)?,
-            (VERSION_KEYRING, None) => {
+        let key = match (version, source) {
+            (VERSION_PASSPHRASE, KeySource::Passphrase(passphrase)) => {
+                derive_key(passphrase, &salt)?
+            }
+            (VERSION_KEYRING, KeySource::Platform) => {
                 let wrapping = self
                     .platform
                     .wrapping_key(false)?
                     .ok_or(Error::Unavailable)?;
                 hkdf_key(&wrapping, &salt)?
             }
+            (VERSION_PASSPHRASE | VERSION_KEYRING, KeySource::File(key)) => key,
             (VERSION_PASSPHRASE | VERSION_KEYRING, _) => return Err(Error::Authentication),
             _ => return Err(Error::Format),
         };
@@ -660,6 +687,7 @@ impl<L: PlatformLock> Vault<L> {
             if [
                 item.provider_key.is_some(),
                 item.channel_secret.is_some(),
+                item.mcp_secret.is_some(),
                 item.subscription.is_some(),
                 item.oauth.is_some(),
             ]
@@ -700,6 +728,24 @@ impl<L: PlatformLock> Vault<L> {
                     signing,
                     info.created_at_ms,
                 )?
+            } else if let Some(info) = item.mcp_secret {
+                if !origins.is_empty()
+                    || !passkeys.is_empty()
+                    || item.totp_seed.is_some()
+                    || !item.username.0 .0.is_empty()
+                {
+                    return Err(Error::Format);
+                }
+                let entry = Entry::mcp_secret(
+                    &info.server_id,
+                    &info.name,
+                    item.password.0,
+                    info.created_at_ms,
+                )?;
+                if entry.site != item.site {
+                    return Err(Error::Format);
+                }
+                entry
             } else if let Some(info) = item.subscription {
                 if !origins.is_empty() || !passkeys.is_empty() || item.totp_seed.is_some() {
                     return Err(Error::Format);
@@ -761,6 +807,16 @@ impl<L: PlatformLock> Vault<L> {
         self.default_policy
     }
 
+    /// The person's autofill rules, checked by every fill decision.
+    pub fn autofill(&self) -> &AutofillRules {
+        &self.autofill
+    }
+
+    /// Replace the autofill rules; they apply to the next decision.
+    pub fn set_autofill(&mut self, rules: AutofillRules) {
+        self.autofill = rules;
+    }
+
     /// Set the policy for items without an override (host configuration; not persisted).
     pub fn set_default_policy(&mut self, policy: AccessPolicy) {
         self.default_policy = policy;
@@ -795,6 +851,7 @@ impl<L: PlatformLock> Vault<L> {
             .filter(|entry| {
                 entry.provider_key.is_none()
                     && entry.channel_secret.is_none()
+                    && entry.mcp_secret.is_none()
                     && entry.subscription.is_none()
                     && entry.oauth.is_none()
             })
@@ -1384,6 +1441,11 @@ impl<L: PlatformLock> Vault<L> {
         if !entry.origins.iter().any(|rule| rule.matches(origin)) {
             return Err(Denial::OriginMismatch);
         }
+        // The person's autofill rules come after the item's own checks, so a refusal never
+        // reveals more about the page than an origin mismatch would.
+        if let Some(denial) = self.autofill.refusal(origin) {
+            return Err(denial);
+        }
         Ok(entry)
     }
 
@@ -1584,7 +1646,7 @@ pub fn audit_lifecycle(
     ctx: &AuditContext<'_>,
     action: AuditAction,
     decision: &'static str,
-    detail: Option<&'static str>,
+    detail: Option<&str>,
 ) -> Result<(), Error> {
     let record = AuditRecord {
         when: SystemTime::now()
@@ -1664,6 +1726,14 @@ fn new_site(entries: &[Entry], prefix: &str, origin: &str) -> String {
         .find(|site| !taken(site))
         .unwrap_or(base)
 }
+/// What opens a vault file: its passphrase (v1), the platform wrapping key (v2), or the file
+/// key itself as unsealed from the recovery file (either version).
+enum KeySource<'a> {
+    Passphrase(&'a Secret),
+    Platform,
+    File(Zeroizing<[u8; 32]>),
+}
+
 fn derive_key(passphrase: &Secret, salt: &[u8; 16]) -> Result<Zeroizing<[u8; 32]>, Error> {
     let params = Params::new(19456, 2, 1, Some(32)).map_err(|_| Error::Crypto)?;
     let mut key = Zeroizing::new([0; 32]);
@@ -1710,6 +1780,8 @@ struct WriteEntry<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     channel_secret: Option<&'a ChannelSecretInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    mcp_secret: Option<&'a McpSecretInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     subscription: Option<&'a SubscriptionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     oauth: Option<&'a OAuthInfo>,
@@ -1750,6 +1822,7 @@ impl<'a> From<&'a Entry> for WriteEntry<'a> {
             registration: entry.registration.as_deref(),
             provider_key: entry.provider_key.as_ref(),
             channel_secret: entry.channel_secret.as_ref(),
+            mcp_secret: entry.mcp_secret.as_ref(),
             subscription: entry.subscription.as_ref(),
             oauth: entry.oauth.as_ref(),
         }
@@ -1777,6 +1850,8 @@ struct ReadEntry {
     provider_key: Option<ProviderKeyInfo>,
     #[serde(default)]
     channel_secret: Option<ChannelSecretInfo>,
+    #[serde(default)]
+    mcp_secret: Option<McpSecretInfo>,
     #[serde(default)]
     subscription: Option<SubscriptionInfo>,
     #[serde(default)]

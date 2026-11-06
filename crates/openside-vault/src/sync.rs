@@ -25,6 +25,7 @@ impl PreparedImport {
         if item.site != expected_site
             || item.provider_key.is_some()
             || item.channel_secret.is_some()
+            || item.mcp_secret.is_some()
             || item.subscription.is_some()
             || item.oauth.is_some()
         {
@@ -76,6 +77,7 @@ impl<L: PlatformLock> Vault<L> {
             .filter(|entry| {
                 entry.provider_key.is_none()
                     && entry.channel_secret.is_none()
+                    && entry.mcp_secret.is_none()
                     && entry.subscription.is_none()
                     && entry.oauth.is_none()
             })
@@ -98,6 +100,7 @@ impl<L: PlatformLock> Vault<L> {
                 entry.site == site
                     && entry.provider_key.is_none()
                     && entry.channel_secret.is_none()
+                    && entry.mcp_secret.is_none()
                     && entry.subscription.is_none()
                     && entry.oauth.is_none()
             })
@@ -141,6 +144,7 @@ impl<L: PlatformLock> Vault<L> {
         let mut entry = prepared.entry;
         if self.is_provider_key(&site)
             || self.is_channel_secret(&site)
+            || self.is_mcp_secret(&site)
             || self.is_subscription(&site)
             || self.is_oauth(&site)
         {
@@ -172,6 +176,7 @@ impl<L: PlatformLock> Vault<L> {
             entry.site == site
                 && entry.provider_key.is_none()
                 && entry.channel_secret.is_none()
+                && entry.mcp_secret.is_none()
                 && entry.subscription.is_none()
                 && entry.oauth.is_none()
         }) else {

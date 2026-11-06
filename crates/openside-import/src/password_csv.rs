@@ -79,10 +79,28 @@ pub fn parse_password_csv(input: &str) -> Result<CsvPasswords> {
                     })
                 })
             };
+            // Browser exports (Chrome, Edge, Firefox, Safari) and password-manager exports
+            // (Bitwarden `login_*`, 1Password and LastPass-style names).
             columns = Some((
-                header(&["url", "website", "website address"]).ok_or_else(malformed)?,
-                header(&["username", "user name", "login"]).ok_or_else(malformed)?,
-                header(&["password"]).ok_or_else(malformed)?,
+                header(&[
+                    "url",
+                    "website",
+                    "website address",
+                    "web site",
+                    "login_uri",
+                    "uri",
+                ])
+                .ok_or_else(malformed)?,
+                header(&[
+                    "username",
+                    "user name",
+                    "login",
+                    "login_username",
+                    "login name",
+                    "email",
+                ])
+                .ok_or_else(malformed)?,
+                header(&["password", "login_password"]).ok_or_else(malformed)?,
             ));
         }
         output[..written].zeroize();
@@ -207,5 +225,20 @@ mod tests {
         );
         assert_eq!(parsed.passwords[1].password.as_str(), "last");
         assert_eq!(parsed.passwords[1].username.as_str(), "other");
+    }
+
+    #[test]
+    fn password_manager_exports_map_their_column_names() {
+        for input in [
+            "folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n,,login,Example,,,0,https://example.test/login,person,pw-1,\n",
+            "Title,Web Site,Login Name,Password,Comments\nExample,https://example.test/login,person,pw-1,\n",
+            "title,uri,email,password\nExample,https://example.test/login,person,pw-1\n",
+        ] {
+            let parsed = parse_password_csv(input).unwrap();
+            assert_eq!(parsed.passwords.len(), 1, "{}", input.lines().next().unwrap());
+            assert_eq!(parsed.passwords[0].origin, "https://example.test");
+            assert_eq!(parsed.passwords[0].username.as_str(), "person");
+            assert_eq!(parsed.passwords[0].password.as_str(), "pw-1");
+        }
     }
 }

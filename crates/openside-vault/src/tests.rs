@@ -1507,3 +1507,294 @@ fn a_redactor_is_covered_only_by_one_filter_holding_all_of_its_patterns() {
     assert!(!Redactor::new([&a, &b]).covered_by(&split));
     assert!(!Redactor::new([&a]).covered_by(&[]));
 }
+
+#[test]
+fn recovery_key_round_trips_a_passphrase_vault_and_rejects_stale_or_wrong_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, audit) = (dir.path().join("vault"), dir.path().join("audit"));
+    let vault = Vault::create(&path, &audit, &passphrase(), PassphraseLock::default()).unwrap();
+    assert!(recovery_info(&path).unwrap().is_none());
+    let first = vault.generate_recovery_key(&ctx("person")).unwrap();
+    let key = vault.generate_recovery_key(&ctx("person")).unwrap();
+    drop(vault);
+    let info = recovery_info(&path).unwrap().unwrap();
+    assert!(info.current);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(recovery_path(&path))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let renewed = Secret::new("a-brand-new-passphrase".into());
+    // The replaced key, a malformed key and a missing passphrase all fail without writing.
+    for (candidate, new) in [(&first, Some(&renewed)), (&key, None)] {
+        assert!(matches!(
+            Vault::recover(&path, &audit, candidate, new, PassphraseLock::default()),
+            Err(Error::Authentication)
+        ));
+    }
+    assert!(RecoveryKey::parse("not-a-key").is_err());
+    // Case, spaces and dashes are ignored when the key is typed back.
+    let typed = RecoveryKey::parse(&key.text().to_lowercase().replace('-', " ")).unwrap();
+    let mut vault = Vault::recover(
+        &path,
+        &audit,
+        &typed,
+        Some(&renewed),
+        PassphraseLock::default(),
+    )
+    .unwrap();
+    vault
+        .put(entry("after", "pw".into(), AccessPolicy::Always))
+        .unwrap();
+    assert!(vault.verify_passphrase(&renewed).unwrap());
+    assert!(!vault.verify_passphrase(&passphrase()).unwrap());
+    drop(vault);
+    assert!(Vault::open(&path, &audit, &passphrase(), PassphraseLock::default()).is_err());
+    Vault::open(&path, &audit, &renewed, PassphraseLock::default()).unwrap();
+    // The saved key keeps working after recovery.
+    assert!(recovery_info(&path).unwrap().unwrap().current);
+    Vault::recover(
+        &path,
+        &audit,
+        &key,
+        Some(&passphrase()),
+        PassphraseLock::default(),
+    )
+    .unwrap();
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(!log.contains(key.text().as_str()));
+    assert!(log.contains("recovery_key"));
+}
+
+#[test]
+fn recovery_key_round_trips_a_keyring_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, audit) = (dir.path().join("vault"), dir.path().join("audit"));
+    let keyring = MemoryKeyring::default();
+    let mut vault = Vault::create_with_platform_key(&path, &audit, keyring.clone()).unwrap();
+    vault
+        .put(entry("item", "keyring-pw".into(), AccessPolicy::Always))
+        .unwrap();
+    let key = vault.generate_recovery_key(&ctx("person")).unwrap();
+    drop(vault);
+    // The keyring entry is lost; recovery creates a new one.
+    *keyring.key.lock() = None;
+    assert!(Vault::open_with_platform_key(&path, &audit, keyring.clone()).is_err());
+    let passphrase = passphrase();
+    assert!(matches!(
+        Vault::recover(&path, &audit, &key, Some(&passphrase), keyring.clone()),
+        Err(Error::Authentication)
+    ));
+    Vault::recover(&path, &audit, &key, None, keyring.clone()).unwrap();
+    let vault = Vault::open_with_platform_key(&path, &audit, keyring.clone()).unwrap();
+    assert!(!vault.verify_passphrase(&passphrase).unwrap());
+    assert_eq!(vault.items(&ctx("person")).unwrap().len(), 1);
+}
+
+#[test]
+fn csv_export_writes_logins_and_codes_skips_passkeys_and_audits_without_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let audit = dir.path().join("audit");
+    let mut vault = Vault::create(
+        dir.path().join("vault"),
+        &audit,
+        &passphrase(),
+        PassphraseLock::default(),
+    )
+    .unwrap();
+    vault
+        .put(
+            Entry::new(
+                "-bank".into(),
+                vec![
+                    AllowedOrigin::parse("https://bank.example").unwrap(),
+                    AllowedOrigin::parse("https://*.bank.example:8443").unwrap(),
+                ],
+                Secret::new("person@bank.example".into()),
+                Secret::new("=p,a\"ss".into()),
+                Some(Totp::parse(Secret::new("JBSWY3DPEHPK3PXP".into())).unwrap()),
+                AccessPolicy::Always,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let exported = vault.export_csv(&ctx("person")).unwrap();
+    let mut lines = exported.csv.lines();
+    assert_eq!(lines.next(), Some("name,url,username,password,otpauth"));
+    let otp = "otpauth://totp/-bank?secret=JBSWY3DPEHPK3PXP&digits=6&period=30&algorithm=SHA1";
+    assert_eq!(
+        lines.next(),
+        Some(
+            format!("'-bank,https://bank.example/,person@bank.example,\"=p,a\"\"ss\",{otp}")
+                .as_str()
+        )
+    );
+    assert_eq!(
+        lines.next(),
+        Some(
+            format!("'-bank,https://bank.example:8443/,person@bank.example,\"=p,a\"\"ss\",{otp}")
+                .as_str()
+        )
+    );
+    assert_eq!(lines.next(), None);
+    assert_eq!((exported.exported, exported.skipped), (1, 0));
+    assert!(!format!("{exported:?}").contains("p,a"));
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.contains("\"export\"") && log.contains("\"exported\""));
+    assert!(!log.contains("p,a") && !log.contains("JBSWY3DP"));
+    vault.lock();
+    assert!(matches!(
+        vault.export_csv(&ctx("person")),
+        Err(Error::Locked)
+    ));
+}
+
+#[test]
+fn autofill_rules_refuse_disabled_excluded_and_insecure_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = Vault::create(
+        dir.path().join("vault"),
+        dir.path().join("audit"),
+        &passphrase(),
+        PassphraseLock::default(),
+    )
+    .unwrap();
+    vault
+        .put(
+            Entry::new(
+                "site".into(),
+                vec![
+                    AllowedOrigin::parse("https://*.example.com").unwrap(),
+                    AllowedOrigin::parse("http://intranet.test").unwrap(),
+                    AllowedOrigin::parse("http://app.localhost:3000").unwrap(),
+                ],
+                Secret::new("user".into()),
+                Secret::new("pw".into()),
+                None,
+                AccessPolicy::Always,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let fill = |vault: &mut Vault<PassphraseLock>, origin: &str| {
+        vault
+            .vault_login(&ctx("host"), AuditAction::Fill, "site", origin, |_| Ok(()))
+            .unwrap()
+    };
+    assert_eq!(
+        fill(&mut vault, "https://www.example.com"),
+        LoginOutcome::Filled
+    );
+    assert_eq!(
+        fill(&mut vault, "http://intranet.test"),
+        LoginOutcome::Denied(Denial::InsecureOrigin)
+    );
+    assert_eq!(
+        fill(&mut vault, "http://app.localhost:3000"),
+        LoginOutcome::Filled
+    );
+    vault.set_autofill(AutofillRules::new(true, false, &["Example.COM".to_owned()]).unwrap());
+    assert_eq!(
+        fill(&mut vault, "https://login.example.com"),
+        LoginOutcome::Denied(Denial::ExcludedDomain)
+    );
+    vault.set_autofill(AutofillRules::new(true, true, &[]).unwrap());
+    assert_eq!(
+        fill(&mut vault, "http://intranet.test"),
+        LoginOutcome::Filled
+    );
+    vault.set_autofill(AutofillRules::new(false, true, &[]).unwrap());
+    assert_eq!(
+        fill(&mut vault, "https://www.example.com"),
+        LoginOutcome::Denied(Denial::AutofillOff)
+    );
+    assert!(AutofillRules::new(true, false, &["not a domain/".to_owned()]).is_err());
+}
+
+#[test]
+fn clearing_removes_sign_ins_and_keeps_model_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let audit = dir.path().join("audit");
+    let path = dir.path().join("vault");
+    let mut vault = Vault::create(&path, &audit, &passphrase(), PassphraseLock::default()).unwrap();
+    vault
+        .put(entry("one", "pw1".into(), AccessPolicy::Always))
+        .unwrap();
+    vault
+        .put(entry("two", "pw2".into(), AccessPolicy::Always))
+        .unwrap();
+    let model_key = Entry::provider_key(
+        "openai",
+        "work",
+        "Work key",
+        Secret::new("sk-clear-survivor-123".into()),
+        0,
+    )
+    .unwrap();
+    vault.set_provider_key(&ctx("person"), model_key).unwrap();
+    assert_eq!(vault.clear_logins(&ctx("person")).unwrap(), 2);
+    assert!(vault.items(&ctx("person")).unwrap().is_empty());
+    drop(vault);
+    let vault = Vault::open(&path, &audit, &passphrase(), PassphraseLock::default()).unwrap();
+    assert!(vault.items(&ctx("person")).unwrap().is_empty());
+    assert_eq!(vault.provider_keys(&ctx("person")).unwrap().len(), 1);
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.contains("\"clear\"") && log.contains("\"cleared\""));
+}
+
+#[test]
+fn a_recovery_interrupted_before_its_rename_still_recovers_with_the_same_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, audit) = (dir.path().join("vault"), dir.path().join("audit"));
+    let vault = Vault::create(&path, &audit, &passphrase(), PassphraseLock::default()).unwrap();
+    let key = vault.generate_recovery_key(&ctx("person")).unwrap();
+    drop(vault);
+    let stale = std::fs::read(recovery_path(&path)).unwrap();
+    let renewed = Secret::new("first-new-passphrase".into());
+    Vault::recover(
+        &path,
+        &audit,
+        &key,
+        Some(&renewed),
+        PassphraseLock::default(),
+    )
+    .unwrap();
+    // Recreate the state a crash between re-keying and the rename leaves behind.
+    let mut next = recovery_path(&path).into_os_string();
+    next.push(".next");
+    std::fs::rename(recovery_path(&path), &next).unwrap();
+    std::fs::write(recovery_path(&path), &stale).unwrap();
+    assert!(recovery_info(&path).unwrap().unwrap().current);
+    let again = Secret::new("second-new-passphrase".into());
+    Vault::recover(&path, &audit, &key, Some(&again), PassphraseLock::default()).unwrap();
+    Vault::open(&path, &audit, &again, PassphraseLock::default()).unwrap();
+    assert!(!std::path::Path::new(&next).exists());
+    // A new key retires the old one even if a staged file lingers.
+    std::fs::copy(recovery_path(&path), &next).unwrap();
+    let vault = Vault::open(&path, &audit, &again, PassphraseLock::default()).unwrap();
+    let replacement = vault.generate_recovery_key(&ctx("person")).unwrap();
+    drop(vault);
+    assert!(!std::path::Path::new(&next).exists());
+    assert!(matches!(
+        Vault::recover(
+            &path,
+            &audit,
+            &key,
+            Some(&renewed),
+            PassphraseLock::default()
+        ),
+        Err(Error::Authentication)
+    ));
+    Vault::recover(
+        &path,
+        &audit,
+        &replacement,
+        Some(&renewed),
+        PassphraseLock::default(),
+    )
+    .unwrap();
+}

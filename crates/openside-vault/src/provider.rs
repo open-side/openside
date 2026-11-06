@@ -100,6 +100,7 @@ impl Entry {
                 reserve_percent: 10,
             }),
             channel_secret: None,
+            mcp_secret: None,
             subscription: None,
             subscription_tokens: Vec::new(),
             oauth: None,

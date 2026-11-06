@@ -107,6 +107,7 @@ impl Entry {
             registration: None,
             provider_key: None,
             channel_secret: None,
+            mcp_secret: None,
             subscription: None,
             subscription_tokens: Vec::new(),
             oauth: Some(info),

@@ -49,8 +49,18 @@ pub enum AuditAction {
     Setup,
     /// Opening (decrypting) the vault, including refused attempts.
     Unlock,
-    /// Dropping the decrypted vault.
+    /// Dropping the decrypted vault (detail `auto_lock` when the idle timer did it).
     Lock,
+    /// A person exported the saved sign-ins as CSV.
+    Export,
+    /// A person deleted every saved sign-in, authenticator and passkey at once.
+    Clear,
+    /// A recovery key was generated or replaced ([`crate::audit_lifecycle`]).
+    RecoveryKey,
+    /// The vault was opened with its recovery key and given a new unlock key.
+    Recover,
+    /// A Passwords setting changed (auto lock, biometrics, autofill, access policy).
+    SettingsUpdate,
 }
 
 impl AuditAction {
@@ -69,6 +79,11 @@ impl AuditAction {
             Self::Setup => "setup",
             Self::Unlock => "unlock",
             Self::Lock => "lock",
+            Self::Export => "export",
+            Self::Clear => "clear",
+            Self::RecoveryKey => "recovery_key",
+            Self::Recover => "recover",
+            Self::SettingsUpdate => "settings_update",
         }
     }
 }
@@ -81,14 +96,16 @@ pub struct AuditRecord {
     /// Caller label.
     pub who: String,
     /// Operation (`fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`,
-    /// `login_save`, `get`, `policy_update`, `item_add`, `item_delete`, `setup`, `unlock`, `lock`).
+    /// `login_save`, `get`, `policy_update`, `item_add`, `item_delete`, `setup`, `unlock`, `lock`,
+    /// `export`, `clear`, `recovery_key`, `recover`, `settings_update`).
     pub what: String,
     /// Item id, or `unknown-site`.
     pub site_id: String,
     /// Normalized page origin, `-` when not applicable, or `invalid-origin`.
     pub origin: String,
     /// `allowed`, `denied`, `filled`, `fill-failed`, `completed`, `failed`, `updated`,
-    /// `registered`, `added`, `deleted`, `unlocked` or `locked`.
+    /// `registered`, `added`, `deleted`, `unlocked`, `locked`, `exported`, `cleared`,
+    /// `generated` or `recovered`.
     pub decision: String,
     /// Agent session id.
     #[serde(default, skip_serializing_if = "Option::is_none")]

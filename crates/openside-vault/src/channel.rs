@@ -56,6 +56,7 @@ impl Entry {
                 account_id: account_id.into(),
                 created_at_ms,
             }),
+            mcp_secret: None,
         })
     }
 }
