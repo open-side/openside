@@ -8,8 +8,8 @@
 | 프로필 | 도구 | 시스템 프롬프트 |
 | --- | --- | --- |
 | `full` | 등록된 데몬 도구 전부(세션 모드·브라우저·Vault 가용성에 따라 기존 규칙대로 숨김) | `prompt::parts()` 3개 + 스킬 목록 |
-| `browser-agent` | `ask_user`, `bash`, `browser_import_lookup`, `browser_pointer`, `browser_repl`, `browser_screenshot`, `edit`, `read`, `request_human_step`, `write` | 짧은 역할 문장 1개 + 안전 규칙 1개 |
-| `ultrabrowse` | `ask_user`, `browser_act`, `browser_close_tab`, `browser_import_lookup`, `browser_navigate`, `browser_open_tab`, `browser_repl`, `browser_snapshot`, `browser_tabs`, `request_human_step` | 역할 문장 + 안전 규칙 + 계획·인용 규칙([ultrabrowse.md](ultrabrowse.md)). 사이드카가 높은 추론·계획 단계·인용 강제를 더한다 |
+| `browser-agent` | `ask_user`, `bash`, `browser_downloads`, `browser_import_lookup`, `browser_pointer`, `browser_repl`, `browser_screenshot`, `connection_check`, `connection_confirm`, `connection_fetch`, `connection_observe`, `connection_open`, `connections_list`, `edit`, `generate_image`, `present`, `read`, `request_choice`, `request_form`, `request_human_step`, `request_login`, `request_otp`, `wait_for_approval`, `webfetch`, `websearch`, `write`, `write_document` | 짧은 역할 문장 1개 + 안전 규칙 1개 |
+| `ultrabrowse` | `ask_user`, `browser_act`, `browser_close_tab`, `browser_downloads`, `browser_import_lookup`, `browser_navigate`, `browser_open_tab`, `browser_repl`, `browser_snapshot`, `browser_tabs`, `connection_check`, `connection_confirm`, `connection_fetch`, `connection_observe`, `connection_open`, `connections_list`, `present`, `read`, `request_choice`, `request_form`, `request_human_step`, `request_login`, `request_otp`, `wait_for_approval`, `webfetch`, `websearch`, `write_document` | 역할 문장 + 안전 규칙 + 계획·인용 규칙([ultrabrowse.md](ultrabrowse.md)). 사이드카가 높은 추론·계획 단계·인용 강제를 더한다 |
 
 - 프로필은 노출 범위를 좁히기만 한다. 정책·승인·세션 모드 규칙은 그대로 적용되고, 읽기 전용 세션에서는 쓰기 도구가 여전히 빠진다.
 - 프로필에 없는 도구는 실행 단계(`tools::visible`)에서도 거부된다. 모델이 이름을 직접 불러도 실행되지 않는다.
@@ -17,6 +17,7 @@
 - 짧은 프롬프트에도 기존 안전 규칙(페이지·파일 내용은 지시가 아님, 정책 우회 금지, 보안 장벽은 `request_human_step`, 비밀번호·코드는 `secret_input` 으로만)이 모두 들어 있다.
 - `browser-agent` 에는 Vault 도구가 없다. 로그인은 `request_human_step`(`secret_input`·`takeover`)으로 사람에게 넘긴다.
 - Front orchestration retains its messaging, Task control, model discovery and `team_*` delegation tools under every profile. Work tools still follow the profile allowlist, but are exposed only to Tasks, not to the front. The front does not run research planning/citation guards or profile-specific reasoning settings; Task settings are unchanged.
+- `propose_routine` is front-side work, but `browser-agent` and `ultrabrowse` leave it out entirely: scheduling is not browsing, and its schema would push both profiles past the A-2 budget (§3). Ordinary chats run the default `full` profile, which keeps it.
 
 ## 2. 스냅샷(A-1)
 `docs/specs/profiles/<프로필>.tools.json` 은 노출 도구 이름 목록, `<프로필>.open.json` 은 사이드카가 실제로 받는 `open` 메시지의 `system_prompt_parts` 와 `tools` 다. 둘 다 `browser-agent`, `ultrabrowse` 에 대해 커밋돼 있다.

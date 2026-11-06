@@ -1,6 +1,7 @@
 [
   "ask_user",
   "bash",
+  "browser_downloads",
   "browser_import_lookup",
   "browser_pointer",
   "browser_repl",
@@ -13,7 +14,6 @@
   "connections_list",
   "edit",
   "present",
-  "propose_routine",
   "read",
   "request_choice",
   "request_form",
@@ -21,6 +21,8 @@
   "request_login",
   "request_otp",
   "wait_for_approval",
+  "webfetch",
+  "websearch",
   "write",
   "write_document"
 ]

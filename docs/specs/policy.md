@@ -18,7 +18,7 @@
 - loopback TCP 는 Bearer 토큰이 필요하다. 토큰이 없거나 모르는 토큰이면 401, 스코프가 모자라면 403. `Authorization` 헤더의 `Bearer` 스킴은 대소문자를 구분하지 않는다.
 - 라우트별 스코프 표는 `openside_proto::ROUTES` 하나뿐이다. OpenAPI 의 `x-capability` 도 여기서 생성한다.
 - 발급: `openside token create --scope browse [--scope ...] [--name NAME]`. 출력은 `device_id<TAB>token` 한 줄이다. 토큰은 다시 볼 수 없다.
-- loopback TCP 연결에서는 디바이스 토큰에 `steer` 권한이 있더라도 데몬의 현재 기본 모드보다 완화된 `mode`(`read-only` < `guard` < `full`)로 세션을 생성(`POST /v1/sessions`)할 수 없으며, `workspace`를 임의로 지정하는 것도 불가능하다. 페어링된 기기가 임의로 `full` 모드를 선택해 승인 절차를 우회하거나 샌드박스 루트 경로를 넓히는 일을 막기 위한 조치이며, 이를 시도하면 데몬이 403 `local_socket_required`를 반환한다. 로컬 Unix 소켓을 통한 요청은 이 제한을 받지 않으며, 원격 기기라도 기본 모드나 더 엄격한 모드는 그대로 선택할 수 있다.
+- loopback TCP 연결에서 `steer` 권한이 있는 기기 토큰은 데몬의 현재 기본 모드보다 완화된 `mode`(`read-only` < `guard` < `full`)로 세션을 생성(`POST /v1/sessions`)할 수 없으며, 로컬 접근 권한(로컬 Unix 소켓 또는 openside가 실행 중인 컴퓨터의 `admin` 사용자 기기)이 없으면 `workspace`도 지정할 수 없다. 페어링된 기기가 `full`을 선택해 승인을 건너뛰거나 샌드박스 루트를 넓히지 못하게 막으며, 이를 시도하면 403 `local_socket_required`를 반환한다. 기존 프로젝트(`project_id`)에서 시작하거나 분기한 채팅은 허용 범위를 넓히는 동작으로 보지 않는다. 프로젝트를 만들 때 이미 openside가 실행 중인 컴퓨터에서 해당 폴더를 승인했으므로(`POST /v1/projects`는 로컬 전용, 403 `local_access_required`), 어느 기기에서든 그 프로젝트 안에서 채팅을 시작할 수 있다. 채팅에 폴더를 첨부하는 요청(`PUT /v1/sessions/{id}/folder`에 `workspace` 지정)도 로컬 접근 권한이 필요하다(403 `local_access_required`). 로컬 Unix 소켓을 통한 요청은 제한을 받지 않으며, 원격 기기라도 기본 모드나 더 엄격한 모드는 그대로 선택할 수 있다. 자세한 내용은 [projects.md](projects.md)를 참고한다.
 - `agent_client` 디바이스 토큰(사람이 아닌 자동화 에이전트 클라이언트)은 `steer` 권한이 있더라도 `speed: "fast"`, `xhigh`·`max` 단계의 `effort`, `profile: "ultrabrowse"` 같은 고비용 등급으로 세션을 생성(`POST /v1/sessions`)할 수 없다. 자동화 에이전트나 유출된 토큰이 우선 처리·고추론 요율로 소유자의 모델 할당량을 소진하지 못하도록, 이를 요청하면 403 `local_socket_required`를 반환한다. 사용자 기기(`person_device`)와 로컬 Unix 소켓은 해당 등급을 자유롭게 선택할 수 있으며, 에이전트 클라이언트도 기본 속도와 `off`부터 `high`까지의 `effort`는 그대로 지정할 수 있다.
 - `PUT /v1/policy`는 이제 Unix 소켓 외에도 로컬 출처의 person/admin 토큰과 로컬 비밀값을 갖춘 검증된 루프백 런처의 요청을 허용한다. 원격 person 토큰, 에이전트 토큰, 읽기 토큰은 정책을 완화할 수 없으며, 요청 시 `local_access_required`(권한 범위 부족 시 `forbidden`) 오류로 거절된다. 세션 및 루틴 모드 완화와 워크스페이스 확장은 기존의 소켓 전용 규칙을 유지한다. `POST /v1/policy/validate`는 저장 없이 변경 사항을 검사하고 잘못된 목록 항목을 식별한다. `GET/PUT /v1/policy/network`는 아웃바운드 허용 목록을 읽고 쓰며, 변경 사항은 재시작 후 반영된다. 네트워크 설정 변경에는 로컬 권한이 필요하다.
 - 발급(`POST /v1/devices/pair`)은 Unix 소켓으로만 된다. TCP 로 호출하면 `admin` 토큰이어도 403 `local_socket_required` 다. 유출된 토큰으로 새 토큰을 만들지 못하게 하는 규칙이다.
@@ -39,6 +39,8 @@
 `Deny` 는 승인으로 뒤집히지 않는다. `Ask` 는 `confirm` 티켓을 연다. 티켓에는 id, 요약, 대상 origin(있을 때), 만료 시각이 있다. 응답이 없으면 만료되고 거부로 처리한다.
 
 민감 행동 키워드는 `openside_policy::SENSITIVE_KEYWORDS` 가 정한다. 결제·구매·삭제·전송·게시 계열이며, 버튼 이름과 역할로 판정한다. 키워드로 분류하는 방식이므로, 이름이 키워드와 맞지 않는 버튼(예: "Continue")은 민감 행동으로 보지 못한다. 그런 행동은 origin 목록과 모드 기본값이 제한한다.
+
+`computer_use` 는 연결한 데스크톱 앱 창 안의 클릭·입력·스크롤·키 입력이다. 읽기 전용은 거부, `guard` 는 매번 묻고, `full` 은 허용한다. 대상은 `app:<앱>/<연결 id>` 라서 승인은 그 연결에만 묶이고, 중지 후 다시 연결하면 이전 승인은 쓸 수 없다. 앱 연결 자체는 `sensitive`(대상 `app:<앱>/<창>:<pid>`)라서 `full` 에서도 묻는다. 자세한 내용은 [computer-use.md](computer-use.md).
 
 ## 3. 정책 API
 

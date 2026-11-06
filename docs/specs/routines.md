@@ -7,7 +7,7 @@
 
 | 항목 | 내용 |
 | --- | --- |
-| 스케줄 | `cron`(정확히 5필드, 요일은 POSIX: 0·7=일요일, 시간대는 IANA 이름, 기본 UTC. §8) 또는 `interval`(초) |
+| 스케줄 | `cron`(정확히 5필드, 요일은 POSIX: 0·7=일요일, 시간대는 IANA 이름, 기본 UTC. §8), `rrule`(RFC 5545 RRULE. §11) 또는 `interval`(초) |
 | 액션 `new_session` | 새 세션을 만들고 프롬프트를 보낸다. 모델·모드·작업공간을 생략하면 데몬 기본값을 쓴다 |
 | 액션 `heartbeat` | 이미 있는 세션에 프롬프트를 후속 메시지(큐 레인)로 넣는다. 새 세션을 만들지 않는다 |
 | 겹침 | 이전 실행의 메시지가 아직 끝나지 않았으면 이번 실행은 보내지 않고 `skipped_overlap` 으로 기록한다 |
@@ -31,7 +31,7 @@
 | 메서드·경로 | 설명 | CLI |
 | --- | --- | --- |
 | `GET /v1/routines` | 목록 | `routine list` |
-| `POST /v1/routines` | 생성(201) | `routine add --name N (--cron EXPR [--timezone Z] \| --interval-secs S) --prompt P [--heartbeat SESSION] [--model M --mode MODE --workspace PATH] [--catch-up] [--disabled]` |
+| `POST /v1/routines` | 생성(201) | `routine add --name N (--cron EXPR [--timezone Z] \| --rrule RULE [--start YYYY-MM-DDTHH:MM[:SS]] [--timezone Z] \| --interval-secs S) --prompt P [--heartbeat SESSION] [--model M --mode MODE --workspace PATH] [--catch-up] [--disabled]` |
 | `GET /v1/routines/suggestions` | 반복 요청 초안 | `routine suggest` |
 | `GET/PATCH/DELETE /v1/routines/{id}` | 조회·수정·삭제(삭제는 삭제된 `Routine` 을 200 으로 돌려준다) | `routine show/pause/resume/rm` |
 | `POST /v1/routines/{id}/run` | 지금 실행(`RunRecord`) | `routine run` |
@@ -80,7 +80,9 @@ require `person_device` in addition to `admin` (the local socket is exempt). An 
 client may pause an existing routine with `{"enabled":false}`, but may not change its
 name, schedule, action, catch-up setting or resume it without a new person action.
 
-Both the chief/front and workers can call `propose_routine`. Its arguments are the
+Both the chief/front and workers can call `propose_routine` under the default `full`
+profile; the narrow `browser-agent` and `ultrabrowse` profiles leave it out
+([profiles.md](profiles.md) §1). Its arguments are the
 existing `CreateRoutineRequest`: `name`, `schedule`, `action`, optional `enabled`
 (default `true`) and `catch_up` (default `false`). The tool validates the request and
 its live target without inserting anything into `routines.db`. Secret-bearing text
@@ -124,3 +126,66 @@ reports that prior approved creation instead of duplicating it or falsely claimi
 it was declined. Receipts retain the exact approved payload and outlive routine
 deletion, so replay cannot recreate a routine the person removed. They are creation
 receipts, not resumable external-side-effect workflows.
+
+## 11. RRULE schedules
+
+```json
+{"type": "rrule", "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "timezone": "Asia/Seoul", "start": "2026-11-06T09:00:00"}
+```
+
+- `rule` is one RFC 5545 RRULE value, evaluated with the `rrule` crate. A leading `RRULE:`
+  is accepted and stripped when the routine is stored. FREQ is `HOURLY`, `DAILY`,
+  `WEEKLY`, `MONTHLY` or `YEARLY`; shorter periods use an `interval` schedule. `COUNT` or
+  `UNTIL` ends the series. `UNTIL` must be UTC (`YYYYMMDDTHHMMSSZ`).
+- `timezone` is the IANA zone the rule's wall-clock fields are read in; UTC when omitted.
+  BY parts that the rule leaves out (hour, minute, weekday, day of month) come from
+  `start`, as RFC 5545 reads them from DTSTART.
+- `start` (DTSTART) is wall-clock time in `timezone`, `YYYY-MM-DDTHH:MM:SS`; sub-second
+  parts are dropped. A `start` inside a spring-forward gap moves past the gap (02:30 →
+  03:30); one inside a fall-back fold uses the earlier instant. Occurrences in a gap or
+  fold follow the `rrule` crate: a gap time runs the same length of time after midnight
+  (03:30), a folded time runs once.
+- Without `start`, the routine's anchor (creation, or the `PATCH` that set the schedule)
+  truncated to the minute in `timezone` is the series start. The daemon writes that value
+  into the stored schedule, so `GET` returns it and a restart (which recomputes from the
+  stored routine) continues the same series. Clients should always send `start`: an
+  `INTERVAL` or `COUNT` series is only reproducible from a fixed start.
+- One-time routines are `FREQ=DAILY;COUNT=1` with `start` set to the chosen time.
+- `next_run_at` is the first occurrence strictly after now; missed occurrences follow §2
+  like cron. When the series has ended (COUNT/UNTIL exhausted), `next_run_at` stays
+  `null` while `enabled` stays as the person set it; clients show such a routine as ended.
+  Resuming an ended routine leaves `next_run_at` `null`; a new schedule restarts it.
+- Validation (`POST` and a `PATCH` with `schedule`), all 400:
+  - unknown time zone → `invalid_timezone`;
+  - unparsable rule, a `DTSTART` or second line inside `rule`, an out-of-range BY value,
+    `UNTIL` before `start`, FREQ `SECONDLY`/`MINUTELY`, any `BYSECOND`, `COUNT` above
+    10,000, or `BYMONTH` and `BYMONTHDAY` lists where no listed day exists in any listed
+    month (`BYMONTH=2;BYMONTHDAY=30`, `BYMONTH=4,6,9,11;BYMONTHDAY=31`) →
+    `invalid_schedule` (`invalid recurrence rule: …`);
+  - a rule that spans more than 10,000 periods (FREQ × INTERVAL) between two occurrences,
+    for example an `HOURLY` rule that only matches 29 February → `invalid_schedule`
+    (`recurrence rule takes too long to expand; …`). The same rule
+    with a coarser FREQ (`DAILY`) is accepted. The spacing check below stops once it has
+    walked 10,000 periods in total;
+  - occurrences closer than 15 minutes: validation expands the next 200 occurrences after
+    now and refuses any gap under 15 minutes (a dense `BYMINUTE` list, for example) →
+    `invalid_schedule` (`invalid recurrence rule: occurrences must be at least 15 minutes
+    apart; …`). Use an `interval` schedule for shorter periods;
+  - no occurrence after now, for example a one-time routine in the past →
+    `invalid_schedule` (`recurrence rule never fires`).
+- Bounded work. A rule without `COUNT` is never walked from an old `start`: BY parts the
+  rule leaves out are first made explicit from `start`, and each computation expands from
+  the latest whole period (`start` plus k × FREQ × INTERVAL, in the rule's zone) that
+  begins no later than the time asked about. So a twenty-year-old hourly rule costs about
+  one period per tick, keeps its phase, and still honours `UNTIL`. A rule with `COUNT` is
+  counted from `start`, so it always expands from `start`; capping `COUNT` at 10,000
+  bounds that walk to at most 10,000 occurrences for the life of the routine.
+- Missed occurrences: `due` lists at most 50 (§2), then stops walking the backlog and finds
+  the latest due occurrence and the next one from the periods around now, so missed runs
+  collapse into one run as they do for cron.
+- Enumeration runs with the crate's validation limits on, so a rule whose BY parts never
+  match stops instead of looping. Compiled rules are cached by rule, time zone and start,
+  so a tick does not re-parse them.
+- Proposal cards describe common shapes in words ("Every Monday and Friday at 09:00",
+  "Once on 2026-11-06 at 18:30") and show any other rule verbatim, with its start and
+  time zone.

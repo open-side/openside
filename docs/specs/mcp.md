@@ -43,7 +43,7 @@ Claude Code, Codex, omp 같은 MCP 클라이언트가 openside 데몬을 도구�
 | `ticket_resolve` | `GET /v1/tickets/{id}`, `POST …/resolve` | `read` + `approve` |
 | `ticket_wait` | `GET /v1/tickets/{id}`(폴링) | `read` |
 | `memory_search` | `GET /v1/memory` | `read` |
-| 데몬 브라우저 도구(`browser_tabs`, `browser_open_tab`, `browser_navigate`, `browser_snapshot`, `browser_act`, `browser_pointer`, `browser_screenshot`, `browser_close_tab`, `request_login`, `request_choice`, `wait_for_approval`, `request_otp`, `register_authenticator`, `request_human_step`, `ask_user`, `vault_login`, `vault_otp`, `vault_passkey`) | `GET /v1/tools`, `POST /v1/sessions/{id}/tools/{name}` | `browse`(`vault_*` 도구는 `vault_use`도 필요) |
+| 데몬 브라우저 도구(`browser_tabs`, `browser_downloads`, `browser_open_tab`, `browser_navigate`, `browser_snapshot`, `browser_act`, `browser_pointer`, `browser_screenshot`, `browser_close_tab`, `request_login`, `request_choice`, `wait_for_approval`, `request_otp`, `register_authenticator`, `request_human_step`, `ask_user`, `vault_login`, `vault_otp`, `vault_passkey`) | `GET /v1/tools`, `POST /v1/sessions/{id}/tools/{name}` | `browse`(`vault_*` 도구는 `vault_use`도 필요) |
 | `repl` | `POST /v1/sessions/{id}/repl` (`session_id` 생략 시 브라우저 프로필마다 임시 세션을 `POST /v1/sessions`로 한 번 만들어 재사용) | `browse`(임시 세션을 만들 때는 `steer`도) |
 | `browser_profiles` | 없음 — 데몬을 호출하지 않고 MCP 서버가 직접 응답 | 없음 |
 

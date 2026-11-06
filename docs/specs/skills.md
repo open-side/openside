@@ -93,4 +93,4 @@ openside skills import SOURCE [--from AGENT | --from-dir PATH] [--allow-scripts]
 - 멘션: `agent/tests/skills.test.ts`(가짜 데몬), `crates/openside-e2e/tests/skills.rs`(실제 사이드카와 CLI).
 - CLI: `crates/openside-cli/src/tests/skills.rs`.
 
-**웹 UI 설치.** 웹 첫 실행 안내는 `POST /v1/external-agents/{id}/browser-skill`(`admin` 스코프)을 호출해 번들로 제공되는 `openside-browser` 스킬을 설치한다. 이때 설치되는 내용과 대상 디렉터리는 `openside skills install`과 완전히 동일하며, 클라이언트 요청으로 임의의 디렉터리를 지정할 수는 없다. 자세한 내용은 `docs/specs/onboarding.md`를 참고한다.
+**웹 UI 설치.** 웹 첫 실행 안내는 `POST /v1/external-agents/{id}/browser-skill`(`admin` 스코프, 로컬 권한 및 사용자 본인 권한 필요)을 호출해 번들로 제공되는 `openside-browser` 스킬을 설치한다. 이때 설치되는 내용과 대상 디렉터리는 `openside skills install`과 완전히 동일하며, 클라이언트 요청으로 임의의 디렉터리를 지정할 수 없고 대상 폴더가 홈 폴더 내부이면서 심볼릭 링크를 거치지 않고 openside 데이터 폴더 바깥에 있는지도 함께 검사한다. 자세한 내용은 `docs/specs/onboarding.md`를 참고한다.

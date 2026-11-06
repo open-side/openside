@@ -88,3 +88,22 @@ After a completed, settled chief turn, a separate tool-free pass uses the config
 Each pass receives a daemon-issued opaque scope bound to its session, owner, and the actually shown `(id, version)` pairs. SQLite atomically checks every edit before applying any: unseen identifiers, expired scopes, stale versions, ownership changes, duplicate edits, and secrets reject the whole pass. A concurrent person edit wins. A successfully consumed scope replays as a no-op, including after daemon restart. Additions are bounded to 20, edits to 100; existing secret screening applies to all writes. No free-form model deletion tool exists.
 
 `__memory_context` and `__memory_consolidate` are private runtime RPCs, not registered model tools. Model proxies refuse `__*` calls; the daemon refuses these names in registrations and rejects private RPCs from subagents or incognito sessions. Internal RPC arguments/results are not recorded as tool events, so rejected extraction content cannot enter persistent event logs.
+
+## 11. File views, change log and rebuild
+Settings › Memory shows the store as three Markdown files rendered on read; nothing is written to disk and the store stays the only source of truth. Visited-page history (`kind = history`) never appears in them.
+
+| File | Contents | Editable |
+| --- | --- | --- |
+| `MEMORY.md` | live notes without the `profile` tag, oldest first | yes |
+| `USER.md` | live notes tagged `profile` (facts about the person) | yes; new notes get `profile` |
+| `TAXONOMY.md` | tag counts and note/history counts | no (`400 read_only_view`) |
+
+Each note in an editable file is `<!-- memory id=<id> tags=<JSON array> -->` followed by its text up to the next marker. On `PUT /v1/memory/files/{name}` with the `revision` of the `GET`: a block under a known id whose text or tags changed updates that note (retention, owner and provenance are kept); an emptied block or a missing id deletes the note; text before the first marker (after the `# MEMORY`/`# USER` heading) or under a bare `<!-- memory -->` creates a note. Dropping `profile` from a `USER.md` note (or adding it in `MEMORY.md`) moves the note to the other file. The whole save is one transaction with actor `api`: any touched or deleted note whose latest change is newer than `revision`, or an id the file no longer shows, fails it with `409 memory_conflict`; secret screening and field limits apply as for single writes (at most 1000 changes per save, 4 MiB per file). A note whose text currently shows a masked Vault value cannot be edited through the file (`400 redacted_memory`), so the mask never replaces the stored text.
+
+A block's text is compared and saved trimmed, with `\n` line ends: leading and trailing whitespace of a note and `\r` before line ends are not kept once the block is edited, and a block saved unchanged never counts as an update, so the stored text stays exactly as written. A text line that would read as a marker (ignoring leading `\`) is shown with one extra leading `\`, which the save removes again, so note text can never split or forge blocks. A repeated id or a malformed marker fails the save with `400 invalid_value`; any failing change rolls back the whole save, including deletes and creates listed before it.
+
+`GET /v1/memory/history?limit=&before=` (read) is the change log across all memories, newest first (`MemoryChangeList`, `limit` 1–200, default 50, `next_before` pages). Deleted and purged entries keep only operation, actor and time.
+
+`POST /v1/memory/rebuild` (admin) purges expired memories, rebuilds the FTS5 index from the live rows and recomputes embeddings with the loaded model, then returns the counts and `MemoryHealth`.
+
+`POST /v1/memory/reveal` (admin, local access only: `403 local_access_required` otherwise) writes the three files exactly as `GET /v1/memory/files/{name}` serves them into `<data_dir>/memory/files` (folder 0700, files 0600, replaced on every call) and opens that folder in the platform file manager (`xdg-open`, `open` or `explorer`, started without a shell; the path comes from the data directory, never from the request). Returns 204, or `503 file_manager_unavailable` when no file manager could be started. The folder is a copy: edits made there are not read back, so changes go through `PUT /v1/memory/files/{name}`.

@@ -27,9 +27,12 @@ Roots follow `Paths::discover` and configured overrides; see `docs/CONFIGURATION
 | data_dir | `browser-state.tmp` | Browser-state atomic replacement |
 | data_dir | `secret-fill-intents`/** | <ticket>.json durable at-most-once fill markers, without secret values |
 | data_dir | `artifacts`/** | <session>/transcript, generated files, screenshots, attachments/<message>/ files and atomic upload staging |
+| data_dir | `shares`/** | <id>/share.json read-only chat snapshots and <id>/<n> artifact copies behind share links; .<id>.tmp staging; removed on revoke, expiry or chat deletion |
 | data_dir | `skills`/** | Skill directories, SKILL.md/resources and enablement metadata |
-| data_dir | `memory`/** | model/ tokenizer.json and model.safetensors; CLI model-generation/staging directories |
+| data_dir | `memory`/** | model/ tokenizer.json and model.safetensors; CLI model-generation/staging directories; files/ copy of MEMORY.md, USER.md and TAXONOMY.md written when Settings opens the folder |
 | data_dir | `pinned-tabs.json` | Pinned URLs and titles; atomic replacement companions |
+| data_dir | `projects.json` | Projects: names, folders and instructions; atomic replacement companions |
+| data_dir | `projects`/** | <id>/ empty folders made for projects started from scratch; kept when the project is deleted |
 | data_dir | `sync`/** | state.json encrypted-share metadata and atomic replacements |
 | data_dir | `push-vapid.key` | Private VAPID signing key |
 | data_dir | `push-subscriptions.json` | Device-bound push subscriptions; atomic replacement companions |

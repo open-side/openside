@@ -44,7 +44,7 @@ RUST_EMBEDDED_NOTICES = {"jpeg-encoder": "src/fdct.rs"}
 # Copied into the repository rather than installed from a registry: (what, source, license, text).
 # The design system is adapted from aside-relay; nothing is taken from the Aside product itself.
 VENDORED = [
-    ("aside-relay: web design system and UI patterns; web/src/theme-presets.ts holds its palette color values for 29 theme families (names identify the palettes; no desktop application code is bundled)", "https://github.com/mym0404/aside-relay", "MIT", "web/third_party/aside-relay.LICENSE"),
+    ("aside-relay: web design system and UI patterns (no desktop application code is bundled)", "https://github.com/mym0404/aside-relay", "MIT", "web/third_party/aside-relay.LICENSE"),
     ("aside-remote: upstream of aside-relay", "https://github.com/esc5221/aside-remote", "MIT", "web/third_party/aside-remote.LICENSE"),
     ("Wanted Sans Variable 1.0.3 font (web/src/assets/fonts/wanted-sans)", "https://github.com/wanteddev/wanted-sans", "OFL-1.1", "web/src/assets/fonts/wanted-sans/OFL.txt"),
     ("D2Coding 1.3.2 font (web/src/assets/fonts/d2coding)", "https://github.com/naver/d2codingfont", "OFL-1.1", "web/src/assets/fonts/d2coding/OFL.txt"),

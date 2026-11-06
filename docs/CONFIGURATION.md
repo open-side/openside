@@ -37,7 +37,7 @@ openside 설정은 TOML 파일 하나다. 아래 표는 2026-10-11 에 `cargo ru
 
 Validation: argv keys (`agent.command`, `vault.passphrase_cmd`) require a non-empty executable and NUL-free arguments. Paths cannot be empty. `agent.startup_timeout_ms` and `agent.compaction_max_tokens` must be positive. `agent.compaction_keep_messages` must be at least two and below `agent.compaction_max_messages` when that optional trigger is configured. `models.default` and `models.fallback` entries cannot be blank. Ticket TTLs must be at least one.
 
-`GET`/`PUT /v1/settings/config`(admin)는 파일과 동일한 유효성 검사 및 원자적 0600 저장으로 JSON 설정을 읽고 쓴다. `credentials`는 파일 전용으로 유지되어 응답에서 제외되고, PUT 시 거부되며, 디스크의 기존 내용이 보존된다. `restart_required`는 저장된 설정과 실행 중인 설정을 비교하며, 여기에는 실시간 원격, models, channels, sync, 외부 에이전트 폴더 오버레이가 포함된다. 전용 엔드포인트는 해당 오버레이를 즉시 반영하며, 설정 파일 직접 편집은 재시작 시 적용된다.
+`GET`/`PUT /v1/settings/config`(admin)는 파일과 동일한 유효성 검사 및 원자적 0600 저장으로 JSON 설정을 읽고 쓴다. `credentials`는 파일 전용으로 유지되어 응답에서 제외되고, PUT 시 거부되며, 디스크의 기존 내용이 보존된다. `restart_required`는 저장된 설정과 실행 중인 설정을 비교하며, 여기에는 실시간 원격, models, channels, sync, 외부 에이전트 폴더 오버레이가 포함된다. 전용 엔드포인트는 해당 오버레이를 즉시 반영하며, 설정 파일 직접 편집은 재시작 시 적용된다. CLI의 `openside config schema`, `openside config get`, `openside config set`, `openside config edit`도 `/v1/settings/config`를 그대로 사용하므로, 원격 호스트에는 동일한 `remote_editable` 제한이 적용된다.
 
 Local authority means a private Unix socket, or a verified loopback launcher with a person/admin token and local secret. Local authority may edit every non-file-only key. Remote person/admin tokens may edit only `tickets.*`, `models.default/fallback/front`, `memory.default_retention/history`, `agent.startup_timeout_ms/tool_retries/compaction_max_messages/compaction_max_tokens/compaction_keep_messages/orchestration`, and `service.inhibit_sleep`. Other changes return audited `local_access_required`; TCP agent clients cannot write settings (`forbidden`). `POST /v1/daemon/restart` requires local authority and gracefully re-execs with the same PID. An expiring private one-time request-bound handoff preserves the launcher secret only during this controlled exec, not ordinary boot.
 
@@ -61,6 +61,14 @@ Local authority means a private Unix socket, or a verified loopback launcher wit
 | `passphrase_cmd` | argv | — | — | 데몬 시작 시 실행되어 출력값으로 passphrase 볼트의 잠금을 해제하는 선택적 명령. 셸 없이 실행되며, 출력값은 잠금 해제에만 사용된 후 메모리에서 안전하게 소멸(zeroized)되고 로그에 기록되지 않음. doctor 실행 시에는 호출되지 않음. 미설정 시 `openside vault unlock` 또는 웹 Vault 페이지에서 잠금 해제 |
 | `unlock` | `auto` \| `passphrase` \| `secret-service` \| `native` | `auto` | — | 잠금 해제 방식. `auto`는 기존 파일의 방식을 따르고, 신규 생성 시 접근 가능한 OS 키링(Linux Secret Service, macOS Keychain, Windows Credential Manager)이 있으면 키링을, 없으면 passphrase를 사용함. `secret-service` 및 `native`는 키링 강제(버전 2 파일), `passphrase`는 passphrase 강제(버전 1 파일) |
 | `default_policy` | `always` \| `while_unlocked` \| `never` | `while_unlocked` | — | 항목별 재정의가 없는 항목의 접근 정책. 재정의는 `openside vault policy` 로 바꾼다 |
+| `auto_lock` | `immediately` \| `one_minute` \| `five_minutes` \| `fifteen_minutes` \| `one_hour` \| `four_hours` \| `one_day` \| `one_week` \| `never` | `one_week` | — | 볼트를 사용하지 않을 때 자동으로 잠기기까지의 유휴 시간. `immediately`는 각 사용 직후 바로 잠금 |
+| `biometric_unlock` | bool | `false` | — | 키링 볼트 전용: 잠금 해제 시 `fprintd`(Linux) 또는 Touch ID(macOS) 인증 요구. 데몬 시작 시 볼트가 자동으로 열리지 않음 |
+| `autofill.enabled` | bool | `true` | — | 저장된 로그인 정보 자동 채우기 사용 여부 |
+| `autofill.auto_submit` | bool | `true` | — | 값을 채운 뒤 로그인 버튼을 자동으로 누름 |
+| `autofill.allow_insecure` | bool | `false` | — | 일반 `http` 페이지에서도 자동 채우기 허용(`localhost`는 항상 안전한 출처로 간주) |
+| `autofill.excluded_domains` | string[] | `[]` | — | 자동 채우기를 수행하지 않을 도메인 및 하위 도메인 목록(최대 500개, 도메인 이름 또는 URL 형식이며 IP 주소는 불가) |
+
+이 설정들은 `openside vault settings` 또는 `PATCH /v1/vault/settings`로도 바꿀 수 있으며 데몬을 재시작하지 않아도 즉시 반영된다.
 
 `openside vault init`을 실행하거나(키링 환경에서는 첫 항목 추가로도 가능) 볼트를 생성하고, 선택된 방식은 `openside doctor`로 확인한다. 포맷, 정책 및 감사 관련 상세 규격은 [`docs/specs/vault.md`](specs/vault.md)를 참고한다.
 
@@ -106,6 +114,13 @@ Local authority means a private Unix socket, or a verified loopback launcher wit
 | `default` | string | — | `OPENSIDE_MODEL` | 일반 세션과 별도 모델을 지정하지 않은 팀원이 사용하는 기본 추론 모델(`provider:model`)입니다. Chief가 Task를 생성할 때 모델을 직접 지정하지 않은 경우에도 이 모델로 동작합니다. |
 | `front` | string | — | — | 대표 프런트 에이전트(chief front agent)에 쓸 빠른 모델입니다. 따로 지정하지 않으면 추론 모델을 그대로 씁니다. Settings에서 한 번 설정하며, 진행 중인 요청을 마친 뒤 유휴 상태가 되었다가 시작하는 다음 턴부터 반영됩니다. |
 | `fallback` | string[] | `[]` | — | 순서 있는 대체 모델 목록 |
+| `standard` | string | — | — | 모델을 직접 지정하지 않고 시작하는 서브에이전트와 Task(`create_task`/`delegate`에서 `role`을 생략하거나 `standard`로 지정한 경우)에 쓰는 모델입니다. 따로 설정하지 않으면 해당 세션의 모델을 그대로 사용합니다. |
+| `deep` | string | — | — | 에이전트가 깊이 있는 추론, 계획 수립, 판단, 종합이 필요하다고 표시한 Task(`role` = `deep`)에 쓰는 모델입니다. 따로 설정하지 않으면 해당 세션의 모델을 그대로 사용합니다. |
+| `visual` | string | — | — | 가장 최근 입력에 이미지(첨부 이미지, 브라우저 스크린샷)가 포함된 요청에 쓰는 모델로, 메인 에이전트와 서브에이전트 모두에 적용됩니다. 이 모델이 요청을 처리할 수 없으면 원래 요청 모델과 대체 모델이 이어받아 처리합니다. 따로 설정하지 않으면 모델을 전환하지 않습니다. |
+| `image` | string | — | — | `generate_image` 도구가 쓰는 이미지 생성 모델입니다. 따로 설정하지 않으면 지금 쓸 수 있는 이미지 생성 모델 가운데 목록에서 첫 번째 모델을 자동으로 씁니다. 이미지 생성 모델만 선택할 수 있으며, 생성된 이미지는 대화의 출력 파일로 저장됩니다. |
+| `image_off` | bool | `false` | — | `true`이면 이미지 생성을 끕니다. 쓸 수 있는 이미지 생성 모델이 있어도 `generate_image` 도구를 제공하지 않습니다. Settings에서 이미지 생성을 '없음'으로 고르면 `true`가 되고, 모델을 고르거나 자동으로 되돌리면 `false`가 됩니다. |
+
+`models.standard`, `models.deep`, `models.visual`, `models.image`를 설정할 때는 명시적인 `provider:model` 식별자를 지정해야 하며, Settings에서는 이미지 역할에 대화 모델을 지정하거나 대화 역할에 이미지 모델을 지정하면 거부합니다.
 
 두 역할 모두 설정하지 않은 상태에서 데몬이 시작되거나 자격 증명·계정·풀이 변경되면, 사용 가능한 추천 추론 모델 가운데 첫 번째 모델과 동일한 제공자의 추천 빠른 모델을 자동으로 선택합니다. 같은 제공자에서 찾지 못하면 다른 제공자의 모델로 대체합니다. 사용자가 직접 지정한 설정은 절대 임의로 덮어쓰지 않으며, 사용할 수 있는 추천 추론 모델이 없으면 `model_not_configured` 상태를 유지합니다.
 
@@ -184,6 +199,7 @@ timeout_seconds = 10
 | `bundle_dir` | path | — | — | `chrome`, 그다음 `chromium` 을 찾을 디렉터리 |
 | `gateway` | `auto`·`off` | `auto` | — | `auto` 면 띄운 브라우저가 gateway(패치한 Chromium, Linux 전용)를 열었을 때 그것을 쓰고, 없으면 CDP만 쓴다. `off` 면 항상 CDP만 쓴다 |
 | `extensions` | path[] | `[]` | — | 신뢰하는 압축 해제 확장 디렉터리 목록. 데몬이 직접 띄우는 순정 Chromium 에 이 확장을 불러와, Agent Tabs 가 에이전트 소유 탭을 id 로 묶을 수 있게 한다. 상대 경로는 설정 파일 디렉터리 기준이고, 실제로 있는 디렉터리여야 한다. Chromium 확장 목록은 쉼표로 구분하므로 쉼표나 NUL 이 든 경로는 거부한다. 여기 적은 확장만 켠다(`--load-extension`, `--disable-extensions-except`, 셸 없이 프로세스 인수로 전달). 시크릿 세션의 브라우저에는 불러오지 않는다. Google Chrome 정식 버전(137 이상)은 `--load-extension` 옵션을 무시하므로 Chromium이나 Chrome for Testing을 사용해야 한다 |
+| `language` | string | — | `OPENSIDE_BROWSER_LANG` | `openside-browser` 런처가 띄우는 브라우저 UI 언어(예: `ko`, `en`). 지정하지 않으면 OS 로케일을 따른다. Linux에서는 Chromium이 `--lang`을 무시하므로 런처가 이 값을 `LANGUAGE` 환경변수로 넘긴다. Chromium은 브라우저가 실제로 제공하는 UI 로케일 외의 값을 무시하므로, 런처는 이 값을 실제 UI 로케일에 맞춰 변환한다(예: `ko_KR`은 `ko`, `pt_BR`은 `pt-BR`, `zh_Hant`는 `zh-TW`). `OPENSIDE_BROWSER_LANG` 환경변수가 이 값보다 우선한다. 언어 설정이 `시스템`이면 웹 UI와 확장도 이 언어를 따른다. `ko`, `en`, `pt-BR` 같은 코드만 허용한다 |
 
 탐색 순서: `executable` → `OPENSIDE_BROWSER` → `bundle_dir` → PATH(`chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `chrome`) → 플랫폼 위치(macOS 앱 번들 두 곳, Windows 는 `LOCALAPPDATA`/`PROGRAMFILES`/`PROGRAMFILES(X86)` 아래, Linux 없음).
 
@@ -210,6 +226,16 @@ timeout_seconds = 10
 |---|---|---|---|---|
 | `allow` | string[] | `[]` | — | loopback 과 설정한 모델·채널 엔드포인트 외에 허용할 외부 목적지. `openside_policy::Egress` 문법(`host`, `*.domain`, `host:port`, `scheme://host[:port]`)을 따른다. 사이드카의 HTTP 전송, 채널 어댑터, `memory model fetch` 가 이 목록 밖으로 나가는 요청(리다이렉트 포함)을 거부한다. 문법이 틀리면 데몬이 시작하지 않는다. bash 샌드박스는 이 목록과 무관하게 네트워크가 없다 |
 
+### `[search]`
+
+| 키 | 타입 | 기본값 | env | 설명 |
+|---|---|---|---|---|
+| `provider` | `browser` \| `brave` \| `tavily` | `browser` | — | `websearch` 도구가 검색 결과를 가져오는 경로다. `browser`는 백그라운드 에이전트 탭에서 검색 엔진의 결과 페이지를 읽는다. `brave`와 `tavily`는 허용 origin에 해당 API origin이 들어 있는 Vault 항목이 정확히 하나일 때 거기서 키를 꺼내 검색 API를 호출한다. 조건에 맞는 항목이 없거나 여러 개일 때, 또는 Vault가 잠겨 있거나 시크릿 세션일 때는 `browser`로 전환한다 |
+| `engine` | string | — | — | `browser` 모드에서 쓸 검색 결과 페이지 URL 템플릿이다. `http(s)` 주소여야 하며 URL 인코딩된 검색어가 들어갈 `{query}`를 포함해야 한다. 지정하지 않으면 브라우저의 기본 검색 엔진이 알려진 엔진(Google, Bing, DuckDuckGo, Yahoo, Ecosia, Brave, Naver)일 때 그 엔진을 쓰고, 그 밖에는 `https://html.duckduckgo.com/html/?q={query}`를 쓴다 |
+| `api_url` | string | — | — | `brave`/`tavily`의 API 엔드포인트 주소를 덮어쓴다(기본값: `https://api.search.brave.com/res/v1/web/search`, `https://api.tavily.com/search`). 자격 증명이 없는 `http(s)` 주소여야 한다. 여기에 지정한 엔드포인트는 설정된 서비스로 보므로 `network.allow` 없이도 접근할 수 있다 |
+
+`webfetch`에는 별도 설정이 없다. `[network] allow`(또는 루프백)가 허용하는 URL은 직접 가져오고, 그 외에는 에이전트 브라우저를 통해 페이지를 읽으며, 두 경로 모두 `[policy]`를 거친다. 자세한 내용은 [specs/web-tools.md](specs/web-tools.md)를 본다.
+
 ### `[ui]`
 
 | 키 | 타입 | 기본값 | env | 설명 |
@@ -234,6 +260,22 @@ timeout_seconds = 10
 | `project` | bool | `true` | — | `false` 면 세션 작업공간의 `.openside/skills/`(읽기 전용)를 쓰지 않는다 |
 | `agents.<이름>` | path | — | `OPENSIDE_SKILLS_<이름>_DIR` | `openside skills install <이름>` 이 openside 브라우저 스킬을 넣을 그 에이전트의 스킬 디렉터리. 설정 항목이 환경변수보다 먼저고, `claude`·`codex`·`omp` 는 둘 다 없으면 각자의 관례 경로(`$CLAUDE_CONFIG_DIR`/`$CODEX_HOME`/`$OMP_CODING_AGENT_DIR`(다음 `$PI_CODING_AGENT_DIR`) 아래 `skills`, 없으면 `$HOME` 아래 각 에이전트의 설정 디렉터리)를 쓴다 |
 
+### `[mcp]`
+
+대화에서 에이전트가 도구를 호출할 수 있는 외부 MCP 서버 설정이다. Settings → Plugins & MCPs 또는 `/v1/mcp/servers`(로컬 접근 필요)에서 서버를 추가·수정·삭제하면 바로 적용된다. 이 파일을 직접 수정하거나 로컬 `PUT /v1/settings`로 바꾸면 데몬을 재시작해야 적용되며, 원격 설정 편집으로는 이 섹션을 바꿀 수 없다. 시크릿 값(환경변수나 HTTP 헤더)은 `mcp_secret` 타입의 Vault 항목으로만 보관하며, 이 파일에 저장하거나 동기화하지 않고 브라우저 자동 완성에도 제공하지 않는다. 동작과 제한 사항은 [`docs/specs/mcp-client.md`](specs/mcp-client.md)에 있다.
+
+| 키 | 타입 | 기본값 | env | 설명 |
+|---|---|---|---|---|
+| `servers[].id` | string | — | — | 고유한 서버 ID(1~32자의 영문 소문자, 숫자, `-`, `_`). 에이전트에게는 도구가 `mcp__<id>__<tool>` 이름으로 보인다 |
+| `servers[].label` | string | — | — | Settings에 표시할 이름(1~80자) |
+| `servers[].enabled` | bool | `true` | — | `false`면 서버를 시작하지 않지만 설정과 시크릿은 그대로 유지한다 |
+| `servers[].transport` | `stdio` \| `http` | — | — | `stdio`는 로컬 프로그램을 실행하고, `http`는 `url`의 Streamable HTTP 엔드포인트에 연결한다 |
+| `servers[].command` | string[] | — | — | stdio 전용. 셸 없이 실행할 프로그램과 인자 목록이다. 환경변수는 비우고 `PATH`, `HOME`, `LANG` 같은 기본 변수와 해당 서버의 시크릿만 넘긴다 |
+| `servers[].cwd` | path | `<data_dir>` | — | stdio 전용. 작업 디렉터리의 절대 경로 |
+| `servers[].url` | string | — | — | `http` 전용. `https://` URL이어야 하며, `http://`는 localhost/loopback 주소에만 허용한다. 연결할 때 호스트 이름을 한 번만 조회하며, 조회된 모든 주소는 이 컴퓨터(loopback)나 공인(전역 라우팅 가능) 주소여야 하고 확인된 그 주소로 연결을 유지한다. 리다이렉트는 따라가지 않는다 |
+| `servers[].allow_private_network` | bool | `false` | — | `http` 전용. `true`면 사설 주소(`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), Tailscale이 쓰는 공유 대역(`100.64.0.0/10`), 고유 로컬 IPv6(`fc00::/7`)의 사설 네트워크 서버에도 연결할 수 있다. 이 경우에도 링크 로컬 주소(`169.254.0.0/16`, `fe80::/10`), 클라우드 메타데이터 서비스, 그 밖의 특수 목적 주소는 계속 차단하며 `https://` 조건도 달라지지 않는다. 서버가 시크릿을 전달받으므로 직접 운영하는 네트워크의 서버에만 켜야 한다. `stdio` 서버에 설정하면 오류가 발생한다 |
+| `servers[].secrets` | string[] | `[]` | — | Vault에 보관된 시크릿의 이름만 적는다. stdio는 환경변수 이름, http는 헤더 이름(예: `Authorization`)을 지정한다. 서버당 시크릿은 최대 32개, 서버는 전체 32개까지 등록할 수 있다 |
+
 ### `[channels]`
 
 관리형 Telegram, Slack, Discord 계정은 Settings → Channels 또는 `/v1/settings/channels`를 통해서만 설정한다. 각 서비스는 라벨이 지정된 여러 ID를 지원하며, 독립적인 활성화, teammate 할당, 상태 조회가 가능하다. 시크릿 값은 타입화된 `channel_secret` Vault 항목으로 암호화되어 저장되며, 메타데이터로 반환되거나 config/argv/logs에 저장되거나 동기화되거나 브라우저 자동 완성으로 노출되지 않는다. 기존 env/command 테이블은 독립 실행형(standalone) 러너에서 서비스당 1개의 레거시 계정으로 계속 허용된다.
@@ -243,9 +285,9 @@ timeout_seconds = 10
 | `api_url` | string | `http://<daemon.listen>` | `OPENSIDE_API_URL` | 어댑터가 연결할 데몬 주소. https 이거나 loopback http 여야 한다 |
 | `token_file` | path | — | — | 데몬 bearer 토큰 파일(`read`·`steer`·`approve` 범위). 없으면 `token_env` 변수를 읽는다 |
 | `token_env` | string | `OPENSIDE_TOKEN` | — | 데몬 토큰이 들어 있는 환경변수 이름 |
-| `stt_cmd` | string[] | — | — | 로컬 음성 전사 명령. 오디오 파일 경로를 마지막 인자로 붙여 실행하고 stdout 을 전사문으로 쓴다. 없으면 음성 메시지를 정중히 거절한다 |
-| `stt_timeout_secs` | int | `120` | — | 전사 제한 시간. 0 이면 거부 |
-| `max_audio_bytes` | int | `26214400` | — | 받아 줄 오디오 최대 크기. 0 이면 거부 |
+| `stt_cmd` | string[] | — | — | 로컬 음성 전사 명령. 오디오 파일 경로를 마지막 인자로 붙여 실행하고 stdout 을 전사문으로 쓴다. 없으면 음성 메시지를 정중히 거절한다. 웹 입력창 받아쓰기(`POST /v1/stt`)도 이 명령을 먼저 쓰고, 없을 때만 `openai` 계정 풀의 OpenAI API 키로 전사한다 |
+| `stt_timeout_secs` | int | `120` | — | 전사 제한 시간(받아쓰기 포함). 0 이면 거부한다 |
+| `max_audio_bytes` | int | `26214400` | — | 받아 줄 오디오 최대 크기. 0 이면 거부한다. 받아쓰기는 8 MiB 와 이 값 중 작은 쪽까지 받는다 |
 | `edit_interval_ms` | int | `1000` | — | 스트리밍 답글을 고쳐 쓰는 최소 간격. 200 미만이면 거부 |
 | `state_dir` | path | `<data_dir>/channels` | — | 스레드-세션 매핑 저장 위치(디렉터리 0700, 파일 0600) |
 | `accounts` | object[] | `[]` | — | `id`, `kind`, `label`, `enabled`, `agent_id`, `secret_id`, `options`를 가진 독립 계정 목록. id는 kind별로 1~40자의 소문자·숫자·밑줄·하이픈만 허용되며, label은 제어 문자가 없는 1~128바이트 문자열이다. `secret_id`는 Vault의 `channel:{kind}:{id}`를 참조하며 자격 증명 값을 직접 포함하지 않는다. |
@@ -293,7 +335,8 @@ timeout_seconds = 10
 
 | 키 | 타입 | 기본값 | env | 설명 |
 |---|---|---|---|---|
-| `public_url` | string | — | — | 다른 기기가 접속하는 주소(예: `https://desk.tail1234.ts.net`). `openside pair` 의 QR 이 `<public_url>/pair#<코드>` 를 가리킨다. http(s) 주소만 받고, 사용자 정보·쿼리·프래그먼트가 있으면 거부한다. doctor 는 loopback 이 아닌 http 주소를 실패로 표시한다 |
+| `enabled` | bool | — | — | 원격 제어의 메인 스위치다. `false`이면 이 컴퓨터만 데몬에 접근할 수 있고(유닉스 소켓, 또는 프록시·포워딩 헤더가 없고 `Host`가 루프백 주소나 `localhost`인 루프백 TCP 요청), 웹 UI와 공개 라우트를 포함한 다른 모든 요청은 403 `remote_disabled`로 거부된다. Tailscale Serve, Cloudflare 터널, 릴레이는 중지되지만 각 설정(`mode`, `public_url`, `tailscale`, `cloudflare`, `relay`)은 그대로 보존되므로 다시 켜면 원래대로 복원된다. 설정 파일에 이 키가 없으면 전송 방식(`mode`)이나 `public_url`이 이미 설정되어 있을 때만 켜진 것으로 간주하므로, 기존 원격 설정은 그대로 동작하고 새로 설치한 환경에서는 원격 제어가 꺼진 상태로 시작한다. 설정 → 개발자에서 스위치를 켜면(`POST /v1/remote/enable` 포함) `true`가 기록되고, 끄면 `false`가 기록된다. 설정 화면에서 개별 전송 방식을 변경할 때는 먼저 현재 유효 값을 기록하므로, 마지막 전송 방식을 끄더라도 원격 제어 자체가 함께 꺼지지 않는다. 원격 제어를 꺼도 사용자가 직접 띄운 리버스 프록시는 중지되지 않으므로 별도로 중지해야 한다 |
+| `public_url` | string | — | — | 다른 기기가 접속하는 주소(예: `https://desk.tail1234.ts.net`). `openside pair`의 QR이 `<public_url>/pair#<코드>`를 가리킨다. 스킴·호스트·선택적 포트로만 이루어진 http(s) 오리진(끝의 `/`는 허용)만 받으며, 경로·사용자 정보·쿼리·프래그먼트가 포함되면 `invalid_config`로 거부한다. doctor는 loopback이 아닌 http 주소를 실패로 표시한다 |
 | `push_contact` | string | `public_url`(https 일 때), 없으면 `mailto:openside@localhost` | — | Web Push VAPID 토큰의 `sub` 연락처. 푸시 서비스 운영자가 문제가 생겼을 때 연락하는 주소다. `mailto:` 또는 `https://`로 시작해야 한다. 그렇지 않으면 설정 검증에 실패한다 |
 | `tailscale.https_port` | integer | `443` | — | 이 컴퓨터의 Tailscale Serve 주소에서 openside 루트 핸들러를 연결할 HTTPS 포트(1–65535). `443`이 아니면 `public_url`에 포트가 함께 들어간다. 다른 앱이 이미 서빙 중인 포트는 거부하고 빈 포트를 알려 준다(`docs/REMOTE.md` 참고) |
 
@@ -315,6 +358,21 @@ SMS·메일 전달 앱이 `POST /v1/otp`(`otp_ingest` 범위 토큰)로 보낸 �
 | `inhibit_cmd` | string[] | Linux `systemd-inhibit --what=sleep:idle … sleep infinity`, macOS `caffeinate -i` | — | 절전을 막는 동안 띄워 둘 명령(셸 없이 실행). 이 프로세스를 끝내면 잠금이 풀린다 |
 
 서비스 등록은 `openside service install` 이 한다([`docs/REMOTE.md`](REMOTE.md#5-상시-실행)).
+
+### `[preferences]`
+
+설정 화면에서 고르는 항목이다. `PATCH /v1/settings/preferences`로 바꾸면 재시작 없이 바로 적용된다. 페어링된 원격 기기에서도 바꿀 수 있지만, `mcp_server`와 `computer_use` 두 항목은 이 컴퓨터(로컬 소켓 또는 이 컴퓨터에서 연 openside)에서 사용자만 직접 바꿀 수 있다. `openside mcp` 클라이언트나 에이전트 클라이언트 토큰으로 요청하면 이 컴퓨터에서 보내더라도 `403 person_access_required`로 거부되며, `PUT /v1/settings/config`에서도 마찬가지다.
+
+|키|타입|기본값|env|설명|
+|---|---|---|---|---|
+|`name`|string|없음|—|앱에서 부를 이름. 1~80자 한 줄|
+|`notifications`|string[]|`["needs_attention", "task_completed", "routine_completed"]`|—|푸시로 받을 알림 종류. 확인이 필요할 때, 채팅 작업이 끝났을 때, 루틴 실행이 끝났을 때. 비우면 알림을 보내지 않는다|
+|`completion_sound`|bool|`true`|—|채팅이 끝나면 앱에서 소리를 낸다|
+|`follow_up`|`queue`\|`steer`|`queue`|—|작업 중에 보낸 메시지를 앱이 어떻게 전달할지. `queue` 는 지금 작업이 끝난 뒤, `steer` 는 진행 중인 작업에 바로 전달한다|
+|`confirmation`|`skip`\|`ask_first`|`skip`|—|새 채팅의 기본 확인 방식. `ask_first` 면 권한 모드가 허용하더라도 파일 쓰기와 명령 실행 전에 묻는다. 채팅마다 바꿀 수 있다|
+|`agent_tab_cleanup_minutes`|int|`15`|—|에이전트가 연 탭을 정리하기까지의 유휴 시간(분). 0, 5, 10, 15, 30, 60, 120 중 하나이며 0 이면 정리하지 않는다|
+|`save_sessions`|bool|`false`|—|CLI·MCP 에서 시작한 세션을 끝난 뒤에도 채팅 목록에 남긴다|
+|`mcp_server`|bool|`true`|—|`openside mcp` 를 허용한다|
 
 ## 그 밖의 환경변수
 

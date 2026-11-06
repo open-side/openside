@@ -9090,6 +9090,10 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 
+Rust: block2 0.6.2
+License: MIT
+
+
 Rust: blocking 1.7.0
 License: Apache-2.0 OR MIT
 
@@ -42995,6 +42999,22 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 
+Rust: objc2 0.6.5
+License: MIT
+
+
+Rust: objc2-encode 4.1.0
+License: MIT
+
+
+Rust: objc2-foundation 0.3.2
+License: MIT
+
+
+Rust: objc2-local-authentication 0.3.2
+License: Zlib OR Apache-2.0 OR MIT
+
+
 Rust: once_cell 1.21.4
 License: MIT OR Apache-2.0
 
@@ -56687,6 +56707,10 @@ License: MIT
 
 Rust: rquickjs-sys 0.14.0
 License: MIT
+
+
+Rust: rrule 0.14.0
+License: MIT OR Apache-2.0
 
 
 Rust: rusqlite 0.37.0
@@ -118641,7 +118665,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
 
-Vendored: aside-relay: web design system and UI patterns; web/src/theme-presets.ts holds its palette color values for 29 theme families (names identify the palettes; no desktop application code is bundled)
+Vendored: aside-relay: web design system and UI patterns (no desktop application code is bundled)
 Source: https://github.com/mym0404/aside-relay
 License: MIT
 

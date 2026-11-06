@@ -595,15 +595,28 @@ Usage: openside settings [OPTIONS] <COMMAND>
 
 #### `openside settings get`
 
-Print the effective CLI settings as JSON
+Print the CLI settings and the daemon's preferences as JSON
 
 ```text
 Usage: openside settings get [OPTIONS]
 ```
 
+#### `openside settings set`
+
+Change one of the daemon's preferences
+
+```text
+Usage: openside settings set [OPTIONS] <key> <value>
+```
+
+| Argument | Description |
+|---|---|
+| `<key>` | One of `name`, `notifications`, `completion_sound`, `follow_up`, `confirmation`, `agent_tab_cleanup_minutes`, `save_sessions`, `mcp_server`, `computer_use`. |
+| `<value>` | `true`/`false` for switches, minutes for `agent_tab_cleanup_minutes`, a comma list for `notifications` (empty for none) |
+
 #### `openside settings save-sessions`
 
-Show CLI sessions in the chat list
+Show CLI sessions in the chat list (the daemon's `save_sessions` preference)
 
 ```text
 Usage: openside settings save-sessions [OPTIONS] <value>
@@ -1169,8 +1182,10 @@ Usage: openside routine add [OPTIONS] --name <NAME> --prompt <TEXT>
 |---|---|
 | `--name <NAME>` | Required. |
 | `--cron <EXPR>` | Five-field cron expression |
-| `--timezone <ZONE>` | IANA time zone for --cron (default UTC) |
-| `--interval-secs <SECS>` | Fixed interval instead of --cron |
+| `--rrule <RULE>` | RFC 5545 recurrence rule, e.g. FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=9;BYMINUTE=0 (FREQ=DAILY;COUNT=1 with --start runs once) |
+| `--start <YYYY-MM-DDTHH:MM[:SS]>` | First occurrence of --rrule, wall-clock time in --timezone (default: now, to the minute) |
+| `--timezone <ZONE>` | IANA time zone for --cron or --rrule (default UTC) |
+| `--interval-secs <SECS>` | Fixed interval instead of --cron or --rrule |
 | `--prompt <TEXT>` | Prompt sent on every run Required. |
 | `--heartbeat <SESSION>` | Send the prompt to this existing session instead of starting a new one |
 | `--model <MODEL>` |  |
@@ -1373,6 +1388,82 @@ Usage: openside vault audit [OPTIONS]
 | `--item <ID>` |  |
 | `--session <SESSION>` |  |
 | `--limit <N>` |  |
+
+#### `openside vault settings`
+
+Show password settings, or change the ones given
+
+```text
+Usage: openside vault settings [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--auto-lock <TIME>` | Lock the vault after this long without use One of `immediately`, `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`, `never`. |
+| `--biometric-unlock <BOOL>` | Require a fingerprint or Touch ID before a keyring vault unlocks One of `true`, `false`. |
+| `--autofill <BOOL>` | Fill saved sign-ins at all One of `true`, `false`. |
+| `--auto-submit <BOOL>` | Press the sign-in button after filling One of `true`, `false`. |
+| `--allow-insecure <BOOL>` | Also fill on plain-http pages (localhost always counts as secure) One of `true`, `false`. |
+| `--exclude-domain <DOMAIN>` | Never fill on this domain or its subdomains; repeatable |
+| `--include-domain <DOMAIN>` | Remove a domain from the excluded list; repeatable |
+| `--default-policy <POLICY>` | Access policy for items without their own One of `always`, `while_unlocked`, `never`. |
+
+#### `openside vault export`
+
+Write every saved sign-in, unencrypted, to a new CSV file (asks for the passphrase)
+
+```text
+Usage: openside vault export [OPTIONS] --output <FILE>
+```
+
+| Argument | Description |
+|---|---|
+| `-o, --output <FILE>` | The file to create; an existing file is never overwritten Required. |
+| `--yes` | Confirm that the file will hold your passwords in plain text |
+
+#### `openside vault import`
+
+Add sign-ins from a browser or password-manager CSV export
+
+```text
+Usage: openside vault import [OPTIONS] <FILE>
+```
+
+| Argument | Description |
+|---|---|
+| `<FILE>` |  |
+
+#### `openside vault clear`
+
+Delete every saved sign-in, authenticator and passkey
+
+```text
+Usage: openside vault clear [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--yes` | Confirm the deletion |
+
+#### `openside vault recovery-key`
+
+Create a recovery key and print it once; any earlier key stops working
+
+```text
+Usage: openside vault recovery-key [OPTIONS]
+```
+
+| Argument | Description |
+|---|---|
+| `--yes` | Confirm replacing any earlier recovery key |
+
+#### `openside vault recover`
+
+Open a locked vault with its recovery key and choose a new passphrase
+
+```text
+Usage: openside vault recover [OPTIONS]
+```
 
 ### `openside connections`
 
@@ -1590,6 +1681,55 @@ Usage: openside policy test [OPTIONS] <TARGET> <CAPABILITY>
 | `--mode <MODE>` | Session mode to evaluate under (default: the policy's default_mode) One of `read-only`, `guard`, `full`. |
 | `--workspace <PATH>` | Approved workspace for guard mode |
 
+### `openside config`
+
+Read or change any config.toml key through the daemon (validated; local-only keys need this computer)
+
+```text
+Usage: openside config [OPTIONS] <COMMAND>
+```
+
+#### `openside config schema`
+
+Print the JSON schema of config.toml (every key, its type and its help)
+
+```text
+Usage: openside config schema [OPTIONS]
+```
+
+#### `openside config get`
+
+Print one key by its dotted path, or the whole document without a key
+
+```text
+Usage: openside config get [OPTIONS] [KEY]
+```
+
+| Argument | Description |
+|---|---|
+| `[KEY]` | Dotted path, e.g. tickets.confirm_ttl_secs |
+
+#### `openside config set`
+
+Change one key. The daemon validates it like config.toml and refuses local-only keys away from this computer
+
+```text
+Usage: openside config set [OPTIONS] <KEY> <VALUE>
+```
+
+| Argument | Description |
+|---|---|
+| `<KEY>` | Dotted path, e.g. tickets.confirm_ttl_secs |
+| `<VALUE>` | JSON (30, true, ["a","b"], null) or plain text for a text key |
+
+#### `openside config edit`
+
+Edit the whole document as JSON in $VISUAL or $EDITOR, then save it
+
+```text
+Usage: openside config edit [OPTIONS]
+```
+
 ### `openside browser`
 
 Call the session's browser and human-step tools directly, like the in-app agent
@@ -1612,6 +1752,23 @@ browser_tabs: list the session's tabs
 
 ```text
 Usage: openside browser tabs [OPTIONS] <SESSION> [ARG]...
+```
+
+| Argument | Description |
+|---|---|
+| `<SESSION>` | Session whose tabs the tool works in |
+| `[ARG]` | Arguments as key=value pairs or one JSON object, e.g. `url=https://example.org` or `tab_id=T1 scope=viewport` |
+| `--approval-ticket <TICKET_ID>` | Retry under this approved ticket (normally done automatically while waiting) |
+| `--no-wait` | Return a pending ticket at once instead of waiting for the person's answer |
+| `--timeout <SECS>` | Stop waiting for a person after this many seconds |
+| `--out <FILE>` | Write the PNG the call saved (a screenshot) to this file |
+
+#### `openside browser downloads`
+
+browser_downloads: list the session's downloads and where each was saved ([download_id=...] [wait_seconds=N] [read_text=true])
+
+```text
+Usage: openside browser downloads [OPTIONS] <SESSION> [ARG]...
 ```
 
 | Argument | Description |

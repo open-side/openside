@@ -10,37 +10,64 @@ Generated from `docs/specs/openapi.json` by `tools/gen-api-docs.py`; do not edit
 
 | Group | Operations |
 |---|---|
+| about | 2 |
 | access-requests | 3 |
 | accounts | 1 |
 | agents | 9 |
-| browser | 2 |
+| browser | 17 |
+| computer-use | 1 |
 | connections | 10 |
 | daemon | 2 |
-| devices | 5 |
+| devices | 6 |
 | doctor | 1 |
 | extension | 1 |
 | external-agents | 4 |
 | favicons | 1 |
+| folders | 1 |
 | health | 1 |
 | hooks | 1 |
 | import | 9 |
-| memory | 10 |
+| mcp | 6 |
+| memory | 16 |
 | onboarding | 2 |
 | otp | 1 |
 | pairing | 2 |
 | pinned-tabs | 3 |
 | policy | 6 |
+| projects | 5 |
 | push | 5 |
-| remote | 5 |
+| remote | 7 |
 | routines | 8 |
-| sessions | 27 |
-| settings | 32 |
+| sessions | 38 |
+| settings | 37 |
+| shares | 2 |
 | skills | 5 |
+| stt | 2 |
 | sync | 6 |
 | team | 2 |
 | tickets | 6 |
 | tools | 1 |
-| vault | 9 |
+| vault | 16 |
+
+## about
+
+### GET /v1/about
+
+Required capability: `read`
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [About](#about) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/about/update-check
+
+Required capability: `read`
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [UpdateCheck](#updatecheck) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## access-requests
 
@@ -218,6 +245,259 @@ Request body (required): `application/json` [TransferRequest](#transferrequest)
 
 ## browser
 
+### GET /v1/browser/person/bookmarks
+
+Required capability: `read`
+
+Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PersonBookmarkTree](#personbookmarktree) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/browser/person/bookmarks
+
+Required capability: `steer`
+
+Bookmark an http(s) page in the person's own browser.
+
+Request body (required): `application/json` [CreatePersonBookmarkRequest](#createpersonbookmarkrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 201 | Success | `application/json` [PersonBookmark](#personbookmark) |
+| 400 | A value the daemon or the browser refuses | `application/json` [ApiError](#apierror) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 404 | No such tab, bookmark or session | `application/json` [ApiError](#apierror) |
+| 409 | No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### DELETE /v1/browser/person/bookmarks/{id}
+
+Required capability: `steer`
+
+Remove a bookmark or an empty bookmark folder from the person's own browser.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
+| 400 | A value the daemon or the browser refuses | `application/json` [ApiError](#apierror) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 404 | No such tab, bookmark or session | `application/json` [ApiError](#apierror) |
+| 409 | No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/browser/person/bridge
+
+Required capability: `steer`
+
+WebSocket the openside extension in the person's own browser keeps open so the daemon can read and drive that browser. Only the extension may connect: a person_device token and Origin chrome-extension://jneddlbpgmlheplolfonafkbkbkjhcfj; the bearer travels as on the takeover stream (`Sec-WebSocket-Protocol: openside.v1, openside.bearer.<token>`). The extension first sends {kind:"hello",protocol:"openside.person-browser",version:1,run}; the daemon then sends requests {id,method,params} and the extension answers {id,result} or {id,error:{code}}. A newer connection replaces the older one; a new run id (browser restart) drops every chat's tab attachments.
+
+| Status | Description | Body |
+|---|---|---|
+| 101 | Switching to WebSocket |  |
+| 403 | Not the openside extension of a person's device | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/browser/person/clear-data
+
+Required capability: `steer`
+
+Delete the chosen kinds of data from the person's own browser profile, as the browser's own Delete browsing data dialog does. Only the person can do this; it is audited without the data itself.
+
+Request body (required): `application/json` [ClearBrowsingDataRequest](#clearbrowsingdatarequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
+| 400 | A value the daemon or the browser refuses | `application/json` [ApiError](#apierror) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 404 | No such tab, bookmark or session | `application/json` [ApiError](#apierror) |
+| 409 | No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/browser/person/downloads
+
+Required capability: `read`
+
+Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. Only file base names are returned, never folders.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `limit` | query | integer | no |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PersonDownloadList](#persondownloadlist) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/browser/person/extensions
+
+Required capability: `read`
+
+Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PersonExtensionList](#personextensionlist) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/browser/person/history
+
+Required capability: `read`
+
+Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected. q searches titles and URLs; without q the most recent pages are listed.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `q` | query | string | no |  |
+| `limit` | query | integer | no |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PersonHistoryList](#personhistorylist) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/browser/person/native-tools
+
+Required capability: `steer`
+
+Open the Task manager, or developer tools for the selected tab of the most recently active window, in the person's own browser. The daemon reaches it through the person-role gateway that `openside-browser` starts a patched browser with; that gateway serves only the person's settings and these tools, never their tabs.
+
+Request body (required): `application/json` [OpenPersonNativeToolRequest](#openpersonnativetoolrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
+| 400 | Unknown tool | `application/json` [ApiError](#apierror) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 409 | The person's browser is not open (browser_not_running), or cannot open the tool: a stock browser, no window of the person's profile, or a policy turns developer tools off (native_tools_unsupported) | `application/json` [ApiError](#apierror) |
+| 503 | The person's browser closed the connection or did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/browser/person/recently-closed
+
+Required capability: `read`
+
+Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `limit` | query | integer | no |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PersonRecentlyClosedList](#personrecentlyclosedlist) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/browser/person/recently-closed/{session_id}/restore
+
+Required capability: `steer`
+
+Reopen a recently closed tab or window in the person's own browser.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `session_id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PersonTabCommandResult](#persontabcommandresult) |
+| 400 | A value the daemon or the browser refuses | `application/json` [ApiError](#apierror) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 404 | No such tab, bookmark or session | `application/json` [ApiError](#apierror) |
+| 409 | No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/browser/person/tabs
+
+Required capability: `read`
+
+Read live from the openside extension in the person's own browser; nothing is cached by the daemon. Incognito windows are never included. connected is false (with empty lists) when no extension is connected.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PersonTabList](#persontablist) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/browser/person/tabs/command
+
+Required capability: `steer`
+
+Run one tab operation in the person's own browser through the openside extension (switch, open, close, duplicate, reload, pin, mute, group, move, new incognito window). create accepts http(s) URLs and a fixed set of browser pages only.
+
+Request body (required): `application/json` [PersonTabCommand](#persontabcommand)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PersonTabCommandResult](#persontabcommandresult) |
+| 400 | A value the daemon or the browser refuses | `application/json` [ApiError](#apierror) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 404 | No such tab, bookmark or session | `application/json` [ApiError](#apierror) |
+| 409 | No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/browser/prefs
+
+Required capability: `read`
+
+Reads the settings of the person's own browser (the patched browser `openside-browser` opens, through its person-role gateway), from its startup profile; the agent browser's profile is never read. status is not_running when that browser is closed (the daemon never launches it) and unsupported for stock Chromium/Chrome; prefs is then null.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [BrowserPrefs](#browserprefs) |
+| 503 | The person's browser closed the connection or did not answer in time (browser_disconnected), or could not load its search engines in time or has too many such requests waiting (browser_busy) | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PATCH /v1/browser/prefs
+
+Required capability: `admin`
+
+Writes settings of the person's own browser through its person-role gateway, one allowlisted preference at a time in field order, and returns the values read back. Never launches a browser and never writes the agent browser's profile.
+
+Request body (required): `application/json` [UpdateBrowserPrefsRequest](#updatebrowserprefsrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [BrowserPrefs](#browserprefs) |
+| 400 | A value the browser refuses | `application/json` [ApiError](#apierror) |
+| 409 | The person's browser is not open (browser_not_running), cannot change settings (browser_prefs_unsupported), or a policy manages the setting (browser_pref_managed) | `application/json` [ApiError](#apierror) |
+| 503 | The person's browser closed the connection or did not answer in time (browser_disconnected), or could not load its search engines in time or has too many such requests waiting (browser_busy) | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### POST /v1/browser/prewarm
 
 Required capability: `steer`
@@ -239,6 +519,19 @@ Metadata-only ledger of explicitly agent-owned targets with a known non-incognit
 |---|---|---|
 | 200 | Success | `application/json` [BrowserTabList](#browsertablist) |
 | 503 | The previously started browser controller is disconnected | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+## computer-use
+
+### GET /v1/computer-use
+
+Required capability: `read`
+
+Whether computer use is turned on (preferences.computer_use, changeable only with local access) and what works on this computer: window frames, pointer and keyboard, each with the mechanism in use or the reason it does not work. Probes the desktop at most every 30 seconds.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ComputerUseStatus](#computerusestatus) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## connections
@@ -471,6 +764,23 @@ Request body (required): `application/json` [PairDeviceRequest](#pairdevicereque
 | 201 | Success | `application/json` [PairDeviceResponse](#pairdeviceresponse) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### PATCH /v1/devices/{id}
+
+Required capability: `admin`
+
+Rename a paired device. The name is trimmed and must be 1-100 characters (400 invalid_value); 404 not_found for an unknown device. An agent client may rename only itself (403 person_approval_required). Audited as `device` `renamed`.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+Request body (required): `application/json` [RenameDeviceRequest](#renamedevicerequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [Device](#device) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### DELETE /v1/devices/{id}
 
 Required capability: `admin`
@@ -561,11 +871,12 @@ Forget a custom agent's skills folder. Requires local access. Presets cannot be 
 
 Required capability: `admin`
 
-Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown (add the folder with `PUT /v1/external-agents/{id}`).
+Install the bundled `openside-browser` skill into the agent's skills directory (what `openside skills install <agent>` does). The content is fixed and the directory comes from the preset or configuration, never from the request. The agent trusts what lands there, so this needs local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret; 403 local_access_required otherwise) and a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required. Right before writing, the directory, presets included even when it comes from CLAUDE_CONFIG_DIR, CODEX_HOME, OMP_CODING_AGENT_DIR or PI_CODING_AGENT_DIR, must be absolute, inside the user's home, reached without any symbolic link below home and outside openside's data directory (400 invalid_skills_dir; nothing is written). 404 unknown_agent, 409 exists (retry with `force`), 400 skills_dir_unknown (add the folder with `PUT /v1/external-agents/{id}`). Audited.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
 | `id` | path | string | yes |  |
+| `X-Openside-Local-Secret` | header | string | no | Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. |
 
 Request body (required): `application/json` [InstallAgentSkillRequest](#installagentskillrequest)
 
@@ -583,6 +894,19 @@ Required capability: `read`
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success |  |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+## folders
+
+### POST /v1/folders/pick
+
+Required capability: `admin`
+
+Open the native folder picker on the screen of the computer running openside and wait until the person chooses a folder or closes it. Returns the canonical path, or `path: null` when the picker was closed without a choice. The folder must be usable as a project folder: not the file system root, the home folder or a folder above it, nor openside's data folder, a folder above it or anything inside it, nor inside an operating-system folder or another person's home, nor a credential folder such as ~/.ssh or a folder above one (400 invalid_project_root). Requires local access (403 local_access_required). 409 folder_picker_busy while another picker is open; 503 folder_picker_unavailable when no folder picker could be started.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [PickedFolder](#pickedfolder) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## health
@@ -779,6 +1103,94 @@ Detect all browser profiles in standard local locations, including Chromium bran
 | 200 | Success | `application/json` [ImportProfileList](#importprofilelist) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+## mcp
+
+### GET /v1/mcp/servers
+
+Required capability: `read`
+
+External MCP servers whose tools agents can call, with connection state and tool lists. Secret values are never returned; secrets lists their names.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [McpServerList](#mcpserverlist) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/mcp/servers
+
+Required capability: `admin`
+
+Connect a stdio (command) or http (URL) MCP server. Secret values go to the Vault, which must be set up and unlocked (409 vault_unavailable; 403 biometric_required when a new keyring vault would be needed but biometric unlock is on, so a person sets it up first). Requires local access (403 local_access_required): a stdio server runs a program on this computer. 409 mcp_server_exists, 409 mcp_server_limit, 400 invalid_value. The response reflects the first connection attempt.
+
+Request body (required): `application/json` [CreateMcpServerRequest](#createmcpserverrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 201 | Success | `application/json` [McpServer](#mcpserver) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/mcp/servers/{id}
+
+Required capability: `read`
+
+One configured MCP server.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [McpServer](#mcpserver) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PATCH /v1/mcp/servers/{id}
+
+Required capability: `admin`
+
+Change a server; secrets set to null are removed from the Vault. Requires local access. The server reconnects with the new settings.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+Request body (required): `application/json` [UpdateMcpServerRequest](#updatemcpserverrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [McpServer](#mcpserver) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### DELETE /v1/mcp/servers/{id}
+
+Required capability: `admin`
+
+Stop the server, delete its Vault secrets and remove it from config.toml. Requires local access.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/mcp/servers/{id}/refresh
+
+Required capability: `admin`
+
+Reconnect the server and list its tools again; returns the state after the attempt. Requires local access (403 local_access_required): reconnecting a stdio server runs its program.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [McpServer](#mcpserver) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ## memory
 
 ### GET /v1/memory
@@ -812,6 +1224,47 @@ Request body (required): `application/json` [CreateMemoryRequest](#creatememoryr
 | 201 | Success | `application/json` [Memory](#memory) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/memory/files
+
+Required capability: `read`
+
+The memory store shown as three files: MEMORY.md (notes not tagged profile), USER.md (notes tagged profile) and TAXONOMY.md (tags and kinds, read-only). Visited-page history is not part of these files.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [MemoryFileList](#memoryfilelist) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/memory/files/{name}
+
+Required capability: `read`
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `name` | path | `"MEMORY.md"` \| `"USER.md"` \| `"TAXONOMY.md"` | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [MemoryFile](#memoryfile) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PUT /v1/memory/files/{name}
+
+Required capability: `admin`
+
+Save an edited MEMORY.md or USER.md in one transaction: blocks under a `<!-- memory id=… -->` marker update that note, removed blocks delete their note, and text before the first marker or under a bare `<!-- memory -->` marker adds notes (USER.md adds the profile tag; dropping or adding the profile tag moves a note between the two files). A note changed, added or removed elsewhere after `revision` fails the whole save with 409 memory_conflict. A note whose text contains a hidden Vault value cannot be edited here (400 redacted_memory); secrets are 400 secret_detected; TAXONOMY.md is 400 read_only_view.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `name` | path | `"MEMORY.md"` \| `"USER.md"` \| `"TAXONOMY.md"` | yes |  |
+
+Request body (required): `application/json` [UpdateMemoryFileRequest](#updatememoryfilerequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [MemoryFileSaved](#memoryfilesaved) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/memory/health
 
 Required capability: `read`
@@ -819,6 +1272,22 @@ Required capability: `read`
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [MemoryHealth](#memoryhealth) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/memory/history
+
+Required capability: `read`
+
+Every memory change (create, update, delete, purge), newest first, across all memories. Deleted and purged entries keep only operation, actor and time.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `limit` | query | integer | no |  |
+| `before` | query | integer | no | next_before of the previous page. |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [MemoryChangeList](#memorychangelist) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### GET /v1/memory/model
@@ -858,6 +1327,28 @@ Request body (required): `application/json` [StartMemoryModelRequest](#startmemo
 | Status | Description | Body |
 |---|---|---|
 | 202 | Success | `application/json` [MemoryModelStatus](#memorymodelstatus) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/memory/rebuild
+
+Required capability: `admin`
+
+Rebuild the full-text index of every live memory and recompute embeddings with the loaded local model. Expired memories are purged first.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [MemoryRebuild](#memoryrebuild) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/memory/reveal
+
+Required capability: `admin`
+
+Write a copy of MEMORY.md, USER.md and TAXONOMY.md, as GET /v1/memory/files/{name} serves them, into `<data_dir>/memory/files` (0700 folder, 0600 files, replaced on every call) and open that folder in the file manager of the computer running openside. Edits made to the copy are not read back. Requires local access (403 local_access_required). 503 file_manager_unavailable when no file manager could be started.
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### GET /v1/memory/{id}
@@ -931,13 +1422,15 @@ State of the first-run guide, kept on the daemon so every device agrees: `pendin
 
 Required capability: `admin`
 
-Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). Reopening the guide from Settings does not reset the flag.
+Record how the guide ended (`completed` or `skipped`; `pending` is 400 invalid_value). A compare-and-set: it writes only while the stored state is `pending`, so of two devices finishing the guide at once exactly one outcome is kept. Reopening the guide from Settings does not reset the flag.
 
 Request body (required): `application/json` [UpdateOnboardingRequest](#updateonboardingrequest)
 
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [OnboardingStatus](#onboardingstatus) |
+| 400 | `pending` was sent | `application/json` [ApiError](#apierror) |
+| 409 | The guide already ended; nothing was written. The body carries the outcome already recorded | `application/json` [OnboardingAlreadySet](#onboardingalreadyset) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## otp
@@ -961,7 +1454,7 @@ Request body (required): `application/json` [OtpIngestRequest](#otpingestrequest
 
 Required capability: `admin`
 
-Issue a one-time pairing code valid for 180 monotonic seconds. Requires the local socket, or verified loopback TCP with a socket-issued person_device admin token and current X-Openside-Local-Secret. Proxied/relay traffic is refused with 403 local_access_required; loopback alone never proves locality. Requested scopes cannot exceed caller grants (403 scope_ceiling_exceeded). The local operator fixes person_device or agent_client in the offer; redemption cannot change kind. Codes and local secrets are never audited.
+Issue a one-time pairing code valid for 180 monotonic seconds. Requires the local socket, or verified loopback TCP with a socket-issued person_device admin token and current X-Openside-Local-Secret. Proxied/relay traffic is refused with 403 local_access_required; loopback alone never proves locality. Requested scopes cannot exceed caller grants (403 scope_ceiling_exceeded). The local operator fixes person_device or agent_client in the offer; redemption cannot change kind. Codes and local secrets are never audited. While Remote Control is off the offer carries no link (url and transport are null) and naming a transport in via is refused with 409 remote_disabled.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1106,6 +1599,79 @@ Request body (required): `application/json` [ValidatePolicyRequest](#validatepol
 | 200 | Success | `application/json` [PolicyValidation](#policyvalidation) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+## projects
+
+### GET /v1/projects
+
+Required capability: `read`
+
+List every project, sorted by name.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ProjectList](#projectlist) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/projects
+
+Required capability: `admin`
+
+Create a project from an existing folder (root) or, without root, from scratch in a new empty folder under openside's data. Only the computer running openside creates projects (403 local_access_required elsewhere). 400 invalid_project_name for a blank name or one longer than 80 characters; 400 instructions_too_large over 16 KiB; 400 invalid_project_root for a folder that is missing, not a folder, the file system root, the home folder or above it, inside openside's data, inside an operating-system folder (such as /etc or /usr) or another person's home, or a credential folder such as ~/.ssh or above one; 409 project_exists when another project already uses the folder.
+
+Request body (required): `application/json` [CreateProjectRequest](#createprojectrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 201 | Success | `application/json` [Project](#project) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/projects/{id}
+
+Required capability: `read`
+
+One project; 404 project_not_found.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [Project](#project) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PATCH /v1/projects/{id}
+
+Required capability: `admin`
+
+Rename a project, replace its instructions, or confirm its folder; the folder is fixed. Chats in the project receive the new instructions from their agent's next start. confirm_root checks the project's folder again as at creation and records it, clearing needs_confirmation; only the computer running openside may confirm (403 local_access_required elsewhere; 400 invalid_project_root when the folder no longer passes). Any other change from the computer running openside to a project that needs confirming also records its folder when it still passes. 400 invalid_value for an empty body, invalid_project_name or instructions_too_large; 404 project_not_found; 403 person_device_required for agent_client devices (the instructions become part of every project chat's system prompt).
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+Request body (required): `application/json` [UpdateProjectRequest](#updateprojectrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [Project](#project) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### DELETE /v1/projects/{id}
+
+Required capability: `admin`
+
+Delete a project and return the remaining ones. Its chats stay and leave the project first, in one commit (each gets `session.folder_changed` with no project and no folder); the folder and its files are never deleted. 404 project_not_found; 403 person_device_required for agent_client devices.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | string | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ProjectList](#projectlist) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ## push
 
 ### POST /v1/push/presence
@@ -1169,6 +1735,8 @@ Required capability: `read`
 
 Required capability: `admin`
 
+Turn one transport on or off and save its settings. Turning one on while Remote Control is off is refused with 409 remote_disabled and changes nothing; turn Remote Control on first (POST /v1/remote/enable). Turning one off works either way.
+
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
 | `X-Openside-Local-Secret` | header | string | no | Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. |
@@ -1180,11 +1748,41 @@ Request body (required): `application/json` [SetCloudflareRequest](#setcloudflar
 | 200 | Success | `application/json` [RemoteStatus](#remotestatus) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### POST /v1/remote/disable
+
+Required capability: `admin`
+
+Turn Remote Control off. Needs local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret; 403 local_access_required otherwise) and a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required. Saves remote.enabled = false and, from that moment, refuses every TCP request that does not come directly from this computer with 403 remote_disabled: other addresses, the relay, and loopback requests carrying proxy or tunnel headers (Forwarded, Via, X-Forwarded-*, Cf-*, Tailscale-*) or a non-loopback Host. The Unix socket and the local web UI keep working. Then stops every transport (Tailscale Serve handler, cloudflared, relay registration), keeping each one's saved settings, and goes on past failures: still_on lists the transports that could not be stopped. Audited as remote/disabled.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `X-Openside-Local-Secret` | header | string | no | Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [RemoteDisabled](#remotedisabled) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/remote/enable
+
+Required capability: `admin`
+
+Turn Remote Control back on with the saved transports: saves remote.enabled = true, then restarts each configured transport (Tailscale Serve handler, cloudflared, relay registration). A transport that fails to start shows its error in the returned status. Same access rules as /v1/remote/disable (403 local_access_required, 403 person_access_required). Audited as remote/enabled.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `X-Openside-Local-Secret` | header | string | no | Per-boot local-person proof obtained only over the local socket. Required for TCP pairing/configuration; never grants authority to a QR-paired, agent or proxied caller. |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [RemoteStatus](#remotestatus) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/remote/local-access
 
 Required capability: `admin`
 
-Local socket only: every call atomically replaces the one managed owner-bootstrap device/token, closes the predecessor's streams/polls, clears its push subscriptions, and audits rotation. A distinct persistent bootstrap marker survives boots; intentional CLI devices are never revoked by display name. Returns the per-boot locality secret and fresh person/admin token plus a loopback launch URL with credentials in its fragment. TCP/relay callers get 403 local_socket_required. Keep the proof only in sessionStorage; strip the fragment immediately and clear proof on sign-out, rejection or identity change.
+Local socket only: every call atomically replaces the one managed owner-bootstrap device/token, closes the predecessor's streams/polls, clears its push subscriptions, and audits rotation. A distinct persistent bootstrap marker survives boots; intentional CLI devices are never revoked by display name. Returns the per-boot locality secret and fresh person/admin token plus a loopback launch URL with credentials in its fragment. TCP/relay callers get 403 local_socket_required. Keep the proof only in sessionStorage; strip the fragment immediately and clear proof on sign-out, rejection or identity change. With a listener it also returns extension_code: a one-time pairing code only the openside extension's own origin may redeem, for a person device (read, steer, approve, human_step) that replaces the extension device of the previous launch. person_browser_runtime_dir is the private directory `openside-browser` gives the person's browser for its person-role gateway and launch record; the daemon looks for that browser nowhere else.
 
 | Status | Description | Body |
 |---|---|---|
@@ -1194,6 +1792,8 @@ Local socket only: every call atomically replaces the one managed owner-bootstra
 ### PUT /v1/remote/relay
 
 Required capability: `admin`
+
+Turn one transport on or off and save its settings. Turning one on while Remote Control is off is refused with 409 remote_disabled and changes nothing; turn Remote Control on first (POST /v1/remote/enable). Turning one off works either way.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1222,6 +1822,8 @@ Required capability: `admin`
 ### PUT /v1/remote/tailscale
 
 Required capability: `admin`
+
+Turn one transport on or off and save its settings. Turning one on while Remote Control is off is refused with 409 remote_disabled and changes nothing; turn Remote Control on first (POST /v1/remote/enable). Turning one off works either way.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1346,6 +1948,7 @@ Required capability: `read`
 | `agent` | query | string | no | Filter immutable agent ownership: none selects earlier untagged conversations; an agent id selects all its threads. |
 | `q` | query | string | no | Case-insensitive substring of the title or first message. |
 | `archived` | query | boolean | no | List archived (true) or unarchived (false, default) sessions; pinned sessions come first. |
+| `project` | query | string | no | Filter by project: none selects chats outside every project; a project id selects that project's chats. |
 
 | Status | Description | Body |
 |---|---|---|
@@ -1356,7 +1959,7 @@ Required capability: `read`
 
 Required capability: `steer`
 
-Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). Paired devices get 403 local_socket_required for a mode looser than the daemon default or any workspace; agent_client devices also get it for speed "fast", effort "xhigh"/"max" or profile "ultrabrowse".
+Create a session. browser_space "isolated" gives its agent tabs their own cookies and storage in the shared managed browser, disposed on archive or delete and lost when the browser restarts; it cannot be combined with incognito (400 invalid_browser_space). project_id starts the chat in a project: its folder becomes the workspace and `session.created` is followed by `session.folder_changed` in the same commit (404 project_not_found; 409 project_root_changed when the project's folder was moved or replaced since the project was made, or still needs confirming (needs_confirmation); 400 invalid_workspace together with workspace). Any person device or the local socket may start a chat in an existing project; agent_client devices get 403 person_device_required. Paired devices get 403 local_socket_required for a mode looser than the daemon default, and for a workspace unless they have local access (an admin person device on the computer running openside); agent_client devices also get it for speed "fast", effort "xhigh"/"max" or profile "ultrabrowse". A model a person picks for a chat without an agent becomes the default for new chats; agent clients and `openside mcp` never change it.
 
 Request body (required): `application/json` [CreateSessionRequest](#createsessionrequest)
 
@@ -1382,7 +1985,7 @@ Required capability: `read`
 
 Required capability: `steer`
 
-Update title/pinned/archived as a durable session.updated event. Archiving an isolated-space session disposes its browser space.
+Change a chat. title, pinned and archived are recorded as one session.updated event; archiving an isolated-space session disposes its browser space. model, effort, mode and confirmation are recorded as one session.options_updated event and apply from the chat's next model request. Paired devices get 403 local_socket_required for a mode looser than the daemon default, and agent_client devices also for effort "xhigh"/"max". A model a person picks becomes the default for new chats; agent clients and `openside mcp` change only this chat. read marks the chat read or unread as a session.read event. Fields equal to the current value record nothing; 409 agent_home for a model or mode change of an agent's home chat.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1476,6 +2079,64 @@ Sandboxed rendering of an HTML, SVG, image, PDF or text artifact for an iframe. 
 | 200 | Success | `*/*` string (binary) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/sessions/{id}/attached-tabs
+
+Required capability: `read`
+
+Person tabs attached to this chat: the agent may snapshot them and act on them under the chat's permission mode. Attachments last for the browser run.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [AttachedTabList](#attachedtablist) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 404 | No such chat | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/sessions/{id}/attached-tabs
+
+Required capability: `steer`
+
+Attach one of the person's tabs (or, without tab_id, the selected tab of the focused window) to this chat, as an @ mention or Ask on this tab does. The person's own action needs no approval; incognito tabs, browser pages and the openside UI cannot be attached (400 invalid_value).
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+Request body (required): `application/json` [AttachTabRequest](#attachtabrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 201 | Success | `application/json` [AttachedTab](#attachedtab) |
+| 400 | A value the daemon or the browser refuses | `application/json` [ApiError](#apierror) |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 404 | No such tab, bookmark or session | `application/json` [ApiError](#apierror) |
+| 409 | No openside extension is connected (person_browser_not_connected), or it lacks access to that page (site_access_required) | `application/json` [ApiError](#apierror) |
+| 502 | The person's browser reported a failure | `application/json` [ApiError](#apierror) |
+| 504 | The person's browser did not answer in time | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### DELETE /v1/sessions/{id}/attached-tabs/{tab_id}
+
+Required capability: `steer`
+
+Detach a person tab from this chat; the agent can no longer read or act on it.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+| `tab_id` | path | integer (int64) | yes | Chrome tab id of an attached person tab. |
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
+| 403 | Agent clients (MCP/CLI agent tokens and marked socket clients) never read or drive the person's own browser | `application/json` [ApiError](#apierror) |
+| 404 | No such chat, or that tab is not attached to it | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/sessions/{id}/browser/preview
 
 Required capability: `browse`
@@ -1527,6 +2188,56 @@ Read a bounded JPEG thumbnail referenced by browser.state. Requires browse; secr
 | 200 | Success | `image/jpeg` string (binary) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/sessions/{id}/computer-use
+
+Required capability: `read`
+
+The chat's connected desktop app, if any, with the cursor in pixels of the latest frame.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ComputerUseSessionState](#computerusesessionstate) |
+| 404 | No such chat | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/sessions/{id}/computer-use/frames
+
+Required capability: `browse`
+
+Server-sent events for the chat's connected app: a `state` event now and on every change (connect, phase, cursor, stop), and a `frame` event with each frame the agent sees. Private chats are refused (409 private_session). The stream ends when the chat is deleted.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+| `Last-Event-ID` | header | string | no | Last seen sequence in this stream; only later events are returned. |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `text/event-stream` string; each event is [ComputerUseStreamEvent](#computerusestreamevent) |
+| 404 | No such chat | `application/json` [ApiError](#apierror) |
+| 409 | Private chats never stream frames | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/sessions/{id}/computer-use/stop
+
+Required capability: `steer`
+
+End the chat's computer use now: an action in progress is cancelled, the virtual input device is removed, and later approvals for that connection no longer act. Audited.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ComputerUseStopResult](#computerusestopresult) |
+| 404 | No such chat | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/sessions/{id}/events
 
 Required capability: `read`
@@ -1558,6 +2269,40 @@ Bounded long polling for transports that buffer SSE. At most 512 raw durable eve
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [EventPoll](#eventpoll) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PUT /v1/sessions/{id}/folder
+
+Required capability: `steer`
+
+Choose where the chat works: project_id moves it into that project (its folder becomes the workspace), workspace attaches an absolute folder outside any project, and both null leaves the project and drops the folder. Recorded as one `session.folder_changed` event (none when nothing changes); the agent switches folders from its next start. 400 invalid_value when both are set; 404 project_not_found; 409 project_root_changed when the project's folder was moved or replaced since the project was made, or still needs confirming (needs_confirmation); 409 agent_home for an agent's home chat; 400 invalid_project_root for a workspace that is missing, not a folder, the file system root, the home folder or above it, inside openside's data, inside an operating-system folder or another person's home, or a credential folder such as ~/.ssh or above one. Attaching a workspace needs local access (403 local_access_required on other devices); moving into an existing project needs a person device or the local socket (403 person_device_required for agent_client devices); leaving needs neither.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+Request body (required): `application/json` [SetSessionFolderRequest](#setsessionfolderrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [Session](#session) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/sessions/{id}/fork
+
+Required capability: `steer`
+
+Branch the chat at a reply: a new chat titled `<title> (branch)` holding the messages and replies up to and including the finished reply to `from_message`, with the same agent, model, effort, permission, confirmation, project, workspace and browser space (a branch of an agent's home chat is an ordinary chat of that agent). The agent receives that conversation as context; tool steps and attachments are not copied (attachments are named in the copied text). The copied events end with `session.branched`. 404 message_not_found; 409 message_not_finished while that message has no finished reply; 409 agent_retired; 409 project_root_changed when the project's folder was moved or replaced, or still needs confirming; 403 local_socket_required when a paired device could not create such a chat itself (a project's folder never counts against a person device; for an agent_client device, or when the project no longer exists, the branch keeps the folder as a plain workspace without the project).
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+Request body (required): `application/json` [ForkSessionRequest](#forksessionrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 201 | Success | `application/json` [Session](#session) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### POST /v1/sessions/{id}/messages
@@ -1669,6 +2414,54 @@ Request body (required): `application/json` [ReplRequest](#replrequest)
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [ReplResponse](#replresponse) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/sessions/{id}/shares
+
+Required capability: `read`
+
+Live share links of the chat, newest first. Expired links are removed when listed.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ShareLinkList](#sharelinklist) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/sessions/{id}/shares
+
+Required capability: `steer`
+
+Publish a read-only snapshot of the chat as it is now. Only a person may share: agent-client and channel callers get 403 person_required. The snapshot holds delivered messages and replies, optionally one line per step (tool name and failure only, never arguments or results), and copies of the chosen artifacts; tickets, thinking, queued messages and tool data are never included. Live vault and session secrets are masked, a line that still looks like a credential is replaced whole, and a chosen text artifact that still looks like one is refused (400 sensitive_artifact). Only UTF-8 text and PNG, JPEG, GIF or WebP images can be shared (400 unsupported_share_artifact otherwise); images are re-encoded without metadata. 409 private_session for private chats, 409 vault_locked while a set-up vault is locked (its values could not be masked), 409 too_many_shares beyond 50 live links per chat, 400 invalid_share_artifact for an unknown, working or transcript path, more than 20 artifacts or a duplicate, 400 invalid_expiry outside 60 s..365 days, 413 share_too_large beyond 4 MiB of conversation, 10 MiB per artifact or 25 MiB of artifacts.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+
+Request body (required): `application/json` [CreateShareRequest](#createsharerequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 201 | Success | `application/json` [ShareLink](#sharelink) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### DELETE /v1/sessions/{id}/shares/{share_id}
+
+Required capability: `steer`
+
+Revoke a link: the snapshot and its artifact copies are deleted and the link answers 404 at once. Deleting the chat revokes all of its links.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `id` | path | [SessionId](#sessionid) | yes |  |
+| `share_id` | path | string | yes | Share id from ShareLink.id. |
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Success |  |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### POST /v1/sessions/{id}/stop
@@ -1852,11 +2645,39 @@ Manage independent labelled channel identities. Read lists are metadata only. Mu
 | 200 | Success | `application/json` [ChannelAccountTest](#channelaccounttest) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/settings/cli
+
+Required capability: `read`
+
+The browser profile new CLI and MCP sessions on this computer use: the `profile` key of `cli.toml` beside config.toml, which `openside settings set-default-profile` also writes. profile_is_default is true when none is saved (new sessions use the account's first profile, `shared`). 500 cli_settings_invalid when the file is not valid TOML or names an unknown profile; the file is left as it is.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [CliDefaults](#clidefaults) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PATCH /v1/settings/cli
+
+Required capability: `admin`
+
+Save the default profile (`null` removes the key, back to the account's first profile). Only `profile` is rewritten; every other key and comment of cli.toml stays, and the file is created when missing. Requires local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret): 403 local_access_required otherwise. 500 cli_settings_invalid leaves an unreadable file untouched. Audited.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `X-Openside-Local-Secret` | header | string | no | Per-boot launcher proof required on verified loopback TCP with a socket-issued local person/admin token. Omit only on the local socket. |
+
+Request body (required): `application/json` [UpdateCliDefaultsRequest](#updateclidefaultsrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [CliDefaults](#clidefaults) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/settings/config
 
 Required capability: `admin`
 
-The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable.
+The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key, except that preferences.mcp_server and preferences.computer_use change only for a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required, audited as `refused_agent`. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1871,7 +2692,7 @@ The whole config.toml as JSON, with defaults filled in. PUT validates exactly li
 
 Required capability: `admin`
 
-The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable.
+The whole config.toml as JSON, with defaults filled in. PUT validates exactly like loading the file (400 invalid_config with the offending key) and writes it atomically with mode 0600; the credentials section is file-only. Changes apply when the daemon restarts, except the live policy (/v1/policy). Who may change what: a caller with local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret) may change any key, except that preferences.mcp_server and preferences.computer_use change only for a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required, audited as `refused_agent`. A paired person device with admin scope anywhere else may change only the behaviour keys listed in `remote_editable`; changing any other key returns 403 local_access_required, writes nothing and is audited as `refused_remote`. Agent clients never write. Security-sensitive keys (sandbox, network allow-list, remote transports, credentials sources, executables, paths, trust lists) are never remote-editable.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1899,7 +2720,7 @@ Administrator-only labelled account metadata: provider, key_id, label, last_four
 
 Required capability: `admin`
 
-Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409.
+Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1918,7 +2739,7 @@ Request body (required): `application/json` [CreateProviderKeyRequest](#createpr
 
 Required capability: `admin`
 
-Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409.
+Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1938,7 +2759,7 @@ Request body (required): `application/json` [SetProviderKeyRequest](#setprovider
 
 Required capability: `admin`
 
-Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409.
+Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1958,7 +2779,7 @@ Request body (required): `application/json` [UpdateProviderKeyRequest](#updatepr
 
 Required capability: `admin`
 
-Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409.
+Requires admin plus person_device (local socket exempt). POST creates one labelled account; PUT replaces its key, PATCH edits metadata, DELETE removes only that account. Values arrive only in secret input bodies; no key in response/config/log/argv/env. Subsequent request snapshots observe changes; missing account404, locked Vault409; 403 biometric_required when a new keyring vault would be created while biometric unlock is on.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -1976,7 +2797,7 @@ Requires admin plus person_device (local socket exempt). POST creates one labell
 
 Required capability: `read`
 
-Local model readiness grouped by provider, from configured ids, source accounts and curated chat/tool-capable models. Credential values, email and upstream account identities are never included. Metadata is cached for at most five seconds; key/source/Vault lifecycle writes invalidate it. Readiness is not an upstream entitlement guarantee.
+Local model readiness grouped by provider, from configured ids, source accounts and curated chat/tool-capable models. Credential values, email and upstream account identities are never included. Metadata is cached for at most five seconds; key/source/Vault lifecycle writes invalidate it. Readiness is not an upstream entitlement guarantee. Each model's default_effort is the effort a chat runs at on it when no effort is picked (null: the provider's own default, or an image model); a create or PATCH without effort keeps it unset.
 
 | Status | Description | Body |
 |---|---|---|
@@ -1987,13 +2808,24 @@ Local model readiness grouped by provider, from configured ids, source accounts 
 
 Required capability: `admin`
 
-Set the default and ordered fallback ids without raw TOML editing. Requires admin; every id must be available in the current catalog (400 model_unavailable), at most16 distinct fallbacks and no default duplicate (400 invalid_models). Atomically persists selection without daemon restart. Ordinary sessions retain stored models; Team homes use their Agent override or the current default and reopen on the next idle/real turn when effective selection changes. Running requests finish their captured model. Response effective:new_sessions_and_home_next_turn.
+Set the role models without raw TOML editing: default, fast, ordered fallbacks, and optional standard, deep, visual and image (omitted keeps, null clears; unset roles use the session model). Requires admin; every id must be available in the current catalog (400 model_unavailable), chat roles need kind chat and image needs kind image (400 invalid_model_kind), at most16 distinct fallbacks and no default duplicate (400 invalid_models). Atomically persists selection without daemon restart. Ordinary sessions retain stored models; Team homes use their Agent override or the current default and reopen on the next idle/real turn when effective selection changes. Running requests finish their captured model. Response effective:new_sessions_and_home_next_turn.
 
 Request body (required): `application/json` [UpdateModelsRequest](#updatemodelsrequest)
 
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [ModelSelection](#modelselection) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/settings/models/providers
+
+Required capability: `read`
+
+Connected providers for the Providers list: one row per provider and connection kind (subscription or api_key) with a product display name and connected/needs_attention status. `accounts` carries the internal account references behind a row for Reconnect and Disconnect; it is not display text. Credential values and upstream identities are never included.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [ProviderConnectionList](#providerconnectionlist) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ### GET /v1/settings/oauth/accounts
@@ -2176,6 +3008,32 @@ Request body (required): `application/json` [UpdateProviderPoolRequest](#updatep
 | 200 | Success | `application/json` [ProviderPool](#providerpool) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/settings/preferences
+
+Required capability: `read`
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [Preferences](#preferences) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PATCH /v1/settings/preferences
+
+Required capability: `admin`
+
+Change some of the person's preferences; omitted fields keep their value and they apply at once. mcp_server and computer_use need local access (the Unix socket, or the computer's own launcher on loopback with X-Openside-Local-Secret): 403 local_access_required otherwise, audited as `refused_remote`. They also need a person: an `openside mcp` client (x-openside-client: mcp) or an agent-client token gets 403 person_access_required even on the socket, audited as `refused_agent`. Agent clients without local access get 403 forbidden for every field. 400 invalid_preferences for a value the file would refuse, 400 invalid_value for an empty body.
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `X-Openside-Local-Secret` | header | string | no | Per-boot launcher proof that makes a loopback TCP caller local; only needed for mcp_server and computer_use. |
+
+Request body (required): `application/json` [UpdatePreferencesRequest](#updatepreferencesrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [Preferences](#preferences) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/settings/subscriptions
 
 Required capability: `admin`
@@ -2254,6 +3112,45 @@ Admin-only external CLI account inventory/status; mutations also require person_
 | 204 | Success |  |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+## shares
+
+### GET /v1/shares/{share_id}
+
+Required capability: `read`
+
+Public read-only snapshot behind a share link. No bearer token: the unguessable id is the credential. Unknown, revoked, expired and deleted-chat links all answer 404 share_not_found. Each link admits 120 requests per rolling minute and the daemon 60 failed lookups per rolling minute; beyond that 429 share_rate_limited with Retry-After 60. Responses are never cached and carry Referrer-Policy no-referrer and X-Robots-Tag noindex.
+
+`x-public`: `true`
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `share_id` | path | string | yes | Share id from ShareLink.id. |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [SharedChat](#sharedchat) |
+| 404 | share_not_found | `application/json` [ApiError](#apierror) |
+| 429 | share_rate_limited | `application/json` [ApiError](#apierror) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/shares/{share_id}/artifacts/{artifact}
+
+Required capability: `read`
+
+Public bytes of an artifact copied into a share, under the same id credential, 404 and rate limit as GET /v1/shares/{share_id}. PNG, JPEG, GIF and WebP images are inline; anything else is an attachment. Every response has X-Content-Type-Options nosniff and a sandbox CSP with default-src 'none', so nothing renders in the daemon origin.
+
+`x-public`: `true`
+
+| Parameter | In | Type | Required | Description |
+|---|---|---|---|---|
+| `share_id` | path | string | yes | Share id from ShareLink.id. |
+| `artifact` | path | integer | yes | SharedArtifact.index. |
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/octet-stream` string (binary) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ## skills
 
 ### GET /v1/skills
@@ -2330,6 +3227,40 @@ Required capability: `admin`
 | Status | Description | Body |
 |---|---|---|
 | 200 | Success | `application/json` [SkillDetail](#skilldetail) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+## stt
+
+### GET /v1/stt
+
+Required capability: `read`
+
+Whether this caller can dictate right now. A caller that POST would refuse (agent clients: MCP/CLI agent tokens and marked socket clients) gets available false with reason person_device_required, without any transcriber lookup. Otherwise available is true when channels.stt_cmd is set or the openai account pool holds a first-party OpenAI API key (ChatGPT-plan sign-ins, relays and plugin accounts are never used), and false with reason stt_unavailable when neither is; nothing leaves the computer to answer. max_bytes is the largest decoded clip (8 MiB, or channels.max_audio_bytes when smaller); max_seconds is the longest clip a client should record (120).
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [SttStatus](#sttstatus) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/stt
+
+Required capability: `steer`
+
+Transcribe one recorded clip (base64) for the person's composer. channels.stt_cmd runs locally first with the clip in a private temporary file that is deleted when the command ends; otherwise the clip goes to OpenAI's transcription API (gpt-4o-mini-transcribe) with the first usable OpenAI API key of the openai account pool. language only reaches OpenAI, as its primary subtag. The clip and the text are never stored, logged or added to a chat. At most two clips are transcribed at once and four more wait for a slot; beyond that the request is refused with 429 stt_busy before its clip is decoded. The request body may be at most the base64 size of max_bytes plus 64 KiB and must arrive within 30 seconds.
+
+Request body (required): `application/json` [TranscribeRequest](#transcriberequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [Transcript](#transcript) |
+| 400 | A body that is not a TranscribeRequest, bad base64, an empty clip, a mime that is not audio/*, or a language that is not a short BCP-47 tag | `application/json` [ApiError](#apierror) |
+| 403 | Only the person's own device or the local socket dictates; agent clients (MCP/CLI agent tokens and marked socket clients) are refused | `application/json` [ApiError](#apierror) |
+| 408 | The request body did not arrive within 30 seconds; its place is freed for others | `application/json` [ApiError](#apierror) |
+| 409 | No transcriber: set channels.stt_cmd or add an OpenAI API key | `application/json` [ApiError](#apierror) |
+| 413 | The clip is larger than max_bytes from GET /v1/stt, or the body is larger than its base64 size plus 64 KiB | `application/json` [ApiError](#apierror) |
+| 422 | The transcriber heard no speech | `application/json` [ApiError](#apierror) |
+| 429 | Two clips are being transcribed and four more are waiting; try again shortly | `application/json` [ApiError](#apierror) |
+| 502 | The transcriber failed or timed out; its output is never returned | `application/json` [ApiError](#apierror) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## sync
@@ -2582,6 +3513,43 @@ Vault audit records (who, what, item, origin, session/tool-call id, time, result
 | 200 | Success | `application/json` [VaultAuditList](#vaultauditlist) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### GET /v1/vault/biometrics
+
+Required capability: `admin`
+
+Whether this computer can verify a person biometrically (fprintd on Linux, Touch ID on macOS) without prompting; `reason` says why not.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [VaultBiometrics](#vaultbiometrics) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/vault/clear
+
+Required capability: `admin`
+
+Delete every saved sign-in, authenticator and passkey; model keys, channel and MCP secrets stay. Same gate and codes as export (local socket, `confirm: true`, fresh authentication). Audited (`clear`: `allowed`, then `cleared` with the count; refusals `denied`). 500 vault_cleared_audit_incomplete (cleared).
+
+Request body (required): `application/json` [VaultConfirmRequest](#vaultconfirmrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [VaultClearResult](#vaultclearresult) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/vault/export
+
+Required capability: `admin`
+
+Every saved sign-in and authenticator as CSV (`name,url,username,password,otpauth`, one row per allowed origin; passkeys cannot be exported and are counted in `skipped`; model keys, channel and MCP secrets are never included). Local socket only, `confirm: true`, and fresh authentication: the passphrase in the body (passphrase vaults), `biometric: true`, or a person's unlock in the last 5 minutes; a keyring vault without biometric unlock needs only the confirmation. Wrong passphrases are throttled like unlock. Refusals are audited (`export`: `denied`); an export is audited `allowed`, then `exported`. Served with Cache-Control: no-store. 400 confirmation_required, wrong_passphrase, passphrase_not_used; 403 local_access_required, biometric_failed; 409 vault_unavailable, reauth_required, biometric_unavailable; 429 too_many_attempts; 500 audit_unavailable.
+
+Request body (required): `application/json` [VaultConfirmRequest](#vaultconfirmrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [VaultExport](#vaultexport) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### GET /v1/vault/items
 
 Required capability: `admin`
@@ -2597,7 +3565,7 @@ Value-free item metadata (ids, allowed origins, policy, TOTP/passkey presence). 
 
 Required capability: `admin`
 
-Add a login (password, optional username and authenticator) or an authenticator alone (`totp`: otpauth:// URI or base32 key). Values only travel to the daemon, are masked in every later output before the save, are saved encrypted and audited (`item_add`, attributed to the caller: `device:<id>` or `local`); the response is value-free metadata. With a keyring backend the first item creates the vault. 400 invalid_item, invalid_origin, invalid_totp, empty_item; 409 item_exists, vault_unavailable; 500 item_added_audit_incomplete (saved).
+Add a login (password, optional username and authenticator) or an authenticator alone (`totp`: otpauth:// URI or base32 key). Values only travel to the daemon, are masked in every later output before the save, are saved encrypted and audited (`item_add`, attributed to the caller: `device:<id>` or `local`); the response is value-free metadata. With a keyring backend the first item creates the vault, unless biometric unlock is on (then a person sets it up first: 403 biometric_required). 400 invalid_item, invalid_origin, invalid_totp, empty_item; 403 biometric_required; 409 item_exists, vault_unavailable; 500 item_added_audit_incomplete (saved).
 
 Request body (required): `application/json` [CreateVaultItemRequest](#createvaultitemrequest)
 
@@ -2649,11 +3617,61 @@ Drop the decrypted vault from daemon memory; vault tools stop working until it i
 | 200 | Success | `application/json` [VaultStatus](#vaultstatus) |
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
+### POST /v1/vault/recover
+
+Required capability: `admin`
+
+Open a locked vault with its recovery key and give it a new unlock key: `passphrase` (8+ characters) for a passphrase vault, the OS keyring's key (created when missing) for a keyring vault. The saved recovery key keeps working. Local socket only; wrong keys are throttled like passphrases. Audited (`recover`: `recovered`, `denied` with wrong_recovery_key, or `failed` with the code). 400 passphrase_required, passphrase_not_used, weak_passphrase; 403 local_access_required, wrong_recovery_key; 409 vault_already_unlocked, vault_not_set_up, recovery_not_configured; 429 too_many_attempts; 503 vault_unsupported, keyring_unavailable; 500 vault_recovered_audit_incomplete (recovered).
+
+Request body (required): `application/json` [VaultRecoverRequest](#vaultrecoverrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [VaultStatus](#vaultstatus) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### POST /v1/vault/recovery-key
+
+Required capability: `admin`
+
+Generate a recovery key and return it once; any earlier key stops working. It is stored nowhere: only the vault key sealed with it is kept next to the vault file, and it is masked in later output. Same gate and codes as export (local socket, `confirm: true`, fresh authentication). Audited (`recovery_key`: `allowed`, then `generated`, both before the old key is replaced). Served with Cache-Control: no-store.
+
+Request body (required): `application/json` [VaultConfirmRequest](#vaultconfirmrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [VaultRecoveryKey](#vaultrecoverykey) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### GET /v1/vault/settings
+
+Required capability: `admin`
+
+Password settings: auto-lock idle time, biometric unlock (with whether this computer supports it), autofill rules, default access policy, the fixed incognito exclusion and recovery-key state. Never values.
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [VaultSettings](#vaultsettings) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
+### PATCH /v1/vault/settings
+
+Required capability: `admin`
+
+Change password settings; absent fields keep their value. Saved to the config file and applied at once; every change is audited (`settings_update`, with the changed key names only). Tightening is open to every vault caller; loosening (longer auto-lock, biometric unlock off, autofill or auto-submit on, insecure pages allowed, fewer excluded domains, a less strict default policy) needs the local socket or a person's device. Turning biometric unlock on needs the local socket, a keyring vault and a passing biometric check. 400 invalid_value, invalid_domain, incognito_always_disabled; 403 local_access_required, person_access_required, biometric_failed; 409 biometric_unavailable; 500 settings_saved_audit_incomplete (saved).
+
+Request body (required): `application/json` [UpdateVaultSettingsRequest](#updatevaultsettingsrequest)
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Success | `application/json` [VaultSettings](#vaultsettings) |
+| default | Sanitized error | `application/json` [ApiError](#apierror) |
+
 ### POST /v1/vault/setup
 
 Required capability: `admin`
 
-Create the vault file. Keyring backends take no body passphrase and keep a random wrapping key in the OS keyring; a passphrase vault needs `passphrase` (8+ characters), which is never stored or returned. Every attempt that reaches the vault is audited (`setup`: `completed` or `failed` with the code), attributed to the caller (`device:<id>` or `local`). 400 passphrase_required, passphrase_not_used, weak_passphrase; 409 vault_already_set_up; 500 vault_set_up_audit_incomplete (set up and unlocked); 503 keyring_unavailable, vault_unsupported.
+Create the vault file. Keyring backends take no body passphrase and keep a random wrapping key in the OS keyring; a passphrase vault needs `passphrase` (8+ characters), which is never stored or returned. With biometric unlock on, a keyring vault is created only from the local socket with `biometric: true` and a passing check. Every attempt that reaches the vault is audited (`setup`: `completed` or `failed` with the code), attributed to the caller (`device:<id>` or `local`). 400 passphrase_required, passphrase_not_used, weak_passphrase; 403 biometric_required, biometric_failed; 409 vault_already_set_up; 500 vault_set_up_audit_incomplete (set up and unlocked); 503 keyring_unavailable, vault_unsupported.
 
 Request body (required): `application/json` [VaultUnlockRequest](#vaultunlockrequest)
 
@@ -2677,6 +3695,17 @@ Request body (required): `application/json` [VaultUnlockRequest](#vaultunlockreq
 | default | Sanitized error | `application/json` [ApiError](#apierror) |
 
 ## Schemas
+
+### About
+
+Versions of what runs on this computer.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `releases_url` | string | yes | Where releases are published. |
+| `runtime_version` | string \| null | no | The agent runtime version reported by the latest started chat since this service started; null before any chat ran. |
+| `runtime_versions` | string | yes | Agent runtime package versions this service accepts, in Cargo/npm comparator syntax. |
+| `version` | string | yes | The background service (`opensided`) version. |
 
 ### AccessRequest
 
@@ -2934,6 +3963,7 @@ One file in a session's artifact directory.
 | `path` | string | yes | Path relative to the artifact directory. |
 | `preview_url` | string \| null | no | Time-limited, unauthenticated URL path for sandboxed rendering, when previewable. |
 | `purpose` | [ArtifactPurpose](#artifactpurpose) | yes | Delivery classification; working observations are omitted from the list route. |
+| `quarantined` | boolean | no | A browser download offered for download only: its bytes are unrecognised or its name runs code or renders active content when opened. Clients never open or preview it, and the daemon lists no `preview_url` for it. |
 | `size` | integer (uint64) | yes | Byte size. |
 | `source` | [ArtifactSource](#artifactsource) | yes | Origin of the file. |
 | `tool` | string \| null | no | Tool name that last wrote it, for tool artifacts. |
@@ -2966,6 +3996,45 @@ Where an artifact came from.
 | `"tool"` | A file a tool created or modified (copied from the workspace) or a tool output. |
 | `"transcript"` | The exported session event log. |
 | `"visual"` | A visual block from an assistant message. |
+
+### AttachTabRequest
+
+Attach one of the person's tabs to a chat.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `tab_id` | integer (int64) \| null (int64) | no | Tab to attach; omitted attaches the selected tab of the person's focused window. |
+
+Unknown fields are rejected.
+
+### AttachedBy
+
+Who attached a tab to a chat.
+
+| Value | Description |
+|---|---|
+| `"person"` | The person (an `@` mention or Ask on this tab). |
+| `"agent"` | The agent, with its `browser_user_tab_attach` tool under the chat's policy. |
+
+### AttachedTab
+
+A person tab the chat's agent may read, and act on under the chat's permission mode.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `attached_at` | string (date-time) | yes | When it was attached. |
+| `attached_by` | [AttachedBy](#attachedby) | yes | Who attached it. |
+| `tab_id` | integer (int64) | yes | Chrome tab id in the person's browser. |
+| `title` | string | yes | Title when attached; untrusted page data. |
+| `url` | string | yes | URL when attached; untrusted page data. |
+
+### AttachedTabList
+
+Person tabs attached to one chat. Attachments last for the browser run: they are dropped when the person's browser restarts, since Chrome reuses tab ids across runs.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `tabs` | [AttachedTab](#attachedtab)[] | yes | In attach order. |
 
 ### Attachment
 
@@ -3028,6 +4097,57 @@ Agent activity in a tab.
 | `"done"` | The Task finished with this tab. |
 | `"error"` | The last browser action failed. |
 
+### BrowserPrefValues
+
+Values as the browser reports them, never cached by the daemon.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `accept_languages` | string[] | yes | Preferred page languages in order (`intl.accept_languages`). |
+| `auto_picture_in_picture` | boolean \| null | no | Whether playing video may enter picture-in-picture automatically when its tab is left; null when the browser has no content settings for the profile. |
+| `default_zoom_percent` | integer (uint16) \| null (uint16) | no | Default page zoom in percent; null when the profile has no zoom preferences. |
+| `mini_popup` | boolean \| null | no | Whether Alt+Space (⌥Space on macOS) opens the mini popup from anywhere; null when the openside extension is not enabled in the browser's profile. |
+| `search_engine` | [BrowserSearchEngines](#browsersearchengines) | yes | Default search engine and the built-in engines it can be switched to. |
+| `spell_check` | boolean | yes | Spell check while typing (`browser.enable_spellchecking`). |
+| `third_party_cookies` | [ThirdPartyCookies](#thirdpartycookies) | yes | Third-party cookie blocking. |
+
+### BrowserPrefs
+
+The person's browser settings that the patched browser applies to its own profile.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `prefs` | [BrowserPrefValues](#browserprefvalues) \| null | no | Current values read back from the browser; present only when `status` is `available`. |
+| `status` | [BrowserPrefsStatus](#browserprefsstatus) | yes | Whether the values below can be read and changed right now. |
+
+### BrowserPrefsStatus
+
+Why browser settings are or are not reachable.
+
+| Value | Description |
+|---|---|
+| `"available"` | The patched browser is running and exposes its settings. |
+| `"not_running"` | No browser is running; the daemon never launches one to read settings. |
+| `"unsupported"` | The running browser is stock Chromium/Chrome or a patched build without settings access. |
+
+### BrowserSearchEngine
+
+One built-in search engine.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | integer (uint32) | yes | Chromium's prepopulated engine id. |
+| `name` | string | yes | Display name. |
+
+### BrowserSearchEngines
+
+Built-in search engines only; engines the person added themselves and every search URL stay inside the browser.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `current` | integer (uint32) \| null (uint32) | no | Id of the current default, or null when it is not a built-in engine. |
+| `options` | [BrowserSearchEngine](#browsersearchengine)[] | yes | Engines the default can be switched to, in the browser's order. |
+
 ### BrowserSpace
 
 Where a session's agent tabs browse, fixed at creation.
@@ -3084,6 +4204,19 @@ Browser tab provenance; only `agent` permits Agent Tabs grouping.
 | `"agent"` | Created by a session. |
 | `"user"` | Adopted by the user. |
 | `"external"` | Discovered without an explicit creation operation. |
+
+### BrowsingDataType
+
+A kind of data the person can clear from their own browser.
+
+| Value | Description |
+|---|---|
+| `"history"` | Pages visited. |
+| `"cookies"` | Cookies and other site data. |
+| `"cache"` | Cached images and files. |
+| `"downloads"` | The download list (not the downloaded files). |
+| `"passwords"` | Saved passwords. |
+| `"form_data"` | Autofill form data. |
 
 ### CapabilityScope
 
@@ -3233,10 +4366,13 @@ One candidate and the credential source that would serve a new sidecar.
 | `account_id` | string \| null | no | Opaque source-local account reference, or null when unavailable. |
 | `accounts` | [ModelAccount](#modelaccount)[] | yes | Credential-free candidates, including blocked/unavailable choices. |
 | `available` | boolean | yes | Local credential readiness under source priority and broker fail-close. |
-| `id` | string | yes | Explicit provider:model selector; image-only models are not chat defaults. |
+| `default_effort` | [ThinkingEffort](#thinkingeffort) \| null | no | Effort a chat's visible agent runs at on this model when the person picks none: the front agent's request clamped to the model's ladder. Null for image models and where the runtime sends no effort, leaving the level to the provider's own default. |
+| `display_name` | string | no | Curated product name for the UI, e.g. "Claude Sonnet 5.5". Default: `""`. |
+| `id` | string | yes | Explicit provider:model selector; image models are never chat role choices. |
 | `in_catalog` | boolean | no | False for an explicitly configured id outside the current curated generations. Default: `false`. |
+| `kind` | [ModelKind](#modelkind) | no | Chat or image generation. Default: `"chat"`. |
 | `label` | string | yes | Model-name portion, never an account label or private identity. |
-| `reason` | string | yes | Credential-value-free readiness or refusal explanation. |
+| `reason` | string | yes | CLI diagnostic: credential-value-free readiness or refusal explanation. |
 | `recommended_for` | [ModelRole](#modelrole) \| null | no | Curated family recommendation, not a routing restriction. |
 | `source` | string \| null | no | First usable source, or null when unavailable. |
 | `strengths` | string | no | Short curated guidance; unknown configured models have no capability claim. Default: `""`. |
@@ -3262,7 +4398,7 @@ Metadata-only account response; credential fields are intentionally absent.
 | `restart_required` | boolean | yes | Live application unavailable; never implies another identity is in use. |
 | `secret_present` | boolean | yes | Whether the unlocked Vault contains the typed entry, or legacy references exist. |
 | `status` | [ChannelAccountStatus](#channelaccountstatus) | yes | Effective state of this account only. |
-| `webhook_url` | string \| null | no | Exact signed callback URL to paste into the platform; null for Telegram or legacy. Default: `null`. |
+| `webhook_url` | string \| null | no | Exact signed callback URL to paste into the platform; null for Telegram or legacy, and while Remote Control is off (the platform could not reach this computer). Default: `null`. |
 
 ### ChannelAccountList
 
@@ -3327,6 +4463,15 @@ Write-only input; Debug is masked and allocations are zeroized on drop.
 
 Unknown fields are rejected.
 
+### ChatConfirmation
+
+Whether a chat asks before it changes anything.
+
+| Value | Description |
+|---|---|
+| `"ask_first"` | Writing files and running commands always ask, even where the permission mode allows them; an explicit allow rule still applies. |
+| `"skip"` | The permission mode alone decides; sensitive actions still ask. |
+
 ### ChoiceAnswerEncoding
 
 Canonical ChoiceAnswerEncoding wire contract; presentation never grants authority.
@@ -3359,6 +4504,36 @@ Canonical ChoiceOption wire contract; presentation never grants authority.
 
 Unknown fields are rejected.
 
+### ClearBrowsingDataRequest
+
+Clear data from the person's own browser, as its "Delete browsing data" dialog does.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `since_ms` | integer (int64) | yes | Clear data from this time on (Unix milliseconds); 0 clears everything. |
+| `types` | [BrowsingDataType](#browsingdatatype)[] | yes | At least one kind; each at most once. |
+
+Unknown fields are rejected.
+
+### CliDefaults
+
+`GET /v1/settings/cli`: the defaults `<config dir>/cli.toml` holds for new CLI and MCP sessions on this computer.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `profile` | [CliProfile](#cliprofile) | yes | The saved default; `shared` (the account's first profile) when none is saved. |
+| `profile_is_default` | boolean | yes | True when no profile is saved, so new sessions use the account's first profile. |
+
+### CliProfile
+
+Browser profile new CLI and MCP sessions on this computer use.
+
+| Value | Description |
+|---|---|
+| `"shared"` | The managed profile with the person's logins. |
+| `"isolated"` | Own cookies and storage, wiped when the session is archived or deleted. |
+| `"incognito"` | A private browser whose browsing is never remembered. |
+
 ### CloudflareStatus
 
 Supervised `cloudflared` state.
@@ -3369,6 +4544,105 @@ Supervised `cloudflared` state.
 | `restarts` | integer (uint32) | yes | Times the process exited and was started again. |
 | `state` | string | yes | `starting`, `running`, `restarting` or `failed` (cannot start at all). |
 | `url` | string \| null | no | Public HTTPS URL once known (quick tunnels change it on every restart). |
+
+### ComputerUseConnection
+
+One chat's connected app.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `app` | string | yes | App name (Linux window class, macOS application name). |
+| `cursor` | [ComputerUseCursor](#computerusecursor) \| null | no | Pointer after the latest pointer action. |
+| `frame_height` | integer (uint32) \| null (uint32) | no | Height of the frame the agent last saw. |
+| `frame_width` | integer (uint32) \| null (uint32) | no | Width of the frame the agent last saw; cursor coordinates use it. |
+| `generation` | integer (uint64) | yes | Increases with every connect on this daemon. |
+| `id` | string | yes | Changes on every connect; approvals name it, so they never carry over. |
+| `phase` | [ComputerUsePhase](#computerusephase) | yes | Current activity. |
+| `pid` | integer (uint32) | yes | Owning process id. |
+| `title` | string | yes | Window title at the latest check. |
+
+### ComputerUseCursor
+
+The agent's pointer, in pixels of the latest frame.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `held` | boolean | yes | A button is down right now. |
+| `x` | number (double) | yes | Frame x. |
+| `y` | number (double) | yes | Frame y. |
+
+### ComputerUseFeature
+
+Whether one part of computer use works on this computer.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `available` | boolean | yes | Usable now. |
+| `reason` | string \| null | no | Why it is not usable, in plain language. |
+| `via` | string \| null | no | Mechanism in use, such as `grim`, `uinput`, `wtype` or `screencapturekit`. |
+
+### ComputerUseFrame
+
+The `frame` event of `GET /v1/sessions/{id}/computer-use/frames`: the frame the agent last saw of the connected window.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connection` | string | yes | Connection the frame belongs to. |
+| `data` | string | yes | Base64 image bytes. |
+| `height` | integer (uint32) | yes | Pixel height. |
+| `mime` | string | yes | Always `image/png`. |
+| `seq` | integer (uint64) | yes | Increases with every frame of this chat. |
+| `width` | integer (uint32) | yes | Pixel width. |
+
+### ComputerUsePhase
+
+What a connection is doing.
+
+| Value | Description |
+|---|---|
+| `"connected"` | Idle and ready. |
+| `"acting"` | Sending input. |
+| `"capturing"` | Taking a frame. |
+
+### ComputerUseSessionState
+
+`GET /v1/sessions/{id}/computer-use` and the `state` event of the frames stream.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connection` | [ComputerUseConnection](#computeruseconnection) \| null | no | The connected app; null when none is connected. |
+| `frame_seq` | integer (uint64) \| null (uint64) | no | Sequence of the latest frame, for matching `frame` events. |
+
+### ComputerUseStatus
+
+`GET /v1/computer-use`: whether computer use is turned on and works here.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `backend` | string \| null | no | Desktop backend (`hyprland`, `macos`); null when this desktop is not supported. |
+| `capture` | [ComputerUseFeature](#computerusefeature) | yes | Window frames. |
+| `eligible` | boolean | yes | Window frames and at least one kind of input work. |
+| `enabled` | boolean | yes | `preferences.computer_use`. |
+| `keyboard` | [ComputerUseFeature](#computerusefeature) | yes | Typing and key presses. |
+| `platform` | string | yes | `linux`, `macos` or another operating system name. |
+| `pointer` | [ComputerUseFeature](#computerusefeature) | yes | Clicks, pointer moves and scrolling. |
+| `reasons` | string[] | yes | Every reason a part does not work, deduplicated. |
+
+### ComputerUseStopResult
+
+`POST /v1/sessions/{id}/computer-use/stop`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connection` | [ComputerUseConnection](#computeruseconnection) \| null | no | The connection that ended. |
+| `stopped` | boolean | yes | A connection was ended. |
+
+### ComputerUseStreamEvent
+
+One event of the frames stream; the SSE event name is the `type`.
+
+- any Connection state changed (connect, phase, cursor, stop).
+- any A new frame.
 
 ### ConfigureTailscaleRequest
 
@@ -3648,6 +4922,15 @@ Broad media class of one content part; the runtime maps it to model input types.
 | `"audio"` | Audio clip (WAV, MP3, OGG, FLAC). |
 | `"file"` | Any other document, e.g. PDF. |
 
+### ContextUsage
+
+How full a chat's context window was at its latest model request.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `used_tokens` | integer (uint64) | yes | Input tokens of the latest request by the chat's own agent (cache reads included). |
+| `window_tokens` | integer (uint64) \| null (uint64) | no | The model's context window; null when the runtime did not report one. |
+
 ### CreateAccountSpaceRequest
 
 A person opts in to a separate persistent sign-in profile for this site.
@@ -3678,6 +4961,24 @@ Person-initiated assignment still routes through the chief as sender.
 | `kind` | [HandoffKind](#handoffkind) | yes | Selects task, ownership or independent-review rules. |
 | `packet` | [HandoffPacket](#handoffpacket) | yes | Validated self-contained assignment; goal and acceptance must be nonblank. |
 | `subject_handoff_id` | string \| null | no | Review subject; never authorizes the subject's author to review itself. |
+
+Unknown fields are rejected.
+
+### CreateMcpServerRequest
+
+`POST /v1/mcp/servers` body.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `allow_private_network` | boolean | no | http: also reach private (10/8, 172.16/12, 192.168/16), CGNAT (100.64/10) and unique-local IPv6 addresses; link-local and cloud metadata stay refused. Default false. Default: `false`. |
+| `command` | string[] \| null | no | stdio: program and arguments, run without a shell. Default: `null`. |
+| `cwd` | string \| null | no | stdio: absolute working directory. Default: `null`. |
+| `enabled` | boolean \| null | no | Defaults to true. Default: `null`. |
+| `id` | string \| null | no | Stable id; derived from `label` when absent. Default: `null`. |
+| `label` | string | yes | Display name, 1-80 characters. |
+| `secrets` | map of string | no | Environment variables (stdio) or headers (http) to store in the Vault, by name. Default: `{}`. |
+| `transport` | [McpServerTransport](#mcpservertransport) | yes | Transport. |
+| `url` | string \| null | no | http: `https://` endpoint, or `http://` on a loopback host. Default: `null`. |
 
 Unknown fields are rejected.
 
@@ -3719,6 +5020,18 @@ Create a one-time pairing offer from the local socket or a verified local person
 
 Unknown fields are rejected.
 
+### CreatePersonBookmarkRequest
+
+Bookmark a page.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `parent_id` | string \| null | no | Folder to add to; omitted adds to the bookmarks bar. |
+| `title` | string | yes | Title (at most 1000 characters). |
+| `url` | string | yes | http(s) URL without credentials. |
+
+Unknown fields are rejected.
+
 ### CreatePinnedTabRequest
 
 `POST /v1/pinned-tabs`. Pinning an already pinned URL updates its title.
@@ -3727,6 +5040,18 @@ Unknown fields are rejected.
 |---|---|---|---|
 | `title` | string \| null | no | Optional display title (at most 512 characters). Default: `null`. |
 | `url` | string | yes | http(s) URL. |
+
+Unknown fields are rejected.
+
+### CreateProjectRequest
+
+Create a project from an existing folder, or (without `root`) from scratch in a new empty folder the daemon makes. Only the computer running openside may create projects.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `instructions` | string \| null | no | Instructions for every chat in the project, at most [`MAX_PROJECT_INSTRUCTIONS_BYTES`]. |
+| `name` | string | yes | Non-blank display name, at most [`MAX_PROJECT_NAME_CHARS`] characters after trimming. |
+| `root` | string \| null | no | Absolute path of an existing folder; it must not be the file system root, the home folder or a folder above it, inside openside's own data, inside an operating-system folder or another person's home, or a credential folder (such as `~/.ssh`) or a folder above one. Omitted: start from scratch. |
 
 Unknown fields are rejected.
 
@@ -3772,14 +5097,28 @@ Session creation request.
 |---|---|---|---|
 | `agent_id` | string \| null | no | Existing active agent for a new non-home thread; cannot rebind an existing session. Default: `null`. |
 | `browser_space` | [BrowserSpace](#browserspace) | no | Browse in the shared managed profile (default) or an isolated space; immutable afterwards. Incognito sessions already have their own browser and refuse `isolated`. |
-| `effort` | [ThinkingEffort](#thinkingeffort) \| null | no | Thinking effort, immutable afterwards; omission keeps the model's default. |
+| `confirmation` | [ChatConfirmation](#chatconfirmation) \| null | no | Confirmation behaviour; omission uses `preferences.confirmation`. Changeable later. |
+| `effort` | [ThinkingEffort](#thinkingeffort) \| null | no | Thinking effort; omission keeps the model's default. Changeable later per chat. |
 | `incognito` | boolean | no | Create a private session; immutable afterwards. Browsing history is not indexed. |
 | `mode` | [PolicyMode](#policymode) \| null | no | Permission override, or settings default when omitted. |
 | `model` | string \| null | no | Model override, or settings default when omitted. |
 | `profile` | [SessionProfile](#sessionprofile) \| null | no | Agent profile, immutable afterwards; omission means the daemon-wide profile. |
+| `project_id` | string \| null | no | Start the chat in this project; its folder becomes the workspace. Cannot be combined with `workspace`. |
 | `speed` | [SessionSpeed](#sessionspeed) \| null | no | Service speed, immutable afterwards; omission means `default`. |
 | `title` | string \| null | no | Conversation title, or a daemon-generated title when omitted. |
-| `workspace` | string \| null | no | Absolute workspace path, canonicalized by the daemon before session creation. |
+| `workspace` | string \| null | no | Absolute workspace path, canonicalized by the daemon before session creation. A paired device needs local access (the computer running openside) to name one. |
+
+Unknown fields are rejected.
+
+### CreateShareRequest
+
+Publish a snapshot of the chat as it is now.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `artifacts` | string[] | no | Artifact paths from `GET /v1/sessions/{id}/artifacts` to copy into the snapshot, in the order given; none by default. The transcript and working files cannot be shared. Default: `[]`. |
+| `expires_in_secs` | integer (uint64) \| null (uint64) | no | Seconds until the link stops working; omitted or null keeps it until revoked. Default: `null`. |
+| `steps` | boolean | no | Include one line per step the agent took (the tool used, never its input or output). Default: `true`. |
 
 Unknown fields are rejected.
 
@@ -3983,7 +5322,7 @@ Variants:
 - `kind=assistant.delta`: Incremental assistant output. Fields: `text`: string.
 - `kind=assistant.final`: Complete assistant response. Fields: `attachments`: [MessageDocument](#messagedocument)[] (optional), `text`: string.
 - `kind=thinking.delta`: Incremental model thinking output. Fields: `text`: string.
-- `kind=usage`: Token usage for a model request. Fields: `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
+- `kind=usage`: Token usage for a model request. Fields: `context_window`: integer (uint64) \| null (uint64) (optional), `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
 - `kind=tool.started`: Tool call began. Fields: `args`: any, `name`: string, `tool_call_id`: string.
 - `kind=tool.updated`: Tool produced intermediate progress. Fields: `tool_call_id`: string, `update`: any.
 - `kind=tool.ended`: Tool completed or failed. Fields: `card`: [Card](#card) \| null (optional), `is_error`: boolean, `result`: any, `tool_call_id`: string.
@@ -4006,6 +5345,10 @@ Variants:
 - `kind=session.stopped`: User explicitly stopped the session; pending messages are retained.
 - `kind=session.deleted`: Session removed by an administrator; the log remains as a tombstone and nothing can be appended after it.
 - `kind=session.updated`: User-visible list metadata changed; omitted fields are unchanged. Fields: `archived`: boolean \| null (optional), `mode`: [PolicyMode](#policymode) \| null (optional), `pinned`: boolean \| null (optional), `title`: string \| null (optional).
+- `kind=session.options_updated`: The person changed a chat's own options after creation; omitted fields are unchanged. Applies from the chat's next model request (a running turn finishes as it started). Fields: `confirmation`: [ChatConfirmation](#chatconfirmation) \| null (optional), `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `mode`: [PolicyMode](#policymode) \| null (optional), `model`: string \| null (optional).
+- `kind=session.read`: The person marked the chat read (every reply so far seen) or unread. Fields: `read`: boolean.
+- `kind=session.branched`: This chat was branched from another chat's reply. Every event before this one is the copied conversation, which the agent receives as context on each start. Fields: `from_message`: [MessageId](#messageid), `from_session`: [SessionId](#sessionid).
+- `kind=session.folder_changed`: The chat moved into a project (its folder becomes the workspace), got a folder of its own, or lost both. Fields: `project_id`: string \| null (optional), `workspace`: string \| null (optional).
 - `kind=session.title_proposed`: A model-written conversation title; explicit titles and later user renames win. Fields: `title`: string.
 - `kind=runtime.started`: Sidecar ready handshake completed with an exact tool-gate match. Fields: `startup_ms`: integer (uint64), `tools`: string[].
 - `kind=runtime.error`: Sanitized runtime failure; credentials and secrets must not appear here. Fields: `code`: string, `message`: string, `retryable`: boolean (optional), `user_message`: string (optional).
@@ -4037,7 +5380,7 @@ Public event payloads with stable `kind` identifiers, dotted except for `usage`.
 - `kind=assistant.delta`: Incremental assistant output. Fields: `text`: string.
 - `kind=assistant.final`: Complete assistant response. Fields: `attachments`: [MessageDocument](#messagedocument)[] (optional), `text`: string.
 - `kind=thinking.delta`: Incremental model thinking output. Fields: `text`: string.
-- `kind=usage`: Token usage for a model request. Fields: `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
+- `kind=usage`: Token usage for a model request. Fields: `context_window`: integer (uint64) \| null (uint64) (optional), `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `input_tokens`: integer (uint64), `model`: string, `output_tokens`: integer (uint64).
 - `kind=tool.started`: Tool call began. Fields: `args`: any, `name`: string, `tool_call_id`: string.
 - `kind=tool.updated`: Tool produced intermediate progress. Fields: `tool_call_id`: string, `update`: any.
 - `kind=tool.ended`: Tool completed or failed. Fields: `card`: [Card](#card) \| null (optional), `is_error`: boolean, `result`: any, `tool_call_id`: string.
@@ -4060,6 +5403,10 @@ Public event payloads with stable `kind` identifiers, dotted except for `usage`.
 - `kind=session.stopped`: User explicitly stopped the session; pending messages are retained.
 - `kind=session.deleted`: Session removed by an administrator; the log remains as a tombstone and nothing can be appended after it.
 - `kind=session.updated`: User-visible list metadata changed; omitted fields are unchanged. Fields: `archived`: boolean \| null (optional), `mode`: [PolicyMode](#policymode) \| null (optional), `pinned`: boolean \| null (optional), `title`: string \| null (optional).
+- `kind=session.options_updated`: The person changed a chat's own options after creation; omitted fields are unchanged. Applies from the chat's next model request (a running turn finishes as it started). Fields: `confirmation`: [ChatConfirmation](#chatconfirmation) \| null (optional), `effort`: [ThinkingEffort](#thinkingeffort) \| null (optional), `mode`: [PolicyMode](#policymode) \| null (optional), `model`: string \| null (optional).
+- `kind=session.read`: The person marked the chat read (every reply so far seen) or unread. Fields: `read`: boolean.
+- `kind=session.branched`: This chat was branched from another chat's reply. Every event before this one is the copied conversation, which the agent receives as context on each start. Fields: `from_message`: [MessageId](#messageid), `from_session`: [SessionId](#sessionid).
+- `kind=session.folder_changed`: The chat moved into a project (its folder becomes the workspace), got a folder of its own, or lost both. Fields: `project_id`: string \| null (optional), `workspace`: string \| null (optional).
 - `kind=session.title_proposed`: A model-written conversation title; explicit titles and later user renames win. Fields: `title`: string.
 - `kind=runtime.started`: Sidecar ready handshake completed with an exact tool-gate match. Fields: `startup_ms`: integer (uint64), `tools`: string[].
 - `kind=runtime.error`: Sanitized runtime failure; credentials and secrets must not appear here. Fields: `code`: string, `message`: string, `retryable`: boolean (optional), `user_message`: string (optional).
@@ -4138,6 +5485,25 @@ Canonical FieldInitial wire contract; presentation never grants authority.
 
 - string Typed Text presentation variant; source authorization remains unchanged.
 - boolean Typed Checked presentation variant; source authorization remains unchanged.
+
+### FollowUpMode
+
+How a message sent while a chat is working is delivered when the client does not choose.
+
+| Value | Description |
+|---|---|
+| `"queue"` | After the current turn. |
+| `"steer"` | Into the running turn at its next step. |
+
+### ForkSessionRequest
+
+Branch a chat at one of its replies: a new chat with the conversation up to and including the reply to `from_message`, which then continues on its own.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `from_message` | [MessageId](#messageid) | yes | The message whose finished reply ends the copied conversation. |
+
+Unknown fields are rejected.
 
 ### Handoff
 
@@ -4720,7 +6086,9 @@ Socket-only bootstrap for a desktop browser; never returned to TCP callers.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `device_id` | string | yes | Local person-device identifier. |
+| `extension_code` | string \| null | no | One-time pairing code (valid [`crate::PAIRING_TTL_SECS`] seconds) for the openside extension in the launcher's browser profile. Only the extension's origin may redeem it, and redeeming replaces the extension device the launcher paired before. Null without a listener. |
 | `kind` | [DeviceKind](#devicekind) | yes | Fixed person-device identity. |
+| `person_browser_runtime_dir` | string | yes | Private directory (under the daemon's runtime directory) the launcher passes to the person's browser as its gateway runtime directory, where the daemon looks for its person-role gateway and launch record. |
 | `scopes` | [CapabilityScope](#capabilityscope)[] | yes | Token scopes. |
 | `secret` | string | yes | Per-boot locality proof; keep only in browser sessionStorage. |
 | `token` | string | yes | Bearer token for the local person, distinct from the per-boot secret. |
@@ -4762,6 +6130,66 @@ Identity provider behind an alternative sign-in control.
 | `"github"` | GitHub. |
 | `"microsoft"` | Microsoft. |
 
+### McpServer
+
+A configured MCP server. Secret values are never returned; `secrets` lists their names.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `allow_private_network` | boolean | yes | http: private, CGNAT and unique-local addresses are reachable too. |
+| `command` | string[] \| null | no | stdio: program and arguments. |
+| `cwd` | string \| null | no | stdio: working directory. |
+| `enabled` | boolean | yes | Disabled servers are kept but not started. |
+| `error` | string \| null | no | Why the last start, handshake or listing failed; redacted, no secret values. |
+| `id` | string | yes | Stable id: lowercase letters, digits, `-`, `_`. |
+| `label` | string | yes | Display name. |
+| `secrets` | string[] | yes | Names of Vault-held environment variables (stdio) or headers (http). |
+| `server_name` | string \| null | no | Name the server reported during the handshake. |
+| `status` | [McpServerStatus](#mcpserverstatus) | yes | Connection state. |
+| `tools` | [McpServerTool](#mcpservertool)[] | yes | Tools agents can call; empty unless `status` is `connected`. |
+| `transport` | [McpServerTransport](#mcpservertransport) | yes | Transport. |
+| `url` | string \| null | no | http: endpoint. |
+
+### McpServerList
+
+Response of `GET /v1/mcp/servers`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `servers` | [McpServer](#mcpserver)[] | yes | Servers in configuration order. |
+
+### McpServerStatus
+
+Connection state of a configured MCP server.
+
+| Value | Description |
+|---|---|
+| `"disabled"` | Turned off; nothing is started. |
+| `"connecting"` | Starting or initializing. |
+| `"connected"` | Initialized; `tools` is current. |
+| `"vault_locked"` | Its secrets are in the Vault, which is locked. |
+| `"failed"` | Start, handshake or tool listing failed; see `error`. |
+
+### McpServerTool
+
+One tool an MCP server offers, as agents see it.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | string \| null | no | The server's description, if any. |
+| `exposed_name` | string | yes | Name agents call: `mcp__<server id>__<tool>`, reduced to `[A-Za-z0-9_-]`, at most 64. |
+| `name` | string | yes | The server's own tool name. |
+| `read_only_hint` | boolean | yes | The server marks the tool as read-only. A hint only: every call still follows the session's approval rules. |
+
+### McpServerTransport
+
+How openside reaches an external MCP server.
+
+| Value | Description |
+|---|---|
+| `"stdio"` | A local process speaking JSON-RPC over stdin/stdout. |
+| `"http"` | The Streamable HTTP transport (JSON or server-sent-event responses). |
+
 ### MediaRef
 
 Canonical MediaRef wire contract; presentation never grants authority.
@@ -4790,6 +6218,75 @@ One stored memory. Content never contains a value matched by secret detection.
 | `updated_at` | string (date-time) | yes | Last write; retention counts from here. |
 | `url` | string \| null | no | Public page URL, for history memories. |
 | `version` | integer (uint32) | yes | Current version number, starting at one. |
+
+### MemoryChange
+
+One entry of the global memory change log.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `actor` | string | yes | Who made the change. |
+| `at` | string (date-time) | yes | When the change happened. |
+| `content` | string \| null | no | Content after the change; absent once scrubbed by deletion or retention. |
+| `kind` | [MemoryKind](#memorykind) \| null | no | Kind of the memory, while it still exists. |
+| `memory_id` | string | yes | Memory the change belongs to. |
+| `op` | [MemoryOp](#memoryop) | yes | Operation. |
+| `seq` | integer (int64) | yes | Log position; pass as `before` to page to older entries. |
+| `tags` | string[] \| null | no | Labels after the change; absent once scrubbed. |
+| `version` | integer (uint32) | yes | Version this change produced. |
+
+### MemoryChangeList
+
+Response of `GET /v1/memory/history`, newest first.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `changes` | [MemoryChange](#memorychange)[] | yes | Changes, newest first. |
+| `next_before` | integer (int64) \| null (int64) | no | `before` value for the next page; absent on the last page. |
+
+### MemoryFile
+
+Response of `GET /v1/memory/files/{name}`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `editable` | boolean | yes | Whether edits are accepted. |
+| `markdown` | string | yes | Markdown. In editable files each note starts with a `<!-- memory id=… -->` marker line; keep markers to edit a note, delete a note's block to delete it, and add text under a bare `<!-- memory -->` marker (or before the first marker) to add notes. An optional `tags="a, b"` in a marker sets labels. |
+| `name` | string | yes | File name. |
+| `revision` | integer (int64) | yes | Change-log position this rendering reflects; send it back with the edit. |
+| `updated_at` | string (date-time) \| null (date-time) | no | Latest write among the rendered notes. |
+| `view` | [MemoryView](#memoryview) | yes | Which projection this file is. |
+
+### MemoryFileInfo
+
+Listing entry of `GET /v1/memory/files`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `editable` | boolean | yes | Whether `PUT /v1/memory/files/{name}` accepts edits. |
+| `items` | integer (uint32) | yes | Notes rendered into the file (for `TAXONOMY.md`, distinct tags). |
+| `name` | string | yes | `MEMORY.md`, `USER.md` or `TAXONOMY.md`. |
+| `updated_at` | string (date-time) \| null (date-time) | no | Latest write among the rendered notes; absent when the file is empty. |
+| `view` | [MemoryView](#memoryview) | yes | Which projection this file is. |
+
+### MemoryFileList
+
+Response of `GET /v1/memory/files`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `files` | [MemoryFileInfo](#memoryfileinfo)[] | yes | The three files in display order. |
+
+### MemoryFileSaved
+
+Response of `PUT /v1/memory/files/{name}`: the re-rendered file and what changed. All changes apply in one transaction; a note edited elsewhere since the `GET` fails the whole save with `memory_conflict` (409).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `created` | integer (uint32) | yes | Notes added. |
+| `deleted` | integer (uint32) | yes | Notes deleted. |
+| `file` | [MemoryFile](#memoryfile) | yes | The file after saving. |
+| `updated` | integer (uint32) | yes | Notes changed. |
 
 ### MemoryHealth
 
@@ -4898,6 +6395,16 @@ Change recorded in memory history.
 | `"delete"` | Explicit deletion. |
 | `"purge"` | Removal by the retention job. |
 
+### MemoryRebuild
+
+Response of `POST /v1/memory/rebuild`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `embedded` | integer (uint64) | yes | Memories that received a fresh embedding (zero without a local model). |
+| `health` | [MemoryHealth](#memoryhealth) | yes | Search status after the rebuild. |
+| `reindexed` | integer (uint64) | yes | Live memories whose full-text index entry was rebuilt. |
+
 ### MemorySearchMode
 
 Search strategy in effect.
@@ -4929,6 +6436,16 @@ One history entry. After delete/purge every earlier snapshot is scrubbed and onl
 | `retention` | [Retention](#retention) \| null | no | Retention after the change. |
 | `tags` | string[] \| null | no | Labels after the change; absent once scrubbed. |
 | `version` | integer (uint32) | yes | Version number this change produced. |
+
+### MemoryView
+
+A file-shaped view of the memory store (Settings › Memory › Overview). The files do not exist on disk; the daemon renders them from stored notes and parses edits back.
+
+| Value | Description |
+|---|---|
+| `"memory"` | `MEMORY.md`: notes about work, decisions and context (every note not tagged `profile`). |
+| `"user"` | `USER.md`: facts about the person (notes tagged `profile`). |
+| `"taxonomy"` | `TAXONOMY.md`: tags and kinds with counts; read-only. |
 
 ### Message
 
@@ -5037,13 +6554,27 @@ Local credential readiness, never a guarantee of upstream model entitlement.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `cached_for_ms` | integer (uint32) | yes | Maximum metadata cache lifetime; managed writes invalidate it immediately. |
+| `deep_model` | string \| null | no | Deep role (hard reasoning, planning, judging, synthesis Tasks); null uses the session model. Default: `null`. |
 | `default_model` | string \| null | no | Current default for new sessions and unoverridden Team homes on their next idle turn. |
-| `fallback_models` | string[] | yes | Running model fallback chain, independent of credential-source order. |
-| `fast_model` | string \| null | no | Fast chief front-agent model; null uses the reasoning model. |
+| `effective_image_model` | string \| null | no | The image model `generate_image` uses right now; null when image generation is off or, on automatic, no image model is available. Default: `null`. |
+| `fallback_models` | string[] | yes | CLI-only running fallback chain, independent of credential-source order. |
+| `fast_model` | string \| null | no | Fast role (front agent, titles, summaries, memory extraction); null uses the session model. |
+| `image_model` | string \| null | no | Stored image generation choice: null picks the best available image model automatically, "off" hides `generate_image`, otherwise a `provider:model` id. Default: `null`. |
 | `providers` | [ModelProvider](#modelprovider)[] | yes | Provider groups sorted by identifier, with deduplicated model ids. |
+| `standard_model` | string \| null | no | Standard role (subagents and Tasks); null uses the session model. Default: `null`. |
 | `truncated` | boolean | yes | An input or output metadata limit omitted entries. |
+| `visual_model` | string \| null | no | Visual role (requests carrying an image); null uses the requesting agent's model. Default: `null`. |
 
 Unknown fields are rejected.
+
+### ModelKind
+
+What a catalog model produces; only chat models serve conversation roles.
+
+| Value | Description |
+|---|---|
+| `"chat"` | Chat/tool-capable model for the Default, Fast, Standard, Deep and Visual roles. |
+| `"image"` | Image generation model, valid only for the Image generation role. |
 
 ### ModelProvider
 
@@ -5051,8 +6582,9 @@ Chat/tool-capable candidates for one SDK provider namespace.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `display_name` | string | no | Product name for the UI, e.g. "Claude" or "ChatGPT". Default: `""`. |
 | `models` | [CatalogModel](#catalogmodel)[] | yes | Configured, curated and account-reported candidates, deduplicated by id. |
-| `pool` | [ProviderPool](#providerpool) | yes | Person-built ordered account membership; empty explicitly disables routing. |
+| `pool` | [ProviderPool](#providerpool) | yes | CLI-only: person-built ordered account membership; empty explicitly disables routing. |
 | `provider` | string | yes | SDK provider namespace, not an upstream account identifier. |
 
 Unknown fields are rejected.
@@ -5072,11 +6604,15 @@ Result of a dedicated model-selection write, not raw config PUT semantics.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `deep_model` | string \| null | no | Persisted deep model; null uses the session model. Default: `null`. |
 | `default_model` | string | yes | The newly running default, after successful private-file persistence. |
 | `effective` | string | yes | new_sessions_and_home_next_turn: ordinary sessions retain stored models; homes reopen idle. |
 | `fallback_models` | string[] | yes | The newly running ordered fallback chain. |
-| `fast_model` | string \| null | no | Persisted fast model; null uses the reasoning model. |
+| `fast_model` | string \| null | no | Persisted fast model; null uses the session model. |
+| `image_model` | string \| null | no | Persisted image generation choice: null for automatic, "off", or a `provider:model` id. Default: `null`. |
 | `restart_required` | boolean | yes | Always false: dedicated selection applies without restarting the daemon. |
+| `standard_model` | string \| null | no | Persisted standard model; null uses the session model. Default: `null`. |
+| `visual_model` | string \| null | no | Persisted visual model; null uses the requesting agent's model. Default: `null`. |
 
 Unknown fields are rejected.
 
@@ -5153,6 +6689,16 @@ Canonical NoticeTone wire contract; presentation never grants authority.
 | `"success"` | Typed Success presentation variant; source authorization remains unchanged. |
 | `"attention"` | Typed Attention presentation variant; source authorization remains unchanged. |
 | `"danger"` | Typed Danger presentation variant; source authorization remains unchanged. |
+
+### NotificationKind
+
+What a task notification is about.
+
+| Value | Description |
+|---|---|
+| `"needs_attention"` | An approval, question, sign-in or other human step is waiting. |
+| `"task_completed"` | A chat finished its work. |
+| `"routine_completed"` | A routine run finished. |
 
 ### OAuthAccount
 
@@ -5282,6 +6828,17 @@ Sign-in transaction progress.
 | `"cancelled"` | Cancelled by the person. |
 | `"expired"` | Not completed in time. |
 
+### OnboardingAlreadySet
+
+`PUT /v1/onboarding` 409 body when the guide already ended: the `{code, message}` of `ApiError` plus the stored outcome, so a client that lost the race can adopt it.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `code` | string | yes | Always `onboarding_already_set`. |
+| `message` | string | yes | Sanitized human-facing detail. |
+| `state` | [OnboardingState](#onboardingstate) | yes | The outcome already recorded: `completed` or `skipped`. |
+| `updated_at` | string (date-time) | yes | When that outcome was recorded. |
+
 ### OnboardingState
 
 Where the first-run guide stands. `pending` until a person finishes or skips it once; the flag lives on the daemon, so every device and browser agrees.
@@ -5300,6 +6857,16 @@ Where the first-run guide stands. `pending` until a person finishes or skips it 
 |---|---|---|---|
 | `state` | [OnboardingState](#onboardingstate) | yes | Current state. |
 | `updated_at` | string (date-time) \| null (date-time) | no | When the state last changed; `null` while pending. |
+
+### OpenPersonNativeToolRequest
+
+Open a native tool in the person's own browser.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `tool` | [PersonNativeTool](#personnativetool) | yes | Which tool. |
+
+Unknown fields are rejected.
 
 ### OtpChannel
 
@@ -5431,6 +6998,244 @@ How a paired device reaches the daemon from outside its network.
 | `"cloudflare"` | Cloudflare Tunnel run by the daemon. |
 | `"relay"` | CLI/MCP use Noise with the pairing-pinned daemon key; relay-served PWA code still requires trust in the relay operator. |
 
+### PersonBookmark
+
+A bookmark or bookmark folder.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `children` | [PersonBookmark](#personbookmark)[] | yes | Folder contents in order; empty for a bookmark. |
+| `id` | string | yes | Chrome bookmark id. |
+| `parent_id` | string \| null | no | Containing folder; null for the top folders. |
+| `title` | string | yes | Title; may be empty. |
+| `url` | string \| null | no | Page URL; null for a folder. |
+
+### PersonBookmarkTree
+
+The person's bookmarks.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connected` | boolean | yes | False when no openside extension is connected. |
+| `roots` | [PersonBookmark](#personbookmark)[] | yes | The browser's top folders (bookmarks bar, other bookmarks, ...). |
+
+### PersonDownload
+
+A download in the person's browser. Only the file's base name is reported, never its folder.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `download_id` | integer (int64) | yes | Chrome download id. |
+| `filename` | string | yes | File base name. |
+| `received_bytes` | integer (uint64) | yes | Bytes received so far. |
+| `started_at` | string (date-time) \| null (date-time) | no | When the download started, if known. |
+| `state` | [PersonDownloadState](#persondownloadstate) | yes | Progress. |
+| `total_bytes` | integer (uint64) \| null (uint64) | no | Size, when the server reported it. |
+| `url` | string | yes | Address the file came from. |
+
+### PersonDownloadList
+
+Recent downloads, newest first.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connected` | boolean | yes | False when no openside extension is connected. |
+| `downloads` | [PersonDownload](#persondownload)[] | yes | Newest first; incognito downloads are never included. |
+
+### PersonDownloadState
+
+Progress of a download.
+
+| Value | Description |
+|---|---|
+| `"in_progress"` | Still downloading. |
+| `"complete"` | Finished. |
+| `"interrupted"` | Failed or cancelled. |
+
+### PersonExtension
+
+An extension installed in the person's browser.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | string | yes | Short description; may be empty. |
+| `enabled` | boolean | yes | Turned on. |
+| `id` | string | yes | Extension id. |
+| `kind` | [PersonExtensionKind](#personextensionkind) | yes | Extension, theme or app. |
+| `name` | string | yes | Display name. |
+| `version` | string | yes | Version string. |
+
+### PersonExtensionKind
+
+What kind of item an installed extension is.
+
+| Value | Description |
+|---|---|
+| `"extension"` | A browser extension. |
+| `"theme"` | A theme. |
+| `"app"` | An app. |
+
+### PersonExtensionList
+
+Extensions installed in the person's browser.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connected` | boolean | yes | False when no openside extension is connected. |
+| `extensions` | [PersonExtension](#personextension)[] | yes | In the browser's order. |
+
+### PersonHistoryItem
+
+One page in the person's browsing history.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `last_visit_at` | string (date-time) \| null (date-time) | no | Last visit, if known. |
+| `title` | string | yes | Page title; may be empty. |
+| `url` | string | yes | Page URL. |
+| `visit_count` | integer (uint32) | yes | Number of visits. |
+
+### PersonHistoryList
+
+Browsing history matches, most recent first.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connected` | boolean | yes | False when no openside extension is connected. |
+| `items` | [PersonHistoryItem](#personhistoryitem)[] | yes | Most recent first. |
+
+### PersonNativeTool
+
+A native tool of the person's own browser that openside's menus open.
+
+| Value | Description |
+|---|---|
+| `"task_manager"` | The browser's Task manager. |
+| `"devtools"` | Developer tools for the selected tab of the person's most recently active window. |
+
+### PersonRecentlyClosed
+
+A tab or window the person closed recently.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `closed_at` | string (date-time) \| null (date-time) | no | When it was closed, if the browser reports it. |
+| `favicon_url` | string \| null | no | Tab favicon, if any. |
+| `kind` | [PersonRecentlyClosedKind](#personrecentlyclosedkind) | yes | Tab or window. |
+| `session_id` | string | yes | Browser session id used to reopen it. |
+| `tab_count` | integer (uint32) | yes | Number of tabs it reopens. |
+| `title` | string | yes | Tab title, or the window's first tab title. |
+| `url` | string \| null | no | Tab URL; null for a window. |
+
+### PersonRecentlyClosedKind
+
+What a recently closed entry reopens.
+
+| Value | Description |
+|---|---|
+| `"tab"` | One tab. |
+| `"window"` | A whole window. |
+
+### PersonRecentlyClosedList
+
+Recently closed tabs and windows, newest first.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connected` | boolean | yes | False when no openside extension is connected. |
+| `entries` | [PersonRecentlyClosed](#personrecentlyclosed)[] | yes | Newest first. |
+
+### PersonTab
+
+One of the person's own (non-incognito) browser tabs, as the openside extension in their browser reports it. Ids are Chrome's numbers and stay valid only for that browser run.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `active` | boolean | yes | The selected tab of its window. |
+| `audible` | boolean | yes | Playing sound. |
+| `discarded` | boolean | yes | Unloaded by the browser to save memory. |
+| `favicon_url` | string \| null | no | Favicon the browser reports for the tab, if any. |
+| `group_id` | integer (int64) \| null (int64) | no | Tab group, or null when ungrouped. |
+| `index` | integer (uint32) | yes | Position in its window's tab strip. |
+| `muted` | boolean | yes | Muted by the person. |
+| `pinned` | boolean | yes | Pinned in its window. |
+| `tab_id` | integer (int64) | yes | Chrome tab id. |
+| `title` | string | yes | Document title; untrusted page data. |
+| `url` | string | yes | Current URL; untrusted page data. |
+| `window_id` | integer (int64) | yes | Chrome window id. |
+
+### PersonTabCommand
+
+One tab operation the person asked for in openside's tab list or tab menu.
+
+- `command=activate`: Switch to the tab and focus its window. Fields: `tab_id`: integer (int64).
+- `command=create`: Open a new tab: at an http(s) URL, at one of the browser pages `chrome://bookmarks`, `chrome://downloads`, `chrome://extensions`, `chrome://history`, `chrome://settings`, `chrome://inspect`, `chrome://profile-picker`, the settings subpages `clearBrowserData`, `appearance`, `adPrivacy`, `content`, `security`, `languages` and `performance`, `chrome://extensions/shortcuts`, or the new-tab page when omitted; right after `after_tab_id` when given (New Tab Below). Fields: `after_tab_id`: integer (int64) \| null (int64) (optional), `url`: string \| null (optional).
+- `command=close`: Close tabs (Close, Close Other Tabs, Close Tabs Below: the caller picks the ids). Fields: `tab_ids`: integer (int64)[].
+- `command=duplicate`: Duplicate a tab. Fields: `tab_id`: integer (int64).
+- `command=reload`: Reload a tab. Fields: `tab_id`: integer (int64).
+- `command=set_pinned`: Pin or unpin a tab. Fields: `pinned`: boolean, `tab_id`: integer (int64).
+- `command=set_muted`: Mute or unmute a tab. Fields: `muted`: boolean, `tab_id`: integer (int64).
+- `command=group`: Add tabs to an existing group, or to a new group when `group_id` is omitted. Fields: `color`: [PersonTabGroupColor](#persontabgroupcolor) \| null (optional), `group_id`: integer (int64) \| null (int64) (optional), `tab_ids`: integer (int64)[], `title`: string \| null (optional).
+- `command=ungroup`: Take tabs out of their groups. Fields: `tab_ids`: integer (int64)[].
+- `command=move_to_new_window`: Move a tab into a new window of its own. Fields: `tab_id`: integer (int64).
+- `command=new_incognito_window`: Open a new incognito window. Its tabs are never listed or attached.
+
+### PersonTabCommandResult
+
+Result of a [`PersonTabCommand`] or a restore.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `group_id` | integer (int64) \| null (int64) | no | The group tabs were added to (`group`). |
+| `tab` | [PersonTab](#persontab) \| null | no | The created, moved or changed tab, when the command produces one. |
+
+### PersonTabGroup
+
+One tab group in the person's browser.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `collapsed` | boolean | yes | Collapsed in the tab strip. |
+| `color` | [PersonTabGroupColor](#persontabgroupcolor) | yes | Group color. |
+| `group_id` | integer (int64) | yes | Chrome tab-group id. |
+| `title` | string | yes | Group name; may be empty. |
+| `window_id` | integer (int64) | yes | Window the group lives in. |
+
+### PersonTabGroupColor
+
+Chromium's fixed tab-group colors.
+
+| Value | Description |
+|---|---|
+| `"grey"` | Grey. |
+| `"blue"` | Blue. |
+| `"red"` | Red. |
+| `"yellow"` | Yellow. |
+| `"green"` | Green. |
+| `"pink"` | Pink. |
+| `"purple"` | Purple. |
+| `"cyan"` | Cyan. |
+| `"orange"` | Orange. |
+
+### PersonTabList
+
+The person's open tabs, read live from their browser on every request.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `connected` | boolean | yes | False when no openside extension is connected; the lists are then empty. |
+| `focused_window_id` | integer (int64) \| null (int64) | no | The window the person last focused, when known. |
+| `groups` | [PersonTabGroup](#persontabgroup)[] | yes | Tab groups of the listed windows. |
+| `tabs` | [PersonTab](#persontab)[] | yes | Tabs ordered by window, then strip position. Incognito tabs are never included. |
+
+### PickedFolder
+
+The folder a person chose in the native folder picker of the computer running openside.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `path` | string \| null | no | Canonical absolute path; null when the person closed the picker without choosing. |
+
 ### PinnedTab
 
 A tab the user pinned; synced between devices when sync is set up.
@@ -5463,7 +7268,9 @@ What an action does; targets are absolute paths for `fs_*`/`exec`, URLs or origi
 | `"fetch"` | Network fetch outside the browser. |
 | `"vault_use"` | Use a saved credential through the vault. |
 | `"sensitive"` | Payment, purchase, posting or sending a message. |
-| `"privacy_read"` | Access private imported records subject to an explicit session person grant. |
+| `"privacy_read"` | Access private imported records or the person's open tabs, subject to an explicit session person grant or tab attachment. |
+| `"person_browser"` | Act in a tab of the person's own browser (target: origin); Guard asks. |
+| `"computer_use"` | Click, type or scroll in the connected desktop app (target: `app:<app>/<connection>`); Guard asks. |
 
 ### PolicyDecision
 
@@ -5562,6 +7369,22 @@ Result of a [`ValidatePolicyRequest`].
 | `problems` | [PolicyProblem](#policyproblem)[] | yes | Every problem found, in list order. |
 | `valid` | boolean | yes | No problems. |
 
+### Preferences
+
+The person's Settings choices, applied by the daemon as soon as they change.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent_tab_cleanup_minutes` | integer (uint32) | yes | Tabs an agent opened close after this many idle minutes; 0 never closes them. |
+| `completion_sound` | boolean | yes | Play a sound in the app when a chat finishes. |
+| `computer_use` | boolean | yes | Whether agents may ask to connect a desktop app (computer use). |
+| `confirmation` | [ChatConfirmation](#chatconfirmation) | yes | Confirmation for new chats that do not choose one. |
+| `follow_up` | [FollowUpMode](#followupmode) | yes | Delivery the app and channels use for a message sent while a chat is working. |
+| `mcp_server` | boolean | yes | Whether `openside mcp` serves MCP clients; while off the daemon refuses its requests (403 `mcp_server_disabled`) except reading these preferences. On the local socket the MCP client identifies itself, so this holds against agents only while their shell is sandboxed; an unsandboxed shell runs as the person and can reach the socket directly. |
+| `name` | string \| null | no | How the app addresses the person; null shows no name. |
+| `notifications` | [NotificationKind](#notificationkind)[] | yes | Kinds of task notification pushed to subscribed browsers; empty sends none. |
+| `save_sessions` | boolean | yes | Keep sessions started by the CLI or an MCP client in the chat list once they finish; otherwise they are archived when their run ends. |
+
 ### PresentImage
 
 Canonical PresentImage wire contract; presentation never grants authority.
@@ -5621,6 +7444,72 @@ Server-only JSON messages for the browse-scoped session preview WebSocket.
 - `type=paused`: Capture resumes automatically when the human step releases the tab. Fields: `reason`: [PreviewPauseReason](#previewpausereason), `tab_id`: string.
 - `type=no_tab`: No current live owned tab can be selected; no browser is launched by preview.
 - `type=ended`: Final message before the socket's bounded close handshake. Fields: `reason`: [PreviewEndReason](#previewendreason).
+
+### Project
+
+One project.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `created_at` | string (date-time) | yes | When the project was created. |
+| `id` | string | yes | Stable opaque id. |
+| `instructions` | string | no | Instructions every chat in the project receives; empty for none. Default: `""`. |
+| `name` | string | yes | Display name. |
+| `needs_confirmation` | boolean | no | The folder has no recorded identity, so openside cannot tell whether it is still the folder the project was made with. A local person must confirm it (`UpdateProjectRequest::confirm_root`) before chats can use it; until then starting or moving a chat into the project fails with 409 project_root_changed. Default: `false`. |
+| `root` | string | yes | Canonical absolute folder the project's chats work in; fixed at creation. |
+| `scratch` | boolean | no | The daemon made the folder (Start from scratch) under `<data_dir>/projects/<id>`. Default: `false`. |
+| `updated_at` | string (date-time) | yes | When the name or instructions last changed. |
+
+### ProjectList
+
+Every project, by name.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `projects` | [Project](#project)[] | yes | Projects sorted by name, then id. |
+
+### ProviderConnection
+
+One Providers row: every account of one provider and connection kind, collapsed.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `accounts` | [ModelAccountRef](#modelaccountref)[] | yes | Internal account references behind the row, for Reconnect/Disconnect; never shown. |
+| `display_name` | string | yes | Product name for the UI, e.g. "Claude", "ChatGPT", "OpenAI API key". |
+| `id` | string | yes | Stable row id, `<provider>/<kind>`. |
+| `kind` | [ProviderConnectionKind](#providerconnectionkind) | yes | Subscription or API key. |
+| `provider` | string | yes | SDK provider namespace. |
+| `status` | [ProviderConnectionStatus](#providerconnectionstatus) | yes | Connected or needs attention. |
+
+Unknown fields are rejected.
+
+### ProviderConnectionKind
+
+How a connected provider authenticates.
+
+| Value | Description |
+|---|---|
+| `"subscription"` | A signed-in subscription (Claude, ChatGPT, GitHub Copilot, Gemini, Antigravity). |
+| `"api_key"` | A person-supplied API key. |
+
+### ProviderConnectionList
+
+Connected providers in display order.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `providers` | [ProviderConnection](#providerconnection)[] | yes | One row per provider and connection kind with at least one account. |
+
+Unknown fields are rejected.
+
+### ProviderConnectionStatus
+
+Whether a connected provider can serve requests now.
+
+| Value | Description |
+|---|---|
+| `"connected"` | At least one enabled account is ready. |
+| `"needs_attention"` | Accounts exist but none is ready; Reconnect usually fixes it. |
 
 ### ProviderKeyInfo
 
@@ -5803,6 +7692,15 @@ Transport settings safe to inspect; no registration or tunnel token values.
 | `relay` | [SetRelayRequest](#setrelayrequest) | yes | Relay settings. |
 | `tailscale` | [TailscaleConfiguration](#tailscaleconfiguration) | yes | Tailscale settings. |
 
+### RemoteDisabled
+
+`POST /v1/remote/disable`: Remote Control is off; transports that could not be stopped.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `status` | [RemoteStatus](#remotestatus) | yes | The status after turning Remote Control off. |
+| `still_on` | [PairingTransport](#pairingtransport)[] | yes | Transports still running because stopping them failed (today only a Tailscale Serve handler the `tailscale` command could not turn off). The daemon refuses their traffic anyway; stop them by hand or try again. |
+
 ### RemoteStatus
 
 Remote transports the daemon runs (`GET /v1/remote/status`).
@@ -5812,12 +7710,23 @@ Remote transports the daemon runs (`GET /v1/remote/status`).
 | `cloudflare` | [CloudflareStatus](#cloudflarestatus) \| null | no | The supervised `cloudflared`, when enabled. |
 | `configuration` | [RemoteConfiguration](#remoteconfiguration) | yes | Persisted transport settings, without secret values or executable overrides. |
 | `configure_allowed` | boolean | yes | This request proved local-person authority to change transport settings. |
+| `enabled` | boolean | yes | Remote Control is on (`remote.enabled`; unset counts as on only when a transport or `public_url` is configured). While off no transport runs, `modes` is empty, `public_url` is null and only requests made directly on this computer are served. |
 | `modes` | [PairingTransport](#pairingtransport)[] | yes | Enabled transports in pairing preference order. |
 | `pairing_allowed` | boolean | yes | This request proved local-person authority to issue an offer. |
-| `public_url` | string \| null | no | `remote.public_url`. |
+| `public_url` | string \| null | no | `remote.public_url`; null while Remote Control is off. |
 | `relay` | [RelayStatus](#relaystatus) \| null | no | The relay registration, when enabled. |
 | `restart_required` | boolean | yes | A missing listener prevents a persisted transport from applying live. |
 | `tailscale` | [TailscaleStatus](#tailscalestatus) | yes | Tailscale installation and the openside Serve handler. |
+
+### RenameDeviceRequest
+
+New label for a paired device.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Trimmed before saving; 1-100 characters. |
+
+Unknown fields are rejected.
 
 ### ReplRequest
 
@@ -5990,6 +7899,7 @@ Wall-clock or elapsed-time trigger.
 
 - `type=cron`: POSIX minute/hour/day/month/weekday. Fields: `expr`: string, `timezone`: string \| null (optional).
 - `type=interval`: Anchored at creation or last reschedule. Fields: `secs`: integer (uint64).
+- `type=rrule`: RFC 5545 RRULE. Fields: `rule`: string, `start`: string (partial-date-time) \| null (partial-date-time) (optional), `timezone`: string \| null (optional).
 
 ### RoutineSuggestionList
 
@@ -6046,19 +7956,24 @@ Session metadata and pending queue, in delivery order.
 | `agent_id` | string \| null | no | Immutable owner tag; null keeps earlier conversations separate from agent homes. Default: `null`. |
 | `archived` | boolean | no | Hidden from the default session list. Default: `false`. |
 | `browser_space` | [BrowserSpace](#browserspace) | no | Browser space fixed at creation; historical sessions are shared. Default: `"shared"`. |
-| `effort` | [ThinkingEffort](#thinkingeffort) \| null | no | Thinking effort fixed at creation; absent keeps the model's default. |
+| `confirmation` | [ChatConfirmation](#chatconfirmation) | no | Whether writing files and running commands ask first; changeable per chat. Default: `"skip"`. |
+| `context` | [ContextUsage](#contextusage) \| null | no | How full the context window was at the chat's latest model request; absent before it. |
+| `effort` | [ThinkingEffort](#thinkingeffort) \| null | no | Thinking effort, chosen at creation or changed later; absent keeps the model's default. |
 | `id` | [SessionId](#sessionid) | yes | Stable session identifier. |
 | `incognito` | boolean | no | Private session fixed at creation: its browsing is never written to memory. Default: `false`. |
+| `last_activity_at` | string (date-time) \| null (date-time) | no | Latest activity other than a metadata change; the list's "most recent" order uses it. |
 | `last_seq` | integer (uint64) | yes | Latest durable sequence, or zero before creation. |
-| `mode` | [PolicyMode](#policymode) | yes | Permission ceiling selected when the session was created. |
-| `model` | string | yes | Provider-qualified model selected when the session was created, not its effective current model. |
+| `mode` | [PolicyMode](#policymode) | yes | Permission ceiling: the creation choice or a later per-chat change. |
+| `model` | string | yes | Provider-qualified model the chat uses for its next request: the creation choice or a later per-chat change. An agent home uses its agent's model instead. |
 | `pinned` | boolean | no | Listed before unpinned sessions. Default: `false`. |
 | `profile` | [SessionProfile](#sessionprofile) \| null | no | Agent profile fixed at creation; absent means the daemon-wide profile. |
+| `project_id` | string \| null | no | Project the chat belongs to; null for none. Default: `null`. |
 | `queue` | [Message](#message)[] | yes | Steering first, then follow-up messages. |
 | `speed` | [SessionSpeed](#sessionspeed) \| null | no | Service speed fixed at creation; absent means `default`. |
 | `status` | [SessionStatus](#sessionstatus) | yes | Rebuilt from turn and session events. |
 | `title` | string | yes | User-visible conversation title. |
-| `workspace` | string \| null | no | Canonical absolute workspace path used as the Guard root and file-tool cwd. |
+| `unread` | boolean | no | A reply arrived after the person last marked the chat read. Default: `false`. |
+| `workspace` | string \| null | no | Canonical absolute workspace path used as the Guard root and file-tool cwd: the project's folder for a chat in a project. |
 
 ### SessionAccountSelection
 
@@ -6163,6 +8078,17 @@ Configure a self-hosted relay; its registration token remains file/env-only.
 
 Unknown fields are rejected.
 
+### SetSessionFolderRequest
+
+Where a chat works: in a project's folder, in a folder of its own, or in none. At most one of the two fields is set; both null leaves the project and drops the folder.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `project_id` | string \| null | no | Move the chat into this project; its folder becomes the chat's workspace. Default: `null`. |
+| `workspace` | string \| null | no | Attach this absolute folder to the chat outside any project. Only the computer running openside may attach a folder (403 local_access_required elsewhere). Default: `null`. |
+
+Unknown fields are rejected.
+
 ### Settings
 
 Minimal daemon settings, with no credentials.
@@ -6185,6 +8111,71 @@ The persisted configuration document (`config.toml`) as JSON.
 | `remote_editable` | string[] | yes | Dotted keys a paired person device may change without local authority; an entry ending in `.` covers every key under that prefix. Every other key (executables, paths, listeners, trust lists, sandbox, network, credentials, remote access) needs local authority: the Unix socket, or a browser opened from the launcher on this computer. Empty for an agent client that has no local authority. |
 | `restart_required` | boolean | yes | Whether the stored document differs from what the running daemon loaded; changes apply on the next daemon start, except the live policy (`/v1/policy`). |
 | `schema` | any | yes | JSON Schema of `config`, so a client can render and validate every key. |
+
+### ShareLink
+
+One published link, as its owner sees it.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `artifacts` | [SharedArtifact](#sharedartifact)[] | yes | Artifacts copied into the snapshot. |
+| `created_at` | string (date-time) | yes | When the snapshot was taken. |
+| `expires_at` | string (date-time) \| null (date-time) | no | When the link stops working; null when it works until revoked. |
+| `id` | string | yes | Unguessable id; whoever holds it can read the snapshot until it is revoked or expires. |
+| `messages` | integer (uint32) | yes | Messages in the snapshot, the person's and the agent's. |
+| `path` | string | yes | App path of the read-only page, `/share#<id>`; the id stays in the fragment so it is never sent in a Referer header. |
+| `session_id` | [SessionId](#sessionid) | yes | Chat the snapshot was taken from. |
+| `steps` | boolean | yes | Whether step summaries were included. |
+| `title` | string | yes | Chat title when the snapshot was taken. |
+| `url` | string \| null | no | Full link through remote access (Tailscale, Cloudflare or `remote.public_url`); null when none is configured, so the link opens only on this computer at `path`. |
+
+### ShareLinkList
+
+Live links of one chat, newest first.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `shares` | [ShareLink](#sharelink)[] | yes | Unexpired, unrevoked links. |
+
+### SharedArtifact
+
+A file copied into a snapshot.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `index` | integer (uint32) | yes | Position in the snapshot; the `{artifact}` of its download route. |
+| `mime` | string | yes | MIME type. |
+| `name` | string | yes | File name, without directories. |
+| `size` | integer (uint64) | yes | Bytes. |
+
+### SharedChat
+
+The public, read-only snapshot behind a link.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `artifacts` | [SharedArtifact](#sharedartifact)[] | yes | Files the person chose to include, fetched from `GET /v1/shares/{share_id}/artifacts/{artifact}`. |
+| `expires_at` | string (date-time) \| null (date-time) | no | When the link stops working; null when it works until revoked. |
+| `items` | [SharedItem](#shareditem)[] | yes | Conversation in order. |
+| `shared_at` | string (date-time) | yes | When the snapshot was taken; later messages are not part of it. |
+| `title` | string | yes | Chat title when the snapshot was taken. |
+
+### SharedItem
+
+One entry of a shared conversation. Text has live secrets masked as `[REDACTED]`, and a line that still looks like a credential is replaced whole.
+
+- `kind=user`: A message the agent received. Fields: `at`: string (date-time), `text`: string.
+- `kind=assistant`: A reply of the agent. Fields: `at`: string (date-time), `text`: string.
+- `kind=steps`: Steps the agent took between two messages. Fields: `steps`: [SharedStep](#sharedstep)[].
+
+### SharedStep
+
+One step: which tool ran, never its arguments or result.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `failed` | boolean | yes | Whether the step failed. |
+| `tool` | string | yes | Registered tool name. |
 
 ### SkillDetail
 
@@ -6282,6 +8273,26 @@ Steering text delivered at the child's next model-request boundary.
 | `text` | string | yes | Steering text. |
 
 Unknown fields are rejected.
+
+### SttStatus
+
+`GET /v1/stt`: whether this caller can dictate right now and how long a clip may be.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `available` | boolean | yes | This caller may dictate and a transcriber is configured: `channels.stt_cmd`, or an OpenAI API key in the `openai` account pool. |
+| `max_bytes` | integer (uint64) | yes | Largest decoded clip `POST /v1/stt` accepts, in bytes. |
+| `max_seconds` | integer (uint32) | yes | Longest clip a client should record, in seconds. The daemon cannot measure duration; clients stop recording at this point. |
+| `reason` | [SttUnavailable](#sttunavailable) \| null | no | Why `available` is false; null when it is true. Default: `null`. |
+
+### SttUnavailable
+
+Why dictation is unavailable to the caller; each value is the code `POST /v1/stt` would answer with.
+
+| Value | Description |
+|---|---|
+| `"person_device_required"` | The caller is an agent client, not the person's own device or the local socket. |
+| `"stt_unavailable"` | Neither `channels.stt_cmd` nor a usable OpenAI API key is configured. |
 
 ### Subagent
 
@@ -6601,6 +8612,15 @@ Per-session thinking effort, fixed at creation; omission keeps the model's defau
 | `"xhigh"` | Extra-high reasoning effort. |
 | `"max"` | Highest reasoning effort the model supports. |
 
+### ThirdPartyCookies
+
+Third-party cookie policy as chrome://settings offers it.
+
+| Value | Description |
+|---|---|
+| `"allow"` | Allowed (blocked in incognito only). |
+| `"block"` | Blocked everywhere. |
+
 ### Ticket
 
 Durable human-intervention ticket correlated with the same deferred tool call.
@@ -6919,6 +8939,26 @@ One daemon tool an API caller may run directly (`POST /v1/sessions/{id}/tools/{n
 | `name` | string | yes | Tool name, identical to the name the in-app agent calls. |
 | `scope` | [CapabilityScope](#capabilityscope) | yes | Capability a token needs to call it. |
 
+### TranscribeRequest
+
+`POST /v1/stt`: one recorded clip.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `audio_base64` | string | yes | The clip, standard base64 with padding. |
+| `language` | string \| null | no | Spoken language as a BCP-47 tag (`ko`, `en-US`); null lets the transcriber detect it. |
+| `mime` | string | yes | The recorder's MIME type, such as `audio/webm;codecs=opus`, `audio/ogg`, `audio/mp4`, `audio/wav` or `audio/mpeg`. |
+
+Unknown fields are rejected.
+
+### Transcript
+
+`POST /v1/stt` result.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `text` | string | yes | Recognized text, trimmed, never empty, at most 64 KiB. |
+
 ### TransferRequest
 
 Explicit cross-store ownership transaction, persisted as a recoverable saga.
@@ -6953,6 +8993,22 @@ Partial profile edit; nullable overrides distinguish omission from explicit inhe
 
 Unknown fields are rejected.
 
+### UpdateBrowserPrefsRequest
+
+Change browser settings; absent fields stay unchanged. Fields are applied in declaration order, so on failure the earlier fields may already have been applied.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `accept_languages` | string[] \| null | no | 1-32 distinct BCP 47 language tags, most preferred first. |
+| `auto_picture_in_picture` | boolean \| null | no | Automatic picture-in-picture. |
+| `default_zoom_percent` | integer (uint16) \| null (uint16) | no | One of 25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500. |
+| `mini_popup` | boolean \| null | no | Global Alt+Space shortcut for the mini popup; needs the openside extension. |
+| `search_engine` | integer (uint32) \| null (uint32) | no | An id from `search_engine.options`. |
+| `spell_check` | boolean \| null | no | Spell check while typing. |
+| `third_party_cookies` | [ThirdPartyCookies](#thirdpartycookies) \| null | no | Third-party cookie blocking. |
+
+Unknown fields are rejected.
+
 ### UpdateChannelAccountRequest
 
 Partial account change; credential replacement rotates only this identity.
@@ -6967,6 +9023,27 @@ Partial account change; credential replacement rotates only this identity.
 
 Unknown fields are rejected.
 
+### UpdateCheck
+
+Result of asking the release feed for the newest version.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `current` | string | yes | The installed version. |
+| `latest` | string \| null | no | Newest published version; null when nothing is published yet. |
+| `update_available` | boolean | yes | `latest` is newer than `current`. |
+| `url` | string \| null | no | Release page to open; null when nothing is published. |
+
+### UpdateCliDefaultsRequest
+
+`PATCH /v1/settings/cli`; changing it needs local access.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `profile` | [CliProfile](#cliprofile) \| null | yes | New default; `null` clears it (back to the account's first profile). Required: an omitted field is refused rather than read as a clear. |
+
+Unknown fields are rejected.
+
 ### UpdateConnectionRequest
 
 Admin metadata patch; omitted fields remain unchanged.
@@ -6975,6 +9052,33 @@ Admin metadata patch; omitted fields remain unchanged.
 |---|---|---|---|
 | `grants` | [ConnectionGrant](#connectiongrant)[] \| null | no | Upsert these grants without replacing unrelated agents. |
 | `home_url` | string \| null | no | New HTTP(S) home URL, restricted to the connection's site. |
+
+Unknown fields are rejected.
+
+### UpdateMcpServerRequest
+
+`PATCH /v1/mcp/servers/{id}` body; absent fields are unchanged.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `allow_private_network` | boolean \| null | no | http: allow or refuse private, CGNAT and unique-local addresses. |
+| `command` | string[] \| null | no | stdio: replacement program and arguments. |
+| `cwd` | string \| null | no | stdio: replacement working directory; an empty string clears it. |
+| `enabled` | boolean \| null | no | Start or stop the server. |
+| `label` | string \| null | no | Display name. |
+| `secrets` | map of string \| null \| null | no | Secrets to set (a value) or remove (null), by name; others are unchanged. |
+| `url` | string \| null | no | http: replacement endpoint. |
+
+Unknown fields are rejected.
+
+### UpdateMemoryFileRequest
+
+`PUT /v1/memory/files/{name}` body.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `markdown` | string | yes | The edited markdown. |
+| `revision` | integer (int64) | yes | `revision` of the `GET` the edit started from. |
 
 Unknown fields are rejected.
 
@@ -6996,9 +9100,13 @@ Persist available catalog ids for new sessions and the next idle turn of Team ho
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `default_model` | string | yes | Available provider-qualified catalog id; must not be a fallback duplicate. |
+| `deep_model` | string \| null | no | Deep role chat model; null clears it, omission keeps the current value. |
+| `default_model` | string | yes | Available provider-qualified chat model id; must not be a fallback duplicate. |
 | `fallback_models` | string[] | yes | At most 16 distinct available catalog ids in fallback order. |
-| `fast_model` | string \| null | no | Fast chief front-agent model; null uses the reasoning model. Default: `null`. |
+| `fast_model` | string \| null | no | Fast role chat model; null or omitted uses the session model. Default: `null`. |
+| `image_model` | string \| null | no | Image generation: a `provider:model` id (kind image), "off" to hide `generate_image`, or null for automatic (the best available image model); omission keeps the current value. |
+| `standard_model` | string \| null | no | Standard role chat model; null clears it, omission keeps the current value. |
+| `visual_model` | string \| null | no | Visual role chat model; null clears it, omission keeps the current value. |
 
 Unknown fields are rejected.
 
@@ -7026,11 +9134,41 @@ Unknown fields are rejected.
 
 ### UpdateOnboardingRequest
 
-`PUT /v1/onboarding`: record how the guide ended. Only `completed` and `skipped` are accepted; reopening the guide from Settings does not reset the flag.
+`PUT /v1/onboarding`: record how the guide ended. Only `completed` and `skipped` are accepted, and only while the state is `pending`; reopening the guide from Settings does not reset the flag.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `state` | [OnboardingState](#onboardingstate) | yes | `completed` or `skipped`. |
+
+Unknown fields are rejected.
+
+### UpdatePreferencesRequest
+
+Partial preference update; omitted fields keep their value.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent_tab_cleanup_minutes` | integer (uint32) \| null (uint32) | no | One of 0, 5, 10, 15, 30, 60, 120. |
+| `completion_sound` | boolean \| null | no | Completion sound on or off. |
+| `computer_use` | boolean \| null | no | Allow computer use; changing it needs local access. Turning it off stops every connected app at once. |
+| `confirmation` | [ChatConfirmation](#chatconfirmation) \| null | no | Default confirmation for new chats. |
+| `follow_up` | [FollowUpMode](#followupmode) \| null | no | Default follow-up delivery. |
+| `mcp_server` | boolean \| null | no | Allow `openside mcp`; changing it needs local access. |
+| `name` | string \| null | no | 1-80 characters on one line; an empty string clears the name. |
+| `notifications` | [NotificationKind](#notificationkind)[] \| null | no | Each kind at most once. |
+| `save_sessions` | boolean \| null | no | Keep CLI and MCP sessions in the chat list. |
+
+Unknown fields are rejected.
+
+### UpdateProjectRequest
+
+Rename a project, change its instructions or confirm its folder; omitted fields keep their value. The folder is fixed at creation.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `confirm_root` | boolean | no | Check the project's folder again and record it as the project's folder, clearing `Project::needs_confirmation`. Only the computer running openside may confirm a folder (403 local_access_required elsewhere). |
+| `instructions` | string \| null | no | Replacement instructions; an empty string removes them. |
+| `name` | string \| null | no | New non-blank display name. |
 
 Unknown fields are rejected.
 
@@ -7082,12 +9220,17 @@ Unknown fields are rejected.
 
 ### UpdateSessionRequest
 
-Partial session metadata update; omitted fields keep their current value. Applied as one durable `session.updated` event, so list state replays from the log.
+Partial session update; omitted fields keep their current value. Title, pinned and archived are applied as one durable `session.updated` event; model, effort, mode and confirmation as one `session.options_updated` event; `read` as `session.read`. Every change replays from the log.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `archived` | boolean \| null | no | Archived sessions are hidden from the default session list. |
+| `confirmation` | [ChatConfirmation](#chatconfirmation) \| null | no | Whether writing files and running commands ask first. |
+| `effort` | [ThinkingEffort](#thinkingeffort) \| null | no | Thinking effort for the chat's next requests. |
+| `mode` | [PolicyMode](#policymode) \| null | no | Permission ceiling. A paired device may not raise it above the daemon default (`local_socket_required`); not for agent homes, whose agent sets it. |
+| `model` | string \| null | no | Provider-qualified model for the chat's next requests. Not for agent homes, which use their agent's model. |
 | `pinned` | boolean \| null | no | Pinned sessions are listed before unpinned ones. |
+| `read` | boolean \| null | no | `true` marks every reply so far as seen; `false` marks the chat unread. |
 | `title` | string \| null | no | New non-blank title, at most [`MAX_SESSION_TITLE_CHARS`] characters after trimming. |
 
 Unknown fields are rejected.
@@ -7140,6 +9283,19 @@ Unknown fields are rejected.
 
 Unknown fields are rejected.
 
+### UpdateVaultAutofillSettings
+
+Partial autofill update; absent fields keep their value.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `allow_insecure` | boolean \| null | no | New `allow_insecure`. Default: `null`. |
+| `auto_submit` | boolean \| null | no | New `auto_submit`. Default: `null`. |
+| `enabled` | boolean \| null | no | New `enabled`. Default: `null`. |
+| `excluded_domains` | string[] \| null | no | Replacement list (domains or URLs; normalized to lowercase host names). Default: `null`. |
+
+Unknown fields are rejected.
+
 ### UpdateVaultItemRequest
 
 `PATCH /v1/vault/items/{id}`.
@@ -7147,6 +9303,20 @@ Unknown fields are rejected.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `policy` | [VaultPolicyOverride](#vaultpolicyoverride) | yes | New override. |
+
+Unknown fields are rejected.
+
+### UpdateVaultSettingsRequest
+
+`PATCH /v1/vault/settings`; absent fields keep their value. Loosening a setting (longer auto-lock, biometric unlock off, autofill or auto-submit on, insecure pages allowed, fewer excluded domains, a less strict default policy) needs the local socket or a person's device; tightening is open to every caller with vault access. Turning biometric unlock on needs the local socket and a passing check.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `auto_lock` | [VaultAutoLock](#vaultautolock) \| null | no | New idle time. Default: `null`. |
+| `autofill` | [UpdateVaultAutofillSettings](#updatevaultautofillsettings) \| null | no | Autofill changes. Default: `null`. |
+| `biometric_unlock` | boolean \| null | no | Require biometrics to unlock. Default: `null`. |
+| `default_policy` | [VaultPolicy](#vaultpolicy) \| null | no | New default policy. Default: `null`. |
+| `disable_in_incognito` | boolean \| null | no | Only `true` is accepted. Default: `null`. |
 
 Unknown fields are rejected.
 
@@ -7187,11 +9357,38 @@ One vault audit record. Never contains a secret value.
 | `detail` | string \| null | no | Denial reason (e.g. `origin_mismatch`, `policy_never`) or new policy. |
 | `item` | string | yes | Item id, `unknown-site`, or `*` for listings and lifecycle steps. |
 | `origin` | string | yes | Normalized page origin, `invalid-origin`, or `-` when not page-bound. |
-| `result` | string | yes | `allowed`, `denied`, `filled`, `fill-failed`, `completed`, `failed`, `updated`, `registered`, `added`, `deleted`, `unlocked` or `locked`. |
+| `result` | string | yes | `allowed`, `denied`, `filled`, `fill-failed`, `completed`, `failed`, `updated`, `registered`, `added`, `deleted`, `unlocked`, `locked`, `exported`, `cleared`, `generated` or `recovered`. |
 | `session_id` | string \| null | no | Agent session (task) id for tool calls. |
 | `tool_call_id` | string \| null | no | Model tool-call id for tool calls. |
-| `what` | string | yes | `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `login_save`, `get`, `policy_update`, `item_add`, `item_delete`, or the lifecycle steps `setup`, `unlock` and `lock`. |
+| `what` | string | yes | `fill`, `otp`, `otp_register`, `passkey_register`, `passkey_login`, `login_save`, `get`, `policy_update`, `item_add`, `item_delete`, `export`, `clear`, `recovery_key`, `settings_update`, or the lifecycle steps `setup`, `unlock`, `lock` and `recover`. |
 | `who` | string | yes | Caller label: `opensided` for tools and the daemon's own startup unlock, `device:<id>` for a paired device's API call, `local` for the Unix socket. |
+
+### VaultAutoLock
+
+Idle time after which the vault locks itself (`vault.auto_lock`).
+
+| Value | Description |
+|---|---|
+| `"immediately"` | As soon as the vault is idle (within seconds of its last use). |
+| `"one_minute"` | 1 minute without vault use. |
+| `"five_minutes"` | 5 minutes without vault use. |
+| `"fifteen_minutes"` | 15 minutes without vault use. |
+| `"one_hour"` | 1 hour without vault use. |
+| `"four_hours"` | 4 hours without vault use. |
+| `"one_day"` | 1 day without vault use. |
+| `"one_week"` | 1 week without vault use (default). |
+| `"never"` | Only by hand or when the daemon stops. |
+
+### VaultAutofillSettings
+
+Where saved sign-ins may be filled (`vault.autofill`).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `allow_insecure` | boolean | yes | Also fill plain `http:` pages; `localhost` always counts as secure. Off refuses with `insecure_origin`. |
+| `auto_submit` | boolean | yes | Click the submit button after filling when the caller names one. |
+| `enabled` | boolean | yes | Fill saved sign-ins at all; off refuses every fill with `autofill_off`. |
+| `excluded_domains` | string[] | yes | Normalized domains never filled, subdomains included (`excluded_domain`). |
 
 ### VaultBackend
 
@@ -7202,6 +9399,48 @@ How the vault file is unlocked.
 | `"passphrase"` | A passphrase a person chooses (or `vault.passphrase_cmd`); never stored. |
 | `"secret_service"` | A random key in the Linux Secret Service keyring (GNOME Keyring, KWallet). |
 | `"native"` | A random key in the macOS Keychain or Windows Credential Manager. |
+
+### VaultBiometrics
+
+`GET /v1/vault/biometrics`: whether this computer can verify a person biometrically.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `available` | boolean | yes | A sensor with an enrolled finger (or Touch ID) is usable now. |
+| `mechanism` | string \| null | no | `fprintd` (Linux) or `local_authentication` (macOS) when available. |
+| `reason` | string \| null | no | Why not: `unsupported_platform`, `no_sensor`, `not_enrolled`, `service_unavailable`, or `passphrase_vault` (biometric unlock applies to keyring vaults only). |
+
+### VaultClearResult
+
+`POST /v1/vault/clear` result.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `removed` | integer (uint32) | yes | Sign-ins, authenticators and passkeys deleted. Model keys, channel and MCP secrets stay. |
+
+### VaultConfirmRequest
+
+A confirmed, freshly authenticated step: `POST /v1/vault/export` and `POST /v1/vault/recovery-key`. `confirm` must be true. Fresh authentication is the passphrase (passphrase vaults), a biometric check (`biometric`), or a person's unlock in the last 5 minutes.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `biometric` | boolean | no | Verify with the OS biometric prompt. Default: `false`. |
+| `confirm` | boolean | no | The person confirmed this step. Default: `false`. |
+| `passphrase` | string \| null | no | Vault passphrase, re-entered. Default: `null`. |
+
+Unknown fields are rejected.
+
+### VaultExport
+
+`POST /v1/vault/export`: every saved sign-in and authenticator as CSV. Served with `Cache-Control: no-store`; store it somewhere private and delete it after importing.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `content` | string | yes | `name,url,username,password,otpauth` rows with a header line. |
+| `exported` | integer (uint32) | yes | Items written. |
+| `filename` | string | yes | Suggested file name. |
+| `format` | string | yes | `csv`. |
+| `skipped` | integer (uint32) | yes | Items left out because CSV cannot carry them (passkey-only). |
 
 ### VaultItem
 
@@ -7247,6 +9486,50 @@ Per-item policy change; `default` removes the override so the vault default appl
 | `"never"` | Override to `never`. |
 | `"default"` | Inherit the vault default. |
 
+### VaultRecoverRequest
+
+`POST /v1/vault/recover`: open the vault with its recovery key and set a new unlock key. A passphrase vault needs `passphrase` (the new one, at least 8 characters); a keyring vault takes none and is re-wrapped with the keyring's key.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `passphrase` | string \| null | no | New passphrase (passphrase vaults). Default: `null`. |
+| `recovery_key` | string | yes | The saved recovery key; case, spaces and dashes are ignored. |
+
+Unknown fields are rejected.
+
+### VaultRecoveryKey
+
+`POST /v1/vault/recovery-key`: the new key, shown once. Any earlier key stops working.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `created_at` | string (date-time) | yes | When it was generated. |
+| `recovery_key` | string | yes | 52 base32 characters in dash-separated groups of four. |
+
+### VaultRecoveryStatus
+
+Recovery key state; never the key itself.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `configured` | boolean | yes | A recovery file exists next to the vault. |
+| `created_at` | string (date-time) \| null (date-time) | no | When the key was generated. |
+| `current` | boolean | yes | It still opens the vault (false after the vault was re-keyed elsewhere; generate a new key). |
+
+### VaultSettings
+
+`GET /v1/vault/settings`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `auto_lock` | [VaultAutoLock](#vaultautolock) | yes | Idle time before the vault locks itself. |
+| `autofill` | [VaultAutofillSettings](#vaultautofillsettings) | yes | Autofill rules. |
+| `biometric_unlock` | boolean | yes | Unlocking a keyring vault requires a biometric check. |
+| `biometrics` | [VaultBiometrics](#vaultbiometrics) | yes | Whether biometric unlock can be turned on here. |
+| `default_policy` | [VaultPolicy](#vaultpolicy) | yes | Policy for items without an override. |
+| `disable_in_incognito` | boolean | yes | Incognito sessions never reach the vault. Always true; it cannot be turned off. |
+| `recovery` | [VaultRecoveryStatus](#vaultrecoverystatus) | yes | Recovery key state. |
+
 ### VaultState
 
 Vault lifecycle state.
@@ -7266,7 +9549,7 @@ Vault lifecycle state.
 |---|---|---|---|
 | `backend` | [VaultBackend](#vaultbackend) \| null | no | Unlock method in effect; null when `unavailable` has no usable method. |
 | `default_policy` | [VaultPolicy](#vaultpolicy) | yes | Policy for items without an override (`vault.default_policy`). |
-| `reason` | string \| null | no | Why the vault is locked or unavailable: `keyring_unreachable`, `keyring_locked`, `keyring_key_mismatch`, `passphrase_cmd_failed` (from the daemon-start attempt), `unsupported_platform`, `format_mismatch`, `unreadable` or `probe_timeout`. |
+| `reason` | string \| null | no | Why the vault is locked or unavailable: `keyring_unreachable`, `keyring_locked`, `keyring_key_mismatch`, `passphrase_cmd_failed` (from the daemon-start attempt), `biometric_required` (a keyring vault with biometric unlock on waits for a person), `unsupported_platform`, `format_mismatch`, `unreadable` or `probe_timeout`. |
 | `state` | [VaultState](#vaultstate) | yes | Current state. |
 
 ### VaultUnlockRequest
@@ -7275,6 +9558,7 @@ Vault lifecycle state.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `biometric` | boolean | no | Verify with the OS biometric prompt first (fingerprint, Touch ID). Required to unlock a keyring vault while `biometric_unlock` is on; local callers only. |
 | `passphrase` | string \| null | no | Vault passphrase (setup: at least 8 characters). Default: `null`. |
 
 Unknown fields are rejected.

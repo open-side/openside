@@ -31,14 +31,19 @@
 - 키링 백엔드: `openside vault init`, 빈 본문(`{}`)의 `POST /v1/vault/setup`, 또는 첫 `openside vault add`(`POST /v1/vault/items`) 실행 시 버전 2 파일이 생성된다. 별도 입력은 요구하지 않는다. 래핑 키는 키링의 기본 컬렉션에 생성된다.
 - Passphrase 백엔드: `openside vault init` 실행 시 터미널 프롬프트에서 passphrase(8자 이상)를 숨김 상태로 두 번 입력받으며, 웹 Vault 페이지에서도 동일하게 처리한다. 분실한 passphrase는 복구할 수 없다. `passphrase_cmd`를 설정하지 않으면 데몬을 시작할 때마다 볼트가 잠긴다. 이때는 `openside vault unlock`이나 웹 Vault 페이지(모바일 접속 가능)에서 잠금을 해제한다.
 - `openside vault lock`(`POST /v1/vault/lock`)을 호출하면 데몬 메모리에서 복호화된 볼트를 파기하며, 다음 잠금 해제 전까지 볼트 툴이 비활성화된다.
-- `GET /v1/vault` 상태값: `uninitialized`, `locked`, `unlocked`, `unavailable`. `reason`은 `keyring_unreachable`, `keyring_locked`, `keyring_key_mismatch`, `passphrase_cmd_failed`, `unsupported_platform`, `format_mismatch`, `unreadable`, `probe_timeout` 중 하나이다.
+- `GET /v1/vault` 상태값: `uninitialized`, `locked`, `unlocked`, `unavailable`. `reason`은 `keyring_unreachable`, `keyring_locked`, `keyring_key_mismatch`, `passphrase_cmd_failed`, `biometric_required`, `unsupported_platform`, `format_mismatch`, `unreadable`, `probe_timeout` 중 하나이다.
+- 자동 잠금: `[vault].auto_lock`은 볼트를 사용하지 않을 때 데몬이 얼마 뒤에 잠글지 정한다(`immediately`, `one_minute`, `five_minutes`, `fifteen_minutes`, `one_hour`, `four_hours`, `one_day`, `one_week`(기본값), `never`). 여기서 '사용'이란 자동 채우기, OTP, 패스키, 항목 변경, 모델 키 및 OAuth·구독 로그인(조회와 변경), 채널 및 MCP 시크릿, 가져오기, 내보내기처럼 실제 값을 다루는 작업만 뜻하며, 상태나 항목 목록을 읽는 것과 백그라운드 동기화는 포함하지 않는다. 데몬은 5초마다 유휴 시간을 확인하고, `immediately`로 설정하면 각 사용이 끝난 직후(1초 유예 뒤) 바로 잠근다. 자동 잠금은 감사 로그에 세부사항 `auto_lock`과 함께 `lock`/`locked`로 기록되며, 설정을 바꾸면 즉시 반영된다.
+- 생체 인증 잠금 해제: `[vault].biometric_unlock`은 키링 볼트에만 적용된다. 이 옵션을 켜면 데몬을 시작할 때 키링 볼트를 스스로 잠금 해제하지 않으며(상태 사유 `biometric_required`), 로컬 소켓에서 `biometric: true`를 전달해 Linux의 `fprintd`나 macOS의 Touch ID 인증을 통과해야 잠금이 풀린다. 생체 인증은 잠금 해제 허용 여부만 제어할 뿐 키를 파생하지는 않는다. 이 설정을 켜려면 로컬 소켓과 키링 볼트가 필요하고 실제 생체 인증을 통과해야 하며, 그 밖의 플랫폼에서는 `unsupported_platform`을 반환한다.
+- `[vault].biometric_unlock`이 켜져 있으면 새 키링 볼트를 만들 때도 이 컴퓨터 앞에 있는 사용자의 확인이 필요하다. 즉 로컬 소켓에서 `biometric: true`를 담아 `POST /v1/vault/setup`을 호출하고(`openside vault init`이 이를 전송함) 생체 인증을 통과해야 한다. 첫 항목, 모델 키, 채널 계정, MCP 서버를 추가하면서 볼트를 암묵적으로 생성하려는 요청은 `403 biometric_required`로 거절하며, 생체 인증에 실패하면 `403 biometric_failed`를 반환한다.
+- 복구 키: `POST /v1/vault/recovery-key`는 한 번만 표시되는 52자 복구 키를 발급한다. 디스크의 `<vault>.recovery`(0600)에는 이 복구 키로 봉인한 볼트 키만 저장하며, 새 키를 발급하면 기존 키는 폐기된다. `POST /v1/vault/recover`는 복구 키로 잠긴 볼트를 열고 새 passphrase(passphrase 볼트)나 키링 키(키링 볼트)를 설정하며, 복구한 뒤에도 같은 복구 키를 계속 쓸 수 있다. 복구 도중에는 새로 봉인한 파일을 `.recovery.next`에 먼저 쓰고 볼트 키를 교체한 뒤 파일 이름을 바꾸며, 두 파일 가운데 볼트 헤더와 일치하는 쪽을 사용하므로 작업이 중간에 끊겨도 복구 키가 유실되지 않는다. 잘못된 복구 키 입력에는 잘못된 passphrase와 동일한 횟수 제한(throttle)이 적용된다.
 - `openside doctor`는 현재 사용하는 잠금 해제 방식과 다음 단계 안내(`openside vault init`, `openside vault unlock`, `openside vault add`)를 표시한다. 파일 헤더 확인과 키링 접근 가능 여부만 검사하며, 볼트를 직접 잠금 해제하거나 `passphrase_cmd`를 실행하지는 않는다.
 
 ## 3. 접근 정책
 - 값: `always`(파일이 복호화돼 있으면 내줌), `while_unlocked`(백엔드 잠금도 풀려 있어야 함), `never`(내주지 않음).
 - 전역 기본값은 `[vault].default_policy`(기본 `while_unlocked`)이고 기동 때 적용한다. 항목별 재정의는 암호화된 파일 안에 저장하며 전역 기본값보다 우선한다.
 - 판정 순서: 항목 존재 → 정책 → 현재 탭 origin 이 항목의 허용 origin 과 정확히 일치. origin 비교는 scheme·host·port 를 정규화해서 한다. IP 리터럴과 유사 도메인은 거절한다. 패스키는 RP ID 가 origin 의 host 와 같거나 점이 들어 있는 상위 도메인일 때만 쓴다.
-- 거절하면 툴은 `denied` 와 함께 `vault_<이유>` 를 돌려준다. 이유는 `locked`, `unknown_site`, `policy_never`, `platform_locked`, `origin_mismatch`, `rp_mismatch`, `no_passkey` 중 하나다. 이때 페이지에는 아무 값도 들어가지 않는다.
+- 거절하면 툴은 `denied` 와 함께 `vault_<이유>` 를 돌려준다. 이유는 `locked`, `unknown_site`, `policy_never`, `platform_locked`, `origin_mismatch`, `rp_mismatch`, `no_passkey`, `autofill_off`, `excluded_domain`, `insecure_origin` 중 하나다. 이때 페이지에는 아무 값도 들어가지 않는다.
+- 자동 채우기 규칙(`[vault.autofill]`)은 origin 일치 확인 뒤에 비밀번호, OTP, 패스키 모두에 똑같이 적용한다. `enabled = false`이면 `autofill_off`로 거절하고, `excluded_domains`에 등록된 도메인(하위 도메인 포함, 대소문자 무시)은 `excluded_domain`으로 거절하며, `allow_insecure`가 켜져 있지 않으면 `localhost`/`*.localhost`가 아닌 일반 `http` 페이지를 `insecure_origin`으로 거절한다. `auto_submit`을 끄면 채우기 도구가 값을 입력하기만 하고 로그인 버튼은 누르지 않는다. 잘못된 제외 도메인이 데몬에 전달되면 해당 제외 항목을 무시하는 대신 자동 채우기를 아예 끈다. 시크릿(Incognito) 창에서는 절대 값을 채우지 않으며, 이 제한은 끌 수 없다.
 - 데몬 정책(`openside-policy`)의 `VaultUse` 판정은 이와 별개로 먼저 적용된다. `read-only` 는 Deny, `guard`·`full` 은 Allow 다. `submit_ref` 가 결제·삭제 키워드에 맞으면 `Sensitive`(Ask)가 추가된다.
 
 ### TOTP 매개변수
@@ -58,6 +63,7 @@ TOTP 팩터는 RFC 6238에 따라 base32 시드와 함께 `digits`(6–8), `peri
 - 항목 추가와 삭제는 `item_add`, `item_delete`로 기록한다. 판정 기록(`allowed`, 또는 `locked`·`item_exists`·`unknown_item`에 따른 `denied`)을 먼저 남기며, 기록 작성에 실패하면 변경 사항을 반영하지 않는다. 이후 `added`, `deleted`, `failed` 결과 기록이 이어진다. 항목 삭제 시 `deleted` 기록의 대상은 `unknown-site`로 표기되므로, 앞서 남긴 `allowed` 기록에 해당 항목 ID를 포함한다.
 - 사용자가 `login` 티켓으로 승인한 로그인 정보를 보관할 때는 `login_save` 액션으로 기록한다. 정책이나 잠금 상태에 따른 결정 기록(`allowed`, 또는 거부 시 `denied`)을 변경 작업 전에 먼저 남기고, 실제 처리 결과 기록(새 항목 생성 시 `saved`, 동일한 origin 및 사용자 이름을 가진 기존 항목의 비밀번호만 바뀐 경우 `updated`)이 뒤따른다. 감사 로그를 기록하지 못하면 로그인 정보도 저장하지 않는다. 저장 항목은 페이지 origin에 정확히 바인딩되며 와일드카드나 추가 origin에는 절대 묶이지 않는다.
 - 수명주기 단계도 함께 기록한다: `setup`(`completed`, 또는 오류 코드가 포함된 `failed`), `unlock`(`unlocked`; `wrong_passphrase`가 포함된 `denied`; 오류 코드가 포함된 `failed`), `lock`(`locked`). 이 기록의 항목은 `*`, origin은 `-`로 표기하며 값은 일절 포함하지 않는다. 감사 기록을 남길 수 없는 잠금 해제 요청은 아예 수행하지 않는다(`500 audit_unavailable`). 잠금은 언제나 실행하며, 기록 작성에 실패하면 `500 vault_locked_audit_incomplete`로 응답한다. 설정(setup) 도중 기록 작성에 실패하더라도 볼트는 설정 및 잠금 해제 상태를 유지하며 `500 vault_set_up_audit_incomplete`로 응답한다. 횟수 제한(throttle)에 걸린 잠금 해제 시도는 기록하지 않으므로 무차별 대입 공격으로 로그가 넘쳐나지 않는다.
+- 추가 감사 액션: `export`(`allowed` 후 `exported`), `clear`(`allowed` 후 삭제 개수를 담은 `cleared`), `recovery_key`(기존 키를 교체하기 전에 `allowed`와 `generated`를 모두 기록), `recover`(`recovered`, `wrong_recovery_key`가 포함된 `denied`, 또는 오류 코드가 포함된 `failed`), `settings_update`(변경된 키 이름만 담은 `updated`). 거절된 내보내기·전체 삭제·복구 키 발급 요청은 `reauth_required`, `wrong_passphrase`, `biometric_failed` 사유와 함께 `denied`로 기록한다. 어떤 기록에도 실제 값은 포함하지 않는다.
 - 필드 목록: 시간(초), 호출자(도구 호출 및 시작 시 데몬 자체의 잠금 해제는 `opensided`, API 호출 및 인증기 등록은 호출하거나 승인한 기기를 가리키며 페어링된 기기는 `device:<id>`, 로컬 소켓은 `local`), 작업(action), 항목 ID, 정규화된 origin, 결과, 세션 ID, tool_call_id, 세부사항(거절 사유 또는 새 정책). 값 자체는 절대 기록하지 않으며, 각 기록은 디스크에 쓰기 직전에 현재 볼트에 보관된 값들과 한 번 더 대조하여 마스킹한다.
 
 ## 5. API·CLI (admin)
@@ -72,10 +78,26 @@ TOTP 팩터는 RFC 6238에 따라 base32 시드와 함께 `digits`(6–8), `peri
 | `GET /v1/vault/items` | 항목 ID, 허용 origin, 재정의 정책, 적용 정책, TOTP 유무, 패스키 RP ID. 값은 없다. Vault 가 없으면 `available=false` |
 | `PATCH /v1/vault/items/{id}` | `{"policy":"always"\|"while_unlocked"\|"never"\|"default"}`. `default` 는 재정의를 지운다. 없는 항목 `404 unknown_item`, Vault 없음 `409 vault_unavailable`, 감사 판정 기록 실패 `500`(정책은 그대로), 저장 뒤 결과 기록 실패 `500 policy_applied_audit_incomplete`(정책은 적용됨) |
 | `GET /v1/vault/audit?since=&item=&session=&limit=` | 오래된 순. `since` 는 RFC 3339, `limit` 기본 200·최대 1000(가장 최근 N개) |
+| `GET /v1/vault/settings` | 자동 잠금, 생체 인증 잠금 해제 설정과 현재 컴퓨터의 지원 여부, 자동 채우기 규칙, 기본 정책, 고정된 시크릿 창 제외 설정, 복구 키 상태를 반환한다. 실제 값은 포함하지 않는다. |
+| `PATCH /v1/vault/settings` | 전달된 필드만 변경해 `config.toml`에 저장하고 즉시 적용한다. 보안을 강화하는 변경은 볼트 접근 권한이 있는 모든 호출자에게 허용되지만, 보안을 완화하는 변경(자동 잠금 시간 연장, 생체 인증 끄기, 자동 채우기·자동 제출 켜기, 비보안 페이지 허용, 제외 도메인 축소, 기본 정책 완화)은 로컬 소켓이나 사용자의 기기가 필요하다(`403 person_access_required`). 오류: `400 invalid_domain`·`incognito_always_disabled`, `409 biometric_unavailable`, `403 biometric_failed`. |
+| `GET /v1/vault/biometrics` | 현재 컴퓨터에서 생체 인증을 쓸 수 있는지 여부와 `mechanism` 또는 `reason`을 반환한다. |
+| `POST /v1/vault/export` | 로컬 소켓 전용이며 `confirm: true`와 최근 인증(요청 본문의 passphrase, 키링 볼트의 `biometric: true`, 또는 5분 이내에 이 컴퓨터에서 사용자가 수행한 잠금 해제. 생체 인증 잠금 해제를 쓰지 않는 키링 볼트는 확인 플래그만 필요)을 요구한다. `Cache-Control: no-store` 헤더와 함께 JSON 안에 CSV(`name,url,username,password,otpauth`)를 담아 반환하며, 내보낼 수 없는 패스키는 `skipped`에 집계한다. `=`, `+`, `-`, `@`로 시작하는 이름 앞에는 작은따옴표(`'`)를 붙이고, 사용자 이름과 비밀번호는 다른 비밀번호 관리자에서 그대로 가져올 수 있도록 원문 그대로 기록한다. 오류: `400 confirmation_required`·`wrong_passphrase`, `409 reauth_required`·`vault_unavailable`, `429 too_many_attempts`. |
+| `POST /v1/vault/clear` | 저장된 로그인 정보, 인증기, 패스키를 모두 삭제한다(모델 키, 채널 및 MCP 시크릿은 유지). 내보내기와 동일한 인증 조건을 거치며 `{removed}`를 반환한다. |
+| `POST /v1/vault/recovery-key` | 내보내기와 동일한 인증 조건을 거치며, `no-store`와 함께 복구 키를 한 번만 반환하고 이후 출력에서는 마스킹한다. |
+| `POST /v1/vault/recover` | 로컬 소켓 전용이며 볼트가 잠겨 있어야 한다. 요청 본문은 `{recovery_key, passphrase?}`이다. 오류: `403 wrong_recovery_key`, `409 recovery_not_configured`·`vault_already_unlocked`, `400 weak_passphrase`, `429 too_many_attempts`. |
 
 민감 정보를 전달하는 요청 본문(`setup`, `unlock`, `items` POST)에 알 수 없는 필드가 있거나 잘못된 JSON 형식이 포함되면 `400 invalid_value`로 거부하며, 오류 응답에 입력값을 그대로 노출하지 않는다. 모든 볼트 라우트는 `admin` 스코프가 필요하다. 모바일 기기에서 볼트를 관리하려면 `openside pair --scope admin`으로 페어링해야 한다. 해당 스코프가 없으면 웹 Vault 페이지에 필요한 조치 방법이 표시된다.
 
 CLI: `openside vault status|init|unlock|lock`, `openside vault add <id> --origin URL [--origin URL…] [--login] [--totp] [--policy always|while_unlocked|never|default]`, `openside vault rm <id>`, `openside vault items`, `openside vault policy <id> <always|while_unlocked|never|default>`, `openside vault audit [--since T] [--item ID] [--session S] [--limit N]`. `add`는 username(표시됨), password 및 인증자 키(숨김) 입력을 순서대로 요구하며, 표준 입력 파이프 사용 시 각 프롬프트에 대응하는 값을 한 줄씩 읽는다. 민감 정보는 argv로 전달되지 않는다. `--json` 플래그 사용 시 API 응답을 그대로 출력한다.
+
+추가 CLI 명령으로는 `openside vault settings [--auto-lock immediately|1m|5m|15m|1h|4h|1d|1w|never] [--biometric-unlock BOOL] [--autofill BOOL] [--auto-submit BOOL] [--allow-insecure BOOL] [--exclude-domain D…] [--include-domain D…] [--default-policy P]`(플래그 없이 실행하면 현재 설정 표시), `openside vault export --output FILE --yes`(passphrase 볼트에서는 passphrase를 물어보며, 기존 파일을 덮어쓰지 않고 새 0600 파일을 생성함), `openside vault import FILE`(브라우저 및 비밀번호 관리자에서 내보낸 UTF-8 또는 UTF-16 CSV 가져오기), `openside vault clear --yes`, `openside vault recovery-key --yes`(복구 키를 한 번만 출력), `openside vault recover`(복구 키와 새 passphrase 입력 요청)가 있으며, 생체 인증 잠금 해제가 켜진 키링 볼트에서 `openside vault unlock`을 실행하면 생체 인증도 함께 요청한다.
+
+내보내기, 전체 삭제, 복구 키 발급은 최근 인증을 해당 인증이 이루어진 볼트 잠금 해제 시점과 대조하므로, 그사이에 볼트가 잠겼다가 다시 열렸다면 `409 reauth_required`로 거절한다.
+
+- 내보내기는 일반적인 브라우저나 비밀번호 관리자와 마찬가지로 다른 비밀번호 관리자가 값을 변형 없이 가져갈 수 있도록 사용자 이름과 비밀번호 셀을 저장된 그대로 기록한다. 수식 시작으로 해석될 수 있는 `=`, `+`, `-`, `@` 앞의 작은따옴표(`'`)는 이름(`name`) 셀에만 붙이며, URL은 항상 스킴(scheme)으로 시작하므로 수식이 될 수 없다. 내보낸 파일을 스프레드시트 앱으로 여는 것은 사용자의 선택이다.
+- 생체 인증 잠금 해제를 켜지 않은 키링 볼트는 물어볼 passphrase가 없으므로, 내보내기·전체 삭제·복구 키 발급 시 로컬 접근 권한과 `confirm: true`만 확인한다.
+- 교체된 이전 복구 키는 데몬을 재시작할 때까지 출력 마스킹 필터(redactor)에 의도적으로 남겨 두어, 앞서 화면에 표시되었던 사본이 다시 노출되더라도 계속 가려지게 한다.
+- 요청 권한 검사와 `recover` 실행 사이의 아주 짧은 순간에 기기 연결이 해제(revoke)되면 해당 요청 한 건은 그대로 완료될 수 있다. 핸들러가 볼트 작업을 수행하기 직전에 철회 여부를 한 번 더 확인해 그 간격을 좁히지만, 시간차를 완전히 없애지는 못한다.
 
 ## 6. 패스키 (`vault_passkey`)
 - 인자: `tab_id`, `site`, `action`(`register`|`login`), `submit_ref`(페이지의 만들기·로그인 버튼).
@@ -138,3 +160,7 @@ CLI: `openside vault status|init|unlock|lock`, `openside vault add <id> --origin
 - `crates/openside-browser/src/browser.rs`(단위): `preloading_is_disabled_in_the_profile_without_losing_other_preferences`(프리렌더 설정을 쓰되 다른 설정은 보존), `termination_is_confirmed_by_the_process_and_not_by_signals`(신호 전송 실패는 오류, "그런 프로세스 없음"이나 성공 응답이 와도 프로세스가 살아 있으면 확인하지 않고, 실제로 죽이면 거둔 종료 상태로 확인한다).
 - `crates/opensided/src/tools/vault/ceremony.rs`(단위)에는 위 외에 전용 탭의 순서(열기 → 가드 → 불러오기 → 프레임 확인 → 인증기 설치, 인증기 제거 → 탭 닫기)와, 열기·가드·불러오기가 실패하거나 불러온 뒤 다른 origin 이면 설치 없이 거절하고 열린 탭을 닫는지, 격리 표식이 없는 브라우저에서 탭도 만들기 전에 거절하는지를 확인하는 테스트가 있다.
 - `crates/opensided/src/tests/vault.rs::the_last_resort_of_a_failed_teardown_kills_the_browser_and_the_controller_relaunches_it`: `Browser::terminate` 가 실제 Chromium 을 죽이고 프로세스가 사라진 것을 확인하며, 컨트롤러가 다음 호출에서 새 브라우저를 띄운다.
+- `crates/openside-vault/src/tests.rs`: passphrase 및 키링 볼트의 복구 키 왕복(round-trip) 검증, 폐기되었거나 잘못된·손상된 복구 키 거절, 이름 변경이 중단된 상태에서의 복구, CSV 내보내기 내용 및 감사 기록, 자동 채우기 거절 사유, 전체 삭제(`clear`) 시 모델 키 유지 여부를 확인한다.
+- `crates/opensided/src/tests/vault.rs::password_settings_auto_lock_export_recovery_and_clear`: 가짜 시계 기반 자동 잠금(`immediately` 포함), 내보내기·전체 삭제 인증 조건(원격 요청 거절, 확인 플래그, 최근 인증 유효 시간, 잘못된 passphrase, `no-store`, 인증과 실제 작업 사이에 볼트가 잠겼다가 다시 열리면 내보내기·전체 삭제·복구 키 발급을 `reauth_required`로 거절하는지), passphrase 볼트에서의 생체 인증 거절, 복구 키 마스킹, 볼트 복구, 설정 유효성 검사, 감사 로그에 실제 값이 남지 않는지 확인한다.
+- `crates/openside-cli/src/tests/vault.rs::password_settings_export_import_clear_and_recovery_commands`: `--yes` 필수 조건, passphrase 프롬프트, 덮어쓰지 않는 0600 내보내기 파일 생성, UTF-16 CSV 가져오기, 복구 키를 제외한 어떤 값도 표준 출력(stdout)에 찍히지 않는지 확인한다.
+- `crates/openside-config/src/tests.rs::vault_password_settings_parse_with_defaults_and_reject_bad_domains`: 9가지 자동 잠금 설정값 전체의 파싱 및 기본값 적용, 잘못된 제외 도메인 거절을 확인한다.
