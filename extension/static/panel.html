@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>Ask openside</title>
+<title data-i18n="ext.panel.title">Ask openside</title>
 <link rel="stylesheet" href="fonts/wanted-sans/WantedSansVariable.css">
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="style.css">
@@ -13,29 +13,50 @@
 </head>
 <body class="panel">
 <header class="bar">
-<h1 class="sr-only">Ask openside</h1>
+<h1 class="sr-only" data-i18n="ext.panel.title">Ask openside</h1>
 <div class="session-picker" id="sessions"></div>
 <p id="connection" class="connection"></p>
-<button id="pair" type="button" class="icon-button" aria-label="Pairing and settings" title="Pairing and settings"><span data-icon="settings"></span></button>
+<div class="bar-actions">
+<button id="new-chat" type="button" class="bar-button" aria-label="New chat" title="New chat" data-i18n-aria-label="ext.panel.newChat" data-i18n-title="ext.panel.newChat"><span data-icon="square-pen" data-size="16"></span></button>
+<button id="pop-out" type="button" class="bar-button" aria-label="Open in openside" title="Open in openside" data-i18n-aria-label="ext.panel.popOut" data-i18n-title="ext.panel.popOut" disabled><span data-icon="arrow-up-right" data-size="20"></span></button>
+<button id="close" type="button" class="bar-button" aria-label="Close" title="Close" data-i18n-aria-label="ext.panel.close" data-i18n-title="ext.panel.close"><span data-icon="x" data-size="16"></span></button>
+</div>
 </header>
 <main class="scroll thin-scroll">
 <div class="column">
 <section id="transcript" class="timeline" aria-live="polite"></section>
 <section id="tickets" class="tickets"></section>
-<div class="empty empty-paired"><span class="empty-icon" data-icon="message-square" data-size="22"></span><h2>Ask about this tab</h2><p>Type <kbd>@</kbd> in your message to attach the page you are looking at, or pick an earlier session above.</p></div>
-<div class="empty empty-unpaired"><span class="empty-icon" data-icon="key-round" data-size="22"></span><h2>Pair openside first</h2><p>Connect this browser to your openside daemon with a pairing link from Connect a phone.</p><button id="pair-start" type="button" class="button compact primary">Pair openside</button></div>
+<div class="empty empty-paired"><span class="empty-icon" data-icon="message-square" data-size="22"></span><h2 data-i18n="ext.panel.empty.title">Ask about this tab</h2><p data-i18n="ext.panel.empty.body">Type <kbd data-slot="kbd">@</kbd> in your message to attach the page you are looking at, or pick an earlier session above.</p></div>
 </div>
 </main>
 <div class="dock">
-<div class="toast surface-overlay" data-tone="info"><span class="toast-icon" data-icon="circle-alert" data-size="18"></span><p id="status" role="status"></p><button type="button" class="toast-close" aria-label="Dismiss"><span data-icon="x" data-size="16"></span></button></div>
+<div class="toast surface-overlay" data-tone="info"><span class="toast-icon" data-icon="circle-alert" data-size="18"></span><p id="status" role="status"></p><button type="button" class="toast-close" aria-label="Dismiss" data-i18n-aria-label="ext.common.dismiss"><span data-icon="x" data-size="16"></span></button></div>
 <form id="compose" class="composer">
 <p id="context" class="context-chip"></p>
-<div class="composer-row">
-<label class="composer-field"><span class="sr-only">Message</span><textarea id="message" rows="1" required placeholder="Ask about this tab"></textarea></label>
-<button id="attach" type="button" class="icon-button" aria-label="@ This tab" title="Attach this tab (@)"><span data-icon="at-sign"></span></button>
-<button type="submit" class="icon-button primary" aria-label="Send" title="Send"><span data-icon="arrow-up"></span></button>
+<ul id="files" class="composer-files" aria-label="Attachments" data-i18n-aria-label="ext.panel.files"></ul>
+<label class="composer-field"><span class="sr-only" data-i18n="ext.panel.composer.label">Message</span><textarea id="message" rows="1" placeholder="Reply, @ for context" data-i18n-placeholder="ext.panel.composer.placeholder"></textarea></label>
+<div class="composer-bar">
+<div class="plus-menu">
+<button id="plus" type="button" class="composer-plus" aria-haspopup="menu" aria-expanded="false" aria-controls="plus-menu" aria-label="Add to this chat" title="Add to this chat" data-i18n-aria-label="ext.panel.plus" data-i18n-title="ext.panel.plus"><span data-icon="plus" data-size="18"></span></button>
+<div id="plus-menu" class="menu-list surface-overlay" role="menu" aria-label="Add to this chat" data-i18n-aria-label="ext.panel.plus" hidden>
+<button id="attach" type="button" class="menu-item" role="menuitem"><span data-icon="at-sign" data-size="16"></span><span data-i18n="ext.panel.attach.label">Attach this tab</span></button>
+<button id="upload" type="button" class="menu-item" role="menuitem"><span data-icon="paperclip" data-size="16"></span><span data-i18n="ext.panel.upload">Upload photos &amp; files</span></button>
+<button id="capture" type="button" class="menu-item" role="menuitem"><span data-icon="lasso" data-size="16"></span><span data-i18n="ext.panel.capture">Capture a region</span></button>
+</div>
+<input id="file-input" type="file" multiple class="sr-only" tabindex="-1" aria-label="Upload photos &amp; files" data-i18n-aria-label="ext.panel.upload">
+</div>
+<div id="confirmation" class="composer-picker confirmation-picker"></div>
+<div id="model" class="composer-picker model-picker"></div>
+<div id="effort" class="composer-picker effort-picker"></div>
+<div class="composer-actions">
+<span id="ring" class="composer-ring" role="img" tabindex="0" hidden></span>
+<button id="mic" type="button" class="composer-mic"></button>
+<button type="submit" class="composer-send" aria-label="Send" title="Send" data-i18n-aria-label="ext.panel.send" data-i18n-title="ext.panel.send" disabled><span data-icon="arrow-up" data-size="14"></span></button>
+<button id="stop" type="button" class="composer-send composer-stop" aria-label="Stop" title="Stop" data-i18n-aria-label="ext.panel.stop" data-i18n-title="ext.panel.stop" hidden><span data-icon="square" data-size="10"></span></button>
+</div>
 </div>
 </form>
+<p class="connect-strip"><span data-i18n="ext.panel.unpaired.title">Open openside to connect</span><button id="pair-start" type="button" class="connect-strip-button" aria-label="Open openside settings" title="Open openside settings" data-i18n-aria-label="ext.panel.unpaired.action" data-i18n-title="ext.panel.unpaired.action"><span data-icon="arrow-up-right" data-size="16"></span></button></p>
 </div>
 <script src="panel.js"></script>
 </body>

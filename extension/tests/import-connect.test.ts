@@ -9,7 +9,7 @@ async function page(changedApp = false) {
   location.hash = id;
   const request = vi.fn(async () => true);
   const set = vi.fn(async () => undefined);
-  vi.stubGlobal("chrome", { storage: { session: { get: vi.fn(async () => ({ [key]: { origin, allowed: null, changedApp } })), set } }, permissions: { request } });
+  vi.stubGlobal("chrome", { storage: { session: { get: vi.fn(async () => ({ [key]: { origin, allowed: null, changedApp } })), set }, local: { get: vi.fn(async () => ({})) }, onChanged: { addListener: vi.fn() } }, permissions: { request } });
   // The page entry executes once per document; every test models a new extension document.
   vi.resetModules();
   await import("../src/import-connect");

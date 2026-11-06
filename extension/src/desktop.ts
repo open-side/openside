@@ -2,24 +2,15 @@ import type { DesktopFailure, DesktopReply, DesktopRequest } from "../../web/src
 import { client, exchangeImportPairing, type Session } from "./api";
 import { announceCodes } from "./codes";
 import { IMPORT_PAIRING, importCredential, importSecretOf, pairing, retainedImportPairing, type Pairing } from "./storage";
+import { adoptLauncherPairing } from "./launcher";
+import { trustedDaemonOrigin } from "./daemonOrigin";
+import { t } from "./i18n";
 
 export const SETTLED_NOTIFICATION = "settled:";
 // Not a secret, so it lives in local storage and survives a browser restart; the pairing it needs
 // does not (session storage), and the web UI re-pairs when it finds the extension unpaired.
 const ENABLED = "desktopNotifications";
 const STATUSES = "sessionStatuses";
-/** The daemon UI is only trusted on this computer; the manifest's externally_connectable matches the same hosts. */
-const LOOPBACK_HOSTS = ["127.0.0.1", "localhost"];
-
-export function loopbackOrigin(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" && LOOPBACK_HOSTS.includes(url.hostname) ? url.origin : null;
-  } catch {
-    return null;
-  }
-}
 
 function parseRequest(raw: unknown): DesktopRequest | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -40,8 +31,7 @@ function failure(reason: DesktopFailure, message: string): DesktopReply {
 
 /** Whether the extension may reach this origin; asks only when the request carries the page's user gesture. */
 async function hostAccess(origin: string): Promise<boolean> {
-  const url = new URL(origin);
-  const origins = [`${url.protocol}//${url.hostname}/*`];
+  const origins = [`${new URL(origin).origin}/*`];
   if (await chrome.permissions.contains({ origins })) return true;
   try { return await chrome.permissions.request({ origins }); } catch { return false; }
 }
@@ -69,13 +59,18 @@ async function importConsent(origin: string, changedApp = false): Promise<boolea
 type Paired = Extract<DesktopReply, { ok: true }>;
 
 export async function handleDesktopRequest(raw: unknown, senderOrigin: string | undefined): Promise<DesktopReply> {
-  const origin = loopbackOrigin(senderOrigin);
+  // Only the daemon UI the manifest names (exact origin and port) may ask, before anything is read or changed.
+  const origin = trustedDaemonOrigin(senderOrigin);
   const request = parseRequest(raw);
-  if (!origin || !request) return failure("refused", "The openside extension only answers the openside web app on this computer.");
+  if (!origin || !request) return failure("refused", t("ext.desktop.refused"));
+  // A browser the launcher just opened may still be redeeming its own code; answer with that result.
+  await adoptLauncherPairing();
   const stored = (await chrome.storage.session.get("pairing")).pairing as Pairing | undefined;
   const here = stored?.url === origin ? stored : undefined;
   const importing = here !== undefined && await importCredential() !== null;
-  const state = async (): Promise<Paired> => ({ ok: true, paired: here !== undefined, enabled: here !== undefined && await desktopEnabled(), device: here?.device ?? null, importing });
+  // The launcher's device is not the page's to revoke while in use: the daemon replaces it on the next launch.
+  const own = here?.launcher ? null : here?.device ?? null;
+  const state = async (): Promise<Paired> => ({ ok: true, paired: here !== undefined, enabled: here !== undefined && await desktopEnabled(), device: own, importing });
   if (request.type === "openside.desktop.status") return state();
   if (request.type === "openside.desktop.disable") {
     const reply = await state();
@@ -83,19 +78,19 @@ export async function handleDesktopRequest(raw: unknown, senderOrigin: string | 
     await chrome.storage.session.remove(STATUSES);
     // A token the extension minted for this feature goes away with it; one pasted in the options stays,
     // and so does one the import pairing still needs (the page must not revoke it either).
-    if (here?.device && !importing) await chrome.storage.session.remove("pairing");
+    if (own && !importing) await chrome.storage.session.remove("pairing");
     return { ...reply, enabled: false, device: importing ? null : reply.device };
   }
   const pairForImport = request.type === "openside.desktop.pair";
-  if (stored && !here && !pairForImport) return failure("pairing_conflict", `The openside extension is paired with ${stored.url}. Forget that pairing in the extension options, then try again.`);
-  let device = here?.device ?? null;
+  if (stored && !here && !pairForImport) return failure("pairing_conflict", t("ext.desktop.pairingConflict", { url: stored.url }));
+  let device = own;
   let replaced: string | null = null;
   let imported = importing;
   if (pairForImport ? !importing : !here) {
-    if (!request.code) return failure("needs_pairing", "The openside extension is not paired yet.");
+    if (!request.code) return failure("needs_pairing", t("ext.desktop.needsPairing"));
     const previous = pairForImport ? await retainedImportPairing(origin) : null;
-    if (pairForImport && !previous && !await importConsent(origin)) return failure("refused", "Not connected. Your import is saved; choose Connect whenever you are ready.");
-    if (!await hostAccess(origin)) return failure("permission", "Allow the openside extension to reach this daemon, then try again.");
+    if (pairForImport && !previous && !await importConsent(origin)) return failure("refused", t("ext.desktop.importDeclined"));
+    if (!await hostAccess(origin)) return failure("permission", t("ext.desktop.permission"));
     try {
       const exchange = pairForImport
         ? await exchangeImportPairing(origin, request.code, previous)
@@ -103,8 +98,8 @@ export async function handleDesktopRequest(raw: unknown, senderOrigin: string | 
       const paired = exchange.paired;
       try {
         const secret = importSecretOf(paired);
-        if (pairForImport && !secret) return failure("exchange_failed", "The daemon did not issue an import secret. Update openside and try again.");
-        if (pairForImport && previous && !exchange.continuous && !await importConsent(origin, true)) return failure("refused", "Not connected. Your previous pairing is unchanged.");
+        if (pairForImport && !secret) return failure("exchange_failed", t("ext.desktop.noImportSecret"));
+        if (pairForImport && previous && !exchange.continuous && !await importConsent(origin, true)) return failure("refused", t("ext.desktop.previousKept"));
         replaced = here?.device ?? null;
         device = paired.device_id;
         await chrome.storage.session.set({ pairing: { url: origin, token: paired.token, device } satisfies Pairing });
@@ -116,7 +111,7 @@ export async function handleDesktopRequest(raw: unknown, senderOrigin: string | 
         paired.import_secret = undefined;
       }
     } catch {
-      return failure("exchange_failed", "The daemon did not accept the pairing code. Try again.");
+      return failure("exchange_failed", t("ext.desktop.exchangeFailed"));
     }
   }
   if (pairForImport) return { ok: true, paired: true, enabled: await desktopEnabled(), device, importing: true, replaced };
@@ -143,7 +138,7 @@ async function announceSettled(sessions: Session[], focused: string | null): Pro
     const before = previous[session.id];
     if (session.status !== "idle" || (before !== "running" && before !== "waiting_human") || session.id === focused) continue;
     chrome.notifications.create(`${SETTLED_NOTIFICATION}${session.id}`, {
-      type: "basic", iconUrl: "icon.png", title: "Task finished", message: session.title || "Conversation",
+      type: "basic", iconUrl: "icon.png", title: t("ext.notification.taskFinished"), message: session.title || t("ext.notification.conversation"),
     });
   }
 }

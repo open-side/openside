@@ -10,6 +10,7 @@ import { unified } from "unified";
 import { imageChip, safeUrl } from "../../web/src/components/markdownPolicy";
 import { copyText } from "../../web/src/ui/clipboard";
 import { icon } from "./ui";
+import { t } from "./i18n";
 
 interface HastNode {
   type: string;
@@ -48,15 +49,15 @@ function copyButton(text: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "icon-button small";
-  button.setAttribute("aria-label", "Copy code");
-  button.title = "Copy code";
+  button.setAttribute("aria-label", t("ext.markdown.copyCode"));
+  button.title = t("ext.markdown.copyCode");
   button.append(icon("copy", 16));
   button.addEventListener("click", () => {
     void copyText(text).then(copied => {
       if (!copied) return;
       button.replaceChildren(icon("check", 16));
-      button.setAttribute("aria-label", "Copied");
-      window.setTimeout(() => { button.replaceChildren(icon("copy", 16)); button.setAttribute("aria-label", "Copy code"); }, 1500);
+      button.setAttribute("aria-label", t("ext.markdown.copied"));
+      window.setTimeout(() => { button.replaceChildren(icon("copy", 16)); button.setAttribute("aria-label", t("ext.markdown.copyCode")); }, 1500);
     });
   });
   return button;
@@ -83,7 +84,7 @@ function codeBlock(node: HastNode): HTMLElement {
 function image(node: HastNode): HTMLElement {
   const src = typeof node.properties?.src === "string" ? node.properties.src : undefined;
   const alt = typeof node.properties?.alt === "string" ? node.properties.alt : undefined;
-  const { label, href } = imageChip(src, alt, window.location.origin);
+  const { label, href } = imageChip(src, alt, window.location.origin, t("ext.markdown.image"));
   const chip = document.createElement(href ? "a" : "span");
   chip.className = "md-image";
   if (chip instanceof HTMLAnchorElement && href) Object.assign(chip, { href, target: "_blank", rel: "noopener noreferrer", title: href });

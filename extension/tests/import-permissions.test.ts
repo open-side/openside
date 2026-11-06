@@ -10,7 +10,7 @@ it("requests the exact saved hosts only from the Allow click and reports the res
   vi.stubGlobal("location", { hash: `#${id}` });
   const request = vi.fn(async () => true);
   const set = vi.fn(async () => undefined);
-  vi.stubGlobal("chrome", { storage: { session: { get: vi.fn(async () => ({ [`importPermissions:${id}`]: { origin: "http://127.0.0.1:43123", origins: ["https://example.test/*", "https://other.test/*"], denied: false } })), set } }, permissions: { request } });
+  vi.stubGlobal("chrome", { storage: { session: { get: vi.fn(async () => ({ [`importPermissions:${id}`]: { origin: "http://127.0.0.1:43123", origins: ["https://example.test/*", "https://other.test/*"], denied: false } })), set }, local: { get: vi.fn(async () => ({})) }, onChanged: { addListener: vi.fn() } }, permissions: { request } });
   await import("../src/import-permissions");
   const button = document.querySelector<HTMLButtonElement>("#allow")!;
   await vi.waitFor(() => expect(button.disabled).toBe(false));
@@ -27,7 +27,7 @@ it("does not request access when the permission request expired", async () => {
   document.body.innerHTML = '<ul id="sites"></ul><button id="allow" disabled>Allow</button><p id="status" role="status"></p>';
   vi.stubGlobal("location", { hash: `#${id}` });
   const request = vi.fn(async () => true);
-  vi.stubGlobal("chrome", { storage: { session: { get: vi.fn(async () => ({})) } }, permissions: { request } });
+  vi.stubGlobal("chrome", { storage: { session: { get: vi.fn(async () => ({})) }, local: { get: vi.fn(async () => ({})) }, onChanged: { addListener: vi.fn() } }, permissions: { request } });
   await import("../src/import-permissions");
   await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toContain("no longer available"));
   expect(document.querySelector<HTMLButtonElement>("#allow")?.disabled).toBe(true);

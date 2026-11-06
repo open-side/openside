@@ -1,5 +1,6 @@
 import { announcementMessage, announcementTitle, isAttentionTicket } from "../../web/src/cards/attention";
 import type { Ticket } from "./api";
+import { t } from "./i18n";
 export const CODE_NOTIFICATION = "code:";
 // Chrome opens a side panel only inside a user gesture, so a code, login or choice request
 // cannot open it by itself: the toolbar badge counts waiting requests and each new one is
@@ -23,7 +24,7 @@ export async function announceCodes(tickets: Ticket[], { all = false, focused }:
       type: "basic", iconUrl: "icon.png",
       title: announcementTitle(ticket),
       message: announcementMessage(ticket),
-      contextMessage: "Click to answer in the openside side panel",
+      contextMessage: t("ext.notification.answerInPanel"),
     });
   }
   await chrome.storage.session.set({ codesNotified: [...ids] });

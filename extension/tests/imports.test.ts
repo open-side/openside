@@ -58,7 +58,7 @@ beforeEach(() => {
     cookies: { set: vi.fn(async (details: chrome.cookies.SetDetails) => ({ ...details })) },
     permissions: { contains: vi.fn(async () => true) },
   };
-  vi.stubGlobal("chrome", { ...api, runtime: { getURL: (path: string) => `chrome-extension://fixture/${path}` }, tabs: { create: vi.fn(async () => ({ id: 10 })) }, storage: {
+  vi.stubGlobal("chrome", { ...api, runtime: { getURL: (path: string) => `chrome-extension://fixture/${path}`, getManifest: () => ({ externally_connectable: { matches: [`${origin}/*`] } }) }, tabs: { create: vi.fn(async () => ({ id: 10 })) }, storage: {
     session: { get: vi.fn(async (key: string) => ({ [key]: saved[key] })), set: vi.fn(async (value: Record<string, unknown>) => { Object.assign(saved, value); }) },
     local: { get: vi.fn(async (key: string) => ({ [key]: local[key] })) },
   } });

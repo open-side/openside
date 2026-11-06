@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark">
+<title data-i18n="ext.lasso.popover.title">Ask openside</title>
+<link rel="stylesheet" href="fonts/wanted-sans/WantedSansVariable.css">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="ask">
+<div id="shortcuts" class="ask-list" role="group" aria-label="Shortcuts" data-i18n-aria-label="ext.lasso.popover.shortcuts"></div>
+<form id="ask" class="ask-form">
+<input id="question" type="text" autocomplete="off" maxlength="1000" aria-label="What would you like to do?" data-i18n-aria-label="ext.lasso.popover.question">
+<button id="send" type="submit" class="ask-send" aria-label="Send" title="Send" data-i18n-aria-label="ext.panel.send" data-i18n-title="ext.panel.send" disabled><span data-icon="arrow-up" data-size="14"></span></button>
+</form>
+<p id="status" class="sr-only" role="status"></p>
+<script src="ask.js"></script>
+</body>
+</html>

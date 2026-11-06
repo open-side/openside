@@ -4,34 +4,37 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>Pair openside</title>
+<title data-i18n="ext.options.title">Pair openside</title>
 <link rel="stylesheet" href="fonts/wanted-sans/WantedSansVariable.css">
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body class="options">
 <main class="page">
-<header class="page-head"><h1>Pair openside</h1><p id="pairing-state" class="pairing-state">Not paired</p></header>
+<header class="page-head"><h1 data-i18n="ext.options.title">Pair openside</h1><p id="pairing-state" class="pairing-state">Not paired</p></header>
 <form id="pairing-link" class="card">
-<label class="field"><span>Pairing link</span><input id="link" type="text" required autocomplete="off" spellcheck="false" placeholder="Paste the link from openside"></label>
-<p class="hint">In openside on the daemon’s computer, open Settings → Remote access → Connect a phone and copy the pairing link. It pairs this browser as your own device for approvals; never give it to an agent. Pairing is cleared when the browser exits.</p>
-<div class="actions"><button class="button primary">Pair for this browser session</button><button id="forget" type="button" class="button danger">Forget pairing</button></div>
+<label class="field"><span data-i18n="ext.options.link.label">Pairing link</span><input id="link" type="text" required autocomplete="off" spellcheck="false" placeholder="Paste the link from openside" data-i18n-placeholder="ext.options.link.placeholder"></label>
+<p class="hint" data-i18n="ext.options.link.hint">In openside on the daemon’s computer, open Settings → Developers → Connect your phone and copy the pairing link. It pairs this browser as your own device for approvals; never give it to an agent. Pairing is cleared when the browser exits.</p>
+<div class="actions"><button class="button primary" data-i18n="ext.options.link.submit">Pair for this browser session</button><button id="forget" type="button" class="button danger" data-i18n="ext.options.forget">Forget pairing</button></div>
 </form>
 <details class="card">
-<summary>Use a device token instead</summary>
+<summary data-i18n="ext.options.token.summary">Use a device token instead</summary>
 <form id="pairing">
-<label class="field"><span>Daemon URL</span><input id="url" type="url" required placeholder="http://localhost:PORT"></label>
-<label class="field"><span>Device token</span><input id="token" type="password" required autocomplete="off"></label>
-<p class="hint">Or from a terminal on the daemon’s computer: <code>openside token create --person --scope read --scope steer --scope approve</code>, then paste its token here. This is your person-device token for approvals; never give it to an agent.</p>
-<div class="actions"><button class="button">Pair with the token</button></div>
+<label class="field"><span data-i18n="ext.options.token.url">Daemon URL</span><input id="url" type="url" required placeholder="http://localhost:PORT"></label>
+<label class="field"><span data-i18n="ext.options.token.label">Device token</span><input id="token" type="password" required autocomplete="off"></label>
+<p class="hint" data-i18n="ext.options.token.hint">Or from a terminal on the daemon’s computer: <code data-slot="command">openside token create --person --scope read --scope steer --scope approve</code>, then paste its token here. This is your person-device token for approvals; never give it to an agent.</p>
+<div class="actions"><button class="button" data-i18n="ext.options.token.submit">Pair with the token</button></div>
 </form>
 </details>
 <section class="card">
-<div class="card-row"><h2><span data-icon="layout-grid" data-size="18"></span>Agent Tabs</h2><button id="agent-tabs" type="button" class="button compact">Enable Agent Tabs</button></div>
-<p class="hint">Agent Tabs optionally requests debugger metadata permission. Ask does not need it.</p>
+<div class="card-row"><h2><span data-icon="layout-grid" data-size="18"></span><span data-i18n="ext.options.agentTabs.title">Agent Tabs</span></h2><button id="agent-tabs" type="button" class="button compact">Enable Agent Tabs</button></div>
+<p class="hint" data-i18n="ext.options.agentTabs.hint">Agent Tabs optionally requests debugger metadata permission. Ask does not need it.</p>
+</section>
+<section class="card">
+<label class="field"><span data-i18n="ext.options.language.label">Language</span><select id="language"><option value="system" data-i18n="ext.options.language.system">System</option><option value="en" lang="en">English</option><option value="ko" lang="ko">한국어</option></select></label>
 </section>
 </main>
-<div class="toast surface-overlay" data-tone="info"><span class="toast-icon" data-icon="circle-alert" data-size="18"></span><p id="status" role="status"></p><button type="button" class="toast-close" aria-label="Dismiss"><span data-icon="x" data-size="16"></span></button></div>
+<div class="toast surface-overlay" data-tone="info"><span class="toast-icon" data-icon="circle-alert" data-size="18"></span><p id="status" role="status"></p><button type="button" class="toast-close" aria-label="Dismiss" data-i18n-aria-label="ext.common.dismiss"><span data-icon="x" data-size="16"></span></button></div>
 <script src="options.js"></script>
 </body>
 </html>

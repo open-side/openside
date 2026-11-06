@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { messageSite, parseStart, sameDocument, validMenu } from "../src/messages";
+import { messageSite, parseStart, sameDocument } from "../src/messages";
 const origin = "chrome-extension://extension-id/";
 const url = "https://mail.google.com/mail/u/0/#inbox/message";
 const context = { url, title: "Message", selection: "Selected message" };
@@ -35,14 +35,5 @@ describe("extension message trust boundary", () => {
     expect(messageSite("app.slack.com")).toBe("slack");
     expect(messageSite("workspace.slack.com")).toBe("slack");
     for (const host of ["slack.com", "app.slack.com.attacker.test", "mail.google.com.attacker.test", "127.0.0.1"]) expect(messageSite(host)).toBeUndefined();
-  });
-  it("checks native selection menu source, host, frame and tab", () => {
-    const tab = { id: 4, url, title: "Message" } as chrome.tabs.Tab;
-    const info = { menuItemId: "handle-openside", pageUrl: url, selectionText: "Chosen text", frameId: 0 } as chrome.contextMenus.OnClickData;
-    expect(validMenu(info, tab)).toBe(true);
-    for (const value of [{ ...info, menuItemId: "other" }, { ...info, frameId: 2 }, { ...info, selectionText: " " }, { ...info, pageUrl: "https://attacker.test/" }]) expect(validMenu(value, tab)).toBe(false);
-    expect(validMenu(info, { ...tab, id: 1.5 })).toBe(false);
-    expect(validMenu(info, { ...tab, url: "https://mail.google.com/mail/u/1/" })).toBe(false);
-    expect(validMenu({ ...info, pageUrl: url.replace("message", "other") }, tab)).toBe(true);
   });
 });

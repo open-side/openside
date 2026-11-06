@@ -40,7 +40,8 @@ const chromeStub = {
   permissions: { contains: vi.fn(async () => true), request: vi.fn(async () => true) },
   windows: { getLastFocused: vi.fn(async () => focusedWindow), update: vi.fn(async () => ({})) },
   tabs: { query: vi.fn(async () => [] as { id: number; windowId: number }[]), update: vi.fn(async () => ({})), create: vi.fn(async (_details: chrome.tabs.CreateProperties) => ({})) },
-  runtime: { getURL: (path: string) => `chrome-extension://fixture/${path}` },
+  // The manifest names exactly one daemon origin; tools/openside-browser writes the resolved listener there.
+  runtime: { getURL: (path: string) => `chrome-extension://fixture/${path}`, getManifest: () => ({ externally_connectable: { matches: [`${UI}/*`] } }) },
 };
 vi.stubGlobal("chrome", chromeStub);
 
@@ -61,9 +62,11 @@ beforeEach(() => {
 });
 
 describe("handleDesktopRequest", () => {
-  it("answers only the daemon UI on this computer and ignores malformed requests", async () => {
-    for (const origin of [undefined, "https://127.0.0.1", "http://evil.test", "http://127.0.0.1.evil.test:1", "not a url"]) {
+  it("answers only the daemon UI the manifest names and ignores malformed requests", async () => {
+    // Another loopback port or host spelling is a different site, refused before any storage is read or changed.
+    for (const origin of [undefined, "https://127.0.0.1", "http://evil.test", "http://127.0.0.1.evil.test:1", "not a url", "http://127.0.0.1", "http://127.0.0.1:47821", "http://localhost:47820", "http://[::1]:47820"]) {
       expect(await handleDesktopRequest({ type: "openside.desktop.status" }, origin)).toMatchObject({ ok: false, reason: "refused" });
+      expect(await handleDesktopRequest({ type: "openside.desktop.disable" }, origin)).toMatchObject({ ok: false, reason: "refused" });
     }
     for (const message of [null, "enable", {}, { type: "openside.desktop.enable", code: 7 }, { type: "openside.desktop.enable", code: "" }, { type: "nope" }]) {
       expect(await handleDesktopRequest(message, UI)).toMatchObject({ ok: false, reason: "refused" });
@@ -98,6 +101,22 @@ describe("handleDesktopRequest", () => {
     expect(local.desktopNotifications).toBe(false);
   });
 
+  it("answers with the launcher's pairing and keeps it on disable, with nothing for the page to revoke", async () => {
+    const file = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => new Response(JSON.stringify({ url: UI, code: SECRET })));
+    try {
+      expect(await handleDesktopRequest({ type: "openside.desktop.status" }, UI)).toEqual({ ok: true, paired: true, enabled: false, device: null, importing: false });
+      expect(file).toHaveBeenCalledWith("chrome-extension://fixture/launch-pairing.json", { cache: "no-store" });
+      expect(api.exchangePairing).toHaveBeenCalledWith(SECRET);
+      expect(session.pairing).toEqual({ url: UI, token: "minted-token", device: "dev-1", launcher: true });
+      expect(await handleDesktopRequest({ type: "openside.desktop.enable" }, UI)).toMatchObject({ ok: true, enabled: true, device: null });
+      expect(await handleDesktopRequest({ type: "openside.desktop.disable" }, UI)).toMatchObject({ ok: true, enabled: false, device: null });
+      expect(session.pairing).toMatchObject({ launcher: true });
+      expect(api.exchangePairing).toHaveBeenCalledTimes(1);
+    } finally {
+      file.mockRestore();
+    }
+  });
+
   it("never replaces a pairing to another daemon", async () => {
     session.pairing = { url: "http://localhost:9999", token: "other" };
     const reply = await handleDesktopRequest({ type: "openside.desktop.enable", code: "c" }, UI);
@@ -110,7 +129,7 @@ describe("handleDesktopRequest", () => {
     chromeStub.permissions.contains.mockResolvedValue(false);
     chromeStub.permissions.request.mockResolvedValueOnce(false);
     expect(await handleDesktopRequest({ type: "openside.desktop.enable", code: "c" }, UI)).toMatchObject({ ok: false, reason: "permission" });
-    expect(chromeStub.permissions.request).toHaveBeenCalledWith({ origins: ["http://127.0.0.1/*"] });
+    expect(chromeStub.permissions.request).toHaveBeenCalledWith({ origins: [`${UI}/*`] });
     chromeStub.permissions.contains.mockResolvedValue(true);
     api.exchangePairing.mockRejectedValueOnce(new Error("expired"));
     expect(await handleDesktopRequest({ type: "openside.desktop.enable", code: "c" }, UI)).toMatchObject({ ok: false, reason: "exchange_failed" });
@@ -277,14 +296,14 @@ describe("extension-owned import connection consent", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it("a remembered key for another origin never permits silent pairing", async () => {
+  it("refuses another loopback port outright, even with a remembered key, before any consent page or exchange", async () => {
     local.importPairing = { device: OLD_DEVICE, secret: SECRET, origin: UI };
-    const different = handleDesktopRequest({ type: "openside.desktop.pair", code: "code2" }, "http://localhost:47821");
-    await vi.waitFor(() => expect(chromeStub.tabs.create).toHaveBeenCalledOnce());
+    session.pairing = { url: UI, token: "t", device: OLD_DEVICE };
+    expect(await handleDesktopRequest({ type: "openside.desktop.pair", code: "code2" }, "http://localhost:47821")).toMatchObject({ ok: false, reason: "refused" });
+    expect(chromeStub.tabs.create).not.toHaveBeenCalled();
     expect(api.exchangePairing).not.toHaveBeenCalled();
-    answerConsent(false);
-    expect(await different).toMatchObject({ ok: false, reason: "refused" });
-    expect(local.importPairing).toMatchObject({ origin: UI });
+    expect(local.importPairing).toEqual({ device: OLD_DEVICE, secret: SECRET, origin: UI });
+    expect(session.pairing).toEqual({ url: UI, token: "t", device: OLD_DEVICE });
   });
 });
 

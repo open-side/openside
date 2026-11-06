@@ -1,6 +1,7 @@
 import { IMPORT_APPLY, IMPORT_STATUS, IMPORT_PERMISSION_OPEN, IMPORT_PERMISSION_STATUS, type ImportDeliveryBatch, type ImportPermissionReply, type ImportReply, type ImportStatusReply } from "../../web/src/import/protocol";
-import { loopbackOrigin } from "./desktop";
+import { trustedDaemonOrigin } from "./daemonOrigin";
 import { importCredential, type ImportCredential } from "./storage";
+import { t } from "./i18n";
 
 const BRANDS: Record<string, string> = { chrome: "Chrome", chromium: "Chromium", brave: "Brave", edge: "Edge", vivaldi: "Vivaldi", opera: "Opera", arc: "Arc", firefox: "Firefox", librewolf: "LibreWolf", zen: "Zen", floorp: "Floorp", safari: "Safari" };
 let applying: Promise<unknown> = Promise.resolve();
@@ -89,7 +90,7 @@ async function applyBatch(batch: ImportDeliveryBatch): Promise<ImportReply> {
       children.set(created.id, []);
       return created.id;
     };
-    const root = await folder(parent.id, `Imported from ${BRANDS[batch.source.brand] ?? batch.source.brand} (${batch.source.name})`);
+    const root = await folder(parent.id, t("ext.import.bookmarkFolder", { browser: BRANDS[batch.source.brand] ?? batch.source.brand, profile: batch.source.name }));
     for (const { bookmark, url } of supported) {
       let parentId = root;
       for (const part of bookmark.folder) parentId = await folder(parentId, part);
@@ -157,7 +158,7 @@ function forgetCookieValues(batch: ImportDeliveryBatch): void {
 }
 
 export async function handleImportRequest(raw: unknown, senderOrigin: string | undefined): Promise<ImportReply | ImportPermissionReply | ImportStatusReply> {
-  const origin = loopbackOrigin(senderOrigin);
+  const origin = trustedDaemonOrigin(senderOrigin);
   if (!origin) return { ok: false, reason: "refused" };
   const pair = await importCredential();
   if (!pair) return { ok: false, reason: "needs_pairing" };

@@ -30,7 +30,3 @@ export function parseStart(value: unknown, sender: chrome.runtime.MessageSender,
 export function messageSite(hostname: string): "gmail" | "slack" | undefined {
   return hostname === "mail.google.com" ? "gmail" : hostname.endsWith(".slack.com") ? "slack" : undefined;
 }
-export function validMenu(info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab): tab is chrome.tabs.Tab & { id: number } {
-  if (info.menuItemId !== "handle-openside" || !validTabId(tab?.id) || !info.selectionText?.trim() || (info.frameId !== undefined && info.frameId !== 0) || !info.pageUrl || !tab?.url || !sameDocument(info.pageUrl, tab.url)) return false;
-  try { const url = new URL(info.pageUrl); return url.protocol === "https:" && messageSite(url.hostname) !== undefined; } catch { return false; }
-}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title data-i18n="ext.micAccess.title">Use your microphone for dictation</title>
+<link rel="stylesheet" href="fonts/wanted-sans/WantedSansVariable.css">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="options">
+<main class="page">
+<header class="page-head"><h1 data-i18n="ext.micAccess.title">Use your microphone for dictation</h1><p data-i18n="ext.micAccess.lead">The side panel can't ask for the microphone itself, so openside asks here once.</p></header>
+<section class="card">
+<p class="hint" data-i18n="ext.micAccess.hint">openside listens only while the mic button in the side panel is on, and turns what you say into text in the message box.</p>
+<div class="actions"><button id="allow" type="button" class="button primary" data-i18n="ext.micAccess.allow">Allow microphone</button></div>
+<p id="status" role="status" class="hint"></p>
+</section>
+</main>
+<script src="mic-access.js"></script>
+</body>
+</html>

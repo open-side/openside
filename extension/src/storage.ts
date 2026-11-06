@@ -1,16 +1,21 @@
-/** `device` is set only when the extension minted its token itself from a web pairing code. */
-export interface Pairing { url: string; token: string; device?: string }
+import { t } from "./i18n";
+/**
+ * `device` is set when the extension minted its token itself from a one-time code. `launcher` marks
+ * the token paired from the desktop launcher's code: the daemon replaces that device on the next
+ * launch, so turning desktop notifications off keeps it.
+ */
+export interface Pairing { url: string; token: string; device?: string; launcher?: true }
 export function validateDaemonUrl(value: string): string {
   const url = new URL(value);
-  if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) throw new Error("Enter a daemon origin without a path or credentials.");
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) throw new Error("Use HTTPS, or HTTP on loopback only.");
+  if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) throw new Error(t("ext.options.error.originOnly"));
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) throw new Error(t("ext.options.error.insecure"));
   return url.origin;
 }
 /** A direct pairing link is `<daemon origin>/pair#<code>`; relay links carry key material this page cannot use. */
 export function parsePairingLink(value: string): { url: string; code: string } {
   const link = new URL(value.trim());
   const code = decodeURIComponent(link.hash.slice(1)).trim();
-  if (link.pathname !== "/pair" || !code || code.includes("=")) throw new Error("That is not a direct openside pairing link. Copy it from Connect a phone, using a Tailscale, Cloudflare or local address.");
+  if (link.pathname !== "/pair" || !code || code.includes("=")) throw new Error(t("ext.options.error.notPairingLink"));
   return { url: validateDaemonUrl(link.origin), code };
 }
 export async function pairing(): Promise<Pairing> {

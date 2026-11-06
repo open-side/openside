@@ -6,7 +6,7 @@
 
 - Node 22 이상
 - pnpm
-- Chromium 126 이상(`sidePanel` API 와 `Promise.withResolvers` 가 필요하다)
+- Chromium 141 이상(`chrome.sidePanel.close`가 필요하다)
 
 ## 설치
 
@@ -36,20 +36,25 @@
 - `@` 버튼을 누르거나 `@` 만 따로 입력하면 현재 탭의 URL·제목·선택한 텍스트를 붙인다. 사용자가 직접 할 때만 동작한다.
 - 어시스턴트 답변은 웹 앱(`web/src/components/Markdown.tsx`)과 동일하게 GFM 표, 목록, 복사 버튼이 포함된 코드 블록 등 Markdown으로 렌더링한다. 답변 내부의 HTML은 일반 텍스트로 표시하고, 안전하지 않은 링크 스킴은 제거하며, 이미지는 패널에서 불러오지 않고 대체 텍스트(http/https 이미지는 링크)로만 표시한다.
 - 답변을 작성하는 동안에는 끝에 작게 깜빡이는 점을 표시하고, 연결 진행 상황(Connecting…/Reconnecting…)은 팝업 대신 상단 바에 작은 텍스트로 띄운다.
-- 브라우저가 페어링되어 있지 않으면 오류 대신 패널에 Pair openside 버튼이 있는 페어링 안내를 표시한다.
+- `tools/openside-browser`로 연 브라우저는 확장을 자동으로 페어링하므로 패널이 바로 동작한다. 다른 방식으로 연 브라우저이거나 Devices에서 페어링을 해지한 경우에만 오류 대신 패널에 "Pair openside" 버튼이 있는 페어링 안내를 표시한다.
+- Ctrl+E(macOS에서는 ⌘E)로 사이드 패널을 열고 닫는다(매니페스트 `_execute_action` 단축키). Linux의 Chromium은 Ctrl+E를 자체 단축키로 차지하고 있어 확장에 자동으로 넘겨주지 않으므로, `tools/openside-browser`가 프로필당 한 번씩 프로필의 `extensions.commands`에 해당 바인딩을 등록한다. 이후 사용자가 `chrome://extensions/shortcuts`에서 단축키를 바꾸거나 지우면 바꾼 설정이 그대로 유지된다. 실행 도구가 매니페스트의 필수 `host_permissions`를 이 데몬의 정확한 오리진으로 설정하므로 페어링할 때 권한 확인 창이 뜨지 않는다. 매니페스트 변경은 브라우저를 새로 시작할 때만 반영되며, 이미 실행 중인 브라우저는 처음 시작할 때 읽은 매니페스트를 그대로 유지한다. 따라서 브라우저가 열려 있는 동안 데몬의 오리진이 바뀌었다면, `tools/openside-browser`는 실행을 넘기지 않고 openside 브라우저를 종료한 뒤 다시 열라는 안내 메시지를 출력하고 멈춘다.
+- `Ctrl+Shift+A`(`⇧⌘A`)는 `open-palette` 명령을 실행하여 openside 탭에서 검색 팔레트를 열며, 현재 창에 openside 탭이 없으면 새 openside 탭을 연다. `tools/openside-browser`가 `Ctrl+E`와 같은 방식으로 별도 마커 파일을 두어 프로필당 한 번씩 이 단축키를 등록한다.
+- `mini-popup` 명령은 `/mini` 경로로 480×600 크기의 작은 채팅 창을 연다. 다시 누르면 창을 앞으로 가져오고, 이미 포커스가 있으면 닫는다. 기본 단축키는 없으며, openside 브라우저에서는 설정 › 미니 팝업에서 전역 단축키인 Alt+Space를 바인딩하고, 다른 브라우저에서는 사용자가 `chrome://extensions/shortcuts`에서 직접 키를 지정한다.
+- 탭 우클릭 메뉴에는 탭을 북마크바에 저장하는 "북마크에 탭 추가" 항목이 있다.
 - 카드 레이블과 버튼은 웹 앱(`web/src/components/TicketCard.tsx`) 기준을 따른다. 기본 작업 버튼은 배경을 채우고, Reject와 Dismiss는 붉은색 대신 튀지 않는 텍스트 버튼으로 둔다.
 
 ### 화면 디자인
-- Ask 사이드 패널과 Options 페이지는 웹 앱(`web/DESIGN.md`)과 동일한 디자인 언어를 따른다. 그라데이션이나 블러 없이 얇은 실선 테두리와 평평한 단색 표면으로 화면을 구성하고, 단색 상단 바에 대화 선택기·연결 상태·설정 버튼을 배치한다. 어시스턴트 답변은 페이지 배경 위에 일반 텍스트로 바로 표시하고, 사용자가 보낸 메시지는 회색 말풍선에 담으며, 하단에 고정된 알약 모양 입력창에는 흑백 원형 전송 버튼을 둔다. 로그인·코드·선택 카드의 'Action needed' 칩을 포함한 대화 카드, 아웃라인 아이콘, 토스트, 빈 화면과 오류 상태도 웹 앱과 같다.
+- Ask 사이드 패널과 Options 페이지는 웹 앱(`web/DESIGN.md`)과 동일한 디자인 언어를 따른다. 그라데이션이나 블러 없이 얇은 실선 테두리와 평평한 단색 표면으로 화면을 구성한다. 패널 헤더에는 대화를 전환하는 캐럿이 붙은 대화 제목과 새 대화, openside(웹 앱)에서 열기, 닫기 버튼을 둔다. 어시스턴트 답변은 페이지 배경 위에 일반 텍스트로 바로 표시하고, 사용자가 보낸 메시지는 첨부 칩과 함께 회색 말풍선에 담는다. 입력창은 1px 테두리를 두른 아담한 흰색 카드로, "Reply, @ for context" 입력란과 + 메뉴(현재 탭 첨부, 최대 4 / 2 MiB 사진·파일 업로드, 영역 캡처), 확인·모델·effort 칩, 대화가 실행되는 동안 Stop으로 바뀌는 원형 전송 버튼을 갖춘다. 마이크는 없다. 로그인·코드·선택 카드의 'Action needed' 칩을 포함한 대화 카드, 아웃라인 아이콘, 토스트, 빈 화면과 오류 상태도 웹 앱과 같다.
 - 빌드할 때 `web/src/tokens.css`를 `dist/tokens.css`로 복사하고 모든 확장 페이지에서 `static/style.css`보다 먼저 불러오므로, 자체 사본을 따로 두지 않고도 웹 앱과 똑같은 디자인 토큰을 쓴다. 토큰을 바꿀 때는 `web/src/tokens.css`만 수정하면 되며, `static/style.css`에는 레이아웃과 컴포넌트 스타일만 담는다. `cards.css`와 `team.css`도 같은 방식으로 웹 앱에서 복사한다.
 - 테마는 `prefers-color-scheme` 을 따라 브라우저 설정에 맞춰진다. 확장 안에 테마 선택 기능은 없다.
+- 표시 언어는 기본적으로 브라우저의 UI 언어를 따르며(System), Options 페이지의 언어 선택(System / English / 한국어) 설정은 `chrome.storage.local`의 `openside.locale` 키에 저장된다. 모든 확장 페이지와 백그라운드 워커(우클릭 메뉴 제목, 알림, 웹 앱 응답), Gmail·Slack 버튼이 이 설정을 따르고, 설정을 바꾸면 열려 있는 확장 페이지가 새로고침된다. 매니페스트 설명과 툴바 버튼 제목은 `build.ts`가 생성하는 `_locales`(`en`, `ko`)에서 가져오므로 브라우저의 UI 언어를 따른다.
 - Wanted Sans 와 D2Coding(둘 다 OFL-1.1, 라이선스 전문 포함)은 빌드할 때 `web/src/assets/fonts` 에서 `dist/fonts` 로 복사한다. 확장 페이지는 외부 폰트나 스크립트를 불러오지 않고, 아이콘도 Lucide 인라인 SVG 를 쓴다.
 > Ask 패널은 웹 앱과 마찬가지로 최신 메시지 아래에 전송 상태를 표시한다. 데몬이 큐에 넣으면 "Sent", 에이전트가 가져가면 "Read"가 뜨고, 에이전트가 작업 중일 때는 점 세 개로 된 입력 중 알약 모양 표시가 나타난다. 응답이 시작되면 두 상태 표시 모두 사라지며, 실패하거나 중단된 메시지에는 다음 메시지를 보낼 때까지 안내 문구(웹과 동일한 문구)가 유지된다. 작성 창과 대화 선택기의 스크롤바는 웹 UI처럼 숨겨진다.
 - 패널 너비와 상관없이 가로 스크롤은 발생하지 않는다. 긴 텍스트와 URL은 메시지 안에서 줄바꿈되고, 대화 제목과 첨부 탭 레이블은 말줄임표로 자르며(마우스를 올리면 전체 텍스트 표시), 가로 스크롤은 코드 블록과 표 내부 상자에서만 동작한다.
 - 상태 및 오류 메시지는 패널 입력창 바로 위와 Options 최상단에 토스트로 표시하고, 일정 시간이 지나거나 닫으면 사라진다. Options에서는 현재 브라우저의 페어링 여부와 연결된 데몬 URL을 확인할 수 있다.
 
 ### Desktop notifications
-> 웹 앱의 Settings → Notifications 토글은 Web Push용 푸시 서비스가 없는 브라우저(패치된 openside 브라우저)에서 확장 프로그램이 데스크톱 알림을 보낼지를 제어한다. 이 설정을 켜면 일회용 코드(`read`, `steer`, `approve`, `human_step`)로 확장 프로그램을 페어링하고, 이전처럼 온/오프 설정을 `chrome.storage.local`에, 토큰을 `chrome.storage.session`에 저장한다. 백그라운드 워커는 `GET /v1/sessions` 및 대기 중인 티켓을 폴링하며(알람 주기 30초, 태스크 실행 중에는 5초), 실행 중이던 태스크가 끝나면 "Task finished"를, 대기 중인 새 요청이 생기면 요청당 하나씩 알림을 띄운다. 포커스된 창의 활성 탭에 열려 있는 대화는 건너뛴다. 알림을 클릭하면 해당 대화가 열리고, 요청인 경우 사이드 패널이 열린다. 매니페스트는 공개 `key`를 고정하여 확장 프로그램 ID(`jneddlbpgmlheplolfonafkbkbkjhcfj`)가 어디서나 동일하도록 보장하며, `externally_connectable`은 `http://127.0.0.1/*` 및 `http://localhost/*`만 허용한다. 확장 프로그램은 다른 데몬과의 페어링으로 교체하는 동작을 거부한다.
+> 웹 앱의 Settings → Notifications 토글은 Web Push용 푸시 서비스가 없는 브라우저(패치된 openside 브라우저)에서 확장 프로그램이 데스크톱 알림을 보낼지를 제어한다. 이 설정을 켜면 일회용 코드(`read`, `steer`, `approve`, `human_step`)로 확장 프로그램을 페어링하고, 이전처럼 온/오프 설정을 `chrome.storage.local`에, 토큰을 `chrome.storage.session`에 저장한다. 백그라운드 워커는 `GET /v1/sessions` 및 대기 중인 티켓을 폴링하며(알람 주기 30초, 태스크 실행 중에는 5초), 실행 중이던 태스크가 끝나면 "Task finished"를, 대기 중인 새 요청이 생기면 요청당 하나씩 알림을 띄운다. 포커스된 창의 활성 탭에 열려 있는 대화는 건너뛴다. 알림을 클릭하면 해당 대화가 열리고, 요청인 경우 사이드 패널이 열린다. 매니페스트는 공개 `key`를 고정하여 확장 프로그램 ID(`jneddlbpgmlheplolfonafkbkbkjhcfj`)가 어디서나 동일하도록 보장하며, `externally_connectable`은 매니페스트에 지정된 데몬 오리진 하나(`tools/openside-browser`가 실행할 때마다 설정하는 오리진이며, 일반 빌드에서는 `http://127.0.0.1:47820/*`)만 허용한다. 확장 프로그램은 다른 데몬과의 페어링으로 교체하는 동작을 거부한다.
 
 ### Imported browser data
 > 가져온 데이터는 페어링되지 않은 웹 페이지로부터 절대 수락하지 않는다. 온보딩 과정에서 `Connect the openside extension` 문구가 표시되며, 공유 커넥터를 사용해도 알림 설정은 바뀌지 않는다. 새로운 데몬 origin이 감지되면 확장 프로그램 자체 페이지가 열려 `Connect openside at <origin> for importing?`이라고 묻고, 사람이 승인해야 교환 절차가 시작된다. 기존에 기억된 origin이나 호스트 권한이 있다고 해서 동일한 앱이 여전히 해당 포트를 점유하고 있다는 증거가 되지는 않는다. 토큰이 유실된 경우, 데몬이 새로운 확장 프로그램 nonce와 교체 응답 전문을 이전 키로 서명해야만 보관 중이던 가져오기 키를 사용해 백그라운드에서 조용히 재페어링할 수 있다. 요청 헤더에 선택 사항인 `x-openside-import-device` / `x-openside-import-nonce`를 실어 이전 키를 식별하며, `x-openside-import-proof`는 `openside-import-pairing-v1\n`, 16진수 32자리 기존 기기 ID, 16진수 64자리 nonce, 응답 바이트의 원시 SHA256 해시값을 조합해 계산한 HMAC-SHA256 값이다. 이전 키가 없으면 교환 전에 확장 프로그램 자체 동의를 새로 받아야 한다. 증명 검증에 실패하면 확장 프로그램이 `openside at <origin> could not prove it's the same app you paired before`라는 경고를 띄우는 동안 교체 정보는 메모리에만 임시 유지된다. 새로 Connect 동의를 받아야 비로소 저장되며, 거부하거나 시간이 초과되면 폐기되어 이전 키가 그대로 유지된다. 토큰은 세션 스토리지에, 가져오기 키는 로컬 스토리지에 남으며, 둘 다 동의 페이지로는 전달되지 않는다.
@@ -74,9 +79,18 @@
 주소창에 `os`, 공백, 질문을 차례로 입력하고 Enter 를 누르면 새 세션을 시작하고 Ask 를 연다.
 
 ### Gmail·Slack 웹
-"Handle with openside" 버튼이나 컨텍스트 메뉴를 쓰면 메시지 안에서 선택한 텍스트(또는 열린 메시지 본문)와 출처 URL 을 새 세션으로 넘긴다. 자동으로 보내는 것은 없다. 페이지 내용은 지시가 아니라 인용한, 신뢰할 수 없는 맥락으로 전달한다.
+"Handle with openside" 버튼을 누르면 메시지 안에서 선택한 텍스트(또는 열린 메시지 본문)와 출처 URL을 새 세션으로 넘긴다. 자동으로 보내는 것은 없다. 페이지 내용은 지시가 아니라 인용한, 신뢰할 수 없는 맥락으로 전달한다. 컨텍스트 메뉴는 더 이상 Gmail·Slack 전용이 아니며, 아래 올가미 (Lasso) 섹션에서 다룬다.
 
-버튼은 닫힌 shadow root 안에 있어 실제 사용자가 클릭했을 때만 반응한다. 웹페이지 스크립트가 `.click()`을 호출하거나 가짜 이벤트를 발생시켜도 아무런 동작도 일어나지 않는다. 컨텍스트 메뉴 동작은 브라우저가 사용자 입력을 바탕으로 생성하며, 현재 탭의 URL과 일치하는 최상위 Gmail/Slack 문서에서 보낸 요청만 받아들인다. SPA 특성상 URL 해시(#)는 바뀔 수 있지만, origin·path·query는 반드시 일치해야 한다.
+버튼은 닫힌 shadow root 안에 있어 실제 사용자가 클릭했을 때만 반응한다. 웹페이지 스크립트가 `.click()`을 호출하거나 가짜 이벤트를 발생시켜도 동작하지 않는다. 현재 탭의 URL과 일치하는 최상위 Gmail/Slack 문서에서 보낸 요청만 받아들인다. SPA 특성상 URL 해시(#)는 바뀔 수 있지만, origin·path·query는 반드시 일치해야 한다.
+
+### 올가미 (Lasso)
+- 어느 페이지에서나 컨텍스트 메뉴를 쓸 수 있다. 텍스트를 선택한 뒤 "Ask openside about “…”"를 누르면 사이드 패널을 열고 선택한 내용을 입력창에 첨부한다(세션 스토리지 키 `panelAsk:<tabId>` 사용). 사이드 패널을 열 수 없을 때는 "Explain this."로 새 대화를 시작해 웹 앱에서 연다. "Capture"(페이지·이미지·링크·프레임·비디오, http/https 전용)를 누르면 올가미 (Lasso)를 시작한다.
+- `start-lasso` 명령(추천 단축키 Alt+Shift+L, `chrome://extensions/shortcuts`에서 변경 가능)과 컨텍스트 메뉴의 Capture 항목은 `activeTab`을 통해 `lasso.js`를 주입하므로 호스트 권한이 따로 필요하지 않다. 단축키 명령은 "Enable on lasso selection"이 켜져 있을 때만 동작한다. 사이드 패널을 클릭해도 `activeTab` 권한은 부여되지 않으므로, 사이드 패널의 + › Capture a region은 확장 프로그램이 이미 접근할 수 있는 페이지(툴바 버튼이나 단축키로 사이드 패널을 열어 `activeTab`이 아직 유지되고 있거나 사이트 권한이 있는 경우)에서만 동작한다. 그 밖의 페이지에서는 페이지에서 단축키를 누르거나 우클릭 › Capture를 사용하라고 안내한다.
+- 사용자가 페이지 일부를 드래그해 그리면 오버레이가 두 프레임 동안 숨고, 서비스 워커가 `chrome.tabs.captureVisibleTab`으로 화면을 찍어 그린 영역만큼 잘라낸다(PNG로 저장하고, 1.5 MB를 넘으면 축소하거나 JPEG로 바꾼다). 캡처한 이미지는 `chrome.storage.session`에 대기 중인 질문으로만 남으며(유효 시간 10분, 탭당 1개), 웹 페이지로는 절대 넘어가지 않는다.
+- 확장 프로그램 자체 팝오버(`use_dynamic_url`이 켜진 웹 접근 가능 iframe 안의 `ask.html`)에 단축 작업 목록과 질문 입력란을 띄우므로, 사용자가 입력하는 내용을 웹 페이지가 읽을 수 없다. 항목을 고르면 해당 클릭 안에서 바로 사이드 패널을 열어 전송하고, 사이드 패널을 열 수 없으면 웹 앱에서 새 대화를 시작한다. Esc를 누르거나 바깥 영역을 클릭하면 취소한다.
+- 웹 앱의 Settings › Lasso(`web/src/settings/pages/Lasso.tsx`)는 `externally_connectable`(`openside.lasso.get|set|access`)을 통해 `chrome.storage.local`의 `lassoSettings`를 읽고 쓰며, 신뢰할 수 있는 데몬 origin에서 온 요청만 받아들인다. 기본 단축 작업으로는 텍스트용 Summarize·Translate와 영역용 Copy code·Search image를 제공하며, 사용자가 종류별로 최대 12개까지 직접 추가·수정·삭제할 수 있다.
+- 텍스트를 선택한 뒤 나타나는 파란색 점과 두 번 누르기 단축키(⌥/Alt, Ctrl, Shift 두 번 연타)는 모든 페이지에서 스크립트를 실행해야 하므로 선택적 권한인 `<all_urls>`가 필요하며, 확장 프로그램 자체 페이지인 `lasso-access.html`(Allow 버튼)에서만 이 권한을 요청한다. `activeTab` 없이 `captureVisibleTab`을 호출할 때는 더 좁은 범위의 권한을 쓸 수 없어 `<all_urls>`를 사용한다. 권한이 허용된 동안에는 확장 프로그램이 `lasso-page` 콘텐츠 스크립트를 등록하고 `chrome.storage.local`에 `lassoAccess`를 저장한다. 권한을 철회하거나 두 토글을 모두 끄면 등록을 해제하며, 열린 탭에서 이미 실행 중인 스크립트도 `lassoAccess`에 따라 점을 숨기고 열려 있는 올가미 (Lasso)를 닫은 뒤 선택과 단축키 감지를 멈춘다. 이 권한을 허용하더라도 에이전트가 사용자의 탭에 들어올 수는 없으며, 사용자 브리지(person bridge)는 여전히 사이트마다 개별 권한을 요구한다.
+- `<all_urls>` 권한이 없어도 단축키 명령과 우클릭 컨텍스트 메뉴 › Capture는 모든 페이지에서 그대로 동작한다.
 
 ### Agent Tabs
 - 프로덕션 빌드에서 `debugger` 권한은 선택 사항이다. Options 화면에서 `Enable Agent Tabs`를 누르면 Chrome의 `debugger` 권한을 요청하고(타깃 메타데이터를 읽는 용도로만 사용) 이번 브라우저 세션에 한해 탭 그룹 기능을 켠다. `Disable Agent Tabs`를 누르면 확장 프로그램이 만든 탭 그룹을 모두 해제한다.
@@ -119,7 +133,7 @@ cargo test -j 8 -p openside-e2e --test extension
 ```
 
 - 배포 빌드의 콘텐츠 스크립트는 `https://mail.google.com/*`, `https://app.slack.com/*`, `https://*.slack.com/*` 에만 붙는다.
-- 플래그 없이 빌드하면 이름이 `openside`로 지정되고 실제 호스트에만 매칭된다. `debugger` 권한은 선택 사항으로 남으며 루프백 호스트 권한도 포함되지 않는다. `OPENSIDE_EXTENSION_TEST_MATCHES=1`로 빌드하면 이름이 `openside (test build)`로 바뀌고, `http://127.0.0.1/*` 및 테스트 픽스처 경로인 `/gmail`, `/slack` 매칭이 추가된다. 이 빌드는 일회용 테스트 프로필에서만 쓰이며 `debugger` 권한과 루프백 접근 권한을 처음부터 부여받는다.
+- 플래그 없이 빌드하면 이름은 `openside`가 되고 콘텐츠 스크립트는 실제 호스트에만 붙으며, `debugger` 권한은 선택 사항으로 남는다. 일반 빌드는 `host_permissions`와 `externally_connectable` 모두에 데몬 오리진 하나(기본값 `http://127.0.0.1:47820/*`, 또는 빌드할 때 `OPENSIDE_DAEMON_ORIGIN`에 지정한 오리진)만 요구한다. `tools/openside-browser`는 실행할 때마다 두 항목을 실행 중인 데몬의 정확한 오리진으로 고쳐 쓰므로, 확장은 권한 확인 창 없이 로컬 데몬과 페어링하고 통신할 수 있으며 다른 루프백 포트나 호스트의 페이지는 확장에 메시지를 보낼 수 없다. 반면 테스트 빌드는 테스트 데몬이 임의의 포트에서 대기하므로 `http://127.0.0.1/*`와 `http://localhost/*`의 모든 포트를 허용한다. 그 외 https 사이트(`https://*/*`)는 선택 권한으로 두어 필요할 때만 요청한다. `OPENSIDE_EXTENSION_TEST_MATCHES=1`로 빌드하면 이름이 `openside (test build)`로 바뀌고 콘텐츠 스크립트 대상에 `http://127.0.0.1/*`와 픽스처 경로인 `/gmail`, `/slack`이 추가된다. 이 빌드는 일회용 테스트 프로필에서만 쓰이며 `debugger` 권한을 처음부터 갖는다.
 - E2E 테스트는 임시 디렉터리(`OPENSIDE_EXTENSION_OUTDIR`)에 있는 테스트 빌드를 `browser.extensions`로 가리키는 실제 테스트 데몬을 띄운다. 데몬은 독립된 임시 프로필 환경에서 stock Chromium을 `--headless=new` 옵션으로 실행한다. 이 테스트는 마지막 메시지뿐 아니라 이전에 선택한 Gmail 및 Slack 메시지가 출처 URL과 함께 전달되는지, 실제 CDP 마우스 클릭만 처리하고 웹페이지의 가짜 클릭은 무시하는지, Ask 응답이 스트리밍되는지, 정확한 ID로만 탭을 묶고 동일한 URL을 띄운 일반 사용자 탭은 묶지 않는지 검증한다.
 - E2E 테스트에서는 200자 URL과 공백 없는 긴 한국어 텍스트가 주어졌을 때 320·400·480px 너비의 패널과 320px 너비의 Options 페이지에서 가로 스크롤이 생기지 않는지 검증한다.
 - 헤드리스 환경에서는 Chrome의 권한 확인 팝업을 클릭할 수 없으므로 E2E 테스트에서 이 과정을 다루지 않는다. 대신 실제 Options 페어링 절차와 `Enable Agent Tabs` 버튼 동작은 그대로 검증한다.
