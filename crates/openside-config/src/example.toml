@@ -17,6 +17,14 @@ unlock = "auto"   # auto | passphrase | secret-service (Linux libsecret) | nativ
 # only to unlock the vault, is zeroized, and is never logged. Doctor never executes it.
 # Unset: the vault starts locked until `openside vault unlock` or the Vault page.
 default_policy = "while_unlocked"   # always | while_unlocked | never (per-item override wins)
+auto_lock = "one_week"   # immediately | one_minute | five_minutes | fifteen_minutes | one_hour | four_hours | one_day | one_week | never
+biometric_unlock = false # keyring vaults: require fprintd (Linux) or Touch ID (macOS) before unlocking
+
+[vault.autofill]
+enabled = true           # fill saved sign-ins at all
+auto_submit = true       # submit the form after filling when the caller names a submit button
+allow_insecure = false   # also fill plain http: pages (localhost always counts as secure)
+excluded_domains = []    # never fill these domains or their subdomains, e.g. ["bank.example"]
 
 [tickets]
 # Expiration values are seconds (minimum 1); no environment overrides.
@@ -44,6 +52,14 @@ max_active_teammates = 5          # excludes the chief; zero blocks hires and re
 [models]
 # default = "provider:your-model"               # OPENSIDE_MODEL
 fallback = []
+# Task roles; an unset role uses the session model. An unset `image` lets generate_image use the
+# best available image model; `image_off = true` turns image generation off.
+# front = "provider:fast-model"
+# standard = "provider:subagent-model"
+# deep = "provider:hard-reasoning-model"
+# visual = "provider:vision-model"
+# image = "provider:image-model"
+# image_off = false
 
 # Credential order remains explicit; a configured broker failure cannot downgrade to local keys.
 # Provider API-key values belong only in the Vault, never in this table.
@@ -59,6 +75,7 @@ codex-cli = true
 # bundle_dir = "./browser"        # Search chrome, then chromium
 gateway = "auto"                  # auto | off; auto uses the patched browser's gateway if present
 extensions = []                  # Unpacked extension dirs; relative to this config file; not loaded in private sessions
+# language = "ko"                 # openside-browser UI language; unset follows the OS locale
 
 [sandbox]
 required = false
@@ -75,6 +92,12 @@ deny_origins = []                # e.g. ["https://*.evil.example"]; always denie
 # HTTP transports, channel adapters and `memory model fetch` refuse anything else (redirects
 # included). bash stays network-isolated regardless of this list.
 allow = []
+
+[search]
+provider = "browser"              # browser | brave | tavily; API providers read their key from the
+                                  # Vault item for the API origin and fall back to the browser without one
+# engine = "https://html.duckduckgo.com/html/?q={query}"  # results page; unset = the browser's default engine
+# api_url = "https://api.search.brave.com/res/v1/web/search"  # API endpoint override
 
 [ui]
 # dir = "./web/dist"              # OPENSIDE_UI_DIR; unset serves no web UI
@@ -97,6 +120,15 @@ project = true                    # also offer <workspace>/.openside/skills (rea
 # claude, codex and omp have built-in conventions; any other name needs an entry here
 # or OPENSIDE_SKILLS_<NAME>_DIR.
 # example-agent = "./example-agent/skills"
+
+# [[mcp.servers]]
+# External MCP servers whose tools agents can call (Settings › Plugins & MCPs adds them).
+# Secret values (environment variables or headers) are kept in the Vault; list only names.
+# id = "files"                     # tools appear as mcp__files__<tool>
+# label = "Files"
+# transport = "stdio"              # or "http" with url = "https://…"
+# command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home/me/notes"]
+# secrets = ["API_TOKEN"]
 
 [channels]
 # Managed accounts are added in the GUI; only their Vault references belong in this file.
@@ -166,6 +198,7 @@ memory_tags = ["sync"]   # memories with one of these tags are synced
 [remote]
 # Phones and remote CLIs reach the daemon through one or more transports (docs/REMOTE.md);
 # set them up with `openside remote setup tailscale|cloudflare|relay|off`.
+# enabled = true         # Remote Control; unset: on only if mode or public_url is set. false: only this computer reaches the daemon, transport settings stay saved
 mode = "off"             # or "tailscale", "cloudflare", "relay", or a list such as ["tailscale", "relay"]
 # public_url = "https://host.example.ts.net"   # Tailscale Serve / reverse proxy address for pairing links
 # push_contact = "mailto:me@example.test"       # VAPID contact; defaults to public_url
@@ -194,3 +227,14 @@ ttl_secs = 300           # unconsumed codes are kept in memory only, this long
 [service]
 inhibit_sleep = false    # keep the machine awake while a session runs (systemd-inhibit/caffeinate)
 inhibit_cmd = []         # argv override for the inhibitor; empty uses the platform default
+
+[preferences]            # Settings choices; PATCH /v1/settings/preferences applies them at once
+# name = "Ada"           # how the app addresses you; unset shows no name
+notifications = ["needs_attention", "task_completed", "routine_completed"]
+completion_sound = true  # the app plays a sound when a chat finishes
+follow_up = "queue"      # queue | steer: delivery the app uses for a message sent mid-run
+confirmation = "skip"    # skip | ask_first: new chats ask before writing files or running commands
+agent_tab_cleanup_minutes = 15  # 0, 5, 10, 15, 30, 60 or 120 (0 never)
+save_sessions = false    # keep CLI and MCP sessions on the chat list after they finish
+mcp_server = true        # allow `openside mcp`; only local access may change it
+computer_use = false     # let agents ask to connect a desktop app; only local access may change it

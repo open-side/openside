@@ -8,14 +8,20 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct RemoteConfig {
+    /// Remote Control on or off. Off stops every transport and the daemon serves only
+    /// requests made directly on this computer (the Unix socket and loopback without proxy
+    /// headers); the transport settings below stay saved for turning it back on. Unset means
+    /// on only when a transport (`mode`) or `public_url` is already configured, so an existing
+    /// remote setup keeps working and a fresh install starts off; see [`RemoteConfig::is_enabled`].
+    pub enabled: Option<bool>,
     /// Managed transports, in pairing preference order: `"tailscale"`, `"cloudflare"`,
     /// `"relay"`; a single string, a list, or `"off"` (none). Several may run at once.
     #[serde(deserialize_with = "modes")]
     pub mode: Vec<RemoteMode>,
-    /// HTTPS base URL other devices use to reach the daemon directly (Tailscale Serve or a
-    /// TLS reverse proxy), e.g. `https://host.example.ts.net`. Pairing links and QR
-    /// codes for the `tailscale` transport point here; unset prints only the pairing code
-    /// and path.
+    /// HTTPS origin other devices use to reach the daemon directly (Tailscale Serve or a
+    /// TLS reverse proxy), e.g. `https://host.example.ts.net`: scheme, host and optional port,
+    /// with no path other than `/`. Pairing links and QR codes for the `tailscale` transport
+    /// point here; unset prints only the pairing code and path.
     pub public_url: Option<String>,
     /// Contact URI sent to push services in the VAPID `sub` claim (`mailto:` or
     /// `https:`); defaults to `public_url` when it is HTTPS.
@@ -133,6 +139,13 @@ pub struct RelayConfig {
 }
 
 impl RemoteConfig {
+    /// Whether Remote Control is on: the saved switch, or for a config that never set it,
+    /// whether a remote way in (`mode` or `public_url`) was already configured.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+            .unwrap_or(!self.mode.is_empty() || self.public_url.is_some())
+    }
+
     /// Whether `mode` lists `which`.
     pub fn has(&self, which: RemoteMode) -> bool {
         self.mode.contains(&which)
@@ -221,15 +234,17 @@ fn is_origin(value: &str) -> bool {
 
 pub(crate) fn validate(config: &crate::Config) -> Result<(), (&'static str, &'static str)> {
     if let Some(url) = &config.remote.public_url {
+        // Pairing links append their own path, so only an origin (with an optional "/") is valid.
         let rest = url
             .strip_prefix("https://")
-            .or_else(|| url.strip_prefix("http://"));
+            .or_else(|| url.strip_prefix("http://"))
+            .map(|rest| rest.strip_suffix('/').unwrap_or(rest));
         if rest.map_or(true, |rest| {
-            rest.is_empty() || rest.contains(['?', '#', '@', ' '])
+            rest.is_empty() || rest.contains(['/', '?', '#', '@', ' '])
         }) {
             return Err((
                 "remote.public_url",
-                "must be an http(s) URL without credentials, query or fragment",
+                "must be an http(s) origin (scheme, host and optional port) without a path, credentials, query or fragment",
             ));
         }
     }
@@ -735,6 +750,32 @@ mod tests {
         assert!(!super::has_ingress(&path));
         std::fs::write(&path, "ingress:\n  - service: http_status:404\n").unwrap();
         assert!(super::has_ingress(&path));
+    }
+
+    #[test]
+    fn public_url_must_be_an_origin() {
+        let path = std::path::Path::new("/tmp/config.toml");
+        let parse =
+            |url: &str| crate::parse_document(path, &format!("[remote]\npublic_url = \"{url}\"\n"));
+        for ok in [
+            "https://desk.example.ts.net",
+            "https://desk.example.ts.net/",
+            "https://desk.example.ts.net:10000",
+            "http://127.0.0.1:47820",
+        ] {
+            assert!(parse(ok).is_ok(), "{ok} should be accepted");
+        }
+        for bad in [
+            "https://desk.example.ts.net/openside",
+            "https://desk.example.ts.net//",
+            "https://desk.example.ts.net/?x=1",
+            "https://user@desk.example.ts.net",
+            "ftp://desk.example.ts.net",
+            "https://",
+        ] {
+            let error = parse(bad).unwrap_err().to_string();
+            assert!(error.contains("remote.public_url"), "{bad}: {error}");
+        }
     }
 
     fn loaded(root: &std::path::Path, edit: impl FnOnce(&mut crate::Config)) -> crate::Loaded {

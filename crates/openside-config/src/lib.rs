@@ -5,6 +5,8 @@
 //! discovery, which gives an explicitly configured executable precedence.
 //! Credential tables stay opaque and are never included in debug output.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 mod browser_extensions;
 mod channels;
 /// Private local crash-report storage, shared by daemon and diagnostics.
@@ -15,10 +17,12 @@ mod discovery;
 /// Non-mutating installation and configuration diagnostics.
 pub mod doctor;
 mod drm;
+mod mcp;
 mod memory;
 mod native_messaging;
 mod paths;
 mod plugin_sources;
+mod preferences;
 mod profile;
 mod remote;
 mod runtime_env;
@@ -41,12 +45,20 @@ pub use channels::{
     LegacyChannelSecret,
 };
 pub use discovery::{agent_command, discover_browser, find_on_path, AgentCommand, BrowserNotFound};
+pub use mcp::{
+    valid_mcp_secret_name, valid_mcp_server_id, valid_mcp_url, McpConfig, McpServerConfig,
+    McpTransport, MAX_MCP_SERVERS,
+};
 pub use memory::{EmbeddingConfig, MemoryConfig, MemoryRetentionSetting, EMBEDDING_MODEL_FILES};
 pub use paths::Paths;
 pub use plugin_sources::{
     load_plugin_sources, normalized_origin, parse_plugin_source, plugin_dir, PluginAuth,
     PluginErrors, PluginLoad, PluginOutcome, PluginProbe, PluginProvider, PluginRule,
     PluginSessionHeader, PluginSource,
+};
+pub use preferences::{
+    ConfirmationSetting, FollowUpSetting, NotificationKindSetting, PreferencesConfig,
+    AGENT_TAB_CLEANUP_MINUTES, MAX_PREFERENCE_NAME_CHARS,
 };
 pub use profile::AgentProfile;
 pub use remote::{
@@ -86,12 +98,19 @@ pub struct Config {
     pub policy: PolicyConfig,
     /// Outbound allow-list beyond loopback and configured endpoints.
     pub network: NetworkConfig,
+    /// `websearch` backend: the agent browser's results page, or a search API with a Vault key.
+    pub search: SearchConfig,
     /// Optional static web UI served by the daemon.
     pub ui: UiConfig,
     /// Local memory: retention default, browsing history, embedding model.
     pub memory: MemoryConfig,
     /// Agent Skills: library location, project skills, other agents' skill directories.
     pub skills: SkillsConfig,
+    /// External MCP servers whose tools agents can call; values of their secrets live in the
+    /// Vault.
+    pub mcp: McpConfig,
+    /// The person's Settings choices that the daemon applies live.
+    pub preferences: PreferencesConfig,
     /// Chat-platform adapters (`openside-channels`): Telegram, Slack, Discord.
     pub channels: ChannelsConfig,
     /// End-to-end encrypted sync of settings, pinned tabs, vault items and tagged memories.
@@ -118,9 +137,12 @@ impl Default for Config {
             sandbox: SandboxConfig::default(),
             policy: PolicyConfig::default(),
             network: NetworkConfig::default(),
+            search: SearchConfig::default(),
             ui: UiConfig::default(),
             memory: MemoryConfig::default(),
             skills: SkillsConfig::default(),
+            mcp: McpConfig::default(),
+            preferences: PreferencesConfig::default(),
             channels: ChannelsConfig::default(),
             sync: SyncConfig::default(),
             remote: RemoteConfig::default(),
@@ -252,6 +274,133 @@ pub struct VaultConfig {
     pub unlock: VaultUnlockSetting,
     /// Access policy for items without a per-item override.
     pub default_policy: VaultPolicySetting,
+    /// Lock the vault after this long without vault use.
+    pub auto_lock: VaultAutoLock,
+    /// Require a biometric check (fprintd on Linux, Touch ID on macOS) before a keyring vault
+    /// unlocks. Passphrase vaults ignore it.
+    pub biometric_unlock: bool,
+    /// Where saved sign-ins may be filled.
+    pub autofill: VaultAutofillConfig,
+}
+
+/// Idle time after which the vault locks itself.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultAutoLock {
+    /// Lock as soon as the vault is idle (within a few seconds of its last use).
+    Immediately,
+    /// 1 minute.
+    OneMinute,
+    /// 5 minutes.
+    FiveMinutes,
+    /// 15 minutes.
+    FifteenMinutes,
+    /// 1 hour.
+    OneHour,
+    /// 4 hours.
+    FourHours,
+    /// 1 day.
+    OneDay,
+    /// 1 week.
+    #[default]
+    OneWeek,
+    /// Stay unlocked until locked by hand or the daemon stops.
+    Never,
+}
+
+impl VaultAutoLock {
+    /// The idle time, `None` for never.
+    pub const fn idle(self) -> Option<std::time::Duration> {
+        let minutes = match self {
+            Self::Never => return None,
+            Self::Immediately => 0,
+            Self::OneMinute => 1,
+            Self::FiveMinutes => 5,
+            Self::FifteenMinutes => 15,
+            Self::OneHour => 60,
+            Self::FourHours => 4 * 60,
+            Self::OneDay => 24 * 60,
+            Self::OneWeek => 7 * 24 * 60,
+        };
+        Some(std::time::Duration::from_secs(minutes * 60))
+    }
+}
+
+/// Autofill rules for saved sign-ins.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct VaultAutofillConfig {
+    /// Fill saved sign-ins at all.
+    pub enabled: bool,
+    /// Submit the sign-in form after filling, when the caller names a submit button.
+    pub auto_submit: bool,
+    /// Also fill plain `http:` pages (`localhost` always counts as secure).
+    pub allow_insecure: bool,
+    /// Domains never filled, including their subdomains (`example.com`).
+    pub excluded_domains: Vec<String>,
+}
+
+impl Default for VaultAutofillConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_submit: true,
+            allow_insecure: false,
+            excluded_domains: Vec::new(),
+        }
+    }
+}
+
+/// Upper bound on excluded autofill domains.
+pub const MAX_EXCLUDED_DOMAINS: usize = 500;
+
+impl VaultAutofillConfig {
+    /// The offending key and a short reason.
+    pub fn validate(&self) -> Result<(), (&'static str, &'static str)> {
+        if self.excluded_domains.len() > MAX_EXCLUDED_DOMAINS {
+            return Err(("vault.autofill.excluded_domains", "at most 500 domains"));
+        }
+        // Same acceptance as `openside_vault::normalize_domain`, which the daemon applies;
+        // anything it would refuse must fail here rather than be dropped at runtime.
+        let domain = |value: &str| {
+            let value = value.trim();
+            let value = value.strip_prefix("*.").unwrap_or(value);
+            if value.is_empty() || value.len() > 253 {
+                return false;
+            }
+            let Ok(url) = url::Url::parse(&if value.contains("://") {
+                value.to_owned()
+            } else {
+                format!("https://{value}")
+            }) else {
+                return false;
+            };
+            let Some(url::Host::Domain(host)) = url.host() else {
+                return false;
+            };
+            let host = host.trim_end_matches('.');
+            url.username().is_empty()
+                && url.password().is_none()
+                && !host.is_empty()
+                && (host.contains('.') || host.eq_ignore_ascii_case("localhost"))
+                && host.split('.').all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && !label.starts_with('-')
+                        && !label.ends_with('-')
+                        && label
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+        };
+        if !self.excluded_domains.iter().all(|value| domain(value)) {
+            return Err((
+                "vault.autofill.excluded_domains",
+                "each entry must be a domain name such as example.com",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl VaultConfig {
@@ -408,6 +557,9 @@ impl fmt::Debug for VaultConfig {
             )
             .field("unlock", &self.unlock)
             .field("default_policy", &self.default_policy)
+            .field("auto_lock", &self.auto_lock)
+            .field("biometric_unlock", &self.biometric_unlock)
+            .field("autofill", &self.autofill)
             .finish()
     }
 }
@@ -500,8 +652,35 @@ pub struct ModelsConfig {
     pub default: Option<String>,
     /// Ordered fallback chain.
     pub fallback: Vec<String>,
-    /// Fast model for the front agent; unset uses the session model.
+    /// Fast role: front agent, titles, summaries and memory extraction; unset uses the session model.
     pub front: Option<String>,
+    /// Standard role: subagents and Tasks started without an explicit model; unset uses the session model.
+    pub standard: Option<String>,
+    /// Deep role: Tasks the agent marks as hard reasoning, planning, judging or synthesis; unset uses the session model.
+    pub deep: Option<String>,
+    /// Visual role: requests whose newest input carries an image (attachments, screenshots); unset uses the requesting agent's model.
+    pub visual: Option<String>,
+    /// Image generation model for the `generate_image` tool; unset picks the best available
+    /// image model automatically.
+    pub image: Option<String>,
+    /// Image generation turned off: `generate_image` stays hidden even when an image model is
+    /// available. Kept apart from `image` so "off" survives restarts without a sentinel model id.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub image_off: bool,
+}
+
+impl ModelsConfig {
+    /// Every configured model id: the role models, then the fallback chain.
+    pub fn selected(&self) -> impl Iterator<Item = &String> {
+        self.default
+            .iter()
+            .chain(&self.front)
+            .chain(&self.standard)
+            .chain(&self.deep)
+            .chain(&self.visual)
+            .chain(&self.image)
+            .chain(&self.fallback)
+    }
 }
 
 /// Discovery prefers an explicit executable over `OPENSIDE_BROWSER`.
@@ -516,6 +695,8 @@ pub struct BrowserConfig {
     pub extensions: Vec<PathBuf>,
     /// Patched-browser gateway use: `auto` or `off`.
     pub gateway: BrowserGatewaySetting,
+    /// UI language for the `openside-browser` launcher, e.g. `ko`; unset follows the OS locale.
+    pub language: Option<String>,
 }
 
 /// Whether the daemon uses the patched browser's gateway.
@@ -571,6 +752,60 @@ pub struct PolicyConfig {
 pub struct NetworkConfig {
     /// Extra outbound destinations; loopback is always allowed.
     pub allow: Vec<String>,
+}
+
+/// Where `websearch` gets results. API providers take their key from the Vault item whose
+/// origins name the API's origin; without one (or in incognito) the browser is used.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SearchConfig {
+    /// `browser` (default), `brave` or `tavily`.
+    pub provider: SearchProvider,
+    /// Results-page URL template containing `{query}` for the browser backend; unset uses
+    /// the browser's default engine when it is a known one, else DuckDuckGo.
+    pub engine: Option<String>,
+    /// Endpoint override for the API provider (defaults to the provider's public API).
+    pub api_url: Option<String>,
+}
+
+/// Search backend.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchProvider {
+    /// The search engine's results page, read in a background agent tab.
+    #[default]
+    Browser,
+    /// Brave Search API (`X-Subscription-Token`).
+    Brave,
+    /// Tavily Search API (bearer token).
+    Tavily,
+}
+
+impl SearchConfig {
+    fn validate(&self) -> Result<(), (&'static str, &'static str)> {
+        let web = |value: &str| {
+            url::Url::parse(&value.replace("{query}", "q")).is_ok_and(|url| {
+                matches!(url.scheme(), "http" | "https")
+                    && url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+            })
+        };
+        if self
+            .engine
+            .as_deref()
+            .is_some_and(|engine| !engine.contains("{query}") || !web(engine))
+        {
+            return Err((
+                "search.engine",
+                "use an http(s) results-page URL containing {query}",
+            ));
+        }
+        if self.api_url.as_deref().is_some_and(|api| !web(api)) {
+            return Err(("search.api_url", "use an http(s) URL without credentials"));
+        }
+        Ok(())
+    }
 }
 
 /// Loaded configuration together with resolved application locations.
@@ -646,7 +881,15 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
         ("daemon", &["data_dir", "socket", "listen"]),
         (
             "vault",
-            &["path", "passphrase_cmd", "unlock", "default_policy"],
+            &[
+                "path",
+                "passphrase_cmd",
+                "unlock",
+                "default_policy",
+                "auto_lock",
+                "biometric_unlock",
+                "autofill",
+            ],
         ),
         (
             "tickets",
@@ -674,18 +917,52 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
             ],
         ),
         ("team", &["max_running", "max_active_teammates"]),
-        ("models", &["default", "fallback", "front"]),
+        (
+            "models",
+            &[
+                "default",
+                "fallback",
+                "front",
+                "standard",
+                "deep",
+                "visual",
+                "image",
+                "image_off",
+            ],
+        ),
         ("credentials", &[]),
         (
             "browser",
-            &["executable", "bundle_dir", "gateway", "extensions"],
+            &[
+                "executable",
+                "bundle_dir",
+                "gateway",
+                "extensions",
+                "language",
+            ],
         ),
         ("sandbox", &["required", "bwrap"]),
         ("policy", &["mode", "allow_origins", "deny_origins"]),
         ("network", &["allow"]),
+        ("search", &["provider", "engine", "api_url"]),
         ("ui", &["dir"]),
         ("memory", &["default_retention", "history", "embedding"]),
         ("skills", &["dir", "project", "agents"]),
+        ("mcp", &["servers"]),
+        (
+            "preferences",
+            &[
+                "name",
+                "notifications",
+                "completion_sound",
+                "follow_up",
+                "confirmation",
+                "agent_tab_cleanup_minutes",
+                "save_sessions",
+                "mcp_server",
+                "computer_use",
+            ],
+        ),
         (
             "sync",
             &[
@@ -718,6 +995,7 @@ fn parse_config(path: &Path, text: &str) -> Result<Config, ConfigError> {
         (
             "remote",
             &[
+                "enabled",
                 "mode",
                 "public_url",
                 "push_contact",
@@ -863,6 +1141,9 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
             }
         }
     }
+    if let Err((key, reason)) = config.vault.autofill.validate() {
+        return Err(error(path, key, reason));
+    }
     if config.agent.startup_timeout_ms == 0 {
         return Err(error(
             path,
@@ -914,6 +1195,23 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
         ));
     }
     for (key, value) in [
+        ("models.standard", &config.models.standard),
+        ("models.deep", &config.models.deep),
+        ("models.visual", &config.models.visual),
+        ("models.image", &config.models.image),
+    ] {
+        if value
+            .as_ref()
+            .is_some_and(|value| !value.contains(':') || value.trim().is_empty())
+        {
+            return Err(error(
+                path,
+                key,
+                "must be an explicit provider:model identifier when configured",
+            ));
+        }
+    }
+    for (key, value) in [
         ("daemon.data_dir", &config.daemon.data_dir),
         ("daemon.socket", &config.daemon.socket),
         ("vault.path", &config.vault.path),
@@ -937,13 +1235,34 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
     if let Err(reason) = browser_extensions::validate(&config.browser.extensions) {
         return Err(error(path, "browser.extensions", reason));
     }
+    if config
+        .browser
+        .language
+        .as_deref()
+        .is_some_and(|tag| !is_language_tag(tag))
+    {
+        return Err(error(
+            path,
+            "browser.language",
+            "use a language code such as ko, en or pt-BR",
+        ));
+    }
     if let Err((key, reason)) = config.skills.validate() {
+        return Err(error(path, key, reason));
+    }
+    if let Err((key, reason)) = config.mcp.validate() {
+        return Err(error(path, key, reason));
+    }
+    if let Err((key, reason)) = config.preferences.validate() {
         return Err(error(path, key, reason));
     }
     if let Err((key, reason)) = config.channels.validate() {
         return Err(error(path, key, reason));
     }
     if let Err((key, reason)) = config.sync.validate() {
+        return Err(error(path, key, reason));
+    }
+    if let Err((key, reason)) = config.search.validate() {
         return Err(error(path, key, reason));
     }
     if let Err((key, reason)) = remote::validate(config) {
@@ -957,6 +1276,20 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
         ));
     }
     Ok(())
+}
+
+/// `ll`, `lll`, optionally followed by `-` or `_` and a 2–4 letter region or script (`pt-BR`,
+/// `zh_Hant`). The launcher exports it as `LANGUAGE`, so nothing else may get through.
+fn is_language_tag(tag: &str) -> bool {
+    let (language, rest) = match tag.find(['-', '_']) {
+        Some(at) => (&tag[..at], Some(&tag[at + 1..])),
+        None => (tag, None),
+    };
+    (2..=3).contains(&language.len())
+        && language.bytes().all(|byte| byte.is_ascii_lowercase())
+        && rest.map_or(true, |region| {
+            (2..=4).contains(&region.len()) && region.bytes().all(|byte| byte.is_ascii_alphabetic())
+        })
 }
 
 /// Parse and validate a configuration document exactly as [`load`] does for the file,

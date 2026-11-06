@@ -11,6 +11,7 @@ use std::{
 };
 
 const MAX_FILES: usize = 32;
+#[cfg(unix)]
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 const MAX_RULES: usize = 16;
 const MAX_SESSION_HEADERS: usize = 4;

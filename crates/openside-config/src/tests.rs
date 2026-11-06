@@ -289,6 +289,30 @@ fn browser_gateway_defaults_to_auto_and_accepts_only_auto_or_off() {
 }
 
 #[test]
+fn browser_language_accepts_only_language_codes() {
+    let (_root, loaded) = fixture();
+    for tag in ["ko", "en", "fil", "pt-BR", "zh_Hant"] {
+        write(
+            &loaded.paths.config_file,
+            &format!("[browser]\nlanguage = '{tag}'"),
+        );
+        let config = load_with(None, loaded.paths.clone(), &|_| None)
+            .unwrap_or_else(|err| panic!("load {tag}: {err}"));
+        assert_eq!(config.config.browser.language.as_deref(), Some(tag));
+    }
+    for tag in ["", "k", "KO", "ko-", "ko-KR-x", "ko;rm", "ko KR", "korean"] {
+        write(
+            &loaded.paths.config_file,
+            &format!("[browser]\nlanguage = '{tag}'"),
+        );
+        let err = load_with(None, loaded.paths.clone(), &|_| None)
+            .err()
+            .unwrap_or_else(|| panic!("must reject {tag:?}"));
+        assert_eq!(err.key, "browser.language");
+    }
+}
+
+#[test]
 fn invalid_types_values_and_env_report_keys_without_raw_values() {
     let (_root, loaded) = fixture();
     for (text, expected) in [
@@ -791,4 +815,105 @@ fn team_concurrency_defaults_and_rejects_zero() {
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(reparsed.team.max_running, 2);
     assert!(parse_config(Path::new("test-config.toml"), "[team]\nunknown=2\n").is_err());
+}
+
+#[test]
+fn vault_password_settings_parse_with_defaults_and_reject_bad_domains() {
+    let path = Path::new("config.toml");
+    let default = parse_config(path, "").unwrap_or_else(|err| panic!("default: {err}"));
+    assert_eq!(default.vault.auto_lock, VaultAutoLock::OneWeek);
+    assert!(!default.vault.biometric_unlock);
+    assert!(default.vault.autofill.enabled && default.vault.autofill.auto_submit);
+    assert!(!default.vault.autofill.allow_insecure);
+    for (text, value, idle) in [
+        ("immediately", VaultAutoLock::Immediately, Some(0)),
+        ("one_minute", VaultAutoLock::OneMinute, Some(60)),
+        ("five_minutes", VaultAutoLock::FiveMinutes, Some(300)),
+        ("fifteen_minutes", VaultAutoLock::FifteenMinutes, Some(900)),
+        ("one_hour", VaultAutoLock::OneHour, Some(3600)),
+        ("four_hours", VaultAutoLock::FourHours, Some(4 * 3600)),
+        ("one_day", VaultAutoLock::OneDay, Some(86400)),
+        ("one_week", VaultAutoLock::OneWeek, Some(7 * 86400)),
+        ("never", VaultAutoLock::Never, None),
+    ] {
+        let config = parse_config(path, &format!("[vault]\nauto_lock = \"{text}\""))
+            .unwrap_or_else(|err| panic!("{text}: {err}"));
+        assert_eq!(config.vault.auto_lock, value);
+        assert_eq!(value.idle().map(|idle| idle.as_secs()), idle);
+    }
+    assert!(parse_config(path, "[vault]\nauto_lock = \"two_minutes\"").is_err());
+    let tuned = parse_config(
+        path,
+        "[vault]\nbiometric_unlock = true\n[vault.autofill]\nenabled = false\nauto_submit = false\nallow_insecure = true\nexcluded_domains = [\"bank.example\"]",
+    )
+    .unwrap_or_else(|err| panic!("tuned: {err}"));
+    assert!(tuned.vault.biometric_unlock);
+    assert_eq!(tuned.vault.autofill.excluded_domains, ["bank.example"]);
+    assert!(!tuned.vault.autofill.enabled && tuned.vault.autofill.allow_insecure);
+    for bad in [
+        "\"\"",
+        "\"bank example\"",
+        "\"https://user:pw@bank.example/\"",
+        "\"intranet\"",
+        "\"-bank.example\"",
+        "\"10.0.0.1\"",
+    ] {
+        let parsed = parse_config(
+            path,
+            &format!("[vault.autofill]\nexcluded_domains = [{bad}]"),
+        );
+        assert!(
+            parsed.and_then(|config| validate(&config, path)).is_err(),
+            "{bad}"
+        );
+    }
+    assert!(parse_config(path, "[vault.autofill]\nunknown = true").is_err());
+}
+
+#[test]
+fn search_settings_accept_engine_templates_and_api_endpoints_only_over_http() {
+    let path = Path::new("config.toml");
+    let check = |text: &str| {
+        let config = parse_config(path, text)?;
+        validate(&config, path).map(|()| config)
+    };
+    let default = check("").unwrap_or_else(|err| panic!("default: {err}"));
+    assert_eq!(default.search.provider, SearchProvider::Browser);
+    assert!(default.search.engine.is_none() && default.search.api_url.is_none());
+    let tuned = check(
+        "[search]\nprovider = \"brave\"\nengine = \"https://search.example/?q={query}\"\napi_url = \"http://localhost:9000/v1\"",
+    )
+    .unwrap_or_else(|err| panic!("tuned: {err}"));
+    assert_eq!(tuned.search.provider, SearchProvider::Brave);
+    for bad in [
+        "provider = \"google\"",
+        "engine = \"https://search.example/?q=fixed\"",
+        "engine = \"ftp://search.example/{query}\"",
+        "engine = \"https://user:pw@search.example/?q={query}\"",
+        "engine = \"{query}\"",
+        "api_url = \"file:///etc/passwd\"",
+        "api_url = \"https://key:secret@api.example/\"",
+        "unknown = true",
+    ] {
+        assert!(check(&format!("[search]\n{bad}")).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn task_role_and_image_keys_round_trip_through_the_settings_file() {
+    let path = Path::new("config.toml");
+    let text = "[models]\ndefault = \"a:chat\"\nstandard = \"a:sub\"\ndeep = \"a:deep\"\nvisual = \"a:vision\"\nimage_off = true";
+    let config = parse_document(path, text).unwrap_or_else(|err| panic!("roles: {err}"));
+    assert_eq!(config.models.standard.as_deref(), Some("a:sub"));
+    assert_eq!(config.models.visual.as_deref(), Some("a:vision"));
+    assert!(config.models.image_off && config.models.image.is_none());
+    // Settings writes go through serde and back through the same parser.
+    let written = toml::to_string(&config).unwrap();
+    let reread = parse_document(path, &written).unwrap_or_else(|err| panic!("reread: {err}"));
+    assert!(reread.models.image_off);
+    assert_eq!(reread.models.deep.as_deref(), Some("a:deep"));
+    // Unset stays out of the file, so automatic is the default.
+    let auto = parse_document(path, "[models]\nimage = \"a:picture\"").unwrap();
+    assert!(!toml::to_string(&auto).unwrap().contains("image_off"));
+    assert!(parse_document(path, "[models]\nimage = \"off\"").is_err());
 }

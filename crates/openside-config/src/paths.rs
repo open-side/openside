@@ -52,6 +52,12 @@ impl Paths {
             runtime_dir,
         }
     }
+
+    /// `cli.toml` beside the configuration file: the CLI's defaults on this computer (session
+    /// host, account, browser profile), which the CLI and the daemon both read and write.
+    pub fn cli_file(&self) -> Option<PathBuf> {
+        self.config_file.parent().map(|dir| dir.join("cli.toml"))
+    }
 }
 
 #[cfg(unix)]
@@ -74,6 +80,7 @@ mod tests {
         let env = |key: &str| Some(root.path().join(key).into_os_string());
         let paths = Paths::discover_with(&env);
         assert_eq!(paths.config_file, root.path().join("OPENSIDE_CONFIG"));
+        assert_eq!(paths.cli_file(), Some(root.path().join("cli.toml")));
         assert_eq!(paths.data_dir, root.path().join("XDG_DATA_HOME/openside"));
         assert_eq!(paths.state_dir, root.path().join("XDG_STATE_HOME/openside"));
         assert_eq!(
