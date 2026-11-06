@@ -13,7 +13,7 @@
 //! Session commands are `session list` (saved and unsaved sessions), `session resume <id>
 //! [prompt...] [--last-event-id <seq>]`, `session stop|steer|queue|archive|delete`,
 //! `session new` and `session tasks`. A finished `exec` or `repl` session is archived unless
-//! `settings save-sessions true`. Tickets support `ticket list [--all]`, `show <id>`,
+//! the daemon's `save_sessions` preference is on (`settings save-sessions true`). Tickets support `ticket list [--all]`, `show <id>`,
 //! `resolve <id> <value>`, `done <id>`, and `reject <id> [--reason TEXT]`.
 //! Resolution values are parsed as JSON when valid, otherwise as strings.
 //! For `secret_input`, `resolve <id>` with no value asks for it at a hidden prompt on the
@@ -83,6 +83,7 @@ mod agent;
 mod browser;
 mod channels;
 mod client;
+mod config;
 mod connections;
 mod cursor;
 mod guide;
@@ -135,7 +136,8 @@ use serde_json::{json, Value};
 
 use client::Client;
 use cursor::Cursor;
-use settings::{AccountRef, AccountSelector, BrowserProfile};
+use openside_proto::CliProfile;
+use settings::{AccountRef, AccountSelector, ProfileExt};
 use sse::Decoder;
 
 const ROOT_AFTER_HELP: &str = "\
@@ -556,6 +558,13 @@ enum Command {
         #[command(subcommand)]
         command: policy::PolicyCommand,
     },
+    /// Read or change any config.toml key through the daemon (validated; local-only keys need
+    /// this computer).
+    #[command(after_help = config::CONFIG_AFTER_HELP)]
+    Config {
+        #[command(subcommand)]
+        command: config::ConfigCommand,
+    },
     /// Call the session's browser and human-step tools directly, like the in-app agent.
     Browser {
         #[command(subcommand)]
@@ -937,9 +946,9 @@ where
             host::local(command, host.as_deref(), chosen.profile, json, stdout)
         }
         Some(Command::Guide { topic }) => guide::print(*topic, stdout),
-        Some(Command::Settings { command }) if matches!(command.account(), Ok(None)) => {
-            settings::execute(command, None, stdout)
-        }
+        Some(Command::Settings {
+            command: command @ settings::SettingsCommand::SetDefaultProfile { id },
+        }) if command.is_local() => settings::set_default_profile(id, None, stdout),
         Some(Command::Remote {
             command: remote::RemoteCommand::Setup(setup),
         }) => remote::setup(setup, json, stdout).await,
@@ -980,14 +989,12 @@ where
                 let defaults = mcp::Defaults {
                     account: account.as_deref(),
                     profile: chosen.profile,
-                    save_sessions: saved.save_sessions,
                 };
                 return mcp::run(client, args.connection.token.clone(), defaults, stderr).await;
             }
             let context = Context {
                 client: &client,
                 host: host.as_deref(),
-                saved: &saved,
                 chosen: &chosen,
             };
             execute(&args, &context, stdin, stdout, stderr, &mut summary).await
@@ -1079,7 +1086,6 @@ struct Context<'a> {
     client: &'a Client,
     /// The remote host, or `None` for this computer's daemon.
     host: Option<&'a str>,
-    saved: &'a settings::CliSettings,
     chosen: &'a Chosen,
 }
 
@@ -1127,7 +1133,7 @@ async fn execute<R: Read, W: Write, E: Write>(
                 Some(selector) => Some(account::resolve(client, &selector).await?),
                 None => None,
             };
-            settings::execute(command, account, stdout)
+            settings::execute(command, client, account, stdout, stderr).await
         }
         Some(Command::Models { command }) => {
             models::run(
@@ -1536,6 +1542,9 @@ async fn execute<R: Read, W: Write, E: Write>(
         Some(Command::Policy { command }) => {
             policy::execute(command, args.connection.json, client, stdout).await
         }
+        Some(Command::Config { command }) => {
+            config::execute(command, args.connection.json, client, stdout).await
+        }
         Some(Command::Vault { command }) => {
             vault::execute(command, args.connection.json, client, stdin, stdout, stderr).await
         }
@@ -1755,10 +1764,11 @@ async fn open_url<W: Write, E: Write>(
     .map_err(output_error)
 }
 
-/// Archive a session this command created once it is done, unless the person keeps CLI
-/// sessions (`settings save-sessions true`). A failure only warns: the run itself succeeded.
+/// Archive a session this command created once it is done, unless the daemon's
+/// `save_sessions` preference keeps CLI sessions. A failure only warns: the run itself
+/// succeeded.
 async fn forget_session<E: Write>(context: &Context<'_>, id: &str, stderr: &mut E) {
-    if context.saved.save_sessions {
+    if settings::keeps_sessions(context.client).await {
         return;
     }
     if let Err(error) = archive(context.client, id).await {
@@ -1782,7 +1792,7 @@ async fn archive(client: &Client, id: &str) -> Result<Session, String> {
 /// The account and browser profile new sessions use, from the flags and the CLI settings.
 struct Chosen {
     account: Option<AccountSelector>,
-    profile: BrowserProfile,
+    profile: CliProfile,
 }
 
 /// `--account` beats the saved account; `--profile` beats the profile in `--account u1:<id>`,
@@ -1794,10 +1804,10 @@ fn choose(
 ) -> Result<Chosen, String> {
     let flag = account.map(AccountSelector::parse).transpose()?;
     let profile = match profile {
-        Some(id) => BrowserProfile::parse(id)?,
+        Some(id) => settings::parse_profile(id)?,
         None => match &flag {
-            Some(selector) => selector.profile.unwrap_or(BrowserProfile::Shared),
-            None => saved.profile.unwrap_or(BrowserProfile::Shared),
+            Some(selector) => selector.profile.unwrap_or(CliProfile::Shared),
+            None => saved.profile.unwrap_or(CliProfile::Shared),
         },
     };
     let account = flag.or_else(|| {
@@ -2287,6 +2297,7 @@ async fn create_request(
                     .map_err(|_| "--workspace must be valid UTF-8".to_owned())
             })
             .transpose()?,
+        project_id: None,
         incognito: false,
         browser_space: BrowserSpace::Shared,
         effort,
@@ -2295,6 +2306,7 @@ async fn create_request(
             Speed::Fast => SessionSpeed::Fast,
         }),
         profile,
+        confirmation: None,
     };
     context.chosen.profile.apply(&mut create);
     Ok(create)

@@ -23,11 +23,21 @@ async fn daemon(environment: &Environment) -> (PathBuf, Seen, JoinHandle<()>) {
                 .iter()
                 .filter(|(_, path, _)| path == "/v1/tickets/t-login")
                 .count();
+            let keep = seen
+                .lock()
+                .iter()
+                .rev()
+                .find(|(method, path, _)| method == "PATCH" && path == "/v1/settings/preferences")
+                .is_some_and(|(_, _, body)| body["save_sessions"] == json!(true));
             seen.lock().push((method.clone(), path.clone(), body.clone()));
             let task = json!({"id":"task-1","parent_tool_call_id":"c1","task":"compare prices",
                 "model":"m","tools":[],"status":"running","started_at":"2026-01-01T00:00:00Z",
                 "background":true,"output":"two shops checked"});
             match (method.as_str(), path.as_str()) {
+                ("GET", "/v1/settings/preferences") => {
+                    respond(200, json!({"save_sessions": keep, "mcp_server": true}))
+                }
+                ("PATCH", "/v1/settings/preferences") => respond(200, body.clone()),
                 ("POST", "/v1/sessions") => respond(201, session_json(3)),
                 ("GET", "/v1/agents/chief") => respond(200, json!({
                     "id":"chief","kind":"chief","name":"openside","initials":"o","color":"#2f6fed",
@@ -196,6 +206,10 @@ async fn exec_follows_the_run_and_archives_unsaved_sessions() {
 
     let (code, out, _) = cli(&socket, &["settings", "save-sessions", "true"], "").await;
     assert_eq!((code, out.as_str()), (0, "ok\n"));
+    assert_eq!(
+        requests(&seen, "PATCH", "/v1/settings/preferences"),
+        vec![json!({"save_sessions": true})]
+    );
     let archived = requests(&seen, "PATCH", "/v1/sessions/s-1").len();
     let (code, ..) = cli(
         &socket,
@@ -256,6 +270,93 @@ async fn exec_follows_the_run_and_archives_unsaved_sessions() {
     assert_eq!(last["effort"], "max");
     assert_public(&seen);
     server.abort();
+}
+
+#[tokio::test]
+async fn settings_read_and_change_the_daemons_preferences() {
+    let environment = Environment::new().await;
+    let (socket, seen, server) = daemon(&environment).await;
+    for (args, body) in [
+        (
+            vec!["agent_tab_cleanup_minutes", "30"],
+            json!({"agent_tab_cleanup_minutes": 30}),
+        ),
+        (vec!["mcp_server", "off"], json!({"mcp_server": false})),
+        (
+            vec!["notifications", "needs_attention, task_completed"],
+            json!({"notifications": ["needs_attention", "task_completed"]}),
+        ),
+        (vec!["notifications", ""], json!({"notifications": []})),
+        (
+            vec!["confirmation", "ask_first"],
+            json!({"confirmation": "ask_first"}),
+        ),
+    ] {
+        let mut argv = vec!["settings", "set"];
+        argv.extend(&args);
+        let (code, out, err) = cli(&socket, &argv, "").await;
+        assert_eq!((code, out.as_str()), (0, "ok\n"), "{err}");
+        assert_eq!(
+            requests(&seen, "PATCH", "/v1/settings/preferences").last(),
+            Some(&body)
+        );
+    }
+    let patches = requests(&seen, "PATCH", "/v1/settings/preferences").len();
+    for args in [
+        ["settings", "set", "save_sessions", "maybe"],
+        ["settings", "set", "agent_tab_cleanup_minutes", "soon"],
+        ["settings", "set", "volume", "3"],
+    ] {
+        let (code, ..) = cli(&socket, &args, "").await;
+        assert_ne!(code, 0, "{args:?}");
+    }
+    assert_eq!(
+        requests(&seen, "PATCH", "/v1/settings/preferences").len(),
+        patches
+    );
+
+    let (code, out, err) = cli(&socket, &["settings", "get"], "").await;
+    assert_eq!(code, 0, "{err}");
+    let shown: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(shown["preferences"]["mcp_server"], true);
+    assert_eq!(shown["host"], "local");
+    assert!(shown.get("save_sessions").is_none());
+    assert_public(&seen);
+    server.abort();
+}
+
+#[test]
+fn older_cli_settings_files_still_load() {
+    let settings: crate::settings::CliSettings =
+        toml::from_str("save_sessions = true\nprofile = \"isolated\"\n").unwrap();
+    assert_eq!(settings.profile, Some(openside_proto::CliProfile::Isolated));
+    assert!(!toml::to_string(&settings)
+        .unwrap()
+        .contains("save_sessions"));
+}
+
+/// `PATCH /v1/settings/cli` edits only `profile` and keeps the rest of the file; this is the
+/// exact text the daemon test (`opensided` tests/cli_defaults.rs) expects it to write.
+#[test]
+fn cli_settings_the_daemon_wrote_still_load() {
+    let written =
+        "# Written by hand.\nhost = \"work\"\naccount = \"chief\"\nprofile = \"isolated\"\n";
+    let settings: crate::settings::CliSettings = toml::from_str(written).unwrap();
+    assert_eq!(
+        (
+            settings.host.as_deref(),
+            settings.account.as_deref(),
+            settings.profile
+        ),
+        (
+            Some("work"),
+            Some("chief"),
+            Some(openside_proto::CliProfile::Isolated)
+        )
+    );
+    let cleared: crate::settings::CliSettings =
+        toml::from_str("# Written by hand.\nhost = \"work\"\naccount = \"chief\"\n").unwrap();
+    assert_eq!(cleared.profile, None);
 }
 
 #[tokio::test]

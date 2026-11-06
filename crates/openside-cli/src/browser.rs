@@ -24,6 +24,9 @@ pub(crate) enum BrowserCommand {
     Tools,
     /// browser_tabs: list the session's tabs.
     Tabs(CallArgs),
+    /// browser_downloads: list the session's downloads and where each was saved
+    /// ([download_id=...] [wait_seconds=N] [read_text=true]).
+    Downloads(CallArgs),
     /// browser_open_tab: open a tab (url=...).
     Open(CallArgs),
     /// browser_navigate: go to a URL in a tab (tab_id=... url=...).
@@ -91,6 +94,7 @@ impl BrowserCommand {
         Some(match self {
             Self::Tools => return None,
             Self::Tabs(args) => ("browser_tabs", args),
+            Self::Downloads(args) => ("browser_downloads", args),
             Self::Open(args) => ("browser_open_tab", args),
             Self::Navigate(args) => ("browser_navigate", args),
             Self::Snapshot(args) => ("browser_snapshot", args),

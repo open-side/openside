@@ -45,19 +45,36 @@ pub(crate) struct AddArgs {
     #[arg(
         long,
         value_name = "EXPR",
-        conflicts_with = "interval_secs",
-        required_unless_present = "interval_secs",
+        conflicts_with_all = ["interval_secs", "rrule"],
+        required_unless_present_any = ["interval_secs", "rrule"],
         help = "Five-field cron expression"
     )]
     cron: Option<String>,
     #[arg(
         long,
+        value_name = "RULE",
+        conflicts_with = "interval_secs",
+        help = "RFC 5545 recurrence rule, e.g. FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=9;BYMINUTE=0 \
+                (FREQ=DAILY;COUNT=1 with --start runs once)"
+    )]
+    rrule: Option<String>,
+    #[arg(
+        long,
+        value_name = "YYYY-MM-DDTHH:MM[:SS]",
+        help = "First occurrence of --rrule, wall-clock time in --timezone (default: now, to the minute)"
+    )]
+    start: Option<String>,
+    #[arg(
+        long,
         value_name = "ZONE",
-        requires = "cron",
-        help = "IANA time zone for --cron (default UTC)"
+        help = "IANA time zone for --cron or --rrule (default UTC)"
     )]
     timezone: Option<String>,
-    #[arg(long, value_name = "SECS", help = "Fixed interval instead of --cron")]
+    #[arg(
+        long,
+        value_name = "SECS",
+        help = "Fixed interval instead of --cron or --rrule"
+    )]
     interval_secs: Option<u64>,
     #[arg(long, value_name = "TEXT", help = "Prompt sent on every run")]
     prompt: String,
@@ -194,16 +211,24 @@ async fn set_enabled<W: Write>(
 }
 
 fn create_request(add: &AddArgs) -> Result<CreateRoutineRequest, String> {
-    let schedule = match (&add.cron, add.interval_secs) {
-        (Some(expr), None) => RoutineSchedule::Cron {
+    if add.start.is_some() && add.rrule.is_none() {
+        return Err("--start only applies to --rrule".into());
+    }
+    let schedule = match (&add.cron, &add.rrule, add.interval_secs) {
+        (Some(expr), None, None) => RoutineSchedule::Cron {
             expr: expr.clone(),
             timezone: add.timezone.clone(),
         },
-        (None, Some(_)) if add.timezone.is_some() => {
-            return Err("--timezone only applies to --cron".into())
+        (None, Some(rule), None) => RoutineSchedule::Rrule {
+            rule: rule.clone(),
+            timezone: add.timezone.clone(),
+            start: add.start.as_deref().map(parse_start).transpose()?,
+        },
+        (None, None, Some(_)) if add.timezone.is_some() => {
+            return Err("--timezone only applies to --cron or --rrule".into())
         }
-        (None, Some(secs)) => RoutineSchedule::Interval { secs },
-        _ => return Err("exactly one of --cron or --interval-secs is required".into()),
+        (None, None, Some(secs)) => RoutineSchedule::Interval { secs },
+        _ => return Err("exactly one of --cron, --rrule or --interval-secs is required".into()),
     };
     let action = match &add.heartbeat {
         Some(session) => RoutineAction::Heartbeat {
@@ -236,6 +261,18 @@ fn create_request(add: &AddArgs) -> Result<CreateRoutineRequest, String> {
     })
 }
 
+/// `YYYY-MM-DDTHH:MM[:SS]`; seconds default to zero. Generic so the proto's `NaiveDateTime`
+/// is inferred at the call site without a direct chrono dependency.
+fn parse_start<T: std::str::FromStr>(text: &str) -> Result<T, String> {
+    let text = text.trim();
+    let full = match text.split_once('T') {
+        Some((_, time)) if time.matches(':').count() == 1 => format!("{text}:00"),
+        _ => text.to_owned(),
+    };
+    full.parse()
+        .map_err(|_| format!("--start must be YYYY-MM-DDTHH:MM[:SS], got {text:?}"))
+}
+
 fn routine_path(id: &str, suffix: &str) -> String {
     let encoded = crate::client::encode_segment(id);
     if suffix.is_empty() {
@@ -254,12 +291,26 @@ fn state(routine: &Routine) -> &'static str {
     }
 }
 
-fn schedule_text(schedule: &RoutineSchedule) -> String {
+pub(crate) fn schedule_text(schedule: &RoutineSchedule) -> String {
     match schedule {
         RoutineSchedule::Cron { expr, timezone } => {
             format!("cron {expr} {}", timezone.as_deref().unwrap_or("UTC"))
         }
         RoutineSchedule::Interval { secs } => format!("every {secs}s"),
+        RoutineSchedule::Rrule {
+            rule,
+            timezone,
+            start,
+        } => {
+            let zone = timezone.as_deref().unwrap_or("UTC");
+            match start {
+                Some(start) => format!(
+                    "rrule {rule} {zone} from {}",
+                    start.format("%Y-%m-%dT%H:%M:%S")
+                ),
+                None => format!("rrule {rule} {zone}"),
+            }
+        }
     }
 }
 

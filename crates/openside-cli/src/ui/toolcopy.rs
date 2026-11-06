@@ -150,6 +150,7 @@ pub(crate) fn describe(name: &str, args: &Value, facts: &Facts, done: bool) -> D
             )
         }
         "browser_tabs" => fixed("Checked the open tabs", "Checking the open tabs"),
+        "browser_downloads" => fixed("Checked the downloads", "Checking the downloads"),
         "browser_snapshot" | "browser_screenshot" => fixed("Read the page", "Reading the page"),
         "browser_close_tab" => fixed("Closed a tab", "Closing a tab"),
         "browser_act" => match action {

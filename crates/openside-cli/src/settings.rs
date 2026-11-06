@@ -1,14 +1,18 @@
 //! CLI defaults kept on this computer: the default session host, account and browser
-//! profile, and whether CLI sessions stay on the chat list. They live in
-//! `<config dir>/cli.toml` (beside `config.toml`) and never hold credentials.
+//! profile. They live in `<config dir>/cli.toml` (beside `config.toml`) and never hold
+//! credentials; the daemon's `/v1/settings/cli` (Settings › Developers) reads and writes the
+//! `profile` key of the same file. Person preferences (whether CLI sessions stay on the chat
+//! list, the MCP switch, ...) belong to the daemon: `settings get` shows them and
+//! `settings set` changes them through `/v1/settings/preferences`.
 
-use std::{io::Write, path::PathBuf};
+use std::{io::Write, path::PathBuf, str::FromStr};
 
 use clap::{Subcommand, ValueEnum};
+use openside_proto::CliProfile;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::output_error;
+use crate::{client::Client, output_error};
 
 /// The local daemon, reached through its socket.
 pub(crate) const LOCAL_HOST: &str = "local";
@@ -23,41 +27,25 @@ pub(crate) struct CliSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) account: Option<String>,
     /// Browser profile for new CLI sessions; absent means the account's first (`shared`).
+    /// The daemon's `PATCH /v1/settings/cli` rewrites this key in place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) profile: Option<BrowserProfile>,
-    /// Keep CLI sessions on the chat list; false archives them once they finish.
-    #[serde(default)]
-    pub(crate) save_sessions: bool,
+    pub(crate) profile: Option<CliProfile>,
+    /// Written by older versions before this preference moved to the daemon; read so such a
+    /// file still loads, never written back.
+    #[serde(default, rename = "save_sessions", skip_serializing)]
+    legacy_save_sessions: Option<bool>,
 }
 
-/// A browser profile on a host: how a new session's browser is set up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum BrowserProfile {
-    /// The managed profile with the person's logins.
-    Shared,
-    /// Own cookies and storage, wiped when the session is archived or deleted.
-    Isolated,
-    /// A private browser whose browsing is never remembered.
-    Incognito,
+/// What the CLI adds to a browser profile (the ids live on [`CliProfile`]): its help text and
+/// how a new session's browser is set up for it.
+pub(crate) trait ProfileExt {
+    fn description(self) -> &'static str;
+    /// The `browser_space` and `incognito` fields of a new session.
+    fn apply(self, request: &mut openside_proto::CreateSessionRequest);
 }
 
-pub(crate) const PROFILES: [BrowserProfile; 3] = [
-    BrowserProfile::Shared,
-    BrowserProfile::Isolated,
-    BrowserProfile::Incognito,
-];
-
-impl BrowserProfile {
-    pub(crate) fn id(self) -> &'static str {
-        match self {
-            Self::Shared => "shared",
-            Self::Isolated => "isolated",
-            Self::Incognito => "incognito",
-        }
-    }
-
-    pub(crate) fn description(self) -> &'static str {
+impl ProfileExt for CliProfile {
+    fn description(self) -> &'static str {
         match self {
             Self::Shared => "Managed browser profile with your logins (default)",
             Self::Isolated => {
@@ -67,17 +55,7 @@ impl BrowserProfile {
         }
     }
 
-    pub(crate) fn parse(id: &str) -> Result<Self, String> {
-        PROFILES
-            .into_iter()
-            .find(|profile| profile.id() == id)
-            .ok_or_else(|| {
-                format!("unknown browser profile {id:?}; choose shared, isolated or incognito (see `openside host profiles`)")
-            })
-    }
-
-    /// The `browser_space` and `incognito` fields of a new session.
-    pub(crate) fn apply(self, request: &mut openside_proto::CreateSessionRequest) {
+    fn apply(self, request: &mut openside_proto::CreateSessionRequest) {
         request.browser_space = match self {
             Self::Isolated => openside_proto::BrowserSpace::Isolated,
             Self::Shared | Self::Incognito => openside_proto::BrowserSpace::Shared,
@@ -86,11 +64,17 @@ impl BrowserProfile {
     }
 }
 
+pub(crate) fn parse_profile(id: &str) -> Result<CliProfile, String> {
+    CliProfile::from_id(id).ok_or_else(|| {
+        format!("unknown browser profile {id:?}; choose shared, isolated or incognito (see `openside host profiles`)")
+    })
+}
+
 /// `u0`, `u1:isolated`, `<agent-id>` or `<agent-id>:<profile>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AccountSelector {
     pub(crate) account: AccountRef,
-    pub(crate) profile: Option<BrowserProfile>,
+    pub(crate) profile: Option<CliProfile>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,7 +88,7 @@ pub(crate) enum AccountRef {
 impl AccountSelector {
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
         let (account, profile) = match text.split_once(':') {
-            Some((account, profile)) => (account, Some(BrowserProfile::parse(profile)?)),
+            Some((account, profile)) => (account, Some(parse_profile(profile)?)),
             None => (text, None),
         };
         if account.is_empty() {
@@ -129,9 +113,7 @@ impl AccountSelector {
 /// `<config dir>/cli.toml`.
 pub(crate) fn file_path() -> Result<PathBuf, String> {
     openside_config::Paths::discover()
-        .config_file
-        .parent()
-        .map(|dir| dir.join("cli.toml"))
+        .cli_file()
         .ok_or_else(|| "cannot resolve the configuration directory".to_owned())
 }
 
@@ -164,9 +146,18 @@ pub(crate) fn save(settings: &CliSettings) -> Result<(), String> {
 
 #[derive(Subcommand)]
 pub(crate) enum SettingsCommand {
-    /// Print the effective CLI settings as JSON.
+    /// Print the CLI settings and the daemon's preferences as JSON.
     Get,
-    /// Show CLI sessions in the chat list.
+    /// Change one of the daemon's preferences.
+    Set {
+        #[arg(value_name = "key")]
+        key: PreferenceKey,
+        /// `true`/`false` for switches, minutes for `agent_tab_cleanup_minutes`, a comma list
+        /// for `notifications` (empty for none).
+        #[arg(value_name = "value", allow_hyphen_values = true)]
+        value: String,
+    },
+    /// Show CLI sessions in the chat list (the daemon's `save_sessions` preference).
     SaveSessions {
         #[arg(value_name = "value", action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
         value: bool,
@@ -180,79 +171,184 @@ pub(crate) enum SettingsCommand {
     },
 }
 
+/// A field of `PATCH /v1/settings/preferences`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum PreferenceKey {
+    Name,
+    Notifications,
+    CompletionSound,
+    FollowUp,
+    Confirmation,
+    AgentTabCleanupMinutes,
+    SaveSessions,
+    McpServer,
+    ComputerUse,
+}
+
+impl PreferenceKey {
+    fn field(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Notifications => "notifications",
+            Self::CompletionSound => "completion_sound",
+            Self::FollowUp => "follow_up",
+            Self::Confirmation => "confirmation",
+            Self::AgentTabCleanupMinutes => "agent_tab_cleanup_minutes",
+            Self::SaveSessions => "save_sessions",
+            Self::McpServer => "mcp_server",
+            Self::ComputerUse => "computer_use",
+        }
+    }
+
+    /// The JSON value for `text`; the daemon validates the allowed values.
+    pub(crate) fn value(self, text: &str) -> Result<serde_json::Value, String> {
+        let field = self.field();
+        match self {
+            Self::CompletionSound | Self::SaveSessions | Self::McpServer | Self::ComputerUse => {
+                match text.trim().to_ascii_lowercase().as_str() {
+                    "true" | "yes" | "on" | "1" => Ok(json!(true)),
+                    "false" | "no" | "off" | "0" => Ok(json!(false)),
+                    _ => Err(format!("{field} takes true or false")),
+                }
+            }
+            Self::AgentTabCleanupMinutes => u32::from_str(text.trim())
+                .map(|minutes| json!(minutes))
+                .map_err(|_| format!("{field} takes a number of minutes (0 never closes tabs)")),
+            Self::Notifications => Ok(json!(text
+                .split(',')
+                .map(str::trim)
+                .filter(|kind| !kind.is_empty())
+                .collect::<Vec<_>>())),
+            Self::Name | Self::FollowUp | Self::Confirmation => Ok(json!(text)),
+        }
+    }
+}
+
 impl SettingsCommand {
     /// The account `set-default-profile` names, which only the daemon's roster can resolve.
     pub(crate) fn account(&self) -> Result<Option<AccountSelector>, String> {
         match self {
-            Self::SetDefaultProfile { id }
-                if id != "default" && BrowserProfile::parse(id).is_err() =>
-            {
+            Self::SetDefaultProfile { id } if id != "default" && parse_profile(id).is_err() => {
                 AccountSelector::parse(id).map(Some)
             }
             _ => Ok(None),
         }
     }
+
+    /// Runs without the daemon: only `set-default-profile` with a profile or `default`.
+    pub(crate) fn is_local(&self) -> bool {
+        matches!(self, Self::SetDefaultProfile { .. }) && matches!(self.account(), Ok(None))
+    }
 }
 
 pub(crate) const SETTINGS_AFTER_HELP: &str = "\
-save-sessions true keeps CLI runs on the chat list. false (default) archives them once they finish.
+get prints this computer's CLI settings and the daemon's preferences.
+set <key> <value> changes a daemon preference: name, notifications (comma list), completion_sound,
+follow_up (queue|steer), confirmation (skip|ask_first), agent_tab_cleanup_minutes (0 = never),
+save_sessions, mcp_server (local socket only), computer_use.
+save-sessions true keeps CLI and MCP runs on the chat list. false (default) archives them once they finish.
 set-default-profile isolated uses that browser profile for new sessions.
 set-default-profile u1 runs new sessions as that account with its first browser profile (shared). Use u1:<profile-id> for both.
 One-shot override: --account u1:<profile-id> or --profile <profile-id>.
 set-default-profile default goes back to no account and the shared profile.
 
 Examples:
+  openside settings get
+  openside settings set agent_tab_cleanup_minutes 30
+  openside settings set mcp_server false
+  openside settings set notifications needs_attention,task_completed
   openside settings save-sessions true
-  openside settings save-sessions false
   openside settings set-default-profile isolated
   openside settings set-default-profile u1
   openside settings set-default-profile u1:isolated
-  openside settings set-default-profile default
-  openside settings get";
+  openside settings set-default-profile default";
 
-/// The settings as `settings get` prints them.
-pub(crate) fn effective(settings: &CliSettings) -> serde_json::Value {
+/// The local settings as `settings get` prints them, with the daemon's `preferences`.
+pub(crate) fn effective(
+    settings: &CliSettings,
+    preferences: serde_json::Value,
+) -> serde_json::Value {
     json!({
         "host": settings.host.as_deref().unwrap_or(LOCAL_HOST),
         "account": settings.account,
-        "profile": settings.profile.unwrap_or(BrowserProfile::Shared).id(),
-        "save_sessions": settings.save_sessions,
+        "profile": settings.profile.unwrap_or(CliProfile::Shared).id(),
         "path": file_path().ok(),
+        "preferences": preferences,
     })
 }
 
-/// `settings get`, `save-sessions` and `set-default-profile <profile>|default` run locally;
-/// `set-default-profile uN[:profile]` arrives with the account resolved to its agent id.
-pub(crate) fn execute<W: Write>(
-    command: &SettingsCommand,
+const PREFERENCES: &str = "/v1/settings/preferences";
+
+pub(crate) async fn preferences(client: &Client) -> Result<serde_json::Value, String> {
+    client.get(PREFERENCES).await
+}
+
+/// Whether finished CLI and MCP sessions stay on the chat list. An unreadable preference
+/// counts as the default (archive), so a hidden run is never left behind by a failed read.
+pub(crate) async fn keeps_sessions(client: &Client) -> bool {
+    preferences(client)
+        .await
+        .is_ok_and(|preferences| preferences["save_sessions"] == json!(true))
+}
+
+/// `set-default-profile <profile>|default` without a daemon; `account` is the agent id the
+/// daemon resolved for `set-default-profile uN[:profile]`.
+pub(crate) fn set_default_profile<W: Write>(
+    id: &str,
     account: Option<String>,
     stdout: &mut W,
 ) -> Result<(), String> {
     let mut settings = load()?;
-    match command {
-        SettingsCommand::Get => {}
-        SettingsCommand::SaveSessions { value } => {
-            settings.save_sessions = *value;
-            save(&settings)?;
+    if id == "default" {
+        settings.account = None;
+        settings.profile = None;
+    } else if let Ok(profile) = parse_profile(id) {
+        settings.profile = Some(profile);
+    } else {
+        let selector = AccountSelector::parse(id)?;
+        settings.account = account;
+        settings.profile = selector.profile;
+    }
+    save(&settings)?;
+    writeln!(stdout, "ok").map_err(output_error)
+}
+
+/// Every settings command except a local `set-default-profile`.
+pub(crate) async fn execute<W: Write, E: Write>(
+    command: &SettingsCommand,
+    client: &Client,
+    account: Option<String>,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), String> {
+    let patch = |key: PreferenceKey, value: serde_json::Value| {
+        let mut body = serde_json::Map::new();
+        body.insert(key.field().to_owned(), value);
+        serde_json::Value::Object(body)
+    };
+    let body = match command {
+        SettingsCommand::Get => {
+            let settings = load()?;
+            let preferences = match preferences(client).await {
+                Ok(preferences) => preferences,
+                Err(error) => {
+                    let _ = writeln!(stderr, "openside: daemon preferences unavailable: {error}");
+                    serde_json::Value::Null
+                }
+            };
+            let text = serde_json::to_string_pretty(&effective(&settings, preferences))
+                .map_err(|e| e.to_string())?;
+            return writeln!(stdout, "{text}").map_err(output_error);
         }
         SettingsCommand::SetDefaultProfile { id } => {
-            if id == "default" {
-                settings.account = None;
-                settings.profile = None;
-            } else if let Ok(profile) = BrowserProfile::parse(id) {
-                settings.profile = Some(profile);
-            } else {
-                let selector = AccountSelector::parse(id)?;
-                settings.account = account;
-                settings.profile = selector.profile;
-            }
-            save(&settings)?;
+            return set_default_profile(id, account, stdout);
         }
-    }
-    let text = serde_json::to_string_pretty(&effective(&settings)).map_err(|e| e.to_string())?;
-    if matches!(command, SettingsCommand::Get) {
-        writeln!(stdout, "{text}").map_err(output_error)
-    } else {
-        writeln!(stdout, "ok").map_err(output_error)
-    }
+        SettingsCommand::SaveSessions { value } => patch(PreferenceKey::SaveSessions, json!(value)),
+        SettingsCommand::Set { key, value } => patch(*key, key.value(value)?),
+    };
+    client
+        .json::<serde_json::Value, _>("PATCH", PREFERENCES, Some(&body))
+        .await?;
+    writeln!(stdout, "ok").map_err(output_error)
 }

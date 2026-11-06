@@ -12,7 +12,7 @@ use crate::{
     client::Client,
     emit, output_error,
     remotes::{self, Transport},
-    settings::{self, BrowserProfile, LOCAL_HOST, PROFILES},
+    settings::{self, ProfileExt, LOCAL_HOST},
 };
 
 #[derive(Subcommand)]
@@ -51,14 +51,14 @@ fn transport(transport: Transport) -> &'static str {
 pub(crate) fn local<W: Write>(
     command: &HostCommand,
     selected: Option<&str>,
-    profile: BrowserProfile,
+    profile: openside_proto::CliProfile,
     json_output: bool,
     stdout: &mut W,
 ) -> Result<(), String> {
     match command {
         HostCommand::Profiles => {
             let host = selected.unwrap_or(LOCAL_HOST);
-            for candidate in PROFILES {
+            for candidate in openside_proto::CliProfile::ALL {
                 let current = candidate == profile;
                 if json_output {
                     emit(

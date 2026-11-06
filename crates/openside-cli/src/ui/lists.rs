@@ -3,8 +3,8 @@
 
 use openside_config::doctor::{group_of, Check, DoctorReport, Status, GROUPS};
 use openside_proto::{
-    AccountsResponse, DeviceList, ModelCatalog, ProviderKeyList, Routine, RoutineList,
-    RoutineSchedule, SessionList, SessionStatus, SkillList, SubagentList, TicketKind, TicketList,
+    AccountsResponse, DeviceList, ModelCatalog, ProviderKeyList, Routine, RoutineList, SessionList,
+    SessionStatus, SkillList, SubagentList, TicketKind, TicketList,
 };
 use serde::Serialize;
 
@@ -462,15 +462,6 @@ pub(crate) fn skills(ui: &Ui, list: &SkillList) -> String {
     table.render(ui)
 }
 
-fn schedule_text(schedule: &RoutineSchedule) -> String {
-    match schedule {
-        RoutineSchedule::Cron { expr, timezone } => {
-            format!("cron {expr} {}", timezone.as_deref().unwrap_or("UTC"))
-        }
-        RoutineSchedule::Interval { secs } => format!("every {secs}s"),
-    }
-}
-
 pub(crate) fn routines(ui: &Ui, list: &RoutineList, now: i64) -> String {
     if list.routines.is_empty() {
         return empty(
@@ -505,7 +496,7 @@ fn routine_row(ui: &Ui, routine: &Routine, now: i64) -> Vec<Cell> {
     vec![
         state,
         Cell::role(ui, Role::Strong, clean(&routine.name)),
-        Cell::text(schedule_text(&routine.schedule)),
+        Cell::text(crate::routines::schedule_text(&routine.schedule)),
         Cell::role(
             ui,
             Role::Dim,

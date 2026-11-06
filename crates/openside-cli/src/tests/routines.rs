@@ -203,6 +203,30 @@ async fn routine_add_rejects_conflicting_options_before_any_request() {
             "--model",
             "m",
         ],
+        &[
+            "routine",
+            "add",
+            "--name",
+            "n",
+            "--prompt",
+            "p",
+            "--cron",
+            "* * * * *",
+            "--rrule",
+            "FREQ=DAILY",
+        ],
+        &[
+            "routine",
+            "add",
+            "--name",
+            "n",
+            "--prompt",
+            "p",
+            "--rrule",
+            "FREQ=DAILY",
+            "--interval-secs",
+            "5",
+        ],
     ] {
         let (code, ..) = daemon.run(args).await;
         assert_eq!(code, 2, "{args:?}");
@@ -223,9 +247,114 @@ async fn routine_add_rejects_conflicting_options_before_any_request() {
         .await;
     assert_eq!(
         (code, err.as_str()),
-        (1, "openside: --timezone only applies to --cron\n")
+        (
+            1,
+            "openside: --timezone only applies to --cron or --rrule\n"
+        )
+    );
+    let (code, _, err) = daemon
+        .run(&[
+            "routine",
+            "add",
+            "--name",
+            "n",
+            "--prompt",
+            "p",
+            "--cron",
+            "* * * * *",
+            "--start",
+            "2026-11-06T09:00",
+        ])
+        .await;
+    assert_eq!(
+        (code, err.as_str()),
+        (1, "openside: --start only applies to --rrule\n")
+    );
+    let (code, _, err) = daemon
+        .run(&[
+            "routine",
+            "add",
+            "--name",
+            "n",
+            "--prompt",
+            "p",
+            "--rrule",
+            "FREQ=DAILY",
+            "--start",
+            "tomorrow 9am",
+        ])
+        .await;
+    assert_eq!(
+        (code, err.as_str()),
+        (
+            1,
+            "openside: --start must be YYYY-MM-DDTHH:MM[:SS], got \"tomorrow 9am\"\n"
+        )
     );
     assert!(daemon.seen.lock().is_empty());
+}
+
+#[tokio::test]
+async fn routine_add_builds_rrule_requests_and_lists_render_them() {
+    let daemon = daemon().await;
+    let (code, _, err) = daemon
+        .run(&[
+            "routine",
+            "add",
+            "--name",
+            "Standup",
+            "--rrule",
+            "FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=9;BYMINUTE=0",
+            "--start",
+            "2026-11-06T09:00",
+            "--timezone",
+            "Asia/Seoul",
+            "--prompt",
+            "standup",
+        ])
+        .await;
+    assert_eq!((code, err.as_str()), (0, ""));
+    assert_eq!(
+        daemon.last().2,
+        json!({"name":"Standup","schedule":{"type":"rrule",
+            "rule":"FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=9;BYMINUTE=0",
+            "timezone":"Asia/Seoul","start":"2026-11-06T09:00:00"},
+            "action":{"type":"new_session","prompt":"standup"}})
+    );
+
+    let (code, ..) = daemon
+        .run(&[
+            "routine",
+            "add",
+            "--name",
+            "Once",
+            "--rrule",
+            "FREQ=DAILY;COUNT=1",
+            "--start",
+            "2026-11-06T18:30:15",
+            "--prompt",
+            "p",
+        ])
+        .await;
+    assert_eq!(code, 0);
+    assert_eq!(
+        daemon.last().2["schedule"],
+        json!({"type":"rrule","rule":"FREQ=DAILY;COUNT=1","start":"2026-11-06T18:30:15"})
+    );
+
+    let schedule: openside_proto::RoutineSchedule = serde_json::from_value(json!({"type":"rrule",
+        "rule":"FREQ=DAILY;COUNT=1","timezone":"Asia/Seoul","start":"2026-11-06T18:30:00"}))
+    .unwrap();
+    assert_eq!(
+        crate::routines::schedule_text(&schedule),
+        "rrule FREQ=DAILY;COUNT=1 Asia/Seoul from 2026-11-06T18:30:00"
+    );
+    let bare: openside_proto::RoutineSchedule =
+        serde_json::from_value(json!({"type":"rrule","rule":"FREQ=HOURLY"})).unwrap();
+    assert_eq!(
+        crate::routines::schedule_text(&bare),
+        "rrule FREQ=HOURLY UTC"
+    );
 }
 
 #[tokio::test]

@@ -24,6 +24,9 @@ struct Mock {
     tickets: Vec<Value>,
     /// Events logged only after the first event stream closed, served from the next one.
     later: Vec<Value>,
+    /// The daemon's `save_sessions` and `mcp_server` preferences (`mcp_off` turns it off).
+    save_sessions: bool,
+    mcp_off: bool,
 }
 
 type Shared = Arc<Mutex<Mock>>;
@@ -78,6 +81,10 @@ async fn handle(State(shared): State<Shared>, request: Request<Body>) -> Respons
         );
     }
     match (method.as_str(), path.as_str()) {
+        ("GET", "/v1/settings/preferences") => respond(
+            200,
+            json!({"save_sessions": mock.save_sessions, "mcp_server": !mock.mcp_off}),
+        ),
         ("GET", "/v1/sessions") => respond(200, json!({"sessions":[session("idle")]})),
         ("POST", "/v1/sessions") => respond(201, session("idle")),
         ("GET", "/v1/sessions/s-1") => {
@@ -251,8 +258,7 @@ impl Rig {
             token.map(str::to_owned),
             crate::mcp::Defaults {
                 account: None,
-                profile: crate::settings::BrowserProfile::Shared,
-                save_sessions: false,
+                profile: openside_proto::CliProfile::Shared,
             },
         );
         let server = tokio::spawn(async move {
@@ -1097,4 +1103,87 @@ async fn a_wait_through_a_resuming_pause_reopens_the_stream_the_daemon_closed() 
         .filter(|(method, target, _)| method == "GET" && target == "/v1/sessions/s-1/events")
         .count();
     assert_eq!(streams, 2);
+}
+
+#[tokio::test]
+async fn exec_archives_its_session_unless_the_daemon_keeps_cli_sessions() {
+    for keep in [false, true] {
+        let rig = Rig::new(|mock| {
+            mock.events = message_events(vec![]);
+            mock.save_sessions = keep;
+        })
+        .await;
+        let result = rig
+            .call("exec", json!({"prompt":"hello","timeout_secs":20}))
+            .await
+            .unwrap();
+        let result: Value = serde_json::from_str(&text(&result)).unwrap();
+        assert_eq!(result["status"], "settled", "{result}");
+        let archives: Vec<Value> = rig
+            .requests()
+            .into_iter()
+            .filter(|(method, target, _)| method == "PATCH" && target == "/v1/sessions/s-1")
+            .map(|(_, _, body)| body)
+            .collect();
+        if keep {
+            assert!(archives.is_empty());
+            assert!(result.get("archived").is_none(), "{result}");
+        } else {
+            assert_eq!(archives, vec![json!({"archived": true})]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_mcp_server_starts_only_while_the_daemon_allows_it() {
+    for (off, allowed) in [(false, true), (true, false)] {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("prefs.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let shared: Shared = Arc::new(Mutex::new(Mock {
+            mcp_off: off,
+            ..Mock::default()
+        }));
+        let router = Router::new().fallback(handle).with_state(shared);
+        let daemon = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let client = Client::new(Some(&socket), None, None)
+            .unwrap()
+            .with_agent_client();
+        let result = crate::mcp::allowed(&client).await;
+        assert_eq!(result.is_ok(), allowed, "{result:?}");
+        if !allowed {
+            assert!(result.unwrap_err().contains("mcp_server true"));
+        }
+        daemon.abort();
+    }
+    // No daemon to ask: refused rather than served.
+    let directory = tempfile::tempdir().unwrap();
+    let client = Client::new(Some(&directory.path().join("gone.sock")), None, None).unwrap();
+    assert!(crate::mcp::allowed(&client).await.is_err());
+}
+
+#[tokio::test]
+async fn turning_the_mcp_server_off_stops_a_running_server_at_its_next_call() {
+    let rig = Rig::new(|_| {}).await;
+    let listed = rig.call("browser_profiles", json!({})).await.unwrap();
+    assert_ne!(listed.is_error, Some(true), "{}", text(&listed));
+    rig.mock.lock().mcp_off = true;
+    let before = rig.requests().len();
+    let refused = rig.call("browser_profiles", json!({})).await.unwrap();
+    assert_eq!(refused.is_error, Some(true));
+    assert!(
+        text(&refused).contains("mcp_server true"),
+        "{}",
+        text(&refused)
+    );
+    // Only the preference read went out; the tool itself never ran.
+    let after: Vec<_> = rig.requests().into_iter().skip(before).collect();
+    assert!(
+        after
+            .iter()
+            .all(|(_, target, _)| target == "/v1/settings/preferences"),
+        "{after:?}"
+    );
 }

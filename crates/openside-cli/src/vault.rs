@@ -1,15 +1,21 @@
-//! `openside vault status|init|unlock|lock|add|rm|items|policy|audit`: vault administration
-//! through `/v1/vault/*`. Passphrases, usernames, passwords and authenticator keys are read
-//! at prompts (hidden, except the username) or one per line from piped stdin, never from
-//! argv, and only sent to the daemon. No command can print a stored value.
+//! `openside vault status|init|unlock|lock|add|rm|items|policy|audit|settings|export|import|
+//! clear|recovery-key|recover`: vault administration through `/v1/vault/*`. Passphrases,
+//! usernames, passwords, authenticator keys and recovery keys are read at prompts (hidden,
+//! except the username) or one per line from piped stdin, never from argv, and only sent to
+//! the daemon. Only `export` (to a new 0600 file) and `recovery-key` (printed once) put values
+//! anywhere, and both need `--yes`.
 
 use std::io::{Read, Write};
 
 use clap::{Subcommand, ValueEnum};
 use openside_proto::{
-    CreateVaultItemRequest, UpdateVaultItemRequest, VaultAuditList, VaultBackend, VaultItem,
-    VaultItemList, VaultPolicy, VaultPolicyOverride, VaultState, VaultStatus, VaultUnlockRequest,
+    CreateVaultItemRequest, ImportCategoryReport, ImportPasswordsRequest,
+    UpdateVaultAutofillSettings, UpdateVaultItemRequest, UpdateVaultSettingsRequest,
+    VaultAuditList, VaultAutoLock, VaultBackend, VaultClearResult, VaultConfirmRequest,
+    VaultExport, VaultItem, VaultItemList, VaultPolicy, VaultPolicyOverride, VaultRecoverRequest,
+    VaultRecoveryKey, VaultSettings, VaultState, VaultStatus, VaultUnlockRequest,
 };
+use zeroize::Zeroize;
 
 use crate::{client::Client, emit, output_error, prompt};
 
@@ -62,6 +68,58 @@ pub(crate) enum VaultCommand {
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
     },
+    /// Show password settings, or change the ones given.
+    Settings {
+        /// Lock the vault after this long without use.
+        #[arg(long, value_enum, value_name = "TIME")]
+        auto_lock: Option<AutoLockArg>,
+        /// Require a fingerprint or Touch ID before a keyring vault unlocks.
+        #[arg(long, value_name = "BOOL")]
+        biometric_unlock: Option<bool>,
+        /// Fill saved sign-ins at all.
+        #[arg(long, value_name = "BOOL")]
+        autofill: Option<bool>,
+        /// Press the sign-in button after filling.
+        #[arg(long, value_name = "BOOL")]
+        auto_submit: Option<bool>,
+        /// Also fill on plain-http pages (localhost always counts as secure).
+        #[arg(long, value_name = "BOOL")]
+        allow_insecure: Option<bool>,
+        /// Never fill on this domain or its subdomains; repeatable.
+        #[arg(long = "exclude-domain", value_name = "DOMAIN")]
+        exclude: Vec<String>,
+        /// Remove a domain from the excluded list; repeatable.
+        #[arg(long = "include-domain", value_name = "DOMAIN")]
+        include: Vec<String>,
+        /// Access policy for items without their own.
+        #[arg(long, value_enum, value_name = "POLICY")]
+        default_policy: Option<DefaultPolicyArg>,
+    },
+    /// Write every saved sign-in, unencrypted, to a new CSV file (asks for the passphrase).
+    Export {
+        /// The file to create; an existing file is never overwritten.
+        #[arg(long, short, value_name = "FILE")]
+        output: std::path::PathBuf,
+        /// Confirm that the file will hold your passwords in plain text.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Add sign-ins from a browser or password-manager CSV export.
+    Import { file: std::path::PathBuf },
+    /// Delete every saved sign-in, authenticator and passkey.
+    Clear {
+        /// Confirm the deletion.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Create a recovery key and print it once; any earlier key stops working.
+    RecoveryKey {
+        /// Confirm replacing any earlier recovery key.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Open a locked vault with its recovery key and choose a new passphrase.
+    Recover,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -71,6 +129,158 @@ pub(crate) enum PolicyArg {
     WhileUnlocked,
     Never,
     Default,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum DefaultPolicyArg {
+    Always,
+    #[value(name = "while_unlocked")]
+    WhileUnlocked,
+    Never,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum AutoLockArg {
+    #[value(name = "immediately")]
+    Immediately,
+    #[value(name = "1m")]
+    OneMinute,
+    #[value(name = "5m")]
+    FiveMinutes,
+    #[value(name = "15m")]
+    FifteenMinutes,
+    #[value(name = "1h")]
+    OneHour,
+    #[value(name = "4h")]
+    FourHours,
+    #[value(name = "1d")]
+    OneDay,
+    #[value(name = "1w")]
+    OneWeek,
+    #[value(name = "never")]
+    Never,
+}
+
+impl AutoLockArg {
+    fn wire(self) -> VaultAutoLock {
+        match self {
+            Self::Immediately => VaultAutoLock::Immediately,
+            Self::OneMinute => VaultAutoLock::OneMinute,
+            Self::FiveMinutes => VaultAutoLock::FiveMinutes,
+            Self::FifteenMinutes => VaultAutoLock::FifteenMinutes,
+            Self::OneHour => VaultAutoLock::OneHour,
+            Self::FourHours => VaultAutoLock::FourHours,
+            Self::OneDay => VaultAutoLock::OneDay,
+            Self::OneWeek => VaultAutoLock::OneWeek,
+            Self::Never => VaultAutoLock::Never,
+        }
+    }
+}
+
+fn auto_lock_name(value: VaultAutoLock) -> &'static str {
+    match value {
+        VaultAutoLock::Immediately => "immediately",
+        VaultAutoLock::OneMinute => "1 minute",
+        VaultAutoLock::FiveMinutes => "5 minutes",
+        VaultAutoLock::FifteenMinutes => "15 minutes",
+        VaultAutoLock::OneHour => "1 hour",
+        VaultAutoLock::FourHours => "4 hours",
+        VaultAutoLock::OneDay => "1 day",
+        VaultAutoLock::OneWeek => "1 week",
+        VaultAutoLock::Never => "never",
+    }
+}
+
+fn print_settings<W: Write>(stdout: &mut W, settings: &VaultSettings) -> Result<(), String> {
+    let on = |value: bool| if value { "on" } else { "off" };
+    let excluded = if settings.autofill.excluded_domains.is_empty() {
+        "none".to_owned()
+    } else {
+        settings.autofill.excluded_domains.join(", ")
+    };
+    let biometrics = match (&settings.biometrics.mechanism, &settings.biometrics.reason) {
+        (Some(mechanism), None) if settings.biometrics.available => mechanism.clone(),
+        (_, Some(reason)) => format!("unavailable ({reason})"),
+        _ => "unavailable".to_owned(),
+    };
+    let recovery = match (settings.recovery.configured, settings.recovery.current) {
+        (true, true) => "set",
+        (true, false) => "outdated; create a new one",
+        _ => "not set",
+    };
+    writeln!(
+        stdout,
+        "auto-lock\t{}\nbiometric unlock\t{} ({biometrics})\nautofill\t{}\nauto-submit\t{}\nhttp pages\t{}\nexcluded domains\t{excluded}\ndefault policy\t{}\nincognito\tnever filled\nrecovery key\t{recovery}",
+        auto_lock_name(settings.auto_lock),
+        on(settings.biometric_unlock),
+        on(settings.autofill.enabled),
+        on(settings.autofill.auto_submit),
+        on(settings.autofill.allow_insecure),
+        policy_name(settings.default_policy),
+    )
+    .map_err(output_error)
+}
+
+/// Fresh authentication for export and recovery keys: the passphrase of a passphrase vault,
+/// or the OS biometric prompt when a keyring vault has biometric unlock on.
+async fn confirm_request<R: Read, E: Write>(
+    client: &Client,
+    stdin: &mut R,
+    stderr: &mut E,
+) -> Result<VaultConfirmRequest, String> {
+    let status: VaultStatus = client.get("/v1/vault").await?;
+    if status.state != VaultState::Unlocked {
+        return Err("the vault is locked; run `openside vault unlock` first".to_owned());
+    }
+    let mut request = VaultConfirmRequest {
+        confirm: true,
+        ..VaultConfirmRequest::default()
+    };
+    if status.backend == Some(VaultBackend::Passphrase) {
+        request.passphrase = Some(hidden("Vault passphrase", stdin, stderr)?);
+    } else {
+        let settings: VaultSettings = client.get("/v1/vault/settings").await?;
+        request.biometric = settings.biometric_unlock;
+    }
+    Ok(request)
+}
+
+/// Text of a CSV export: UTF-8 (with or without a byte-order mark) or UTF-16 with its
+/// byte-order mark, which some password managers on Windows write.
+fn decode_export(bytes: &[u8]) -> Option<String> {
+    let utf16 = |bytes: &[u8], read: fn([u8; 2]) -> u16| {
+        if bytes.len() % 2 != 0 {
+            return None;
+        }
+        let units = zeroize::Zeroizing::new(
+            bytes
+                .chunks_exact(2)
+                .map(|pair| read([pair[0], pair[1]]))
+                .collect::<Vec<_>>(),
+        );
+        String::from_utf16(&units).ok()
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => std::str::from_utf8(bytes).ok().map(str::to_owned),
+    }
+}
+
+fn write_new_private(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("could not create {}: {error}", path.display()))?;
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(format!("could not write {}: {error}", path.display()));
+    }
+    Ok(())
 }
 
 fn policy_name(policy: VaultPolicy) -> &'static str {
@@ -159,6 +369,9 @@ pub(crate) async fn execute<R: Read, W: Write, E: Write>(
                     _ => "the vault is already set up".to_owned(),
                 });
             }
+            let keyring = status
+                .backend
+                .is_some_and(|backend| backend != VaultBackend::Passphrase);
             let passphrase = if status.backend == Some(VaultBackend::Passphrase) {
                 let first = hidden("New vault passphrase (8+ characters)", stdin, stderr)?;
                 let again = hidden("Repeat the passphrase", stdin, stderr)?;
@@ -173,7 +386,11 @@ pub(crate) async fn execute<R: Read, W: Write, E: Write>(
                 .json(
                     "POST",
                     "/v1/vault/setup",
-                    Some(&VaultUnlockRequest { passphrase }),
+                    // The daemon runs the biometric check only when biometric unlock is on.
+                    Some(&VaultUnlockRequest {
+                        passphrase,
+                        biometric: keyring,
+                    }),
                 )
                 .await?;
             print_status(stdout, json, &status)
@@ -183,14 +400,22 @@ pub(crate) async fn execute<R: Read, W: Write, E: Write>(
             if status.state == VaultState::Unlocked {
                 return print_status(stdout, json, &status);
             }
-            let passphrase = (status.backend == Some(VaultBackend::Passphrase))
+            let keyring = status
+                .backend
+                .is_some_and(|backend| backend != VaultBackend::Passphrase);
+            let passphrase = (!keyring && status.backend.is_some())
                 .then(|| hidden("Vault passphrase", stdin, stderr))
                 .transpose()?;
+            // A keyring vault with biometric unlock on asks for the OS prompt; otherwise the
+            // daemon ignores the flag.
             let status: VaultStatus = client
                 .json(
                     "POST",
                     "/v1/vault/unlock",
-                    Some(&VaultUnlockRequest { passphrase }),
+                    Some(&VaultUnlockRequest {
+                        passphrase,
+                        biometric: keyring,
+                    }),
                 )
                 .await?;
             print_status(stdout, json, &status)
@@ -323,6 +548,194 @@ pub(crate) async fn execute<R: Read, W: Write, E: Write>(
                 .map_err(output_error)?;
             }
             Ok(())
+        }
+        VaultCommand::Settings {
+            auto_lock,
+            biometric_unlock,
+            autofill,
+            auto_submit,
+            allow_insecure,
+            exclude,
+            include,
+            default_policy,
+        } => {
+            let mut request = UpdateVaultSettingsRequest {
+                auto_lock: auto_lock.map(AutoLockArg::wire),
+                biometric_unlock: *biometric_unlock,
+                default_policy: default_policy.map(|policy| match policy {
+                    DefaultPolicyArg::Always => VaultPolicy::Always,
+                    DefaultPolicyArg::WhileUnlocked => VaultPolicy::WhileUnlocked,
+                    DefaultPolicyArg::Never => VaultPolicy::Never,
+                }),
+                ..UpdateVaultSettingsRequest::default()
+            };
+            let mut fill = UpdateVaultAutofillSettings {
+                enabled: *autofill,
+                auto_submit: *auto_submit,
+                allow_insecure: *allow_insecure,
+                excluded_domains: None,
+            };
+            if !exclude.is_empty() || !include.is_empty() {
+                let current: VaultSettings = client.get("/v1/vault/settings").await?;
+                let mut domains = current.autofill.excluded_domains;
+                domains.retain(|domain| {
+                    !include
+                        .iter()
+                        .any(|removed| removed.trim().eq_ignore_ascii_case(domain))
+                });
+                domains.extend(exclude.iter().cloned());
+                fill.excluded_domains = Some(domains);
+            }
+            if fill != UpdateVaultAutofillSettings::default() {
+                request.autofill = Some(fill);
+            }
+            let settings: VaultSettings = if request == UpdateVaultSettingsRequest::default() {
+                client.get("/v1/vault/settings").await?
+            } else {
+                client
+                    .json("PATCH", "/v1/vault/settings", Some(&request))
+                    .await?
+            };
+            if json {
+                return emit(stdout, &settings);
+            }
+            print_settings(stdout, &settings)
+        }
+        VaultCommand::Export { output, yes } => {
+            if !*yes {
+                return Err(
+                    "the file will hold your passwords unencrypted; pass --yes to export"
+                        .to_owned(),
+                );
+            }
+            if output.exists() {
+                return Err(format!("{} already exists", output.display()));
+            }
+            let request = confirm_request(client, stdin, stderr).await?;
+            let mut export: VaultExport = client
+                .json("POST", "/v1/vault/export", Some(&request))
+                .await?;
+            let written = write_new_private(output, export.content.as_bytes());
+            export.content.zeroize();
+            written?;
+            if json {
+                return emit(
+                    stdout,
+                    &serde_json::json!({
+                        "path": output,
+                        "exported": export.exported,
+                        "skipped": export.skipped,
+                    }),
+                );
+            }
+            writeln!(
+                stdout,
+                "Exported {} sign-ins to {} (unencrypted; delete it once imported){}",
+                export.exported,
+                output.display(),
+                if export.skipped > 0 {
+                    format!("; {} passkeys cannot be exported", export.skipped)
+                } else {
+                    String::new()
+                },
+            )
+            .map_err(output_error)
+        }
+        VaultCommand::Import { file } => {
+            let bytes = zeroize::Zeroizing::new(
+                std::fs::read(file)
+                    .map_err(|error| format!("could not read {}: {error}", file.display()))?,
+            );
+            let csv = decode_export(&bytes).ok_or_else(|| {
+                format!(
+                    "{} is not UTF-8 or UTF-16 text; export it again as CSV",
+                    file.display()
+                )
+            })?;
+            let mut request = ImportPasswordsRequest { csv };
+            let sent = client
+                .json::<ImportCategoryReport, _>("POST", "/v1/import/passwords", Some(&request))
+                .await;
+            request.csv.zeroize();
+            let report = sent?;
+            if json {
+                return emit(stdout, &report);
+            }
+            writeln!(
+                stdout,
+                "Imported {} of {} sign-ins ({} skipped)",
+                report.imported, report.read, report.skipped
+            )
+            .map_err(output_error)?;
+            if let Some(note) = &report.note {
+                writeln!(stdout, "{note}").map_err(output_error)?;
+            }
+            Ok(())
+        }
+        VaultCommand::Clear { yes } => {
+            if !*yes {
+                return Err(
+                    "this deletes every saved sign-in, authenticator and passkey; pass --yes"
+                        .to_owned(),
+                );
+            }
+            let request = confirm_request(client, stdin, stderr).await?;
+            let result: VaultClearResult = client
+                .json("POST", "/v1/vault/clear", Some(&request))
+                .await?;
+            if json {
+                return emit(stdout, &result);
+            }
+            writeln!(stdout, "Deleted {} items", result.removed).map_err(output_error)
+        }
+        VaultCommand::RecoveryKey { yes } => {
+            if !*yes {
+                return Err(
+                    "a new recovery key replaces any earlier one; pass --yes to create it"
+                        .to_owned(),
+                );
+            }
+            let request = confirm_request(client, stdin, stderr).await?;
+            let mut key: VaultRecoveryKey = client
+                .json("POST", "/v1/vault/recovery-key", Some(&request))
+                .await?;
+            let printed = if json {
+                emit(stdout, &key)
+            } else {
+                writeln!(
+                    stdout,
+                    "{}\nKeep this key somewhere safe. It is shown only once and opens your vault if you forget how to unlock it.",
+                    key.recovery_key
+                )
+                .map_err(output_error)
+            };
+            key.recovery_key.zeroize();
+            printed
+        }
+        VaultCommand::Recover => {
+            let status: VaultStatus = client.get("/v1/vault").await?;
+            if status.state == VaultState::Unlocked {
+                return Err("the vault is already unlocked".to_owned());
+            }
+            let recovery_key = hidden("Recovery key", stdin, stderr)?;
+            let passphrase = if status.backend == Some(VaultBackend::Passphrase) {
+                let first = hidden("New vault passphrase (8+ characters)", stdin, stderr)?;
+                let again = hidden("Repeat the passphrase", stdin, stderr)?;
+                if first != again {
+                    return Err("the passphrases do not match".to_owned());
+                }
+                Some(first)
+            } else {
+                None
+            };
+            let request = VaultRecoverRequest {
+                recovery_key,
+                passphrase,
+            };
+            let status: VaultStatus = client
+                .json("POST", "/v1/vault/recover", Some(&request))
+                .await?;
+            print_status(stdout, json, &status)
         }
     }
 }

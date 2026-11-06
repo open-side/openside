@@ -246,7 +246,7 @@ fn hire_handoff_and_undo_have_truthful_web_and_team_equivalents() {
     assert!(hire.contains("CLI: openside team proposals"));
     assert!(hire.contains("openside ticket resolve hire1 hire"));
     let handoff = render(&fixture(CardKind::Handoff), 200);
-    assert!(handoff.contains("https://local.example/agents/mina#handoff%3Ah1"));
+    assert!(!handoff.contains("/agents/"));
     assert!(handoff.contains("openside team show mina"));
     let mut hired = fixture(CardKind::Hire);
     hired.status = CardStatus::Done;

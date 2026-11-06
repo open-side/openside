@@ -186,20 +186,10 @@ fn action_hint(action: &Action, card: &Card, context: &Context<'_>) -> Option<St
     let hint = match &action.target {
         ActionTarget::Link { url } => format!("{label}: {}", clean(url)),
         ActionTarget::FollowUp { text } => format!("{label}: send this follow-up: {}", clean(text)),
-        ActionTarget::OpenThread { agent_id, anchor } => {
-            let path = format!(
-                "/agents/{}{}",
-                encode_segment(agent_id),
-                anchor
-                    .as_ref()
-                    .map(|a| format!("#{}", encode_segment(a)))
-                    .unwrap_or_default()
-            );
-            let cli = team_command(context, "show", Some(agent_id));
-            match web(context, &path) {
-                Some(url) => format!("{label}: Open web: {url}; CLI: {cli}"),
-                None => format!("{label}: {cli}"),
-            }
+        // The web app has no page per teammate: it opens the teammate's home chat, which only the
+        // roster knows, so the hint names the command that shows that chat instead of a URL.
+        ActionTarget::OpenThread { agent_id, .. } => {
+            format!("{label}: {}", team_command(context, "show", Some(agent_id)))
         }
         ActionTarget::OpenTicket { ticket_id } => {
             let cli = ticket_command(context, ticket_id.as_str(), "show", None);
@@ -209,7 +199,7 @@ fn action_hint(action: &Action, card: &Card, context: &Context<'_>) -> Option<St
             }
         }
         ActionTarget::OpenConnection { .. } => {
-            let url = web(context, "/connections")?;
+            let url = web(context, "/settings/security")?;
             format!("{label}: Open web: {url}")
         }
         ActionTarget::TeamCommand { agent_id, command } => {

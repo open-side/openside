@@ -64,10 +64,11 @@ to the chat list.
 #### Saving sessions
 
 By default a finished `exec` or `repl` session is archived, so it stays out of the web app's
-chat list; `openside settings save-sessions true` keeps them. `openside settings
-set-default-profile <profile>` (or `u1:<profile>`) picks the browser profile new sessions use;
-`default` goes back to the shared profile. For one command, pass `--profile <profile>` or
-`--account u1:<profile>`.
+chat list; `openside settings save-sessions true` (Settings › Developers › Save sessions) keeps
+them. `openside settings get` shows the daemon's preferences and `openside settings set <key>
+<value>` changes one. `openside settings set-default-profile <profile>` (or `u1:<profile>`)
+picks the browser profile new sessions use; `default` goes back to the shared profile. For one
+command, pass `--profile <profile>` or `--account u1:<profile>`.
 
 ### B. `openside repl`
 

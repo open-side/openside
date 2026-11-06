@@ -407,7 +407,13 @@ pub(crate) async fn status<W: Write>(
     if json {
         return emit(stdout, &status);
     }
-    if status.modes.is_empty() {
+    if !status.enabled {
+        writeln!(
+            stdout,
+            "Remote Control is off: only this computer can reach the daemon; transport settings are kept (turn it on in Settings > Developers)."
+        )
+        .map_err(output_error)?;
+    } else if status.modes.is_empty() {
         writeln!(
             stdout,
             "No remote transport is enabled (`openside remote setup <mode>`)."

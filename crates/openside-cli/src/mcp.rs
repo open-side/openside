@@ -17,7 +17,7 @@
 use std::{io::Write, path::Path, time::Duration};
 
 use base64::Engine;
-use openside_proto::{BrowserSpace, MessageMode, PolicyMode, ToolCatalog};
+use openside_proto::{BrowserSpace, CliProfile, MessageMode, PolicyMode, ToolCatalog};
 use rmcp::{
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
@@ -33,7 +33,7 @@ use serde_json::{json, Map, Value};
 use crate::{
     agent,
     client::{self, Client},
-    settings::{BrowserProfile, PROFILES},
+    settings::{self, ProfileExt},
     tool_call,
     wait::{self, Replay, Until},
 };
@@ -46,8 +46,24 @@ const MAX_WAIT_SECS: u64 = 3600;
 pub(crate) struct Defaults<'a> {
     /// Team agent id new sessions run as.
     pub(crate) account: Option<&'a str>,
-    pub(crate) profile: BrowserProfile,
-    pub(crate) save_sessions: bool,
+    pub(crate) profile: CliProfile,
+}
+
+/// Whether the daemon allows `openside mcp` (Settings › Developers). An unreadable
+/// preference refuses too: the switch exists to keep MCP clients out.
+pub(crate) async fn allowed(client: &Client) -> Result<(), String> {
+    let preferences = crate::settings::preferences(client)
+        .await
+        .map_err(|error| format!("cannot read the daemon's preferences: {error}"))?;
+    if preferences["mcp_server"] == json!(true) {
+        Ok(())
+    } else {
+        Err(
+            "the openside MCP server is turned off; turn on `Enable MCP server` in Settings › \
+             Developers or run `openside settings set mcp_server true`"
+                .into(),
+        )
+    }
 }
 
 /// Runs the server on stdin/stdout until the client disconnects. Returns the process exit code.
@@ -57,6 +73,10 @@ pub(crate) async fn run<E: Write>(
     defaults: Defaults<'_>,
     stderr: &mut E,
 ) -> u8 {
+    if let Err(error) = allowed(&client).await {
+        let _ = writeln!(stderr, "openside: {}", redact(&error, token.as_deref()));
+        return 1;
+    }
     let served = match Mcp::new(client, token.clone(), defaults)
         .serve(rmcp::transport::stdio())
         .await
@@ -94,11 +114,10 @@ pub(crate) struct Mcp {
     client: Client,
     token: Option<String>,
     account: Option<String>,
-    profile: BrowserProfile,
-    save_sessions: bool,
+    profile: CliProfile,
     /// The session `repl` calls without a `session_id` use, and its profile; a different
     /// profile starts a new session (and so new tabs).
-    scratch: tokio::sync::Mutex<Option<(BrowserProfile, String)>>,
+    scratch: tokio::sync::Mutex<Option<(CliProfile, String)>>,
 }
 
 /// Why a tool call did not produce a result.
@@ -264,29 +283,30 @@ impl Mcp {
             token,
             account: defaults.account.map(str::to_owned),
             profile: defaults.profile,
-            save_sessions: defaults.save_sessions,
             scratch: tokio::sync::Mutex::new(None),
         }
     }
 
-    fn profile(&self, id: Option<&str>) -> Result<BrowserProfile, Failure> {
+    fn profile(&self, id: Option<&str>) -> Result<CliProfile, Failure> {
         id.map_or(Ok(self.profile), |id| {
-            BrowserProfile::parse(id).map_err(Failure::Params)
+            settings::parse_profile(id).map_err(Failure::Params)
         })
     }
 
-    fn create_request(&self, profile: BrowserProfile) -> openside_proto::CreateSessionRequest {
+    fn create_request(&self, profile: CliProfile) -> openside_proto::CreateSessionRequest {
         let mut create = openside_proto::CreateSessionRequest {
             agent_id: self.account.clone(),
             title: None,
             model: None,
             mode: None,
             workspace: None,
+            project_id: None,
             incognito: false,
             browser_space: BrowserSpace::Shared,
             effort: None,
             speed: None,
             profile: None,
+            confirmation: None,
         };
         profile.apply(&mut create);
         create
@@ -294,7 +314,7 @@ impl Mcp {
 
     /// The session a `repl` call without `session_id` runs in: one per profile, created on
     /// first use.
-    async fn scratch_session(&self, profile: BrowserProfile) -> Result<String, Failure> {
+    async fn scratch_session(&self, profile: CliProfile) -> Result<String, Failure> {
         let mut scratch = self.scratch.lock().await;
         if let Some((current, id)) = scratch.as_ref() {
             if *current == profile {
@@ -428,7 +448,7 @@ impl Mcp {
             }
             "browser_profiles" => {
                 let _: Empty = parse(arguments)?;
-                let profiles: Vec<Value> = PROFILES
+                let profiles: Vec<Value> = CliProfile::ALL
                     .iter()
                     .map(|profile| {
                         json!({
@@ -614,8 +634,11 @@ impl Mcp {
         }
         result["tasks"] = self.tasks(&session).await?;
         // Like `openside exec`: a finished run in a session this call created is archived
-        // unless `openside settings save-sessions true`.
-        if finished && args.session_id.is_none() && !self.save_sessions {
+        // unless the daemon's `save_sessions` preference keeps CLI and MCP sessions.
+        if finished
+            && args.session_id.is_none()
+            && !crate::settings::keeps_sessions(&self.client).await
+        {
             let archived = self
                 .client
                 .json::<Value, _>(
@@ -952,7 +975,7 @@ fn direct_tool(descriptor: &openside_proto::ToolDescriptor) -> Tool {
     }
     let read_only = matches!(
         descriptor.name.as_str(),
-        "browser_tabs" | "browser_snapshot" | "browser_screenshot"
+        "browser_tabs" | "browser_downloads" | "browser_snapshot" | "browser_screenshot"
     );
     let description = format!(
         "{} (Direct daemon tool, same as the openside agent's; needs the {} scope over TCP.)",
@@ -988,7 +1011,7 @@ pub(crate) fn tools() -> Vec<Tool> {
             "description": "Only consider events after this sequence (`after_seq` from session_send, or `last_seq` from a timed-out wait)."},
     }));
     wait_props.extend(object(wait_args));
-    let profile_id = json!({"type": "string", "enum": PROFILES.map(BrowserProfile::id),
+    let profile_id = json!({"type": "string", "enum": CliProfile::ALL.map(CliProfile::id),
         "description": "Browser profile for a new session (see browser_profiles); default: the server's profile."});
     let mut repl_props = object(json!({
         "code": {"type": "string", "description": "Playwright-syntax script; may run many actions in one call. The last expression is returned."},
@@ -1199,6 +1222,10 @@ impl ServerHandler for Mcp {
             peer: context.peer.clone(),
             token,
         });
+        // The switch takes effect at once: a server started earlier stops serving calls.
+        if let Err(error) = allowed(&self.client).await {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(self.redact(error))]).into());
+        }
         let arguments = request.arguments.map_or(Value::Null, Value::Object);
         let builtin = tools().iter().any(|tool| tool.name == request.name);
         let result = if builtin {

@@ -19,6 +19,7 @@ use tokio::{
 mod agent;
 mod cards;
 mod channels;
+mod config;
 mod connections;
 mod import;
 mod mcp;
