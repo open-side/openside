@@ -6,6 +6,7 @@ import type { PersonBookmark, Session } from "../api/types";
 import { ClientContext } from "../context";
 import type { AgentsState } from "../hooks/useAgents";
 import { PersonBrowserContext, type PersonBrowser } from "../hooks/usePersonBrowser";
+import { setLocale } from "../i18n/core";
 import { saveSidebarPrefs, ShellContext, SIDEBAR_PREFS_KEY } from "../shell";
 import { agentSummary } from "../test/agents";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
@@ -81,6 +82,17 @@ describe("Sidebar", () => {
     expect(screen.getByTestId("path")).toHaveTextContent("/chats");
     await user.click(screen.getByRole("link", { name: "New Chat" }));
     expect(screen.getByTestId("path")).toHaveTextContent(/^\/$/);
+  });
+
+  it("names untitled chats in the UI language, leaving named ones as they are", () => {
+    setLocale("ko");
+    try {
+      setup({ sessions: [session("a", { title: "New session" }), session("b", { title: "" }), session("c", { title: "Acme plans" })] });
+      const rows = within(screen.getByRole("region", { name: "채팅" })).getAllByRole("link").map((link) => link.textContent);
+      expect(rows).toEqual(["새 채팅", "새 채팅", "새 채팅", "Acme plans", "모두 보기"]);
+    } finally {
+      setLocale("en");
+    }
   });
 
   it("keeps Show all with no chats yet, so the Chats tab and its archived chats stay reachable", async () => {

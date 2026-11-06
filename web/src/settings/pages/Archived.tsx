@@ -4,7 +4,7 @@ import { Link } from "react-router";
 import type { Session } from "../../api/types";
 import { useChatActions } from "../../components/ChatActions";
 import { relativeTime } from "../../components/SearchPalette";
-import { displayTitle } from "../../components/toolStatus";
+import { displaySessionTitle } from "../../components/toolStatus";
 import { useClient } from "../../context";
 import { useTeam } from "../../hooks/useAgents";
 import { useSessionList } from "../../hooks/useSessionList";
@@ -17,13 +17,14 @@ const icon = { size: 16, strokeWidth: ICON_STROKE, "aria-hidden": true } as cons
 /** One archived chat: its title opens the thread; ⋯ unarchives it or, unless it is an agent's home chat, deletes it. */
 function ArchivedRow({ session, deletable, onChanged }: { session: Session; deletable: boolean; onChanged: () => void }) {
   const actions = useChatActions(session, { onChanged });
-  const label = t("shell.chat.menu", { title: session.title });
+  const title = displaySessionTitle(session.title);
+  const label = t("shell.chat.menu", { title });
   return (
     <>
       <SettingsRow
         title={
-          <Link to={`/sessions/${encodeURIComponent(session.id)}`} className="settings-row-link" title={session.title}>
-            {displayTitle(session.title)}
+          <Link to={`/sessions/${encodeURIComponent(session.id)}`} className="settings-row-link" title={title}>
+            {title}
           </Link>
         }
         description={relativeTime(session.last_activity_at) ?? undefined}

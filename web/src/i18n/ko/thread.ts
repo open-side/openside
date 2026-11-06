@@ -159,7 +159,6 @@ export const thread: Catalog<typeof en> = {
   "thread.split.or": "또는",
   "thread.split.newChat": "새 보조 대화",
   "thread.split.newChatFailed": "보조 대화를 시작하지 못했어요. 다시 시도해 주세요.",
-  "thread.split.untitled": "새 대화",
   "thread.split.openChat": "전체 대화로 열기",
   "thread.split.openFile": "전체 크기로 열기",
   "thread.split.fileFailed": "이 파일을 열 수 없어요.",

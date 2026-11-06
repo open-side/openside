@@ -7,7 +7,7 @@ import { AppHeader } from "../components/AppHeader";
 import { ChatMenuItems, useChatActions } from "../components/ChatActions";
 import { Composer } from "../components/Composer";
 import { relativeTime } from "../components/SearchPalette";
-import { displayTitle } from "../components/toolStatus";
+import { displaySessionTitle } from "../components/toolStatus";
 import { useClient } from "../context";
 import { useTeam } from "../hooks/useAgents";
 import { useSessionList } from "../hooks/useSessionList";
@@ -36,7 +36,7 @@ const activity = (session: Session) => (session.last_activity_at ? Date.parse(se
 function ordered(sessions: readonly Session[], show: Show, sort: Sort): Session[] {
   const shown = sessions.filter((session) => (show === "unread" ? session.unread : show === "pinned" ? session.pinned : true));
   if (sort === "recent") return shown;
-  const by = sort === "oldest" ? (a: Session, b: Session) => activity(a) - activity(b) : (a: Session, b: Session) => displayTitle(a.title).localeCompare(displayTitle(b.title));
+  const by = sort === "oldest" ? (a: Session, b: Session) => activity(a) - activity(b) : (a: Session, b: Session) => displaySessionTitle(a.title).localeCompare(displaySessionTitle(b.title));
   return [...shown].sort((a, b) => Number(b.pinned) - Number(a.pinned) || by(a, b));
 }
 
@@ -342,7 +342,7 @@ function ViewSwitch({ value, onChange }: { value: View; onChange: (view: View) =
 
 function ChatEntry({ session, view, selected, deletable, onToggle, onChanged }: { session: Session; view: View; selected: boolean; deletable: boolean; onToggle: (range: boolean) => void; onChanged: () => void }) {
   const actions = useChatActions(session, { onChanged });
-  const title = displayTitle(session.title);
+  const title = displaySessionTitle(session.title);
   const working = session.status === "running";
   const needsYou = session.status === "waiting_human";
   const time = relativeTime(session.last_activity_at);
@@ -388,7 +388,7 @@ function ChatEntry({ session, view, selected, deletable, onToggle, onChanged }: 
         trigger={
           <li className={cx(view === "card" ? "chats-card" : "chats-row", selected && "is-selected", session.unread && "is-unread")} data-session={session.id}>
             {check}
-            <Link to={path} className="chats-link" title={session.title}>
+            <Link to={path} className="chats-link" title={title}>
               <span className="chats-title">
                 {session.pinned ? <Pin className="chats-pin" size={12} strokeWidth={ICON_STROKE} role="img" aria-label={t("shell.chats.pinned")} /> : null}
                 <span className="chats-title-text">{title}</span>

@@ -234,6 +234,7 @@ export const shell: Catalog<typeof en> = {
   "shell.chats.bulkFailed": { other: "채팅 {count}개를 변경하지 못했어요: {reason}" },
   "shell.chats.archivedEmptyTitle": "보관된 채팅이 없어요",
   "shell.chats.archivedEmptyDetail": "보관한 채팅이 여기에 표시돼요.",
+  "shell.chats.untitled": "새 채팅",
   "shell.access.label": "권한 요청",
   "shell.access.title": "{name}에서 권한을 요청했어요",
   "shell.access.titleUnnamed": "연결된 기기에서 권한을 요청했어요",

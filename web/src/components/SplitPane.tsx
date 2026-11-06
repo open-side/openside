@@ -11,7 +11,7 @@ import { ArtifactPreview } from "./FilesTray";
 import { SessionDocument } from "./MessageDocument";
 import { createSessionRequest, DEFAULT_SESSION_OPTIONS } from "./sessionOptions";
 import { useSplitPane } from "./splitPaneState";
-import { displayTitle } from "./toolStatus";
+import { displaySessionTitle } from "./toolStatus";
 import "./splitPane.css";
 
 const MARKDOWN = /\.(md|markdown)$/i;
@@ -112,7 +112,7 @@ export function SplitPane({ sessionId }: { sessionId: string }) {
             key={content.sessionId}
             sessionId={content.sessionId}
             side
-            header={({ view }) => <div className="split-chat-title">{displayTitle(view.title) || t("thread.split.untitled")}</div>}
+            header={({ view }) => <div className="split-chat-title">{displaySessionTitle(view.title)}</div>}
           />
         )}
       </div>

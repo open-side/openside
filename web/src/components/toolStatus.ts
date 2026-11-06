@@ -158,8 +158,15 @@ export function outcomeNote(outcome: string, reason: string | undefined): string
   return tMaybe(`timeline.outcome.${outcome}Reason`, { reason }) ?? `${label}: ${reason}`;
 }
 
-/** A conversation titled with a bare URL reads as its site. */
-export function displayTitle(title: string): string {
+/** The daemon's stored title for a chat nobody has named yet (`openside-proto` `DEFAULT_SESSION_TITLE`). */
+export const DEFAULT_SESSION_TITLE = "New session";
+
+/**
+ * The title a chat shows: an unnamed chat reads in the UI language (the stored English default
+ * stays as is), and one titled with a bare URL reads as its site.
+ */
+export function displaySessionTitle(title: string): string {
   const trimmed = title.trim();
+  if (!trimmed || trimmed === DEFAULT_SESSION_TITLE) return t("shell.chats.untitled");
   return /^\S+$/.test(trimmed) ? (hostOf(trimmed) ?? title) : title;
 }

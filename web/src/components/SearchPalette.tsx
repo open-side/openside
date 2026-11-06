@@ -13,7 +13,7 @@ import { keyLabel, shortcutKeys } from "../shortcuts";
 import { BrandMark, cx, ICON_STROKE, useToast } from "../ui";
 import { browserFailure } from "./SidebarChats";
 import { Favicon, ourPage, PageLabel, tabTarget } from "./SidebarTabs";
-import { displayTitle } from "./toolStatus";
+import { displaySessionTitle } from "./toolStatus";
 import "../shortcuts.css";
 import "./searchPalette.css";
 
@@ -166,7 +166,7 @@ function Results({ agentTabs, pageLabel, onDone }: { agentTabs: readonly OwnedTa
       })
       .filter((item) => item.kind === "tab" && matches(trimmed, item.title, item.url))
       .slice(0, SECTION_LIMIT);
-    const chats: Item[] = (sessions ?? []).slice(0, SECTION_LIMIT).map((session) => ({ kind: "chat", key: `chat:${session.id}`, title: displayTitle(session.title), session, time: relativeTime(session.last_activity_at, now) }));
+    const chats: Item[] = (sessions ?? []).slice(0, SECTION_LIMIT).map((session) => ({ kind: "chat", key: `chat:${session.id}`, title: displaySessionTitle(session.title), session, time: relativeTime(session.last_activity_at, now) }));
     const reopen: Item[] = (closed ?? [])
       .filter((entry) => matches(trimmed, entry.title, entry.url ?? ""))
       .slice(0, SECTION_LIMIT)

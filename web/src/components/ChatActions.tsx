@@ -10,6 +10,7 @@ import { useShell } from "../shell";
 import { Button, copyText, Dialog, DialogActions, ICON_STROKE, MenuItem, MenuSeparator, useToast } from "../ui";
 import { RenameDialog } from "./SessionMenu";
 import { browserFailure } from "./SidebarChats";
+import { displaySessionTitle } from "./toolStatus";
 
 const icon = { size: 16, strokeWidth: ICON_STROKE, "aria-hidden": true } as const;
 
@@ -81,7 +82,7 @@ export function useChatActions(session: Session, { current = false, onChanged }:
 
   async function bookmark() {
     try {
-      await client.createPersonBookmark({ parent_id: browser.bookmarkBar, title: session.title, url: `${window.location.origin}${path}` });
+      await client.createPersonBookmark({ parent_id: browser.bookmarkBar, title: displaySessionTitle(session.title), url: `${window.location.origin}${path}` });
       toast.notify(t("shell.chat.bookmarked"));
       browser.refreshBookmarks();
     } catch (cause) {
@@ -101,7 +102,7 @@ export function useChatActions(session: Session, { current = false, onChanged }:
           if (await update({ title }, t("shell.session.renamed"))) setRenaming(false);
         }}
       />
-      <Dialog open={deleting} onClose={() => { if (!deleteBusy) setDeleting(false); }} title={t("shell.session.deleteTitle")} description={t("shell.session.deleteDescription", { title: session.title })}>
+      <Dialog open={deleting} onClose={() => { if (!deleteBusy) setDeleting(false); }} title={t("shell.session.deleteTitle")} description={t("shell.session.deleteDescription", { title: displaySessionTitle(session.title) })}>
         {deleteError ? <p role="alert">{deleteError}</p> : null}
         <DialogActions>
           <Button disabled={deleteBusy} onClick={() => setDeleting(false)}>

@@ -10,7 +10,7 @@ import { SessionMenu } from "../components/SessionMenu";
 import { ShareDialog } from "../components/ShareDialog";
 import { SplitPane, SplitToggle } from "../components/SplitPane";
 import { SplitPaneContext, useSplitPane, useSplitPaneState } from "../components/splitPaneState";
-import { displayTitle } from "../components/toolStatus";
+import { displaySessionTitle } from "../components/toolStatus";
 import { useClient } from "../context";
 import { t } from "../i18n";
 import { useShell } from "../shell";
@@ -71,7 +71,7 @@ function ThreadHeader({ id, view, running }: { id: string; view: SessionView; ru
   const panel = useAgentTabsPanel(id);
   const split = useSplitPane();
   const [sharing, setSharing] = useState(false);
-  const title = displayTitle(view.title) || "…";
+  const title = view.title ? displaySessionTitle(view.title) : "…";
   return (
     <AppHeader
       heading={

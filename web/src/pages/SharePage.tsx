@@ -4,6 +4,7 @@ import { ApiError, createClient, type Client } from "../api/client";
 import type { SharedArtifact, SharedChat, SharedItem } from "../api/types";
 import { Markdown } from "../components/Markdown";
 import { describeTool } from "../components/toolCopy";
+import { displaySessionTitle } from "../components/toolStatus";
 import { t, type MessageKey } from "../i18n";
 import { BrandMark, Button, ICON_STROKE, Spinner } from "../ui";
 import { formatBytes, formatDateTime } from "./format";
@@ -50,7 +51,7 @@ export function SharePage() {
     client.sharedChat(id).then(
       (chat) => {
         if (!live) return;
-        document.title = chat.title;
+        document.title = displaySessionTitle(chat.title);
         setLoad({ state: "ready", chat });
       },
       (cause: unknown) => live && setLoad(failure(cause)),
@@ -89,7 +90,7 @@ function SharedConversation({ client, id, chat }: { client: Client; id: string; 
     <article className="share-chat">
       <header className="share-head">
         <p className="share-eyebrow">{t("share.page.label")}</p>
-        <h1>{chat.title}</h1>
+        <h1>{displaySessionTitle(chat.title)}</h1>
         <p className="share-meta">
           {t("share.page.snapshot", { date: formatDateTime(chat.shared_at) })}
           {chat.expires_at ? <> {t("share.page.expires", { date: formatDateTime(chat.expires_at) })}</> : null}

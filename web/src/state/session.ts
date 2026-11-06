@@ -1,6 +1,6 @@
 import { isOutputArtifact } from "../api/artifacts";
 import type { Attachment, BrowserState, Card, Event, MessageAuthorKind, MessageDocument, PolicyMode, QueueMode, SubagentStatus, Ticket } from "../api/types";
-import { browserLine } from "../components/toolStatus";
+import { browserLine, DEFAULT_SESSION_TITLE } from "../components/toolStatus";
 
 export interface QueuedMessage {
   id: string;
@@ -246,7 +246,7 @@ function reduceEvent(state: SessionView, event: Event): SessionView {
   const last = state.items.at(-1);
   switch (event.kind) {
     case "session.created":
-      return { ...next, title: event.title, titleLocked: event.title !== "New session", model: event.model, mode: event.mode ?? undefined, incognito: event.incognito ?? false };
+      return { ...next, title: event.title, titleLocked: event.title !== DEFAULT_SESSION_TITLE, model: event.model, mode: event.mode ?? undefined, incognito: event.incognito ?? false };
     case "session.updated":
       return {
         ...next,

@@ -5,6 +5,7 @@ import type { Session } from "../api/types";
 import { t } from "../i18n";
 import { ContextMenu, cx, ICON_STROKE, Spinner } from "../ui";
 import { ChatMenuItems, useChatActions } from "./ChatActions";
+import { displaySessionTitle } from "./toolStatus";
 
 const icon = { size: 16, strokeWidth: ICON_STROKE, "aria-hidden": true } as const;
 
@@ -59,21 +60,22 @@ function ChatRow({ session, current, deletable }: { session: Session; current: b
   const working = session.status === "running";
   const needsYou = session.status === "waiting_human";
   const state = needsYou ? t("shell.person.needsYou") : working ? t("shell.person.working") : session.unread ? t("shell.person.unread") : null;
+  const title = displaySessionTitle(session.title);
 
   return (
     <>
       <ContextMenu
-        label={t("shell.chat.menu", { title: session.title })}
+        label={t("shell.chat.menu", { title })}
         trigger={
           <li className={cx("chat-row", current && "current", session.unread && "unread")} data-session={session.id}>
             <Link
               to={path}
               className="sidebar-row"
               aria-current={current ? "page" : undefined}
-              aria-label={state ? t("shell.person.label", { name: session.title, state }) : undefined}
-              title={session.title}
+              aria-label={state ? t("shell.person.label", { name: title, state }) : undefined}
+              title={title}
             >
-              <span className="sidebar-row-label">{session.title}</span>
+              <span className="sidebar-row-label">{title}</span>
             </Link>
             {/* Siblings of the link, not inside it: a button cannot nest in an anchor. The state mark
                 stays while Archive shows, moved aside (`.chat-status`). */}
@@ -88,7 +90,7 @@ function ChatRow({ session, current, deletable }: { session: Session; current: b
             ) : session.unread ? (
               <span className="sidebar-row-trailing unread-dot" aria-hidden="true" />
             ) : null}
-            <button type="button" className="sidebar-row-trailing sidebar-row-action" aria-label={t("shell.chat.archiveNamed", { title: session.title })} title={t("shell.chat.archive")} onClick={() => void actions.setArchived(true)}>
+            <button type="button" className="sidebar-row-trailing sidebar-row-action" aria-label={t("shell.chat.archiveNamed", { title })} title={t("shell.chat.archive")} onClick={() => void actions.setArchived(true)}>
               <Archive size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </button>
           </li>

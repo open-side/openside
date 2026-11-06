@@ -175,7 +175,6 @@ export const thread = {
   "thread.split.or": "or",
   "thread.split.newChat": "New side chat",
   "thread.split.newChatFailed": "Couldn’t start a side chat. Try again.",
-  "thread.split.untitled": "New chat",
   "thread.split.openChat": "Open as a full chat",
   "thread.split.openFile": "Open full size",
   "thread.split.fileFailed": "Couldn’t open this file.",

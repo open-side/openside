@@ -7,6 +7,7 @@ import { openInBrowser } from "../hooks/usePersonBrowser";
 import { t } from "../i18n";
 import { SETTINGS_FOOTER } from "../settings/nav";
 import { Button, copyText, Dialog, DialogActions, ICON_STROKE, MenuItem, MenuSeparator, PopoverMenu, useToast } from "../ui";
+import { displaySessionTitle } from "./toolStatus";
 
 export interface SessionSummary {
   id: string;
@@ -109,7 +110,7 @@ export function SessionMenu({ session, trigger, label, onChanged, onDeleted }: S
         open={deleting}
         onClose={() => { if (!deleteBusy) setDeleting(false); }}
         title={t("shell.session.deleteTitle")}
-        description={t("shell.session.deleteDescription", { title: session.title })}
+        description={t("shell.session.deleteDescription", { title: displaySessionTitle(session.title) })}
       >
         {deleteError ? <p role="alert">{deleteError}</p> : null}
         <DialogActions>

@@ -233,6 +233,7 @@ export const shell = {
   "shell.chats.bulkFailed": { one: "{count} chat couldn’t be changed: {reason}", other: "{count} chats couldn’t be changed: {reason}" },
   "shell.chats.archivedEmptyTitle": "No archived chats",
   "shell.chats.archivedEmptyDetail": "Chats you archive will appear here.",
+  "shell.chats.untitled": "New chat",
   "shell.access.label": "Access requests",
   "shell.access.title": "{name} is asking for access",
   "shell.access.titleUnnamed": "A paired device is asking for access",

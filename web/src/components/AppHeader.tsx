@@ -8,6 +8,7 @@ import { t } from "../i18n";
 import { settingsBreadcrumb } from "../settings/nav";
 import { useShell } from "../shell";
 import { BrandMark, cx, ICON_STROKE, IconButton } from "../ui";
+import { displaySessionTitle } from "./toolStatus";
 
 const icon = { size: 20, strokeWidth: ICON_STROKE, "aria-hidden": true } as const;
 const toolIcon = { size: 16, strokeWidth: ICON_STROKE, "aria-hidden": true } as const;
@@ -24,7 +25,8 @@ export function pageLabel(pathname: string, sessions: readonly Session[] | null)
   const session = /^\/sessions\/([^/]+)/.exec(pathname)?.[1];
   if (session) {
     const id = decodeURIComponent(session);
-    return `${sessions?.find((candidate) => candidate.id === id)?.title ?? t("shell.toolbar.chat")} · ${chats}`;
+    const title = sessions?.find((candidate) => candidate.id === id)?.title;
+    return `${title === undefined ? t("shell.toolbar.chat") : displaySessionTitle(title)} · ${chats}`;
   }
   if (pathname.startsWith("/chats")) return chats;
   if (pathname.startsWith("/welcome")) return t("shell.toolbar.welcome");
