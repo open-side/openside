@@ -58,5 +58,9 @@ pub(crate) async fn on_session_deleted(shared: &Shared, id: &SessionId) {
     shared.registry.browser.close_incognito(shared, id).await;
     shared.registry.browser.close_space(shared, id).await;
     shared.registry.browser.forget_lost_tabs(id).await;
+    shared.registry.person_browser.forget(id);
     crate::artifacts::remove_session(shared, id).await;
+    // After the artifact gate: a download record or event raced in under that gate is gone now.
+    shared.registry.browser.downloads.forget(id);
+    crate::shares::remove_session(shared, id).await;
 }
