@@ -1063,6 +1063,205 @@ async fn remote_setup_local_boot_secret_rotates_and_revoked_bootstrap_device_is_
     restarted.shutdown().await;
 }
 
+fn extension_exchange(code: &Value, origin: Option<&str>) -> axum::extract::Request {
+    let mut request = request("POST", "/v1/pairing/exchange", json!({"code": code}), None);
+    if let Some(origin) = origin {
+        request
+            .headers_mut()
+            .insert("Origin", origin.parse().unwrap());
+    }
+    request
+}
+
+#[tokio::test]
+async fn remote_setup_launcher_extension_code_is_extension_bound_and_rotates_one_device() {
+    const EXTENSION: &str = "chrome-extension://jneddlbpgmlheplolfonafkbkbkjhcfj";
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let unix = api::router(daemon.shared.clone(), true);
+    // Without a listener the extension could not reach the daemon, so no code is minted.
+    assert!(bootstrap(&unix).await["extension_code"].is_null());
+    crate::remote::start(&daemon.shared, Some("127.0.0.1:47821".parse().unwrap()));
+    let tcp = api::router(daemon.shared.clone(), false);
+
+    // Only the extension's own origin may redeem it: not a page, not another extension. Those
+    // attempts are refused without spending the code, so a page cannot burn it first.
+    let access = bootstrap(&unix).await;
+    let code = &access["extension_code"];
+    assert_eq!(code.as_str().unwrap().len(), 64);
+    for origin in [
+        None,
+        Some("http://127.0.0.1:47821"),
+        Some("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    ] {
+        let (status, body) = send(&tcp, extension_exchange(code, origin)).await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("extension_origin_required")),
+            "{origin:?}"
+        );
+    }
+    assert!(daemon
+        .shared
+        .db
+        .devices()
+        .await
+        .unwrap()
+        .iter()
+        .all(|device| device.name != "openside extension"));
+
+    let (status, first) = send(&tcp, extension_exchange(code, Some(EXTENSION))).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["kind"], "person_device");
+    assert_eq!(
+        first["scopes"],
+        json!(["read", "steer", "approve", "human_step"])
+    );
+    assert!(first["import_secret"].is_null());
+    let first_token = first["token"].as_str().unwrap().to_owned();
+    let (status, _) = send(
+        &tcp,
+        request("GET", "/v1/sessions", Value::Null, Some(&first_token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Person scopes only: the extension never gets admin or local credential-issuer authority.
+    let (status, _) = send(
+        &tcp,
+        request("GET", "/v1/devices", Value::Null, Some(&first_token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = send(
+        &tcp,
+        local_request(
+            "POST",
+            "/v1/pairing",
+            json!({"name":"x","scopes":["read"],"kind":"person_device","via":null}),
+            &first_token,
+            access["secret"].as_str().unwrap(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // A code is one-time.
+    let (status, _) = send(
+        &tcp,
+        extension_exchange(&access["extension_code"], Some(EXTENSION)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // An unredeemed code (the extension was already paired) changes nothing.
+    bootstrap(&unix).await;
+    assert!(daemon
+        .shared
+        .db
+        .device(first_token.clone())
+        .await
+        .unwrap()
+        .is_some());
+
+    // A browser restart redeems a fresh code: the previous extension device is replaced, not kept.
+    let access = bootstrap(&unix).await;
+    let (status, second) = send(
+        &tcp,
+        extension_exchange(&access["extension_code"], Some(EXTENSION)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(daemon
+        .shared
+        .db
+        .device(first_token.clone())
+        .await
+        .unwrap()
+        .is_none());
+    assert!(daemon
+        .shared
+        .remote
+        .is_revoked(first["device_id"].as_str().unwrap()));
+    let extensions: Vec<_> = daemon
+        .shared
+        .db
+        .devices()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|device| device.name == "openside extension")
+        .collect();
+    assert_eq!(extensions.len(), 1);
+    assert_eq!(
+        extensions[0].device_id,
+        second["device_id"].as_str().unwrap()
+    );
+
+    // Revocable from Devices like any device; the next launch pairs a new one.
+    assert!(
+        crate::pairing::revoke(&daemon.shared, second["device_id"].as_str().unwrap())
+            .await
+            .is_ok()
+    );
+    let second_token = second["token"].as_str().unwrap().to_owned();
+    let (status, _) = send(
+        &tcp,
+        request("GET", "/v1/sessions", Value::Null, Some(&second_token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let access = bootstrap(&unix).await;
+    let (status, third) = send(
+        &tcp,
+        extension_exchange(&access["extension_code"], Some(EXTENSION)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        daemon
+            .shared
+            .db
+            .devices()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|device| device.name == "openside extension")
+            .count(),
+        1
+    );
+    let audit = std::fs::read_to_string(daemon.shared.config.data_dir.join("audit.jsonl")).unwrap();
+    assert!(audit.contains("launcher_rotation"));
+    assert!(!audit.contains(third["token"].as_str().unwrap()));
+    assert!(!audit.contains(access["extension_code"].as_str().unwrap()));
+
+    // An expired code is refused and spent, whatever the origin.
+    let base = Instant::now();
+    let offset = Arc::new(parking_lot::Mutex::new(Duration::ZERO));
+    let later = offset.clone();
+    daemon
+        .shared
+        .remote
+        .set_clocks(move || base + *later.lock(), chrono::Utc::now);
+    let access = bootstrap(&unix).await;
+    *offset.lock() = Duration::from_secs(openside_proto::PAIRING_TTL_SECS.unsigned_abs());
+    let (status, body) = send(
+        &tcp,
+        extension_exchange(&access["extension_code"], Some(EXTENSION)),
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::GONE, Some("pairing_expired"))
+    );
+    let (status, _) = send(
+        &tcp,
+        extension_exchange(&access["extension_code"], Some(EXTENSION)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    daemon.shutdown().await;
+}
+
 #[tokio::test]
 async fn remote_setup_revocation_cancels_a_paused_event_page_read_without_releasing_data() {
     let root = tempfile::tempdir().unwrap();

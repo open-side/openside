@@ -296,11 +296,15 @@ async fn save_secret(s: &Shared, c: &Caller, entry: Entry) -> Result<(), HttpErr
             return Err(unavailable());
         }
         service
-            .setup(s, &mut guard, c.id(), None)
+            .setup(s, &mut guard, c.id(), None, false)
             .await
-            .map_err(|_| unavailable())?;
+            .map_err(|error| match error {
+                (403, "biometric_required") => crate::vault_api::lifecycle(error),
+                _ => unavailable(),
+            })?;
     }
     let vault = guard.as_mut().ok_or_else(unavailable)?;
+    s.registry.vault.touch(s);
     s.registry.redactors.write().push(entry.redactor());
     vault
         .set_channel_secret(&context(c.id()), entry)
@@ -475,11 +479,15 @@ async fn metadata(s: &Shared, supervisor: &Supervisor, a: &ChannelAccountConfig)
         .get(&key)
         .and_then(Running::agent_id)
         .map(str::to_owned);
-    let webhook_url = if a.kind == ChannelKind::Telegram || a.legacy_secret.is_some() {
+    let webhook_url = if a.kind == ChannelKind::Telegram
+        || a.legacy_secret.is_some()
+        || !crate::remote::enabled(s)
+    {
+        // With Remote Control off the platform cannot reach this computer, so no address is
+        // offered, not even the saved one.
         None
     } else {
-        crate::remote::effective(s)
-            .public_url
+        crate::remote::public_base(s)
             .or_else(|| supervisor.listen.map(|addr| format!("http://{addr}")))
             .map(|base| {
                 format!(
@@ -669,6 +677,7 @@ pub(crate) async fn delete(
         if account.secret_id.is_some() {
             let mut guard = s.registry.vault.vault.lock().await;
             let vault = guard.as_mut().ok_or_else(unavailable)?;
+            s.registry.vault.touch(&s);
             match vault.delete_channel_secret(&context(c.id()), k.as_str(), &id) {
                 Ok(()) | Err(Error::UnknownItem) => {}
                 Err(Error::Locked) => return Err(unavailable()),

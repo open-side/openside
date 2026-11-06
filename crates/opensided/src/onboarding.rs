@@ -1,18 +1,25 @@
 //! First-run guide and external-agent skills folders. Folder edits require local authority;
-//! custom destinations are validated again immediately before installing bundled skills.
+//! every destination, preset or custom, is checked again immediately before installing
+//! bundled skills (see [`checked_destination`]).
 
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 use axum::{
     extract::{Path as UrlPath, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use chrono::{DateTime, Utc};
 use openside_config::data_layout::DataPath;
+use openside_core::MessageAuthorKind;
 use openside_proto::{
     ExternalAgent, ExternalAgentList, InstallAgentSkillRequest, InstalledAgentSkill,
-    OnboardingState, OnboardingStatus, SetExternalAgentRequest, UpdateOnboardingRequest,
+    OnboardingAlreadySet, OnboardingState, OnboardingStatus, SetExternalAgentRequest,
+    UpdateOnboardingRequest,
 };
 use openside_skills::{agent_skills_dir, bundled, install::write_skill, Error, BROWSER_SKILL};
 use serde::{Deserialize, Serialize};
@@ -36,17 +43,24 @@ struct Stored {
     updated_at: DateTime<Utc>,
 }
 
+/// Serializes the read-check-write of the flag so two devices finishing the guide at once can
+/// never both record an outcome.
+static WRITE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 fn path(s: &Shared) -> PathBuf {
     DataPath::Onboarding.path(&s.config.data_dir)
 }
 
 /// A missing or unreadable file means the guide was never finished: showing it once more is
 /// harmless, hiding it forever on a corrupt file is not.
-fn read(path: &Path) -> OnboardingStatus {
-    let stored = std::fs::read(path)
+fn load(path: &Path) -> Option<Stored> {
+    std::fs::read(path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Stored>(&bytes).ok());
-    match stored {
+        .and_then(|bytes| serde_json::from_slice::<Stored>(&bytes).ok())
+}
+
+fn read(path: &Path) -> OnboardingStatus {
+    match load(path) {
         Some(stored) => OnboardingStatus {
             state: stored.state,
             updated_at: Some(stored.updated_at),
@@ -66,31 +80,94 @@ pub(crate) async fn get(State(s): State<Shared>) -> Result<Json<OnboardingStatus
         .map_err(|_| HttpError::internal())
 }
 
+/// Compare-and-set: writes only while the stored state is `pending`; otherwise 409
+/// `onboarding_already_set` with the outcome already recorded, which stays untouched.
 pub(crate) async fn put(
     State(s): State<Shared>,
     Json(request): Json<UpdateOnboardingRequest>,
-) -> Result<Json<OnboardingStatus>, HttpError> {
+) -> Response {
     if request.state == OnboardingState::Pending {
-        return Err(HttpError::invalid_value());
+        return HttpError::invalid_value().into_response();
     }
-    let stored = Stored {
-        state: request.state,
-        updated_at: Utc::now(),
-    };
-    let bytes = serde_json::to_vec(&stored).map_err(|_| HttpError::internal())?;
     let path = path(&s);
-    tokio::task::spawn_blocking(move || crate::persistence::write_private(&path, &bytes))
-        .await
-        .map_err(|_| HttpError::internal())?
-        .map_err(|_| HttpError::internal())?;
-    Ok(Json(OnboardingStatus {
-        state: stored.state,
-        updated_at: Some(stored.updated_at),
-    }))
+    let written = tokio::task::spawn_blocking(move || {
+        let _write = WRITE.lock();
+        if let Some(current) = load(&path).filter(|s| s.state != OnboardingState::Pending) {
+            return Ok(Err(current));
+        }
+        let stored = Stored {
+            state: request.state,
+            updated_at: Utc::now(),
+        };
+        let bytes = serde_json::to_vec(&stored).map_err(|_| HttpError::internal())?;
+        crate::persistence::write_private(&path, &bytes).map_err(|_| HttpError::internal())?;
+        Ok::<_, HttpError>(Ok(stored))
+    })
+    .await;
+    match written {
+        Ok(Ok(Ok(stored))) => Json(OnboardingStatus {
+            state: stored.state,
+            updated_at: Some(stored.updated_at),
+        })
+        .into_response(),
+        Ok(Ok(Err(current))) => (
+            StatusCode::CONFLICT,
+            Json(OnboardingAlreadySet {
+                code: "onboarding_already_set".into(),
+                message: "onboarding already set".into(),
+                state: current.state,
+                updated_at: current.updated_at,
+            }),
+        )
+            .into_response(),
+        Ok(Err(error)) => error.into_response(),
+        Err(_) => HttpError::internal().into_response(),
+    }
+}
+
+/// The environment the skills-folder rules read (HOME, the agents' own variables). Each test
+/// daemon gets its own instead of the process environment, which parallel tests share.
+#[cfg(test)]
+static TEST_ENV: parking_lot::Mutex<std::collections::BTreeMap<PathBuf, Vec<(String, OsString)>>> =
+    parking_lot::Mutex::new(std::collections::BTreeMap::new());
+
+/// Make the daemon whose data folder is `data_dir` see only `vars` as its environment.
+#[cfg(test)]
+pub(crate) fn set_test_env(data_dir: &Path, vars: &[(&str, &Path)]) {
+    TEST_ENV.lock().insert(
+        data_dir.to_path_buf(),
+        vars.iter()
+            .map(|(key, value)| ((*key).to_owned(), value.as_os_str().to_owned()))
+            .collect(),
+    );
+}
+
+#[cfg(test)]
+fn env_var(s: &Shared, key: &str) -> Option<OsString> {
+    match TEST_ENV.lock().get(&s.config.data_dir) {
+        Some(vars) => vars
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.clone()),
+        None => std::env::var_os(key),
+    }
+}
+
+#[cfg(not(test))]
+fn env_var(_: &Shared, key: &str) -> Option<OsString> {
+    std::env::var_os(key)
+}
+
+fn home(s: &Shared) -> Option<PathBuf> {
+    env_var(s, "HOME")
+        .or_else(|| env_var(s, "USERPROFILE"))
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
 }
 
 fn skills_dir(s: &Shared, agent: &str) -> Option<PathBuf> {
-    agent_skills_dir(agent, &s.ops.agents.read(), &|key| std::env::var_os(key))
+    agent_skills_dir(agent, &s.ops.agents.read(), &|key| env_var(s, key))
 }
 
 /// Shown to people, so a path under the daemon user's home reads `~/.claude/skills`.
@@ -177,38 +254,56 @@ pub(crate) async fn agents(State(s): State<Shared>) -> Result<Json<ExternalAgent
     .map_err(|_| HttpError::internal())
 }
 
+/// `POST /v1/external-agents/{id}/browser-skill`. Local access comes from
+/// `api::LOCAL_REQUIRED`; the agent then trusts what lands in that folder, so the request
+/// must also come from the person, never from an MCP client or agent token.
 pub(crate) async fn install_skill(
     State(s): State<Shared>,
     Extension(caller): Extension<Caller>,
+    Extension(author): Extension<MessageAuthorKind>,
     UrlPath(id): UrlPath<String>,
     Json(request): Json<InstallAgentSkillRequest>,
 ) -> Result<(StatusCode, Json<InstalledAgentSkill>), HttpError> {
+    if crate::takeover::person_only(&caller, author).is_err() {
+        return Err(HttpError(StatusCode::FORBIDDEN, "person_access_required"));
+    }
     if !known_agents(&s).iter().any(|(known, _)| *known == id) {
         return Err(HttpError(StatusCode::NOT_FOUND, "unknown_agent"));
     }
     let Some(dir) = skills_dir(&s, &id) else {
         return Err(HttpError(StatusCode::BAD_REQUEST, "skills_dir_unknown"));
     };
-    let dir = if PRESETS.iter().any(|(preset, _)| *preset == id) {
-        dir
-    } else {
-        validate_path(&dir.to_string_lossy(), &roots())?
-    };
+    let preset = PRESETS.iter().any(|(preset, _)| *preset == id);
+    let home = home(&s);
+    let roots = roots(&s);
+    let data_dirs = [
+        s.config.data_dir.clone(),
+        s.config.loaded.paths.data_dir.clone(),
+    ];
     let files = bundled(BROWSER_SKILL).ok_or_else(HttpError::internal)?;
     let force = request.force;
-    let installed =
-        tokio::task::spawn_blocking(move || write_skill(&dir, BROWSER_SKILL, files, force))
-            .await
-            .map_err(|_| HttpError::internal())?
-            .map_err(|error| match error {
-                Error::Exists(_) => HttpError(StatusCode::CONFLICT, "exists"),
-                other => {
-                    crate::diag!(
-                        "opensided: installing the browser skill for {id} failed: {other}"
-                    );
-                    HttpError::internal()
-                }
-            })?;
+    // Checked on the same blocking thread right before writing, to keep the window in which
+    // a folder could be swapped for a link as short as possible.
+    let agent = id.clone();
+    let installed = tokio::task::spawn_blocking(move || {
+        let invalid = || HttpError(StatusCode::BAD_REQUEST, "invalid_skills_dir");
+        let home = home.ok_or_else(invalid)?;
+        let dir = if preset {
+            dir
+        } else {
+            validate_path(&dir.to_string_lossy(), &roots, Some(&home))?
+        };
+        let dir = checked_destination(&dir, &home, &data_dirs)?;
+        write_skill(&dir, BROWSER_SKILL, files, force).map_err(|error| match error {
+            Error::Exists(_) => HttpError(StatusCode::CONFLICT, "exists"),
+            other => {
+                crate::diag!("opensided: installing the browser skill for {agent} failed: {other}");
+                HttpError::internal()
+            }
+        })
+    })
+    .await
+    .map_err(|_| HttpError::internal())??;
     crate::pairing::audit(
         &s,
         "external_agent",
@@ -227,10 +322,70 @@ pub(crate) async fn install_skill(
     ))
 }
 
-fn roots() -> Vec<PathBuf> {
+/// A folder a bundled skill may be written to: inside the person's home, reached without
+/// following a symbolic link below it, and outside openside's data folder. Presets need this
+/// as much as custom folders: their location comes from variables such as
+/// `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `OMP_CODING_AGENT_DIR` that nothing else checks.
+/// Returns the canonical folder.
+fn checked_destination(
+    dir: &Path,
+    home: &Path,
+    data_dirs: &[PathBuf],
+) -> Result<PathBuf, HttpError> {
+    use std::path::Component;
+    let invalid = || HttpError(StatusCode::BAD_REQUEST, "invalid_skills_dir");
+    if !dir.is_absolute()
+        || dir
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return Err(invalid());
+    }
+    let canonical_home = home.canonicalize().map_err(|_| invalid())?;
+    // A custom folder arrives canonical already, so it may be spelled through the canonical
+    // home even when HOME itself goes through a link (`/home` -> `/var/home`).
+    let (base, below) = match dir.strip_prefix(home) {
+        Ok(below) => (home, below),
+        Err(_) => (
+            canonical_home.as_path(),
+            dir.strip_prefix(&canonical_home).map_err(|_| invalid())?,
+        ),
+    };
+    if below.as_os_str().is_empty() {
+        return Err(invalid());
+    }
+    let mut current = base.to_path_buf();
+    for part in below.components() {
+        current.push(part);
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => return Err(invalid()),
+            Ok(_) => {}
+            // Everything from here down is created by the install.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => return Err(invalid()),
+        }
+    }
+    let canonical = canonical_destination(dir).ok_or_else(invalid)?;
+    if !canonical.starts_with(&canonical_home) {
+        return Err(invalid());
+    }
+    let inside_data = data_dirs.iter().any(|data| {
+        dir.starts_with(data)
+            || canonical.starts_with(data)
+            || data
+                .canonicalize()
+                .is_ok_and(|data| canonical.starts_with(data))
+    });
+    if inside_data {
+        return Err(invalid());
+    }
+    Ok(canonical)
+}
+
+fn roots(s: &Shared) -> Vec<PathBuf> {
     ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]
         .into_iter()
-        .filter_map(std::env::var_os)
+        .filter_map(|key| env_var(s, key))
         .map(PathBuf::from)
         .collect()
 }
@@ -269,7 +424,7 @@ fn canonical_destination(path: &Path) -> Option<PathBuf> {
     Some(canonical)
 }
 
-fn validate_path(raw: &str, roots: &[PathBuf]) -> Result<PathBuf, HttpError> {
+fn validate_path(raw: &str, roots: &[PathBuf], home: Option<&Path>) -> Result<PathBuf, HttpError> {
     let invalid = || HttpError(StatusCode::BAD_REQUEST, "invalid_skills_dir");
     if raw.is_empty()
         || raw.chars().any(char::is_control)
@@ -280,7 +435,7 @@ fn validate_path(raw: &str, roots: &[PathBuf]) -> Result<PathBuf, HttpError> {
         return Err(invalid());
     }
     let path = if let Some(rest) = raw.strip_prefix("~/") {
-        PathBuf::from(std::env::var_os("HOME").ok_or_else(invalid)?).join(rest)
+        home.ok_or_else(invalid)?.join(rest)
     } else {
         PathBuf::from(raw)
     };
@@ -306,7 +461,7 @@ pub(crate) async fn set_agent(
 ) -> Result<Json<ExternalAgent>, HttpError> {
     local.require()?;
     validate_id(&id)?;
-    let dir = validate_path(&request.skills_dir, &roots())?;
+    let dir = validate_path(&request.skills_dir, &roots(&s), home(&s).as_deref())?;
     tokio::spawn(async move {
         let _writer = crate::settings_api::WRITE.lock().await;
         let mut config = crate::settings_api::stored(&s).await?;
@@ -358,8 +513,12 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let allowed = vec![root.path().to_path_buf()];
         assert_eq!(
-            validate_path(&root.path().join("new/skills").to_string_lossy(), &allowed)
-                .unwrap_or_else(|_| panic!("valid folder rejected")),
+            validate_path(
+                &root.path().join("new/skills").to_string_lossy(),
+                &allowed,
+                None
+            )
+            .unwrap_or_else(|_| panic!("valid folder rejected")),
             root.path().join("new/skills")
         );
         for path in [
@@ -367,14 +526,15 @@ mod tests {
             root.path().join("../escape").display().to_string(),
             outside.path().display().to_string(),
         ] {
-            assert!(validate_path(&path, &allowed).is_err(), "{path}");
+            assert!(validate_path(&path, &allowed, None).is_err(), "{path}");
         }
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
             assert!(validate_path(
                 &root.path().join("escape/skills").to_string_lossy(),
-                &allowed
+                &allowed,
+                None
             )
             .is_err());
             std::os::unix::fs::symlink(
@@ -384,7 +544,8 @@ mod tests {
             .unwrap();
             assert!(validate_path(
                 &root.path().join("dangling/skills").to_string_lossy(),
-                &allowed
+                &allowed,
+                None
             )
             .is_err());
         }
@@ -392,6 +553,47 @@ mod tests {
             assert!(validate_id(id).is_err());
         }
         assert!(validate_id("my-agent2").is_ok());
+    }
+
+    #[test]
+    fn skill_destinations_stay_in_home_off_links_and_out_of_openside_data() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let data = home.join(".local/share/openside");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let data_dirs = [data.clone()];
+        let check = |dir: &Path| checked_destination(dir, &home, &data_dirs);
+        assert_eq!(
+            check(&home.join(".claude/skills")).unwrap(),
+            home.join(".claude/skills")
+        );
+        // Missing folders below an existing one are fine: the install creates them.
+        assert!(check(&home.join("new/deeper/skills")).is_ok());
+        for refused in [
+            outside.path().join("skills"),
+            home.clone(),
+            home.join("../escape/skills"),
+            PathBuf::from("relative/skills"),
+            data.join("skills"),
+            data.clone(),
+        ] {
+            assert!(check(&refused).is_err(), "{}", refused.display());
+        }
+        #[cfg(unix)]
+        {
+            // A link anywhere below home, even to a folder that is itself inside home.
+            std::os::unix::fs::symlink(outside.path(), home.join("away")).unwrap();
+            std::os::unix::fs::symlink(home.join(".claude"), home.join("alias")).unwrap();
+            std::os::unix::fs::symlink(&data, home.join("data-link")).unwrap();
+            for refused in ["away/skills", "alias/skills", "data-link/skills", "alias"] {
+                assert!(check(&home.join(refused)).is_err(), "{refused}");
+            }
+            // A file in the way is not a folder.
+            std::fs::write(home.join("file"), "x").unwrap();
+            assert!(check(&home.join("file/skills")).is_err());
+        }
     }
 
     use super::*;

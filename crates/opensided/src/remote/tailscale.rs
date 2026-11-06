@@ -130,6 +130,22 @@ where
     Err(error)
 }
 
+/// Turn openside's handler on `port` back on (Remote Control turned on); the saved settings
+/// are the caller's business. Returns the HTTPS origin it serves.
+pub(crate) async fn start(
+    bin: &Path,
+    listen: SocketAddr,
+    port: u16,
+) -> Result<Option<String>, HttpError> {
+    apply(bin, true, listen, port).await.map(|(url, _)| url)
+}
+
+/// Turn openside's handler on `port` off (Remote Control turned off) and keep the saved
+/// settings. Another app's handler on that port is left alone.
+pub(crate) async fn stop(bin: &Path, listen: SocketAddr, port: u16) -> Result<(), HttpError> {
+    apply(bin, false, listen, port).await.map(|_| ())
+}
+
 /// Apply the Serve change; returns the origin when on and whether Serve was changed.
 async fn apply(
     bin: &Path,

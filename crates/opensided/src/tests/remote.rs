@@ -786,6 +786,22 @@ fn changed_value(path: &str, schema: &Value, current: &Value) -> Value {
         ("network.allow", json!(["example.test"])),
         ("policy.allow_origins", json!(["https://ok.example.test"])),
         ("policy.deny_origins", json!(["https://no.example.test"])),
+        (
+            "mcp.servers",
+            json!([{"id": "fixture", "label": "Fixture", "enabled": false, "transport": "stdio", "command": ["server"]}]),
+        ),
+        ("models.standard", json!("fixture:standard")),
+        ("models.deep", json!("fixture:deep")),
+        ("models.visual", json!("fixture:visual")),
+        ("models.image", json!("fixture:image")),
+        ("preferences.agent_tab_cleanup_minutes", json!(30)),
+        ("preferences.notifications", json!(["needs_attention"])),
+        ("search.api_url", json!("https://search.example.test/api")),
+        (
+            "search.engine",
+            json!("https://search.example.test/?q={query}"),
+        ),
+        ("vault.autofill.excluded_domains", json!(["example.test"])),
     ]);
     if let Some(sample) = samples.get(path) {
         return sample.clone();
@@ -893,17 +909,25 @@ async fn every_config_schema_key_is_readable_and_writable_through_the_settings_a
             );
             continue;
         }
-        let current = document["config"]
-            .pointer(&pointer(path))
-            .unwrap_or_else(|| panic!("{path} is not readable through GET /v1/settings/config"))
-            .clone();
+        // `models.image_off` is left out of the file (and the document) while it is off.
+        let current = match document["config"].pointer(&pointer(path)) {
+            Some(current) => current.clone(),
+            None if path == "models.image_off" => json!(false),
+            None => panic!("{path} is not readable through GET /v1/settings/config"),
+        };
         let value = if path == "browser.extensions" {
             json!([extension])
+        } else if path == "browser.language" {
+            json!("ko")
         } else {
             changed_value(path, key_schema, &current)
         };
         let mut updated = document["config"].clone();
-        *updated.pointer_mut(&pointer(path)).unwrap() = value.clone();
+        let (parent, key) = pointer(path)
+            .rsplit_once('/')
+            .map(|(p, k)| (p.to_owned(), k.to_owned()))
+            .unwrap();
+        updated.pointer_mut(&parent).unwrap()[key] = value.clone();
         // Cross-key rules: a key that is only valid together with another gets its partner.
         for (partner, partner_value) in companions(path) {
             *updated.pointer_mut(&pointer(partner)).unwrap() = partner_value;
@@ -1072,6 +1096,9 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
             .replace("{ticket}", "unknown-ticket")
             .replace("{transaction_id}", "unknown-transaction")
             .replace("{tab_id}", "unknown-tab")
+            .replace("{share_id}", "unknown-share")
+            .replace("{artifact}", "0")
+            .replace("{session_id}", "unknown-closed")
             .replace("{name}", "unknown");
         assert!(
             !path.contains('{'),
@@ -1170,7 +1197,12 @@ async fn no_route_tool_or_setting_is_behind_a_feature_flag_or_paywall() {
             let needs_absent_resource = name.starts_with("browser_")
                 || name.starts_with("vault_")
                 || name.starts_with("tab")
-                || name == "register_authenticator";
+                || name == "register_authenticator"
+                || name == "websearch"
+                // Needs an available image model (picked automatically unless chosen or off).
+                || name == "generate_image"
+                // Off until the person turns it on locally, and needs a supported desktop.
+                || name.starts_with("computer_use_");
             assert!(
                 shown || needs_absent_resource || name == "bash",
                 "{name} is hidden in full access without a missing resource in {orchestration:?}"
@@ -1308,7 +1340,11 @@ async fn push_endpoints_must_be_known_services_or_explicitly_allowed_and_redirec
         ("fe80::1", false),
         ("::ffff:127.0.0.1", false),
     ] {
-        assert_eq!(crate::push::public_ip(ip.parse().unwrap()), public, "{ip}");
+        assert_eq!(
+            crate::net_guard::public_ip(ip.parse().unwrap()),
+            public,
+            "{ip}"
+        );
     }
 
     let root = tempfile::tempdir().unwrap();

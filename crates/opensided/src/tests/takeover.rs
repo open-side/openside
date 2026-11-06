@@ -742,6 +742,100 @@ async fn takeover_streams_frames_forwards_input_locks_agent_and_resumes_with_fre
     f.daemon.shutdown().await;
 }
 
+/// The result a takeover hands back names a document that is not http(s) by its scheme alone,
+/// like the stream does: a file path the person typed under control, or a `data:` payload
+/// the page moved to, never reaches the agent's result or the ticket events.
+#[tokio::test]
+async fn a_takeover_result_names_non_network_documents_only_by_scheme() {
+    let Some(f) = fixture(1800).await else {
+        return;
+    };
+    let steer = f
+        .daemon
+        .shared
+        .db
+        .pair(vec![CapabilityScope::Steer])
+        .await
+        .unwrap()
+        .1;
+    let file = f._root.path().join("result-file-canary.html");
+    std::fs::write(&file, "<title>File</title>").unwrap();
+    let file = url::Url::from_file_path(&file).unwrap().to_string();
+    let local = api::router(f.daemon.shared.clone(), true);
+    for (id, url, shown) in [
+        ("file-ticket", file.as_str(), "file:"),
+        (
+            "data-ticket",
+            "data:text/html,<title>Data</title><p>data-result-canary</p>",
+            "data:",
+        ),
+    ] {
+        let mut socket = connect_control(&f, &f.tab, &steer, None).await.unwrap();
+        send(&mut socket, json!({"type":"navigate","url":url})).await;
+        page_update(&mut socket, |page| page == shown).await;
+        socket.close(None).await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while refused(&agent_snapshot(&f, &format!("released-{id}")).await) {
+            assert!(std::time::Instant::now() < deadline, "control kept the tab");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let ticket = takeover(&f, id).await;
+        let done = local
+            .clone()
+            .oneshot(request(
+                "POST",
+                &format!("/v1/tickets/{ticket}/done"),
+                json!({}),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(done.status(), StatusCode::OK);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let resolution = loop {
+            let found = f
+                .runtime
+                .0
+                .lock()
+                .resolved
+                .iter()
+                .find(|(resolved, _, _)| resolved == &ticket)
+                .map(|(_, _, resolution)| resolution.clone());
+            if let Some(resolution) = found {
+                break resolution;
+            }
+            assert!(std::time::Instant::now() < deadline, "{id} never resolved");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let TicketResolution::Result { for_model_json } = resolution else {
+            panic!("takeover resolves with a result");
+        };
+        let result: Value = serde_json::from_str(&for_model_json).unwrap();
+        assert_eq!(result["url"], shown, "{id}");
+    }
+    // The agent's own snapshots may read the page; the ticket's result and event may not.
+    let resolved: Vec<String> = f
+        .daemon
+        .shared
+        .db
+        .events(&f.session, 0)
+        .await
+        .unwrap()
+        .iter()
+        .map(|event| serde_json::to_string(event).unwrap())
+        .filter(|event| event.contains("ticket.resolved"))
+        .collect();
+    assert_eq!(resolved.len(), 2, "{resolved:?}");
+    let resolved = resolved.join("\n");
+    let results = format!("{:?}", f.runtime.0.lock().resolved);
+    for canary in ["result-file-canary", "data-result-canary"] {
+        for (name, text) in [("ticket.resolved", &resolved), ("results", &results)] {
+            assert!(!text.contains(canary), "{canary} in {name}");
+        }
+    }
+    f.daemon.shutdown().await;
+}
+
 #[tokio::test]
 async fn takeover_stream_ends_on_ticket_expiry_and_on_token_revocation() {
     let Some(f) = fixture(4).await else {
@@ -1716,15 +1810,24 @@ async fn page_moves_out_of_typed_documents_and_cross_origin_redirect_hops_meet_t
             "allow_origins":[],"deny_origins":deny,"rules":rules}))
         .unwrap()
     };
+    /// Evaluate in the tab, or `Null` while a navigation replaces the document under it.
+    async fn probe(f: &Fixture, expression: &str) -> Value {
+        let browser = f.daemon.shared.registry.browser.existing().await;
+        let browser = browser.map_err(|error| error.0).unwrap();
+        browser
+            .evaluate(&f.tab, expression)
+            .await
+            .unwrap_or(Value::Null)
+    }
     /// Wait until `expression` holds in the tab; a typed navigation sends no acknowledgement,
     /// and one queued behind a load the page abandoned waits out its 20 s limit.
     async fn until(f: &Fixture, expression: &str) {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while page(f, expression).await != true {
+        while probe(f, expression).await != true {
             assert!(
                 std::time::Instant::now() < deadline,
                 "{expression}: at {}",
-                page(f, "location.href").await
+                probe(f, "location.href").await
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1771,13 +1874,13 @@ async fn page_moves_out_of_typed_documents_and_cross_origin_redirect_hops_meet_t
             } else {
                 sink.send(navigate("about:blank")).await.unwrap();
                 until(&f, "location.href === 'about:blank'").await;
-                page(&f, &format!("{script}; true")).await;
+                probe(&f, &format!("{script}; true")).await;
             }
             if allowed {
                 until(&f, &moved).await;
             } else {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                assert_eq!(page(&f, &moved).await, false, "{from} {effect}");
+                assert_ne!(probe(&f, &moved).await, true, "{from} {effect}");
             }
         }
     }
@@ -1811,7 +1914,7 @@ async fn page_moves_out_of_typed_documents_and_cross_origin_redirect_hops_meet_t
             ["navigation_failed", "connection_denied"].contains(&code.as_str()),
             "{code}"
         );
-        assert_eq!(page(&f, &moved).await, false);
+        assert_ne!(probe(&f, &moved).await, true);
     }
     reader.abort();
     f.daemon.shutdown().await;

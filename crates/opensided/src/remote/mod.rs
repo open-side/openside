@@ -5,7 +5,7 @@ pub(crate) mod cloudflare;
 pub(crate) mod relay;
 mod tailscale;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf};
 
 use axum::{
     extract::{ConnectInfo, State},
@@ -15,15 +15,18 @@ use axum::{
 use hmac::{Hmac, Mac};
 use openside_config::{CloudflareTunnel, RemoteConfig, RemoteMode};
 use openside_proto::{
-    CapabilityScope, ConfigureTailscaleRequest, DeviceKind, LocalAccess, PairingTransport,
-    RemoteConfiguration, RemoteStatus, SetCloudflareRequest, SetRelayRequest,
-    TailscaleConfiguration, TailscaleStatus,
+    CapabilityScope, ConfigureTailscaleRequest, DeviceKind, LocalAccess, MessageAuthorKind,
+    PairingTransport, RemoteConfiguration, RemoteDisabled, RemoteStatus, SetCloudflareRequest,
+    SetRelayRequest, TailscaleConfiguration, TailscaleStatus,
 };
 use parking_lot::Mutex;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
-use crate::{api::HttpError, engine::Shared};
+use crate::{
+    api::{Caller, HttpError},
+    engine::Shared,
+};
 
 pub(crate) const LOCAL_SECRET_HEADER: &str = "x-openside-local-secret";
 
@@ -48,11 +51,15 @@ pub(crate) struct Transports {
     cloudflare: Mutex<Option<cloudflare::Supervisor>>,
     relay: Mutex<Option<relay::Link>>,
     relay_error: Mutex<Option<String>>,
-    effective: Mutex<Option<RemoteConfig>>,
+    pub(crate) effective: Mutex<Option<RemoteConfig>>,
     listen: Mutex<Option<SocketAddr>>,
     boot_secret: Zeroizing<String>,
     boot_tag: [u8; 32],
-    local_device: tokio::sync::Mutex<()>,
+    /// Serialises replacing the daemon-managed launcher devices (browser sign-in and extension).
+    pub(crate) local_device: tokio::sync::Mutex<()>,
+    /// A fake `tailscale` for tests; never consulted outside them.
+    #[cfg(test)]
+    pub(crate) tailscale_bin: Mutex<Option<PathBuf>>,
 }
 
 impl Default for Transports {
@@ -80,6 +87,8 @@ impl Transports {
             boot_secret: secret,
             boot_tag: mac.finalize().into_bytes().into(),
             local_device: tokio::sync::Mutex::default(),
+            #[cfg(test)]
+            tailscale_bin: Mutex::default(),
         }
     }
 
@@ -113,7 +122,9 @@ impl Transports {
     }
 }
 
-pub(crate) fn local_tcp(shared: &Shared, request: &axum::extract::Request) -> bool {
+/// The peer is this computer and nothing marks the request as relayed or proxied. The
+/// forwarding and tunnel headers can only reduce authority; they are not trusted assertions.
+fn untunneled_loopback(request: &axum::extract::Request) -> bool {
     if request.extensions().get::<RelayOrigin>().is_some() {
         return false;
     }
@@ -124,17 +135,18 @@ pub(crate) fn local_tcp(shared: &Shared, request: &axum::extract::Request) -> bo
     {
         return false;
     }
-    // These headers can only reduce authority. They are not trusted origin assertions.
-    if request.headers().keys().any(|name| {
+    !request.headers().keys().any(|name| {
         let name = name.as_str();
         name == "forwarded"
             || name == "via"
             || name.starts_with("x-forwarded-")
             || name.starts_with("cf-")
             || name.starts_with("tailscale-")
-    }) {
-        return false;
-    }
+    })
+}
+
+/// Whether the host part of the `Host` header (IPv6 brackets removed) passes `accept`.
+fn host_is(request: &axum::extract::Request, accept: impl FnOnce(&str) -> bool) -> bool {
     let Some(host) = request
         .headers()
         .get(axum::http::header::HOST)
@@ -145,17 +157,94 @@ pub(crate) fn local_tcp(shared: &Shared, request: &axum::extract::Request) -> bo
     let Ok(authority) = host.parse::<axum::http::uri::Authority>() else {
         return false;
     };
-    let host = authority
-        .host()
-        .trim_start_matches('[')
-        .trim_end_matches(']');
-    if !host
-        .parse::<std::net::IpAddr>()
+    accept(
+        authority
+            .host()
+            .trim_start_matches('[')
+            .trim_end_matches(']'),
+    )
+}
+
+fn loopback_ip(host: &str) -> bool {
+    host.parse::<std::net::IpAddr>()
         .is_ok_and(|ip| ip.is_loopback())
-    {
-        return false;
+}
+
+pub(crate) fn local_tcp(shared: &Shared, request: &axum::extract::Request) -> bool {
+    untunneled_loopback(request)
+        && host_is(request, loopback_ip)
+        && shared.transports.valid_secret(request.headers())
+}
+
+/// A TCP request made directly on this computer, the only kind served while Remote Control is
+/// off: no relay, a loopback peer without proxy or tunnel headers, and a loopback `Host`
+/// (`localhost` counts; a proxy that keeps the visitor's host name does not). A reverse proxy
+/// the person runs that strips every forwarding header cannot be told apart from a local
+/// client, so turning Remote Control off cannot stop one; it can only stop openside's own
+/// transports and refuse what is marked as proxied.
+pub(crate) fn direct(request: &axum::extract::Request) -> bool {
+    untunneled_loopback(request)
+        && host_is(request, |host| {
+            host.eq_ignore_ascii_case("localhost") || loopback_ip(host)
+        })
+}
+
+/// Remote Control is on (`remote.enabled`) in the running daemon.
+pub(crate) fn enabled(shared: &Shared) -> bool {
+    shared
+        .transports
+        .effective
+        .lock()
+        .as_ref()
+        .map_or(shared.config.loaded.config.remote.is_enabled(), |remote| {
+            remote.is_enabled()
+        })
+}
+
+/// Rate-limit identity of a public (token-less) request's caller: the socket peer, except
+/// that a loopback peer is taken to be this daemon's own tunnel when one is enabled, and that
+/// tunnel's header names the visitor (Cloudflare: `cf-connecting-ip`; Tailscale Serve/Funnel:
+/// the last `x-forwarded-for` hop, the one the tunnel appended). Nothing marks a request as
+/// having come through the tunnel, so a local process can set these headers too; local
+/// processes are trusted as the owner. Non-loopback peers always get their own address.
+/// Relay traffic is one caller, keyed by the relay.
+pub(crate) fn public_client(shared: &Shared, parts: &axum::http::request::Parts) -> String {
+    if parts.extensions.get::<RelayOrigin>().is_some() {
+        return "relay".into();
     }
-    shared.transports.valid_secret(request.headers())
+    let Some(peer) = parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|peer| peer.0.ip())
+    else {
+        return "unknown".into();
+    };
+    if peer.is_loopback() {
+        let header = |name: &str| {
+            parts
+                .headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+        let modes = effective(shared).mode;
+        let via_tunnel = if modes.contains(&RemoteMode::Cloudflare) {
+            header("cf-connecting-ip")
+        } else {
+            None
+        }
+        .or_else(|| {
+            modes
+                .contains(&RemoteMode::Tailscale)
+                .then(|| header("x-forwarded-for"))
+                .flatten()
+                .and_then(|hops| hops.rsplit(',').next().map(|hop| hop.trim().to_owned()))
+        });
+        if let Some(ip) = via_tunnel.and_then(|ip| ip.parse::<std::net::IpAddr>().ok()) {
+            return ip.to_string();
+        }
+    }
+    peer.to_string()
 }
 
 pub(crate) fn transport(mode: RemoteMode) -> PairingTransport {
@@ -206,10 +295,9 @@ fn spawn_relay(shared: &Shared, remote: &RemoteConfig) {
     }
 }
 
-pub(crate) fn start(shared: &Shared, listen: Option<SocketAddr>) {
-    let remote = &shared.config.loaded.config.remote;
-    *shared.transports.listen.lock() = listen;
-    *shared.transports.effective.lock() = Some(remote.clone());
+/// Start the daemon-run transports `remote` lists. Tailscale Serve is kept by tailscaled
+/// itself, so nothing runs for it here.
+fn spawn_transports(shared: &Shared, remote: &RemoteConfig, listen: Option<SocketAddr>) {
     if remote.has(RemoteMode::Cloudflare) {
         if let Some(listen) = listen {
             spawn_cloudflare(shared, remote, listen);
@@ -217,6 +305,15 @@ pub(crate) fn start(shared: &Shared, listen: Option<SocketAddr>) {
     }
     if remote.has(RemoteMode::Relay) {
         spawn_relay(shared, remote);
+    }
+}
+
+pub(crate) fn start(shared: &Shared, listen: Option<SocketAddr>) {
+    let remote = &shared.config.loaded.config.remote;
+    *shared.transports.listen.lock() = listen;
+    *shared.transports.effective.lock() = Some(remote.clone());
+    if remote.is_enabled() {
+        spawn_transports(shared, remote, listen);
     }
 }
 
@@ -235,12 +332,40 @@ fn direct_base(shared: &Shared, via: PairingTransport) -> Option<String> {
     }
 }
 
+/// Origin a link to this daemon's web app takes from outside: the first enabled direct
+/// transport that is up, else the configured `remote.public_url`. The relay carries only
+/// paired devices, so a token-less visitor cannot use it. None while Remote Control is off.
+pub(crate) fn public_base(shared: &Shared) -> Option<String> {
+    let remote = effective(shared);
+    if !remote.is_enabled() {
+        return None;
+    }
+    remote
+        .mode
+        .iter()
+        .map(|mode| transport(*mode))
+        .find_map(|via| direct_base(shared, via))
+        .or_else(|| {
+            remote
+                .public_url
+                .map(|url| url.trim_end_matches('/').to_owned())
+        })
+}
+
 pub(crate) fn pairing_link(
     shared: &Shared,
     via: Option<PairingTransport>,
     code: &str,
 ) -> Result<(Option<String>, Option<PairingTransport>), HttpError> {
     let remote = effective(shared);
+    if !remote.is_enabled() {
+        // Only this computer is served, so a link would lead nowhere; the bare code and path
+        // still pair a client on this computer.
+        return match via {
+            Some(_) => Err(HttpError(StatusCode::CONFLICT, "remote_disabled")),
+            None => Ok((None, None)),
+        };
+    }
     let enabled: Vec<PairingTransport> = remote.mode.iter().copied().map(transport).collect();
     let via = match via.or_else(|| enabled.first().copied()) {
         None => {
@@ -331,9 +456,16 @@ pub(crate) fn snapshot(shared: &Shared) -> RemoteStatus {
                     }
                 })
             });
+    // Off: nothing may be advertised as a way in, while `configuration` keeps the saved settings.
+    let on = remote.is_enabled();
     RemoteStatus {
-        modes: remote.mode.iter().copied().map(transport).collect(),
-        public_url: remote.public_url.clone(),
+        enabled: on,
+        modes: if on {
+            remote.mode.iter().copied().map(transport).collect()
+        } else {
+            Vec::new()
+        },
+        public_url: remote.public_url.as_ref().filter(|_| on).cloned(),
         cloudflare: shared
             .transports
             .cloudflare
@@ -392,7 +524,13 @@ pub(crate) async fn local_access(
         crate::pairing::audit(&shared, "device", "paired", serde_json::json!({"device_id":device_id,"name":"openside-browser","kind":"person_device","via":"local_bootstrap","replaces":previous})).await;
         let secret = shared.transports.boot_secret.to_string();
         let url = shared.transports.listen.lock().map(|listen| format!("http://{listen}/#local_secret={secret}&local_token={token}&local_device={device_id}"));
-        Ok(Json(LocalAccess { secret, url, device_id, token, scopes, kind: DeviceKind::PersonDevice }))
+        // The extension reaches the daemon over the same listener; without one a code is useless.
+        let extension_code = match url {
+            Some(_) => Some(crate::pairing::issue_launcher_extension_code(&shared).await),
+            None => None,
+        };
+        let person_browser_runtime_dir = shared.registry.person_gateway.runtime_dir().to_string_lossy().into_owned();
+        Ok(Json(LocalAccess { secret, url, device_id, token, scopes, kind: DeviceKind::PersonDevice, extension_code, person_browser_runtime_dir }))
     }).await.map_err(|_| HttpError::internal())?
 }
 
@@ -430,6 +568,9 @@ async fn update(shared: Shared, change: Change) -> Result<Json<RemoteStatus>, Ht
 async fn update_owned(shared: Shared, change: Change) -> Result<Json<RemoteStatus>, HttpError> {
     let _write = crate::settings_api::WRITE.lock().await;
     let mut config = crate::settings_api::stored(&shared).await?;
+    // An unset switch follows whether a way in is configured; pin the running value before
+    // changing the transports so turning one off can never flip Remote Control as a side effect.
+    config.remote.enabled = Some(config.remote.enabled.unwrap_or(self::enabled(&shared)));
     let (mode, enabled) = match change {
         Change::Tailscale(request) => (RemoteMode::Tailscale, request.enabled),
         Change::Cloudflare(request) => {
@@ -448,6 +589,10 @@ async fn update_owned(shared: Shared, change: Change) -> Result<Json<RemoteStatu
             (RemoteMode::Relay, request.enabled)
         }
     };
+    // Off means nothing runs: a transport turned on now would start behind the switch.
+    if enabled && !(config.remote.is_enabled() && self::enabled(&shared)) {
+        return Err(HttpError(StatusCode::CONFLICT, "remote_disabled"));
+    }
     if enabled {
         if !config.remote.mode.contains(&mode) {
             config.remote.mode.push(mode);
@@ -543,5 +688,137 @@ async fn update_owned(shared: Shared, change: Change) -> Result<Json<RemoteStatu
         serde_json::json!({"transport":transport(mode),"enabled":enabled}),
     )
     .await;
+    Ok(Json(document(&shared, true).await?))
+}
+
+fn tailscale_bin(shared: &Shared) -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(bin) = shared.transports.tailscale_bin.lock().clone() {
+            return Some(bin);
+        }
+    }
+    #[cfg(not(test))]
+    let _ = shared;
+    openside_config::find_on_path("tailscale")
+}
+
+/// Only the person at this computer turns Remote Control on or off; `api::LOCAL_REQUIRED`
+/// supplies the "at this computer" part.
+fn person(caller: &Caller, author: MessageAuthorKind) -> Result<(), HttpError> {
+    crate::takeover::person_only(caller, author)
+        .map_err(|_| HttpError(StatusCode::FORBIDDEN, "person_access_required"))
+}
+
+/// `POST /v1/remote/disable`.
+pub(crate) async fn disable(
+    State(shared): State<Shared>,
+    Extension(caller): Extension<Caller>,
+    Extension(author): Extension<MessageAuthorKind>,
+) -> Result<Json<RemoteDisabled>, HttpError> {
+    person(&caller, author)?;
+    tokio::spawn(disable_owned(shared))
+        .await
+        .map_err(|_| HttpError::internal())?
+}
+
+async fn disable_owned(shared: Shared) -> Result<Json<RemoteDisabled>, HttpError> {
+    let _write = crate::settings_api::WRITE.lock().await;
+    let mut config = crate::settings_api::stored(&shared).await?;
+    // Refuse remote traffic before anything else, so a transport that fails to stop or a save
+    // that fails still leaves only this computer served (fail closed until the next restart).
+    let mut running = effective(&shared);
+    running.enabled = Some(false);
+    let tailscale_on =
+        running.has(RemoteMode::Tailscale) || config.remote.has(RemoteMode::Tailscale);
+    *shared.transports.effective.lock() = Some(running);
+    shared.transports.stop().await;
+    *shared.transports.relay_error.lock() = None;
+    let mut still_on = Vec::new();
+    let target = (*shared.transports.listen.lock()).or(config.daemon.listen);
+    if let (true, Some(bin), Some(target)) = (tailscale_on, tailscale_bin(&shared), target) {
+        let port = config.remote.tailscale.https_port;
+        if let Err(error) = tailscale::stop(&bin, target, port).await {
+            crate::diag!(
+                "opensided: Remote Control is off but Tailscale Serve port {port} could not be turned off ({})",
+                error.1
+            );
+            still_on.push(PairingTransport::Tailscale);
+        }
+    }
+    config.remote.enabled = Some(false);
+    let value = serde_json::to_value(&config).map_err(|_| HttpError::internal())?;
+    crate::settings_api::persist(&shared, value).await?;
+    crate::pairing::audit(
+        &shared,
+        "remote",
+        "disabled",
+        serde_json::json!({"still_on":still_on}),
+    )
+    .await;
+    Ok(Json(RemoteDisabled {
+        status: document(&shared, true).await?,
+        still_on,
+    }))
+}
+
+/// `POST /v1/remote/enable`.
+pub(crate) async fn enable(
+    State(shared): State<Shared>,
+    Extension(caller): Extension<Caller>,
+    Extension(author): Extension<MessageAuthorKind>,
+) -> Result<Json<RemoteStatus>, HttpError> {
+    person(&caller, author)?;
+    tokio::spawn(enable_owned(shared))
+        .await
+        .map_err(|_| HttpError::internal())?
+}
+
+async fn enable_owned(shared: Shared) -> Result<Json<RemoteStatus>, HttpError> {
+    let _write = crate::settings_api::WRITE.lock().await;
+    let mut config = crate::settings_api::stored(&shared).await?;
+    if config.remote.enabled != Some(true) {
+        config.remote.enabled = Some(true);
+        let value = serde_json::to_value(&config).map_err(|_| HttpError::internal())?;
+        crate::settings_api::persist(&shared, value).await?;
+    }
+    // Already on in the running daemon: its transports are up, and starting them again would
+    // run a second cloudflared or relay link.
+    if !self::enabled(&shared) {
+        let listen = *shared.transports.listen.lock();
+        let mut running = effective(&shared);
+        running.enabled = Some(true);
+        let target = listen.or(config.daemon.listen);
+        if let (true, Some(bin), Some(target)) = (
+            running.has(RemoteMode::Tailscale),
+            tailscale_bin(&shared),
+            target,
+        ) {
+            let port = config.remote.tailscale.https_port;
+            match tailscale::start(&bin, target, port).await {
+                // The machine's Serve address changed while Remote Control was off.
+                Ok(Some(url)) if config.remote.public_url.as_deref() != Some(url.as_str()) => {
+                    config.remote.public_url = Some(url.clone());
+                    running.public_url = Some(url);
+                    let value = serde_json::to_value(&config).map_err(|_| HttpError::internal())?;
+                    if let Err(error) = crate::settings_api::persist(&shared, value).await {
+                        crate::diag!(
+                            "opensided: the new Tailscale Serve address could not be saved ({})",
+                            error.1
+                        );
+                    }
+                }
+                Ok(_) => {}
+                // The returned status carries Serve's state and fix hint.
+                Err(error) => crate::diag!(
+                    "opensided: Tailscale Serve port {port} did not come back on ({})",
+                    error.1
+                ),
+            }
+        }
+        spawn_transports(&shared, &running, listen);
+        *shared.transports.effective.lock() = Some(running);
+    }
+    crate::pairing::audit(&shared, "remote", "enabled", serde_json::json!({})).await;
     Ok(Json(document(&shared, true).await?))
 }

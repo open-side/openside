@@ -22,6 +22,24 @@ struct Inner {
     devices: Connection,
 }
 
+/// Daemon-managed devices: each slot holds at most one live device, replaced on every issue.
+#[derive(Clone, Copy)]
+enum Managed {
+    /// The launcher's own web UI sign-in (`GET /v1/remote/local-access`).
+    Browser,
+    /// The extension in the launcher's browser profile, paired from the launcher's one-time code.
+    Extension,
+}
+
+impl Managed {
+    fn table(self) -> &'static str {
+        match self {
+            Self::Browser => "device_bootstrap",
+            Self::Extension => "device_extension_bootstrap",
+        }
+    }
+}
+
 impl Database {
     pub(crate) async fn open(directory: &Path) -> Result<Self> {
         let directory = directory.to_owned();
@@ -34,6 +52,8 @@ impl Database {
             // Legacy and QR-paired devices never inherit local credential-issuer authority.
             devices.execute_batch("CREATE TABLE IF NOT EXISTS device_local (id TEXT PRIMARY KEY);")?;
             devices.execute_batch("CREATE TABLE IF NOT EXISTS device_bootstrap (slot INTEGER PRIMARY KEY CHECK(slot=1), id TEXT NOT NULL UNIQUE);")?;
+            // A separate table, not slot 2 of device_bootstrap: existing databases pin that table's CHECK(slot=1).
+            devices.execute_batch("CREATE TABLE IF NOT EXISTS device_extension_bootstrap (slot INTEGER PRIMARY KEY CHECK(slot=1), id TEXT NOT NULL UNIQUE);")?;
             Ok(Self(
                 Arc::new(Mutex::new(Inner { store, devices })),
                 #[cfg(test)]
@@ -219,8 +239,7 @@ impl Database {
         scopes: Vec<CapabilityScope>,
         kind: DeviceKind,
     ) -> Result<(String, String)> {
-        self.pair_with_origin(name, scopes, kind, false, false)
-            .await
+        self.pair_with_origin(name, scopes, kind, false, None).await
     }
     pub(crate) async fn pair_local(
         &self,
@@ -228,7 +247,7 @@ impl Database {
         scopes: Vec<CapabilityScope>,
         kind: DeviceKind,
     ) -> Result<(String, String)> {
-        self.pair_with_origin(name, scopes, kind, true, false).await
+        self.pair_with_origin(name, scopes, kind, true, None).await
     }
     pub(crate) async fn pair_bootstrap(
         &self,
@@ -239,18 +258,51 @@ impl Database {
             scopes,
             DeviceKind::PersonDevice,
             true,
-            true,
+            Some(Managed::Browser),
+        )
+        .await
+    }
+    /// The extension in the launcher's browser profile; not local, so it never carries
+    /// credential-issuer authority even next to the per-boot secret.
+    pub(crate) async fn pair_launcher_extension(
+        &self,
+        name: String,
+        scopes: Vec<CapabilityScope>,
+    ) -> Result<(String, String)> {
+        self.pair_with_origin(
+            name,
+            scopes,
+            DeviceKind::PersonDevice,
+            false,
+            Some(Managed::Extension),
         )
         .await
     }
     pub(crate) async fn bootstrap_device(&self) -> Result<Option<String>> {
+        self.managed_device(Managed::Browser).await
+    }
+    pub(crate) async fn launcher_extension_device(&self) -> Result<Option<String>> {
+        self.managed_device(Managed::Extension).await
+    }
+    async fn managed_device(&self, managed: Managed) -> Result<Option<String>> {
         let inner = self.0.clone();
         tokio::task::spawn_blocking(move || -> Result<Option<String>> {
             use rusqlite::OptionalExtension;
-            Ok(inner.lock().map_err(|_| "database lock poisoned")?.devices
-                .query_row("SELECT b.id FROM device_bootstrap b JOIN devices d ON d.id=b.id WHERE b.slot=1", [], |row| row.get(0))
+            let table = managed.table();
+            Ok(inner
+                .lock()
+                .map_err(|_| "database lock poisoned")?
+                .devices
+                .query_row(
+                    &format!(
+                        "SELECT b.id FROM {table} b JOIN devices d ON d.id=b.id WHERE b.slot=1"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
                 .optional()?)
-        }).await?
+        })
+        .await?
     }
     async fn pair_with_origin(
         &self,
@@ -258,7 +310,7 @@ impl Database {
         scopes: Vec<CapabilityScope>,
         kind: DeviceKind,
         local: bool,
-        bootstrap: bool,
+        managed: Option<Managed>,
     ) -> Result<(String, String)> {
         let inner = self.0.clone();
         tokio::task::spawn_blocking(move || {
@@ -267,10 +319,11 @@ impl Database {
             let hash = Sha256::digest(token.as_bytes());
             let mut inner = inner.lock().map_err(|_| "database lock poisoned")?;
             let transaction = inner.devices.transaction()?;
-            if bootstrap {
+            if let Some(managed) = managed {
                 use rusqlite::OptionalExtension;
+                let table = managed.table();
                 let previous: Option<String> = transaction.query_row(
-                    "SELECT id FROM device_bootstrap WHERE slot=1", [], |row| row.get(0),
+                    &format!("SELECT id FROM {table} WHERE slot=1"), [], |row| row.get(0),
                 ).optional()?;
                 if let Some(previous) = previous {
                     transaction.execute("DELETE FROM devices WHERE id=?1", [&previous])?;
@@ -278,7 +331,7 @@ impl Database {
                     transaction.execute("DELETE FROM device_kind WHERE id=?1", [&previous])?;
                     transaction.execute("DELETE FROM device_local WHERE id=?1", [&previous])?;
                 }
-                transaction.execute("INSERT INTO device_bootstrap(slot,id) VALUES(1,?1) ON CONFLICT(slot) DO UPDATE SET id=excluded.id", [&id])?;
+                transaction.execute(&format!("INSERT INTO {table}(slot,id) VALUES(1,?1) ON CONFLICT(slot) DO UPDATE SET id=excluded.id"), [&id])?;
             }
             transaction.execute(
                 "INSERT INTO devices(id, hash, scopes) VALUES (?1, ?2, ?3)",
@@ -407,6 +460,31 @@ impl Database {
         })
         .await?
     }
+    /// Set a live device's label; returns whether it existed.
+    pub(crate) async fn rename_device(&self, id: String, name: String) -> Result<bool> {
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut inner = inner.lock().map_err(|_| "database lock poisoned")?;
+            let transaction = inner.devices.transaction()?;
+            let exists: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM devices WHERE id=?1",
+                [&id],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                return Ok(false);
+            }
+            // A device paired before labels were stored has no meta row; its pairing time stays
+            // unknown (empty) rather than becoming the rename time.
+            transaction.execute(
+                "INSERT INTO device_meta(id, name, created_at) VALUES (?1, ?2, '') ON CONFLICT(id) DO UPDATE SET name=excluded.name",
+                params![id, name],
+            )?;
+            transaction.commit()?;
+            Ok(true)
+        })
+        .await?
+    }
     /// Delete a device token; returns whether it existed.
     pub(crate) async fn revoke(&self, id: String) -> Result<bool> {
         let inner = self.0.clone();
@@ -418,6 +496,7 @@ impl Database {
             transaction.execute("DELETE FROM device_kind WHERE id=?1", [&id])?;
             transaction.execute("DELETE FROM device_local WHERE id=?1", [&id])?;
             transaction.execute("DELETE FROM device_bootstrap WHERE id=?1", [&id])?;
+            transaction.execute("DELETE FROM device_extension_bootstrap WHERE id=?1", [&id])?;
             transaction.commit()?;
             Ok(removed > 0)
         })

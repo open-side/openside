@@ -120,14 +120,14 @@ async fn the_guide_flag_is_kept_on_the_daemon_and_only_admin_changes_it() {
         assert!(body["updated_at"].is_string());
     }
 
-    // A restart, and any other device, see the same answer.
+    // A restart, and any other device, see the same answer; the recorded outcome is final.
     let daemon = daemon_with(root.path(), |_| {}).await;
     let tcp = api::router(daemon.shared.clone(), false);
     let reader = token(&daemon, vec![CapabilityScope::Read]).await;
     let (_, body) = call(&tcp, "GET", "/v1/onboarding", Value::Null, Some(&reader)).await;
     assert_eq!(body["state"], "skipped");
     let unix = api::router(daemon.shared.clone(), true);
-    let (_, body) = call(
+    let (status, body) = call(
         &unix,
         "PUT",
         "/v1/onboarding",
@@ -135,9 +135,16 @@ async fn the_guide_flag_is_kept_on_the_daemon_and_only_admin_changes_it() {
         None,
     )
     .await;
-    assert_eq!(body["state"], "completed");
+    assert_eq!(
+        (status, body["code"].as_str(), body["state"].as_str()),
+        (
+            StatusCode::CONFLICT,
+            Some("onboarding_already_set"),
+            Some("skipped")
+        )
+    );
 
-    // A damaged file never hides the guide for good.
+    // A damaged file never hides the guide for good, and the next outcome can be recorded.
     std::fs::write(
         daemon.shared.config.data_dir.join("onboarding.json"),
         b"{not json",
@@ -145,6 +152,102 @@ async fn the_guide_flag_is_kept_on_the_daemon_and_only_admin_changes_it() {
     .unwrap();
     let (_, body) = call(&unix, "GET", "/v1/onboarding", Value::Null, None).await;
     assert_eq!(body["state"], "pending");
+    let (status, body) = call(
+        &unix,
+        "PUT",
+        "/v1/onboarding",
+        json!({"state": "completed"}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["state"].as_str()),
+        (StatusCode::OK, Some("completed"))
+    );
+}
+
+fn stored_flag(daemon: &Daemon) -> Value {
+    serde_json::from_slice(
+        &std::fs::read(daemon.shared.config.data_dir.join("onboarding.json")).unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_recorded_outcome_is_never_overwritten() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with(root.path(), |_| {}).await;
+    let unix = api::router(daemon.shared.clone(), true);
+    let (status, first) = call(
+        &unix,
+        "PUT",
+        "/v1/onboarding",
+        json!({"state": "completed"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let before = std::fs::read(daemon.shared.config.data_dir.join("onboarding.json")).unwrap();
+
+    for state in ["skipped", "completed"] {
+        let (status, body) = call(
+            &unix,
+            "PUT",
+            "/v1/onboarding",
+            json!({ "state": state }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(
+            body,
+            json!({
+                "code": "onboarding_already_set",
+                "message": "onboarding already set",
+                "state": "completed",
+                "updated_at": first["updated_at"],
+            })
+        );
+    }
+    assert_eq!(
+        std::fs::read(daemon.shared.config.data_dir.join("onboarding.json")).unwrap(),
+        before
+    );
+    let (_, body) = call(&unix, "GET", "/v1/onboarding", Value::Null, None).await;
+    assert_eq!(body, first);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_devices_finishing_at_once_record_exactly_one_outcome() {
+    for _ in 0..8 {
+        let root = tempfile::tempdir().unwrap();
+        let daemon = daemon_with(root.path(), |_| {}).await;
+        let unix = api::router(daemon.shared.clone(), true);
+        let put = |state: &'static str| {
+            let unix = unix.clone();
+            tokio::spawn(async move {
+                call(
+                    &unix,
+                    "PUT",
+                    "/v1/onboarding",
+                    json!({ "state": state }),
+                    None,
+                )
+                .await
+            })
+        };
+        let (completed, skipped) = tokio::join!(put("completed"), put("skipped"));
+        let (completed, skipped) = (completed.unwrap(), skipped.unwrap());
+        let (winner, loser) = match (completed.0, skipped.0) {
+            (StatusCode::OK, StatusCode::CONFLICT) => (completed.1, skipped.1),
+            (StatusCode::CONFLICT, StatusCode::OK) => (skipped.1, completed.1),
+            statuses => panic!("expected one 200 and one 409, got {statuses:?}"),
+        };
+        assert_eq!(loser["code"], "onboarding_already_set");
+        assert_eq!(loser["state"], winner["state"]);
+        assert_eq!(loser["updated_at"], winner["updated_at"]);
+        assert_eq!(stored_flag(&daemon), winner);
+    }
 }
 
 fn audit_lines(daemon: &Daemon) -> Vec<Value> {
@@ -174,6 +277,7 @@ async fn external_agents_are_detected_and_get_the_bundled_browser_skill() {
         config.skills.agents.insert("ghost".into(), ghost.clone());
     })
     .await;
+    crate::onboarding::set_test_env(&daemon.shared.config.data_dir, &[("HOME", &home)]);
     let unix = api::router(daemon.shared.clone(), true);
     let tcp = api::router(daemon.shared.clone(), false);
     let reader = token(&daemon, vec![CapabilityScope::Read]).await;
@@ -215,12 +319,28 @@ async fn external_agents_are_detected_and_get_the_bundled_browser_skill() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
-    let (status, installed) = call(
+    // Writing into an agent's skills folder is for this computer only: a paired admin device
+    // elsewhere is refused before anything is written.
+    let (status, body) = call(
         &tcp,
         "POST",
         "/v1/external-agents/claude/browser-skill",
         json!({}),
         Some(&admin),
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("local_access_required"))
+    );
+    assert!(!claude.exists());
+
+    let (status, installed) = call(
+        &unix,
+        "POST",
+        "/v1/external-agents/claude/browser-skill",
+        json!({}),
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{installed}");
@@ -301,6 +421,113 @@ async fn external_agents_are_detected_and_get_the_bundled_browser_skill() {
     assert_eq!(installs.len(), 2, "{installs:?}");
     assert_eq!(installs[1]["forced"], true);
     assert!(installs.iter().all(|line| line["agent"] == "claude"));
+}
+
+/// The skills folder an agent trusts is written only for the person on this computer, and only
+/// inside their home, never through a link and never into openside's own data, whatever the
+/// agent's environment variables say.
+#[tokio::test]
+async fn the_browser_skill_is_installed_only_by_the_person_into_a_checked_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let real = home.join("real/claude-config");
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let daemon = daemon_with(root.path(), |_| {}).await;
+    let data = daemon.shared.config.data_dir.clone();
+    let unix = api::router(daemon.shared.clone(), true);
+    let install = |agent: &str| {
+        let unix = unix.clone();
+        let path = format!("/v1/external-agents/{agent}/browser-skill");
+        async move { call(&unix, "POST", &path, json!({}), None).await }
+    };
+    let refused = (
+        StatusCode::BAD_REQUEST,
+        Some("invalid_skills_dir".to_owned()),
+    );
+    let code =
+        |(status, body): (StatusCode, Value)| (status, body["code"].as_str().map(str::to_owned));
+
+    #[cfg(unix)]
+    {
+        // A preset folder below a linked parent inside home: the link is not followed.
+        std::os::unix::fs::symlink(home.join("real"), home.join("linked")).unwrap();
+        crate::onboarding::set_test_env(
+            &data,
+            &[
+                ("HOME", &home),
+                ("CLAUDE_CONFIG_DIR", &home.join("linked/claude-config")),
+            ],
+        );
+        assert_eq!(code(install("claude").await), refused);
+        assert!(!real.join("skills").exists());
+    }
+    // Outside home, and inside openside's data folder (itself under this home here).
+    crate::onboarding::set_test_env(
+        &data,
+        &[
+            ("HOME", root.path()),
+            ("CODEX_HOME", &outside),
+            ("OMP_CODING_AGENT_DIR", &data),
+        ],
+    );
+    assert_eq!(code(install("omp").await), refused);
+    assert!(!data.join("skills").exists());
+    crate::onboarding::set_test_env(&data, &[("HOME", &home), ("CODEX_HOME", &outside)]);
+    assert_eq!(code(install("codex").await), refused);
+    assert!(!outside.join("skills").exists());
+
+    // An MCP client on the socket has local access but is not the person.
+    crate::onboarding::set_test_env(&data, &[("HOME", &home), ("CLAUDE_CONFIG_DIR", &real)]);
+    let mut marked = request(
+        "POST",
+        "/v1/external-agents/claude/browser-skill",
+        json!({}),
+        None,
+    );
+    marked
+        .headers_mut()
+        .insert("x-openside-client", "mcp".parse().unwrap());
+    let response = unix.clone().oneshot(marked).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("person_access_required"))
+    );
+    assert!(!real.join("skills").exists());
+    // An agent-client token has no local authority over TCP.
+    let (_, agent) = daemon
+        .shared
+        .db
+        .pair_local(
+            "agent".into(),
+            vec![CapabilityScope::Admin],
+            openside_proto::DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap();
+    let tcp = api::router(daemon.shared.clone(), false);
+    let (status, body) = call(
+        &tcp,
+        "POST",
+        "/v1/external-agents/claude/browser-skill",
+        json!({}),
+        Some(&agent),
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("local_access_required"))
+    );
+    assert!(!real.join("skills").exists());
+
+    // Positive control: the same preset folder, reached without the link, takes the skill.
+    let (status, installed) = install("claude").await;
+    assert_eq!(status, StatusCode::CREATED, "{installed}");
+    assert!(real.join("skills/openside-browser/SKILL.md").is_file());
 }
 
 #[tokio::test]

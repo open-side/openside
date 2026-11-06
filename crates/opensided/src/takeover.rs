@@ -332,9 +332,10 @@ pub(crate) async fn done_result(shared: &Shared, ticket: &Ticket) -> Value {
                 }
             }
         }
-        // The tab ledger's title lags behind the page; read the live document instead.
+        // The tab ledger's title lags behind the page; read the live document instead. Like
+        // the stream's `page`, a document that is not http(s) is named only by its scheme.
         if let Ok(url) = browser.url(tab_id).await {
-            result["url"] = json!(crate::browser::public_url(&url));
+            result["url"] = json!(page_address(&url));
         }
         if let Ok(Value::String(title)) = browser.evaluate(tab_id, "document.title").await {
             result["title"] = json!(title.chars().take(200).collect::<String>());
@@ -538,7 +539,7 @@ struct ControlRequest {
 /// Only the person may drive a tab without a ticket: their own paired device, or the local
 /// socket without the MCP or channel marker. An agent client must never take its own work
 /// out from under the policy and approvals that govern agent browsing.
-fn person_only(caller: &Caller, author: MessageAuthorKind) -> Result<(), HttpError> {
+pub(crate) fn person_only(caller: &Caller, author: MessageAuthorKind) -> Result<(), HttpError> {
     let device = caller.0.is_none() || caller.1 == openside_proto::DeviceKind::PersonDevice;
     if device && author == MessageAuthorKind::Person {
         Ok(())

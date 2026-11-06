@@ -894,3 +894,56 @@ async fn channel_two_accounts_rebind_existing_thread_to_teammate_without_reusing
     platform_server.abort();
     let _ = platform_server.await;
 }
+
+#[tokio::test]
+async fn channel_webhook_url_is_withheld_while_remote_control_is_off() {
+    fn webhook_urls(value: &Value, found: &mut Vec<Value>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(url) = map.get("webhook_url") {
+                    found.push(url.clone());
+                }
+                map.values().for_each(|item| webhook_urls(item, found));
+            }
+            Value::Array(items) => items.iter().for_each(|item| webhook_urls(item, found)),
+            _ => {}
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let daemon = fixture(root.path()).await;
+    let file = daemon.shared.config.loaded.paths.config_file.clone();
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "").unwrap();
+    crate::channels_api::initialize(&daemon.shared, Some("127.0.0.1:1".parse().unwrap())).await;
+    *daemon.shared.transports.effective.lock() = Some(openside_config::RemoteConfig {
+        public_url: Some("https://desk.example.ts.net".into()),
+        ..Default::default()
+    });
+    let local = api::router(daemon.shared.clone(), true);
+    let body = json!({"id":"work","label":"work","enabled":false,
+        "credentials":{"token":CANARY,"signing_secret":"channel-hook-signing-canary"},
+        "options":{"allowed_users":["U1"]}});
+    let (status, row) = call(
+        &local,
+        "POST",
+        "/v1/settings/channels/slack/accounts",
+        body,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{row}");
+    assert_eq!(
+        row["webhook_url"],
+        "https://desk.example.ts.net/v1/hooks/slack/work"
+    );
+
+    let (status, off) = call(&local, "POST", "/v1/remote/disable", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{off}");
+    let (status, list) = call(&local, "GET", "/v1/settings/channels", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let mut found = Vec::new();
+    webhook_urls(&list, &mut found);
+    // Neither the saved public address nor the local listener is offered to the platform.
+    assert_eq!(found, vec![Value::Null], "{list}");
+    daemon.shutdown().await;
+}
