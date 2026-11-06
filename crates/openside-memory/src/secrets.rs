@@ -34,6 +34,12 @@ const PATTERNS: &[&str] = &[
     r#"(?i)\b(password|passwd|pwd|passphrase|비밀번호)["']?\s*[:=]\s*["']?[^\s"']+"#,
     // Generic credential assignments with a token-like value.
     r#"(?i)\b(api[_-]?key|secret[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|refresh[_-]?token|private[_-]?key|token|secret)["']?\s*[:=]\s*["']?[A-Za-z0-9._~+/-]{12,}"#,
+    // One-time codes next to the words that introduce them.
+    r"(?i)\b(otp|one[- ]?time[- ]?(?:pass)?(?:code|word)|passcode|(?:verification|security|confirmation|login|sign[- ]?in|auth(?:entication)?) code|[2m]fa(?: code)?)\b\D{0,20}\b\d{4,8}\b",
+    r"(인증\s?(?:번호|코드)|보안\s?코드|일회용\s?(?:비밀번호|코드))\D{0,20}\d{4,8}",
+    // Cookie headers and session or CSRF tokens.
+    r"(?im)^\s*(?:set-)?cookie\s*:\s*\S",
+    r#"(?i)\b(session[_-]?(?:id|token|key)|sessid|phpsessid|jsessionid|connect\.sid|sid|[cx]srf[_-]?token|__(?:host|secure)-[a-z0-9_-]+)["']?\s*[:=]\s*["']?[A-Za-z0-9._~+/%-]{6,}"#,
 ];
 
 // Patterns are compile-time constants; `every_pattern_compiles` proves the fallbacks unused.
@@ -250,6 +256,34 @@ mod tests {
             "password manager recommendations",
             "call 010-1234-5678 tomorrow",
             "token budget is 4000",
+        ] {
+            assert!(!looks_secret(text), "false positive {text:?}");
+        }
+    }
+
+    #[test]
+    fn detects_one_time_codes_cookies_and_session_tokens() {
+        for secret in [
+            "Your verification code is 482913",
+            "OTP: 7731",
+            "2FA code 123456",
+            "one-time passcode 90210 expires soon",
+            "인증번호 [583920]",
+            "Cookie: theme=dark; sessionid=8f2c9a77",
+            "set-cookie: __Host-auth=abc",
+            "sessionid=8f2c9a77d1e04b",
+            "PHPSESSID=q9v0e3abcd12",
+            "connect.sid: s%3Aabcdefgh12345",
+            "csrf_token = 'Zx81aPq0rT55'",
+            "session_token: ab12cd34ef56gh78",
+        ] {
+            assert!(looks_secret(secret), "missed {secret:?}");
+        }
+        for text in [
+            "The verification step takes about 5 minutes.",
+            "Use the promo code SPRING at checkout.",
+            "cookie consent banner dismissed",
+            "Session 42 starts at 10:30.",
         ] {
             assert!(!looks_secret(text), "false positive {text:?}");
         }

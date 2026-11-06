@@ -10,7 +10,9 @@ use std::sync::{
 };
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use openside_memory::{Clock, Embedder, Error, MemoryStore, NewMemory, Options, StaticEmbedder};
+use openside_memory::{
+    Clock, EditCounts, Embedder, Error, MemoryEdit, MemoryStore, NewMemory, Options, StaticEmbedder,
+};
 use openside_proto::{
     MemoryKind, MemoryMatch, MemoryOp, MemorySearchMode, Retention, UpdateMemoryRequest,
 };
@@ -347,6 +349,106 @@ fn history_visits_upsert_by_url_with_thirty_day_retention() {
             .len(),
         1
     );
+}
+
+#[test]
+fn note_snapshot_counts_history_and_failed_batches_change_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path(), Options::default());
+    let kept = store
+        .create(NewMemory::note("  kept as written \n"), "api")
+        .unwrap();
+    let dropped = store.create(NewMemory::note("dropped"), "api").unwrap();
+    store
+        .record_visit(
+            "https://docs.example.test/",
+            Some("Docs"),
+            None,
+            "browser_history:s1",
+        )
+        .unwrap();
+    let before = store.notes().unwrap();
+    assert_eq!(before.history, 1);
+    let ids = |snapshot: &openside_memory::NoteSnapshot| {
+        snapshot
+            .notes
+            .iter()
+            .map(|note| (note.id.clone(), note.content.clone(), note.version))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(&before),
+        [
+            (kept.id.clone(), "  kept as written \n".to_owned(), 1),
+            (dropped.id.clone(), "dropped".to_owned(), 1),
+        ]
+    );
+
+    // A bad tag on the last edit undoes the update applied before it.
+    let mut bad_tag = NewMemory::note("new");
+    bad_tag.tags = vec!["x".repeat(65)];
+    assert!(matches!(
+        store.apply_edits(
+            before.revision,
+            vec![
+                MemoryEdit::Update {
+                    id: kept.id.clone(),
+                    content: "changed".into(),
+                    tags: vec!["ok".into()],
+                },
+                MemoryEdit::Create(bad_tag),
+            ],
+            "api",
+        ),
+        Err(Error::Invalid(_))
+    ));
+    // A failing create undoes the delete before it.
+    assert!(matches!(
+        store.apply_edits(
+            before.revision,
+            vec![
+                MemoryEdit::Delete {
+                    id: dropped.id.clone(),
+                },
+                MemoryEdit::Create(NewMemory::note(" \n ")),
+            ],
+            "api",
+        ),
+        Err(Error::Invalid(_))
+    ));
+    let after = store.notes().unwrap();
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(ids(&after), ids(&before));
+    assert_eq!(after.notes[0].tags, Vec::<String>::new());
+
+    let counts = store
+        .apply_edits(
+            before.revision,
+            vec![
+                MemoryEdit::Delete { id: dropped.id },
+                MemoryEdit::Create(NewMemory::note("second")),
+                MemoryEdit::Create(NewMemory::note("third")),
+            ],
+            "api",
+        )
+        .unwrap();
+    assert_eq!(
+        counts,
+        EditCounts {
+            created: 2,
+            updated: 0,
+            deleted: 1
+        }
+    );
+    let saved = store.notes().unwrap();
+    let order: Vec<_> = saved
+        .notes
+        .iter()
+        .map(|note| note.content.as_str())
+        .collect();
+    assert_eq!(order, ["  kept as written \n", "second", "third"]);
+    assert_eq!(saved.history, 1);
+    assert!(saved.revision > before.revision);
 }
 
 #[test]

@@ -15,6 +15,7 @@
 mod embed;
 mod secrets;
 mod sync;
+mod views;
 
 use std::{collections::HashMap, fmt, path::Path, sync::Arc};
 
@@ -28,6 +29,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
 pub use embed::{Embedder, ModelError, StaticEmbedder, MODEL_FILE, TOKENIZER_FILE};
 pub use secrets::looks_secret;
+pub use views::{EditCounts, MemoryEdit, NoteSnapshot, MAX_EDITS};
 
 /// Reciprocal-rank-fusion constant (Cormack et al.); damps the head of each list.
 pub const RRF_K: f64 = 60.0;
@@ -96,6 +98,8 @@ pub enum Error {
     SecretDetected,
     /// A field violated a documented limit.
     Invalid(&'static str),
+    /// A note changed or disappeared after the caller read it; nothing was stored.
+    Conflict,
     /// SQLite failure.
     Storage(String),
 }
@@ -107,6 +111,7 @@ impl Error {
             Self::NotFound => "not_found",
             Self::SecretDetected => "secret_detected",
             Self::Invalid(_) => "invalid_value",
+            Self::Conflict => "memory_conflict",
             Self::Storage(_) => "internal_error",
         }
     }
@@ -118,6 +123,7 @@ impl fmt::Display for Error {
             Self::NotFound => f.write_str("memory not found"),
             Self::SecretDetected => f.write_str("content looks like a secret and was not stored"),
             Self::Invalid(reason) => f.write_str(reason),
+            Self::Conflict => f.write_str("memory changed since it was read"),
             Self::Storage(reason) => write!(f, "memory storage failed: {reason}"),
         }
     }
