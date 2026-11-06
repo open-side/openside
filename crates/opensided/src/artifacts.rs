@@ -3,6 +3,7 @@
 //! Layout under `<data_dir>/artifacts/<session>/` (directories 0700, files 0600):
 //! `attachments/<message>/<n>-<name>` user uploads, `files/<workspace path>` copies of files
 //! tools created or modified, `screenshots/<tool_call_id>.png` explicit screenshot outputs,
+//! `downloads/<guid>/<name>` files the session's browser downloaded (`crate::downloads`),
 //! `visuals/<seq>-<n>.<ext>` visual blocks and `transcript.jsonl` (rewritten on every read).
 //! The event log is the index: `message.queued` carries attachments, `artifact.saved` tool
 //! files, `assistant.final` visual blocks. Bytes never enter the log.
@@ -69,6 +70,26 @@ pub(crate) fn session_dir(shared: &Shared, session: &SessionId) -> PathBuf {
     openside_config::data_layout::DataPath::Artifacts
         .path(&shared.config.data_dir)
         .join(session.as_str())
+}
+
+/// `path` with its longest existing ancestor resolved through symlinks, for policy checks:
+/// write rules name real directories, so a data directory reached through a link must be
+/// judged where it really is. The missing tail is appended unchanged.
+pub(crate) fn resolved(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            return tail.iter().rev().fold(real, |path, part| path.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 fn component(value: &str) -> bool {
@@ -370,6 +391,102 @@ pub(crate) async fn save_tool_output(
         .await
         .map(|_| ())
         .map_err(|_| std::io::Error::other("artifact event could not be recorded"))
+}
+
+/// Why [`store_download`] kept nothing.
+pub(crate) enum DownloadRefusal {
+    /// The session's downloads already hold this much, and the file would pass the ceiling.
+    SessionQuota,
+    /// The session was deleted, or the file could not be written or recorded.
+    Unavailable,
+}
+
+/// Stores an imported browser download at `rel` (under `downloads/`) and records it as
+/// `artifact.saved` by the `browser_download` tool with the download's guid as call id.
+/// The quota check runs under the lifecycle gate, so concurrent imports of one session
+/// cannot both fit into the same remaining space.
+pub(crate) async fn store_download(
+    shared: &Shared,
+    session: &SessionId,
+    guid: &str,
+    rel: &str,
+    bytes: Vec<u8>,
+    mime: &str,
+    session_limit: u64,
+) -> Result<u64, DownloadRefusal> {
+    let _gate = lifecycle(shared, session).await;
+    if !alive(shared, session).await || !component(session.as_str()) {
+        return Err(DownloadRefusal::Unavailable);
+    }
+    let folder = session_dir(shared, session).join(crate::downloads::ARTIFACT_DIR);
+    let used = tokio::task::spawn_blocking(move || stored_bytes(&folder))
+        .await
+        .unwrap_or(u64::MAX);
+    if used.saturating_add(bytes.len() as u64) > session_limit {
+        return Err(DownloadRefusal::SessionQuota);
+    }
+    let size = store(shared, session, rel, bytes, true)
+        .await
+        .map_err(|_| DownloadRefusal::Unavailable)?;
+    let recorded = shared
+        .emit(
+            session,
+            None,
+            EventKind::ArtifactSaved {
+                path: rel.into(),
+                size,
+                mime: mime.into(),
+                tool_call_id: guid.into(),
+                tool: crate::downloads::ARTIFACT_TOOL.into(),
+            },
+        )
+        .await;
+    if recorded.is_err() {
+        // An unrecorded file would still count against the quota and outlive its download
+        // record; still under the gate, so nothing else can have reached it.
+        let path = session_dir(shared, session).join(rel);
+        let _ = tokio::fs::remove_file(&path).await;
+        if let Some(folder) = path.parent() {
+            let _ = tokio::fs::remove_dir(folder).await;
+        }
+        return Err(DownloadRefusal::Unavailable);
+    }
+    Ok(size)
+}
+
+/// Bytes of the regular files one level below each `downloads/<guid>/` folder; links are
+/// neither followed nor counted. A missing folder holds nothing.
+fn stored_bytes(folder: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(entry.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            if let Ok(meta) = file.path().symlink_metadata() {
+                if meta.is_file() {
+                    total = total.saturating_add(meta.len());
+                }
+            }
+        }
+    }
+    total
+}
+
+/// Reads a session artifact for a tool, up to `max` bytes; the caller checks the path.
+pub(crate) async fn read_private(
+    shared: &Shared,
+    session: &SessionId,
+    rel: &str,
+    max: u64,
+) -> std::io::Result<Vec<u8>> {
+    load(shared, session, rel, max).await
 }
 
 fn document_denial(index: usize, reason: &str, hint: &str) -> crate::tools::ToolExec {
@@ -686,7 +803,26 @@ pub(crate) async fn message_parts(
 
 /// PNG for vision models: unchanged when small enough, otherwise halved up to three times.
 pub(crate) fn model_image(png_bytes: &[u8]) -> Option<Vec<u8>> {
-    if png_bytes.len() <= MODEL_IMAGE_MAX_BYTES {
+    model_image_within(png_bytes, u32::MAX)
+}
+
+/// [`model_image`] that also halves until neither side exceeds `max_edge` pixels; desktop
+/// windows on high-density displays are far larger than a vision model reads in detail.
+pub(crate) fn model_image_within(png_bytes: &[u8], max_edge: u32) -> Option<Vec<u8>> {
+    let edge = if png_bytes.len() >= 24 {
+        let side = |at: usize| {
+            u32::from_be_bytes([
+                png_bytes[at],
+                png_bytes[at + 1],
+                png_bytes[at + 2],
+                png_bytes[at + 3],
+            ])
+        };
+        side(16).max(side(20))
+    } else {
+        u32::MAX
+    };
+    if png_bytes.len() <= MODEL_IMAGE_MAX_BYTES && edge <= max_edge {
         return Some(png_bytes.to_vec());
     }
     let mut decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
@@ -726,7 +862,7 @@ pub(crate) fn model_image(png_bytes: &[u8]) -> Option<Vec<u8>> {
             let mut writer = encoder.write_header().ok()?;
             writer.write_image_data(&pixels).ok()?;
         }
-        if out.len() <= MODEL_IMAGE_MAX_BYTES {
+        if out.len() <= MODEL_IMAGE_MAX_BYTES && width.max(height) <= max_edge as usize {
             return Some(out);
         }
     }
@@ -1245,10 +1381,13 @@ async fn gated(
     Ok((id, gate))
 }
 
-/// Type served for an artifact: uploads keep their sniffed type, so a text upload named
-/// `.html` is never served as HTML; tool and visual files are typed by extension.
+/// Type served for an artifact: uploads and browser downloads keep their sniffed type, so a
+/// text file named `.html` is never served as HTML; tool and visual files are typed by
+/// extension.
 fn served_mime(path: &str, bytes: &[u8]) -> String {
-    if path.starts_with("attachments/") {
+    if path.starts_with("attachments/")
+        || path.starts_with(&format!("{}/", crate::downloads::ARTIFACT_DIR))
+    {
         sniff(bytes)
             .map_or("application/octet-stream", |(_, mime, _)| mime)
             .into()
@@ -1273,8 +1412,15 @@ pub(crate) async fn list(
                 return None;
             }
             let created = entry.created?;
+            let quarantined = path
+                .strip_prefix(crate::downloads::ARTIFACT_DIR)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .and_then(|rest| rest.rsplit('/').next())
+                .is_some_and(|name| crate::downloads::quarantined(name, &entry.mime));
             Some(Artifact {
-                preview_url: preview_kind(&entry.mime).map(|_| preview_url(&id, path)),
+                preview_url: preview_kind(&entry.mime)
+                    .filter(|_| !quarantined)
+                    .map(|_| preview_url(&id, path)),
                 path: path.clone(),
                 size: entry.size,
                 mime: entry.mime,
@@ -1284,6 +1430,7 @@ pub(crate) async fn list(
                 modified_at: entry.modified.unwrap_or(created),
                 tool_call_id: entry.tool_call_id,
                 tool: entry.tool,
+                quarantined,
             })
         })
         .collect();
@@ -1311,6 +1458,53 @@ pub(crate) async fn card_image(
         .await
         .map_err(|_| HttpError::not_found())?;
     Ok((bytes, entry.mime))
+}
+
+/// Delivered artifacts a person chose for a share snapshot, in the order asked, as
+/// `(file name, MIME type, bytes)`. Unknown paths, working files and the transcript (the
+/// complete event log, tool data included) are refused alike; so is one listed above `max`,
+/// or a choice whose listed sizes add up to more than `max_total`. Every size is checked
+/// from the index before any file is read.
+pub(crate) async fn shareable(
+    shared: &Shared,
+    session: &SessionId,
+    paths: &[String],
+    max: u64,
+    max_total: u64,
+) -> Result<Vec<(String, String, Vec<u8>)>, HttpError> {
+    let invalid = || HttpError(StatusCode::BAD_REQUEST, "invalid_share_artifact");
+    let too_large = || HttpError(StatusCode::PAYLOAD_TOO_LARGE, "share_too_large");
+    let (_, _gate) = gated(shared, session.as_str().to_owned()).await?;
+    let mut index = index(shared, session).await?;
+    let mut total = 0_u64;
+    for path in paths {
+        relative(path).ok_or_else(invalid)?;
+        let entry = index.entries.remove(path.as_str()).ok_or_else(invalid)?;
+        if path == TRANSCRIPT
+            || ArtifactPurpose::classify(path, entry.tool.as_deref()) == ArtifactPurpose::Working
+        {
+            return Err(invalid());
+        }
+        total = total.saturating_add(entry.size);
+        if entry.size > max || total > max_total {
+            return Err(too_large());
+        }
+    }
+    let mut chosen = Vec::with_capacity(paths.len());
+    let mut loaded = 0_u64;
+    for path in paths {
+        let bytes = load(shared, session, path, max)
+            .await
+            .map_err(|_| invalid())?;
+        // The file may have grown since it was indexed; the budget still holds.
+        loaded += bytes.len() as u64;
+        if loaded > max_total {
+            return Err(too_large());
+        }
+        let name = file_name(path.rsplit('/').next(), "bin");
+        chosen.push((name, served_mime(path, &bytes), bytes));
+    }
+    Ok(chosen)
 }
 
 pub(crate) async fn visuals(

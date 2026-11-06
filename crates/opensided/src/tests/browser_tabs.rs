@@ -933,3 +933,93 @@ async fn shutdown_kills_the_browser_even_with_a_straggler_handle() {
     drop(daemon);
     drop(fixture);
 }
+
+/// Agent tab cleanup closes only the idle chat's own agent tabs: a person's tab, a tab held
+/// by a Task, a tab under a pending takeover and the tabs of a chat with a running tool call
+/// stay open, and turning cleanup off while a sweep waits for the browser gate stops it.
+#[tokio::test]
+async fn tab_cleanup_closes_only_idle_agent_tabs_and_obeys_the_live_setting() {
+    let root = tempfile::tempdir().unwrap();
+    let Some(config) = browser_config(root.path()) else {
+        return;
+    };
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let (origin, fixture) = site().await;
+    let idle = create_session(&daemon, "tab-cleanup-idle", PolicyMode::Full, None).await;
+    let waiting = create_session(&daemon, "tab-cleanup-takeover", PolicyMode::Full, None).await;
+    let plain = open_tab(&daemon, &idle, &format!("{origin}/"), "plain").await;
+    let held = open_tab(&daemon, &idle, &format!("{origin}/next"), "held").await;
+    let taken = open_tab(&daemon, &waiting, &format!("{origin}/"), "taken").await;
+    let browser = shared_browser(&daemon).await;
+    let _kill = Kill(vec![browser.process_id()]);
+    let user = browser
+        .tabs()
+        .await
+        .into_iter()
+        .find(|tab| tab.opened_by == OpenedBy::External)
+        .expect("the browser's own start tab");
+    browser.adopt_user_tab(&user.id).await.unwrap();
+    drop(browser);
+    daemon
+        .shared
+        .registry
+        .browser
+        .task_tabs
+        .claim(&idle, &held, "task-1");
+    let outcome = tool(
+        &daemon,
+        &waiting,
+        "request_human_step",
+        json!({"kind":"takeover","summary":"Solve the CAPTCHA","tab_id":taken}),
+        "takeover",
+    )
+    .await;
+    assert!(
+        matches!(outcome, ToolOutcome::Deferred { .. }),
+        "{outcome:?}"
+    );
+    async fn open(daemon: &Daemon, ids: [&str; 4]) -> [bool; 4] {
+        let tabs = shared_browser(daemon).await.tabs().await;
+        ids.map(|id| tabs.iter().any(|tab| tab.id == id))
+    }
+    let ids = [
+        plain.as_str(),
+        held.as_str(),
+        taken.as_str(),
+        user.id.as_str(),
+    ];
+    let mut preferences = daemon.shared.preferences.get();
+    preferences.agent_tab_cleanup_minutes = 15;
+    daemon.shared.preferences.replace(preferences.clone());
+    let later = chrono::Utc::now() + chrono::Duration::days(1);
+
+    let running = crate::tab_cleanup::in_use(&idle);
+    assert_eq!(crate::tab_cleanup::sweep(&daemon.shared, later).await, 0);
+    drop(running);
+    assert_eq!(open(&daemon, ids).await, [true; 4]);
+
+    let gate = daemon.shared.registry.browser.gate.lock().await;
+    let sweeping = tokio::spawn({
+        let shared = daemon.shared.clone();
+        async move { crate::tab_cleanup::sweep(&shared, later).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut off = preferences.clone();
+    off.agent_tab_cleanup_minutes = 0;
+    daemon.shared.preferences.replace(off);
+    drop(gate);
+    assert_eq!(
+        sweeping.await.unwrap(),
+        0,
+        "cleanup was turned off during the wait"
+    );
+    assert_eq!(open(&daemon, ids).await, [true; 4]);
+
+    daemon.shared.preferences.replace(preferences);
+    assert_eq!(crate::tab_cleanup::sweep(&daemon.shared, later).await, 1);
+    assert_eq!(open(&daemon, ids).await, [false, true, true, true]);
+    daemon.shutdown().await;
+    drop(fixture);
+}

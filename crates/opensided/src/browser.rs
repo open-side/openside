@@ -194,7 +194,7 @@ pub(crate) fn steer_text(event: &BrowserEvent) -> Option<String> {
         BrowserEvent::DownloadFinished { guid, status } => format!(
             "[browser event] Download {guid} {}.",
             match status {
-                openside_browser::DownloadStatus::Completed => "finished",
+                openside_browser::DownloadStatus::Completed => "finished; browser_downloads shows whether it was saved to the user's Files",
                 openside_browser::DownloadStatus::Canceled => "was canceled or failed",
             }
         ),

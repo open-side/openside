@@ -134,6 +134,7 @@ impl Controller {
             }
         };
         self.install_navigation_policy(&browser, shared);
+        browser.set_download_limit(Some(crate::downloads::MAX_FILE_BYTES));
         // Lets the next daemon start terminate this Chromium if the daemon dies first.
         let endpoint = serde_json::to_vec(&browser.endpoint())
             .map_err(|_| ToolError("Incognito browser state could not be saved".into()))?;
@@ -194,7 +195,10 @@ impl Controller {
                     BrowserEvent::TooManyTabs { .. } | BrowserEvent::OriginCommitted { .. }
                 ) {
                     let notice = crate::browser::steer_text(&event);
-                    let _ = shared.emit(&owner, None, crate::browser_event(event)).await;
+                    let _ = shared
+                        .emit(&owner, None, crate::browser_event(event.clone()))
+                        .await;
+                    crate::downloads::observe(&shared, &owner, browser.upgrade(), &event).await;
                     if let Some(text) = notice {
                         crate::browser::steer_notice(&shared, &owner, text).await;
                     }

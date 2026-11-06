@@ -109,28 +109,40 @@ impl Drop for Kill {
     }
 }
 
+/// Starts a download in the owner's space and saves it there by name; the file Chromium wrote
+/// is deleted once the daemon has imported it, so the saved copy is what the space folder keeps.
 async fn download(browser: &Browser, owner: &SessionId, tab: &str) -> PathBuf {
     let context = browser.space(owner.as_str()).await.unwrap();
     let directory = browser.space_downloads(&context);
+    let before = browser.downloads_of(owner.as_str()).len();
     browser
         .evaluate(tab, "document.getElementById('download').click(); true")
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
+    let guid = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if std::fs::read_dir(&directory).unwrap().any(|entry| {
-                std::fs::read_to_string(entry.unwrap().path())
-                    .ok()
-                    .as_deref()
-                    == Some("synthetic private space download\n")
-            }) {
-                return;
+            let downloads = browser.downloads_of(owner.as_str());
+            if downloads.len() > before {
+                return downloads.last().unwrap().guid.clone();
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
     .unwrap();
+    browser
+        .wait_download(&guid, std::time::Instant::now() + Duration::from_secs(10))
+        .await
+        .unwrap();
+    let saved = browser
+        .save_download(owner.as_str(), &guid, Some("kept.txt"))
+        .await
+        .unwrap();
+    assert_eq!(saved.parent(), Some(directory.as_path()));
+    assert_eq!(
+        std::fs::read_to_string(saved).unwrap(),
+        "synthetic private space download\n"
+    );
     directory
 }
 #[tokio::test]

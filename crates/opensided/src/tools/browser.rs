@@ -146,6 +146,8 @@ pub(crate) struct Controller {
     pub(crate) task_tabs: crate::browser_state::TabLedger,
     /// A blank agent tab per session, opened by prewarm for its next `browser_open_tab`.
     warm_tabs: parking_lot::Mutex<HashMap<SessionId, WarmTab>>,
+    /// Downloads the agent's browsing started, per session ([`crate::downloads`]).
+    pub(crate) downloads: crate::downloads::Downloads,
 }
 
 struct Grant {
@@ -196,6 +198,7 @@ impl Controller {
             reset_spaces: parking_lot::Mutex::default(),
             task_tabs: crate::browser_state::TabLedger::default(),
             warm_tabs: parking_lot::Mutex::default(),
+            downloads: Default::default(),
         }
     }
 
@@ -226,6 +229,11 @@ impl Controller {
             .await
             .map_err(browser_error)?;
         self.install_navigation_policy(&browser, shared);
+        browser.set_download_limit(Some(crate::downloads::MAX_FILE_BYTES));
+        // Only a freshly opened account browser comes with its event pump.
+        if events.is_some() {
+            crate::downloads::sweep(shared, &browser, true).await;
+        }
         self.install_document_policy(&browser, shared, Some(id));
         if let Some(mut events) = events {
             let shared = shared.clone();
@@ -278,6 +286,7 @@ impl Controller {
                                 .emit(&session, None, crate::browser_event(event.clone()))
                                 .await;
                         }
+                        crate::downloads::observe(&shared, &session, weak.upgrade(), &event).await;
                         crate::browser::steer_browser_event(&shared, &session, &event).await;
                     }
                     if let BrowserEvent::TabClosed { tab, .. } = &event {
@@ -764,6 +773,8 @@ impl Controller {
             .launched(std::time::Instant::now(), launched.is_ok());
         let (browser, events) = launched.map_err(browser_error)?;
         self.install_navigation_policy(&browser, shared);
+        browser.set_download_limit(Some(crate::downloads::MAX_FILE_BYTES));
+        crate::downloads::sweep(shared, &browser, true).await;
         self.install_document_policy(&browser, shared, None);
         let browser = Arc::new(browser);
         *slot = Some(browser.clone());
@@ -820,6 +831,8 @@ impl Controller {
             }
         };
         self.install_navigation_policy(&browser, shared);
+        browser.set_download_limit(Some(crate::downloads::MAX_FILE_BYTES));
+        crate::downloads::sweep(shared, &browser, true).await;
         self.install_document_policy(&browser, shared, None);
         // Spaces first: a space tab is only adopted into its restored space.
         self.restore_spaces(shared, &browser, saved.spaces).await;
@@ -1004,6 +1017,14 @@ impl Controller {
                         let _ = shared
                             .emit(&session, None, crate::browser_event(event.clone()))
                             .await;
+                    }
+                    if matches!(
+                        event,
+                        BrowserEvent::DownloadStarted { .. }
+                            | BrowserEvent::DownloadFinished { .. }
+                    ) {
+                        let browser = shared.registry.browser.existing().await.ok();
+                        crate::downloads::observe(&shared, &session, browser, &event).await;
                     }
                     crate::browser::steer_browser_event(&shared, &session, &event).await;
                 }
@@ -1558,6 +1579,7 @@ impl Controller {
         // browser was never started.
         if let Ok(browser) = self.existing().await {
             self.settle_spaces(shared, &browser).await;
+            crate::downloads::sweep(shared, &browser, false).await;
             tabs::sync_gateway_sleep(&browser).await;
             let mut sleeping = HashSet::new();
             let mut asleep = self.asleep.lock().await;
