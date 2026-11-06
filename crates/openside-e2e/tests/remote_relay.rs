@@ -312,22 +312,23 @@ async fn pwa_pairs_lists_streams_and_takes_over_through_the_encrypted_relay() {
     let link = offer.body["url"].as_str().unwrap();
     assert!(link.starts_with(&format!("{relay_origin}/pair#c=")));
     browser.navigate("relay-pwa-acceptance", &page.tab, link).await.unwrap();
-    page.wait("paired chief shell", "!!document.querySelector('.shell') && !!document.querySelector('a[href=\"/history\"]')").await;
-    page.eval("document.querySelector('a[href=\"/history\"]').click(); true").await;
-    page.wait("paired session history", "!!document.querySelector('.history-list') && document.body.innerText.includes('Relay acceptance')").await;
+    page.wait("paired chief shell", "!!document.querySelector('.shell') && !!document.querySelector('a[href=\"/chats\"]')").await;
+    page.eval("document.querySelector('a[href=\"/chats\"]').click(); true").await;
+    page.wait("paired session in Chats", "!!document.querySelector('.chats-list') && document.body.innerText.includes('Relay acceptance')").await;
     assert_eq!(page.eval("location.hash === '' && JSON.parse(localStorage.getItem('openside.transport')).kind === 'relay'").await, true);
     assert_eq!(harness.request("POST", "/v1/pairing/exchange", Some(json!({"code":offer.body["code"]}))).await.status, 404);
     page.eval(&format!("Array.from(document.querySelectorAll('a')).find(a => a.getAttribute('href') === {}).click()", json!(format!("/sessions/{session}")))).await;
-    page.wait("relay session SSE", "!!document.querySelector('.composer textarea')").await;
+    // Chats has its own new-task composer, so only the thread's composer proves the route switched.
+    page.wait("relay session SSE", "!!document.querySelector('main.session .composer textarea')").await;
     page.eval(r#"(() => {
-        const form = document.querySelector('.composer');
+        const form = document.querySelector('main.session .composer');
         const input = form.querySelector('textarea');
         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Show the relay screen');
         input.dispatchEvent(new Event('input', {bubbles:true}));
         return true;
     })()"#).await;
-    page.wait("enabled send", "!!document.querySelector('.composer button[type=submit]:not(:disabled)')").await;
-    page.eval("document.querySelector('.composer button[type=submit]').click()").await;
+    page.wait("enabled send", "!!document.querySelector('main.session .composer button[type=submit]:not(:disabled)')").await;
+    page.eval("document.querySelector('main.session .composer button[type=submit]').click()").await;
     page.wait("takeover Card streamed", "!!document.querySelector('.oc-card[data-kind=takeover][data-status=pending] .oc-pill')").await;
     page.eval("document.querySelector('.oc-card[data-kind=takeover][data-status=pending] .oc-pill').click(); true").await;
     page.wait("ticket over SSE", "Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Open remote screen')").await;

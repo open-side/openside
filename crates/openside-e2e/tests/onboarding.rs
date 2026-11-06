@@ -1,8 +1,8 @@
 //! F-5: the first-run guide in the built web app, walked end to end in headless Chromium
 //! against a throwaway daemon. Fake Chrome and Firefox profiles sit where the daemon looks for
-//! them, a fake agent configuration directory is detected, and the "phone" is a pairing code
-//! exchanged over TCP. Covers the one-time auto-open, every step through public endpoints only,
-//! the dry-run preview before any write, skipping, and reopening from Settings.
+//! them. Covers the one-time auto-open, welcome → browser import → passwords → AI subscription →
+//! all set through public endpoints only, the dry-run preview before any write, the default-browser
+//! prompt, skipping, and reopening from Settings › General.
 //!
 //! Captures: with `OPENSIDE_SCREENS_DIR` set, the flow is walked once per theme and viewport
 //! (light/dark x 390x844 phone / 1440x900 desktop) and every step is saved as
@@ -344,16 +344,8 @@ fn seed_browsers(root: &Path) {
     .unwrap();
 }
 
-/// Back to a daemon nobody has set up: the guide pending, no skill, nothing imported.
+/// Back to a daemon nobody has set up: the guide pending, no vault, nothing imported.
 async fn reset(harness: &Harness) {
-    let remote = harness
-        .request(
-            "PUT",
-            "/v1/remote/cloudflare",
-            Some(json!({"enabled":false,"tunnel":"quick","hostname":null,"token_file":null})),
-        )
-        .await;
-    assert_eq!(remote.status, 200, "{}", remote.body);
     // Locked first: the unlocked vault lives in daemon memory, the file alone decides "set up".
     let _ = harness.request("POST", "/v1/vault/lock", None).await;
     for path in [
@@ -363,7 +355,6 @@ async fn reset(harness: &Harness) {
     ] {
         let _ = std::fs::remove_file(path);
     }
-    let _ = std::fs::remove_dir_all(harness.root().join("home/.claude/skills"));
     let _ = std::fs::remove_dir_all(harness.data_dir.join("browser-profile"));
 }
 
@@ -383,21 +374,33 @@ fn audit(harness: &Harness, tool: &str) -> Vec<Value> {
 }
 
 /// Skip the step the guide is on, or continue when the person already did the work.
-const NEXT: &str =
-    "(__ob.press('Continue') || __ob.press('Skip this step') || __ob.press('Skip for now'))";
+const NEXT: &str = "(__ob.press('Continue') || __ob.press('Skip'))";
 
 /// One full run of the guide on `ui`, which is already open on a pending daemon at `/`.
 async fn walk(ui: &mut Ui, harness: &Harness) {
-    // First visit: the app opens the guide by itself, on the browser import.
+    // First visit: the app opens the guide by itself, on the welcome window.
     ui.wait("guide opened by the app", "__ob.where() === '/welcome'")
         .await;
-    ui.on_step("Bring your browser with you").await;
+    ui.on_step("An AI assistant that works in your browser.")
+        .await;
     assert_eq!(
         ui.eval("!!document.querySelector('.shell[data-focus]') && getComputedStyle(document.querySelector('.shell-sidebar')).display")
             .await,
         "none",
         "the conversation list is hidden while the guide is open"
     );
+    assert_eq!(
+        ui.eval("!!document.querySelector('.onb-pager')").await,
+        false,
+        "welcome stands outside the step count"
+    );
+    assert_eq!(ui.eval("__ob.enabled('Skip setup')").await, true);
+    ui.snap("1-welcome").await;
+    ui.press("Get started", None).await;
+
+    // Browser import: every profile listed and preselected, passwords left to their own step.
+    ui.on_step("Import from another browser").await;
+    assert_eq!(ui.eval("__ob.where()").await, "/welcome?step=import");
     ui.wait(
         "three browser profiles with their counts",
         "document.querySelectorAll('.onb-profile').length === 3 && !document.body.innerText.includes('Counting')",
@@ -410,6 +413,12 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
         .await,
         true,
         "every browser is preselected"
+    );
+    assert_eq!(
+        ui.eval("document.querySelector('.onb-pager [aria-current=step]') === document.querySelector('.onb-pager li')")
+            .await,
+        true,
+        "import is the first of the counted steps"
     );
     let body = ui.text_of(".onb").await;
     assert!(body.contains("Chrome · Personal"), "{body}");
@@ -426,13 +435,13 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
         ui.eval("!!document.querySelector('form[aria-label=Vault]')")
             .await,
         false,
-        "no passwords to bring over, so no vault form"
+        "passwords have their own step, so no vault form here"
     );
-    assert_eq!(ui.eval("__ob.enabled('Skip for now')").await, true);
-    ui.snap("1-import").await;
+    assert_eq!(ui.eval("__ob.enabled('Skip')").await, true);
+    ui.snap("2-import").await;
 
-    // One primary button brings everything over.
-    ui.press("Import everything", None).await;
+    // The footer's Import brings everything over.
+    ui.press("Import", Some(".onb-footer")).await;
     ui.wait(
         "import result",
         "!!document.querySelector('.onb-result [aria-label=Imported]')",
@@ -441,6 +450,11 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
     let imported = ui.text_of(".onb-result").await;
     assert!(imported.contains("Imported from 3 profiles"), "{imported}");
     assert!(imported.contains("History"), "{imported}");
+    assert_eq!(
+        ui.eval("!!__ob.find('Skip')").await,
+        false,
+        "Skip gives way to Continue once something was imported"
+    );
     // Later passes reset the data directory under a browser that is already running, which
     // does not recreate its profile, so only the first pass can see the folder appear.
     static FIRST_PASS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -448,7 +462,7 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
         let profile = harness.data_dir.join("browser-profile/Default");
         assert!(profile.is_dir(), "{} missing", profile.display());
     }
-    ui.snap("2-import-done").await;
+    ui.snap("3-import-done").await;
 
     // Audit: what happened, never a cookie value.
     let lines = audit(harness, "import");
@@ -463,114 +477,64 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
     let raw = std::fs::read_to_string(harness.data_dir.join("audit.jsonl")).unwrap();
     assert!(!raw.contains(COOKIE_VALUE));
 
-    // Models: connecting one is optional.
-    ui.press("Continue", None).await;
-    ui.on_step("Connect a model").await;
+    // Passwords: the import sheet opens and closes without writing anything; the step is skippable.
+    ui.press("Continue", Some(".onb-footer")).await;
+    ui.on_step("Let openside fill in your passwords").await;
+    ui.snap("4-passwords").await;
+    ui.press("Import", Some(".onb-footer")).await;
     ui.wait(
-        "provider cards",
-        "document.querySelectorAll('.onb [aria-label^=\"Provider\"]').length > 0",
+        "vault import sheet",
+        "document.body.innerText.includes('Import credentials to openside Vault') && !!__ob.find('Not now')",
     )
     .await;
-    ui.snap("3-models").await;
-
-    // Agents: the fake `~/.claude` is detected; the skill is installed on request.
-    ui.press("Skip this step", None).await;
-    ui.on_step("Connect your agents").await;
+    ui.snap("5-vault-sheet").await;
+    ui.press("Not now", None).await;
     ui.wait(
-        "Claude Code found",
-        "Array.from(document.querySelectorAll('.onb article')).some((a) => a.textContent.includes('Claude Code') && a.textContent.includes('Found'))",
+        "sheet closed",
+        "!document.body.innerText.includes('Import credentials to openside Vault')",
     )
     .await;
-    let skill = harness
-        .root()
-        .join("home/.claude/skills/openside-browser/SKILL.md");
-    assert!(!skill.exists());
-    ui.snap("4-agents").await;
-    ui.press("Install the browser skill for Claude Code", None)
-        .await;
-    ui.wait(
-        "skill installed",
-        "Array.from(document.querySelectorAll('.onb article')).some((a) => a.textContent.includes('Claude Code') && a.textContent.includes('Skill installed'))",
-    )
-    .await;
-    assert!(skill.is_file(), "{} was not written", skill.display());
-    ui.snap("5-agents-installed").await;
-
-    // With no reachable transport, ConnectPhone offers setup instead of issuing a dead QR.
-    ui.press("Continue", None).await;
-    ui.on_step("Pair your phone").await;
-    ui.wait("connection setup", "!!__ob.find('Turn on Tailscale')")
-        .await;
-    assert_eq!(
-        ui.eval("document.querySelectorAll('.onb .pair [role=img]').length")
-            .await,
-        0
-    );
-    let pair = ui.text_of(".onb").await;
-    assert!(!pair.contains("openside pair"), "{pair}");
-    // A private stand-in announces a reachable URL; no real tunnel or host Tailscale is touched.
-    let enabled = harness
-        .request(
-            "PUT",
-            "/v1/remote/cloudflare",
-            Some(json!({"enabled":true,"tunnel":"quick","hostname":null,"token_file":null})),
-        )
-        .await;
-    assert_eq!(enabled.status, 200, "{}", enabled.body);
-    ui.wait(
-        "automatically issued pairing QR",
-        "!!document.querySelector('.onb .pair[data-state=waiting] [role=img]') && !!document.querySelector('.pair-link code')",
-    )
-    .await;
-    assert_eq!(
-        ui.eval("document.querySelector('.pair-options-toggle').getAttribute('aria-expanded')")
-            .await,
-        "false"
-    );
-    let link = ui.text_of(".pair-link code").await;
     assert!(
-        link.starts_with("https://onboarding.trycloudflare.com/pair#"),
-        "{link}"
+        !harness.data_dir.join("vault.db").exists(),
+        "closing the sheet set up a vault"
     );
-    let code = link.split_once('#').unwrap().1;
-    let exchanged = ui
-        .eval(&format!(
-            "(async () => {{ const r = await fetch('/v1/pairing/exchange', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{code:{}}})}}); return r.status; }})()",
-            json!(code)
-        ))
-        .await;
-    assert_eq!(exchanged, 201);
+    ui.press("Skip", Some(".onb-footer")).await;
+
+    // AI subscription: ChatGPT is preselected; connecting one is optional.
+    ui.on_step("Choose your AI subscription").await;
     ui.wait(
-        "phone connected",
-        "document.querySelector('.remote-result')?.textContent.includes('Connected as')",
+        "subscription choices",
+        "document.querySelectorAll('.onb .models-choice').length > 0",
     )
     .await;
-    ui.snap("6-pair").await;
-
-    // The assistant keeps the name the daemon gave it.
+    ui.snap("6-subscription").await;
     assert_eq!(ui.eval(NEXT).await, true);
-    ui.on_step("Name your assistant").await;
-    ui.wait(
-        "assistant name",
-        "!!document.querySelector('.onb-assistant input')",
-    )
-    .await;
-    ui.snap("7-assistant").await;
 
-    // Done: the recap lists what happened, and finishing records it on the daemon.
-    assert_eq!(ui.eval(NEXT).await, true);
-    ui.on_step("You’re all set").await;
-    let recap = ui.text_of(".onb-recap").await;
-    for expected in ["Browser skill for Claude Code", "Brought over: 3 profiles"] {
-        assert!(recap.contains(expected), "{expected} not in {recap}");
-    }
-    assert!(recap.contains("Skipped"), "models were skipped: {recap}");
-    ui.snap("8-done").await;
+    // All set: finishing records it on the daemon, after the default-browser prompt.
+    ui.on_step("You’re all set!").await;
+    assert_eq!(
+        ui.eval("!!document.querySelector('.onb-pager')").await,
+        false
+    );
+    assert_eq!(
+        ui.eval("document.querySelector('.onb-option input')?.checked")
+            .await,
+        true,
+        "the default-browser option starts ticked"
+    );
+    ui.snap("7-done").await;
     assert_eq!(onboarding_state(harness).await, "pending");
-    ui.press("Open openside", None).await;
+    ui.press("Get started", Some(".onb-footer")).await;
+    ui.wait(
+        "default-browser prompt",
+        "document.body.innerText.includes('Make openside your default browser?')",
+    )
+    .await;
+    ui.snap("8-default-browser").await;
+    ui.press("Not now", None).await;
     ui.wait(
         "app home",
-        "__ob.where() === '/' && !!document.querySelector('main.home .composer')",
+        "__ob.where() === '/' && !!document.querySelector('main.home')",
     )
     .await;
     assert_eq!(onboarding_state(harness).await, "completed");
@@ -580,12 +544,12 @@ async fn walk(ui: &mut Ui, harness: &Harness) {
     tokio::time::sleep(Duration::from_millis(1_000)).await;
     assert_eq!(ui.eval("__ob.where()").await, "/");
 
-    // Reopened from Settings; leaving it again does not turn "completed" into "skipped".
-    ui.press("Settings", None).await;
-    let entry = "Array.from(document.querySelectorAll('.workspace-entry')).find((b) => b.textContent.includes('Setup guide'))";
-    ui.wait("settings dialog", &format!("!!{entry}")).await;
+    // Reopened from Settings › General; leaving it again does not turn "completed" into "skipped".
+    ui.goto("/settings/general").await;
+    ui.wait("settings general", "!!__ob.find('Run setup again')")
+        .await;
     ui.snap("9-settings").await;
-    assert_eq!(ui.eval(&format!("{entry}.click() ?? true")).await, true);
+    ui.press("Run setup again", None).await;
     ui.wait("guide from settings", "__ob.where() === '/welcome'")
         .await;
     ui.press("Skip setup", None).await;
@@ -610,29 +574,12 @@ async fn first_run_guide_is_walked_through_public_endpoints() {
     };
     let root = harness.root().to_owned();
     seed_browsers(&root);
-    // The agent's configuration directory exists, so it counts as installed.
-    std::fs::create_dir_all(root.join("home/.claude")).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    // The Phone step's suggestion reads `tailscale.installed`, which the daemon resolves
-    // on its own PATH. A fixture in the private bin directory (ahead of PATH) says
-    // installed-but-not-serving, whatever the runner has or lacks.
-    let tailscale = root.join("bin/tailscale");
-    std::fs::write(&tailscale, "#!/bin/sh\necho '{}'\n").unwrap();
-    std::fs::set_permissions(&tailscale, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let cloudflared = root.join("cloudflared-fixture");
-    std::fs::write(
-        &cloudflared,
-        "#!/bin/sh\necho 'INF | https://onboarding.trycloudflare.com |' >&2\nexec sleep 3600\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&cloudflared, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Pinned: `auto` would reach the developer's real keyring; skills stay inside the root.
     harness.append_config(&format!(
-        "[ui]\ndir = {}\n[vault]\nunlock = \"passphrase\"\n[skills]\ndir = {}\n[browser]\nexecutable = {}\n[remote.cloudflare]\nbin = {}\n",
+        "[ui]\ndir = {}\n[vault]\nunlock = \"passphrase\"\n[skills]\ndir = {}\n[browser]\nexecutable = {}\n",
         json!(dist),
         json!(root.join("skill-library")),
-        json!(executable),
-        json!(cloudflared)
+        json!(executable)
     ));
     harness.launch().await;
 

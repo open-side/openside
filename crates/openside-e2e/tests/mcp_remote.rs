@@ -274,14 +274,16 @@ async fn remote_agent_and_browser(relay: bool) {
     );
 
     // `exec` archives its session once done unless CLI sessions are kept; this test reuses it.
-    let kept = computer
-        .cli(&["settings", "save-sessions", "true"], None)
+    // Keeping them is the desk daemon's `save_sessions` preference, which this read/steer
+    // pairing cannot change, so the person sets it on the desk.
+    let kept = harness
+        .request(
+            "PATCH",
+            "/v1/settings/preferences",
+            Some(json!({"save_sessions": true})),
+        )
         .await;
-    assert!(
-        kept.status.success(),
-        "{}",
-        String::from_utf8_lossy(&kept.stderr)
-    );
+    assert_eq!(kept.status, 200, "{}", kept.body);
     let output = computer
         .cli(
             &["--host", "desk", "--json", "exec", "answer remotely"],

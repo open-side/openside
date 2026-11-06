@@ -1489,7 +1489,7 @@ async fn cards_handoff_threads_and_chief_attention_link_have_one_secret_form() {
         "!!document.querySelector('.oc-card[data-card-id=\"handoff:{id}\"]')"
     ))
     .await;
-    ui.wait(&format!("document.querySelector('.person-row[data-agent=\"{agent}\"] .row-badge')?.textContent === 'Needs you'")).await;
+    ui.wait(&format!("document.querySelector('.chat-row[data-session=\"{home}\"] .row-badge')?.textContent === 'Needs you'")).await;
     ui.wait(&format!(
         "!!document.querySelector('.card-dock .oc-card[data-ticket=\"{}\"]')",
         ticket.id
@@ -1516,7 +1516,7 @@ async fn cards_handoff_threads_and_chief_attention_link_have_one_secret_form() {
     );
     ui.eval("document.querySelector('.card-dock-meta a').click(); true")
         .await;
-    ui.wait(&format!("location.pathname === '/agents/{agent}' && !!document.querySelector('main .oc-card[data-ticket=\"{}\"]')",ticket.id)).await;
+    ui.wait(&format!("location.pathname === '/sessions/{home}' && !!document.querySelector('main .oc-card[data-ticket=\"{}\"]')",ticket.id)).await;
     ui.wait("!document.querySelector('.card-dock')").await;
     assert_eq!(
         ui.eval(&format!(

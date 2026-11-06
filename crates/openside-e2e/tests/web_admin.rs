@@ -1,8 +1,9 @@
 //! Web UI management acceptance: the built PWA served by the real daemon, driven in
 //! headless Chromium over the loopback TCP listener as a paired device. Covers the
-//! `/pair` deep link (F-2 web), the device list, the vault audit view (C-4) and the
-//! schema-driven settings screen with the local-socket-only rule (PP-13), and a
-//! phone-width (390x844) vault setup that adds an authenticator from its setup key.
+//! `/pair` deep link (F-2 web), Settings › Account's device list, a per-item policy change on
+//! Settings › Passwords that the vault enforces and audits (C-4; the audit log itself is CLI
+//! only, as in Aside), and a phone-width (390x844) vault setup that adds an authenticator from
+//! its setup key.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -67,19 +68,18 @@ impl Page<'_> {
         }
     }
 
-    /// Client-side navigation as a user would: the sidebar's Workspace link opens the
-    /// Workspace dialog, whose tile opens the section.
+    /// Client-side navigation as a user would: Mod+, opens Settings, whose nav row opens the page.
     async fn open_section(&self, label: &str, ready: &str) {
         self.eval(
-            "Array.from(document.querySelectorAll('nav.manage-nav a')).find((a) => a.textContent === 'Workspace').click()",
+            "document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Comma', key: ',', ctrlKey: true, bubbles: true }))",
         )
         .await;
-        let tile = format!(
-            "Array.from(document.querySelectorAll('[role=dialog] a.workspace-tile')).find((a) => a.querySelector('strong').textContent === {})",
+        let row = format!(
+            "Array.from(document.querySelectorAll('nav.settings-nav a.settings-nav-row')).find((a) => a.querySelector('.settings-nav-label').textContent === {})",
             json!(label)
         );
-        self.wait("Workspace dialog", &format!("!!{tile}")).await;
-        self.eval(&format!("{tile}.click()")).await;
+        self.wait("Settings nav", &format!("!!{row}")).await;
+        self.eval(&format!("{row}.click()")).await;
         self.wait(label, ready).await;
     }
 }
@@ -106,12 +106,11 @@ const HELPERS: &str = r#"(() => {
   return true;
 })()"#;
 
-fn config_file(harness: &Harness) -> String {
-    std::fs::read_to_string(harness.root().join("config/openside/config.toml")).unwrap()
-}
+/// The Data management row that opens the Vaults dialog; its description changes with the vault state.
+const VAULTS_ROW: &str = "Array.from(document.querySelectorAll('[data-section=passwords] button.ui-row')).find((b) => b.querySelector('.ui-row-title')?.textContent === 'Vaults')";
 
 #[tokio::test]
-async fn paired_web_device_manages_devices_vault_audit_and_settings() {
+async fn paired_web_device_manages_devices_and_passwords() {
     let (Some(dist), Some(executable)) = (bundle(), chromium()) else {
         return;
     };
@@ -193,7 +192,7 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
     // Pairing replaces the URL with `/`, which is Home.
     page.wait(
         "app after pairing, on Home",
-        "!!document.querySelector('.session-list') && !!document.querySelector('main.home') && location.pathname + location.hash === '/'",
+        "!!document.querySelector('.sidebar-chats') && !!document.querySelector('main.home') && location.pathname + location.hash === '/'",
     )
     .await;
     page.eval(HELPERS).await;
@@ -211,9 +210,9 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
     assert_eq!(replay.status, 404, "{}", replay.body);
 
     page.open_section(
-        "Devices",
+        "Account",
         &format!(
-            "!!document.querySelector('[role=dialog] [data-section=devices] li[data-device={}]')",
+            "!!document.querySelector('[data-section=devices] li[data-device={}]')",
             json!(device)
         ),
     )
@@ -227,9 +226,16 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
         true
     );
 
-    // Vault: a policy change made in the UI is audited by the vault and read back in the UI.
+    // Passwords: a policy change made in the Vaults dialog is enforced and audited by the vault and survives a reload.
     page.open_section(
-        "Vault",
+        "Passwords",
+        "!!document.querySelector('[data-section=passwords]')",
+    )
+    .await;
+    page.wait("Vaults row", &format!("!!{VAULTS_ROW}")).await;
+    page.eval(&format!("{VAULTS_ROW}.click()")).await;
+    page.wait(
+        "Vaults dialog",
         "!!document.querySelector('[data-section=vault] [role=combobox][aria-label=\"Use policy for fixture\"]')",
     )
     .await;
@@ -251,102 +257,36 @@ async fn paired_web_device_manages_devices_vault_audit_and_settings() {
          && document.querySelector('[data-section=vault] [role=combobox][aria-label=\"Use policy for fixture\"]').textContent.trim() === 'Never')",
     )
     .await;
-    page.eval(
-        "(() => { const f = document.querySelector('form[aria-label=\"Audit filters\"]'); \
-         __os.fill(f.querySelector('input'), 'fixture'); __os.button(f, 'Filter').click(); return true })()",
-    )
-    .await;
+    let audit = harness
+        .request("GET", "/v1/vault/audit?item=fixture", None)
+        .await;
+    assert_eq!(audit.status, 200, "{}", audit.body);
+    assert!(
+        audit.body["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| record["what"] == "policy_update" && record["result"] == "updated"),
+        "{}",
+        audit.body
+    );
+    assert_eq!(page.eval("window.__violations").await, json!([]));
+    page.eval("location.reload()").await;
+    page.wait("Vaults row after reload", &format!("!!{VAULTS_ROW}"))
+        .await;
+    page.eval(&format!("{VAULTS_ROW}.click()")).await;
     page.wait(
-        "audit record of the policy change",
-        "Array.from(document.querySelectorAll('ol.audit-list li[data-item=fixture]')).some((r) => \
-         r.dataset.result === 'updated' && r.textContent.includes('Policy change') && r.textContent.includes('never'))",
+        "policy after reload",
+        "document.querySelector('[data-section=vault] [role=combobox][aria-label=\"Use policy for fixture\"]')?.textContent.trim() === 'Never' \
+         && !document.querySelector('.audit-list')",
     )
     .await;
+    page.eval(HELPERS).await;
     assert_eq!(
         page.eval("document.body.innerText.includes('WEB-ADMIN-VAULT-PASSWORD')")
             .await,
         false
     );
-
-    // Settings over TCP: a remote-editable key saves; a local-only key is shown locked.
-    page.open_section(
-        "Configuration",
-        "!!document.getElementById('setting-tickets.confirm_ttl_secs')",
-    )
-    .await;
-    assert_eq!(
-        page.eval("document.querySelector('[data-key=\"policy.mode\"]').dataset.locked === 'true' && document.getElementById('setting-policy.mode').disabled")
-            .await,
-        true
-    );
-    // Persistence can finish before the browser receives the save response.
-    page.eval(
-        "(() => { const fetch = window.fetch; let first = true; window.__configSaves = []; \
-         window.fetch = async (...args) => { const response = await fetch(...args); \
-         if (args[0].endsWith('/v1/settings/config') && args[1]?.method === 'PUT') { \
-         const doc = JSON.parse(args[1].body).config; \
-         window.__configSaves.push({ mode: doc.policy.mode, ttl: doc.tickets.confirm_ttl_secs, status: response.status, \
-         ...(!response.ok ? { code: (await response.clone().json()).code } : {}) }); \
-         const delay = first ? 1000 : 1500; first = false; \
-         await new Promise((resolve) => setTimeout(resolve, delay)); \
-         } return response; }; return true; })()",
-    )
-    .await;
-    page.eval(
-        "(() => { __os.fill(document.getElementById('setting-tickets.confirm_ttl_secs'), '1234'); \
-         __os.button(document.querySelector('[data-section=config]'), 'Save (1)').click(); return true })()",
-    )
-    .await;
-    // Switch editors while the browser's first save response is still pending.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let stored = loop {
-        let stored = harness.request("GET", "/v1/settings/config", None).await;
-        if stored.body["config"]["tickets"]["confirm_ttl_secs"] == 1234 {
-            break stored;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "setting not saved: {}",
-            stored.body
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    assert_eq!(stored.body["config"]["tickets"]["confirm_ttl_secs"], 1234);
-    assert_eq!(stored.body["config"]["policy"]["mode"], "full");
-    assert!(config_file(&harness).contains("confirm_ttl_secs = 1234"));
-
-    // The JSON tab can express a local-only change; the daemon refuses it over TCP.
-    page.eval("__os.button(document.querySelector('[data-section=config]'), 'JSON').click()")
-        .await;
-    page.wait(
-        "JSON editor",
-        "!!document.querySelector('[data-section=config] textarea')",
-    )
-    .await;
-    page.eval(
-        "(() => { const t = document.querySelector('[data-section=config] textarea'); const doc = JSON.parse(t.value); \
-         doc.policy.mode = 'read-only'; __os.fill(t, JSON.stringify(doc)); \
-         __os.button(document.querySelector('[data-section=config]'), 'Save JSON').click(); return true })()",
-    )
-    .await;
-    page.wait(
-        "local authority refusal",
-        "window.__configSaves.some(s => s.status === 403 && s.code === 'local_access_required') \
-         && Array.from(document.querySelectorAll('[data-section=config] [role=alert]')).some((a) => \
-         a.textContent.includes('Reopen openside using the desktop launcher on the computer it runs on'))",
-    )
-    .await;
-    let after = harness.request("GET", "/v1/settings/config", None).await;
-    assert_eq!(after.body["config"]["policy"]["mode"], "full");
-    assert_eq!(after.body["config"]["tickets"]["confirm_ttl_secs"], 1234);
-    assert_eq!(
-        page.eval("window.__configSaves").await,
-        json!([
-            {"mode":"full","ttl":1234,"status":200},
-            {"mode":"read-only","ttl":600,"status":403,"code":"local_access_required"},
-        ])
-    );
-    assert!(config_file(&harness).contains("mode = \"full\""));
     assert_eq!(page.eval("window.__violations").await, json!([]));
 
     browser.shutdown().await.unwrap();
@@ -461,17 +401,26 @@ async fn paired_phone_adds_an_authenticator_to_the_vault() {
     };
     page.wait(
         "app after pairing",
-        "!!document.querySelector('.session-list') || !!localStorage.getItem('openside.token')",
+        "!!document.querySelector('.sidebar-chats') || !!localStorage.getItem('openside.token')",
     )
     .await;
     page.eval("location.assign('/vault')").await;
     page.wait(
         "vault status at phone width",
-        "window.innerWidth === 390 && !!document.querySelector('[data-section=vault] article[data-state=uninitialized]')",
+        "window.innerWidth === 390 && !!document.querySelector('[data-section=passwords] [data-vault-state=uninitialized]')",
     )
     .await;
     page.eval(HELPERS).await;
 
+    page.eval(
+        "__os.button(document.querySelector('[data-vault-state=uninitialized]'), 'Set up').click()",
+    )
+    .await;
+    page.wait(
+        "setup form",
+        "!!document.querySelector('form[aria-label=\"Set up vault\"]')",
+    )
+    .await;
     page.eval(&format!(
         "(() => {{ const f = document.querySelector('form[aria-label=\"Set up vault\"]'); \
          f.querySelectorAll('input[type=password]').forEach((i) => __os.fill(i, {p})); \
@@ -479,9 +428,16 @@ async fn paired_phone_adds_an_authenticator_to_the_vault() {
         p = json!(PASSPHRASE)
     ))
     .await;
+    // An unlocked vault has no status card on the page; its items live in the Vaults dialog.
     page.wait(
         "unlocked vault",
-        "!!document.querySelector('[data-section=vault] article[data-state=unlocked]')",
+        &format!("!document.querySelector('[data-vault-state]') && !!{VAULTS_ROW}"),
+    )
+    .await;
+    page.eval(&format!("{VAULTS_ROW}.click()")).await;
+    page.wait(
+        "Vaults dialog",
+        "!!document.querySelector('[data-section=vault] [data-vault-state=unlocked]')",
     )
     .await;
 

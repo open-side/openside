@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 use std::{path::PathBuf, time::Duration};
 use ui_support::{assert_transient_status, thinking_session, Cdp, Fixture, Ui, OWNER};
 
-fn surface_assertions(page: &str, user: &str, send: &str) -> String {
+/// `background` is the page's own flat token: the web canvas, or the docked panel's sidebar grey.
+fn surface_assertions(page: &str, background: &str, user: &str, send: &str) -> String {
     format!(
         r#"(() => {{
       const failures=[];
@@ -21,7 +22,7 @@ fn surface_assertions(page: &str, user: &str, send: &str) -> String {
       const pageEl=document.querySelector({page});
       const pageStyle=style({page});
       if (pageStyle && pageStyle.backgroundImage !== 'none') failures.push(`page has a background image: ${{pageStyle.backgroundImage}}`);
-      if (pageStyle && pageStyle.backgroundColor !== token(pageEl,'--canvas','backgroundColor')) failures.push(`page background ${{pageStyle.backgroundColor}} is not --canvas`);
+      if (pageStyle && pageStyle.backgroundColor !== token(pageEl,{background},'backgroundColor')) failures.push(`page background ${{pageStyle.backgroundColor}} is not ${{{background}}}`);
       for (const el of document.querySelectorAll('body *')) {{
         const filter=getComputedStyle(el).backdropFilter;
         if (filter && filter !== 'none') failures.push(`${{el.tagName.toLowerCase()}}.${{el.className}} blurs what is behind it: ${{filter}}`);
@@ -45,27 +46,31 @@ fn surface_assertions(page: &str, user: &str, send: &str) -> String {
       return failures;
     }})()"#,
         page = json!(page),
+        background = json!(background),
         user = json!(user),
         send = json!(send)
     )
 }
 
-/// The desktop rail (web/DESIGN.md): 280px of flat `--surface`, 36px rows without per-chat
-/// avatars, the selected row a solid `--active` pill, and the account/search row below the list.
+/// The desktop sidebar (web/DESIGN.md "Sidebar"): `--sidebar-width` of flat `--sidebar-bg`, chat
+/// rows `--sidebar-row` high without per-chat avatars, the current row a `--sidebar-row-selected`
+/// pill, and the account/search row below the sections.
 const SIDEBAR: &str = r#"(() => {
   const failures=[];
   const rail=document.querySelector('.shell-sidebar');
   if (!rail) return ['missing .shell-sidebar'];
   const token=(name, property) => { const probe=document.createElement('span'); probe.style[property]=`var(${name})`; rail.append(probe); const value=getComputedStyle(probe)[property]; probe.remove(); return value; };
   const s=getComputedStyle(rail);
-  if (Math.round(rail.getBoundingClientRect().width) !== 280) failures.push(`rail is ${rail.getBoundingClientRect().width}px, not 280`);
-  if (s.backgroundColor !== token('--surface','backgroundColor') || s.backgroundImage !== 'none') failures.push(`rail background ${s.backgroundColor} ${s.backgroundImage} is not flat --surface`);
-  if (rail.querySelector('.person-row .avatar')) failures.push('a chat row still renders an avatar');
-  const rows=[...rail.querySelectorAll('.person-link')];
+  const width=Math.round(rail.getBoundingClientRect().width);
+  if (`${width}px` !== token('--sidebar-width','minWidth')) failures.push(`rail is ${width}px, not --sidebar-width`);
+  if (s.backgroundColor !== token('--sidebar-bg','backgroundColor') || s.backgroundImage !== 'none') failures.push(`rail background ${s.backgroundColor} ${s.backgroundImage} is not flat --sidebar-bg`);
+  if (rail.querySelector('.chat-row .avatar')) failures.push('a chat row still renders an avatar');
+  const rows=[...rail.querySelectorAll('.chat-row > a.sidebar-row')];
   if (rows.length === 0) failures.push('no chat rows');
-  for (const row of rows) if (Math.round(row.getBoundingClientRect().height) !== 36) failures.push(`chat row is ${row.getBoundingClientRect().height}px high`);
-  const current=rail.querySelector('.person-link[aria-current=page]');
-  if (current && getComputedStyle(current).backgroundColor !== token('--active','backgroundColor')) failures.push(`selected row ${getComputedStyle(current).backgroundColor} is not --active`);
+  const rowHeight=token('--sidebar-row','minHeight');
+  for (const row of rows) if (`${Math.round(row.getBoundingClientRect().height)}px` !== rowHeight) failures.push(`chat row is ${row.getBoundingClientRect().height}px high, not --sidebar-row (${rowHeight})`);
+  const current=rail.querySelector('.chat-row > a.sidebar-row[aria-current=page]');
+  if (current && getComputedStyle(current).backgroundColor !== token('--sidebar-row-selected','backgroundColor')) failures.push(`selected row ${getComputedStyle(current).backgroundColor} is not --sidebar-row-selected`);
   if (!rail.querySelector('.sidebar-utility .sidebar-search')) failures.push('no Search in the account row');
   return failures;
 })()"#;
@@ -156,11 +161,13 @@ async fn web_and_extension_share_flat_surfaces_and_transient_status_pills() {
     // The web user bubble is a column wrapper (text bubble plus attachments); the text paragraph is the bubble surface.
     let web = surface_assertions(
         ".shell-content",
+        "--canvas",
         ".bubble.user > p",
         ".composer button[type=submit]",
     );
     let extension = surface_assertions(
         "body.panel",
+        "--panel-bg",
         ".bubble.user",
         ".composer button[type=submit]",
     );

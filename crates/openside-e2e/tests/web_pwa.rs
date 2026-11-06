@@ -19,7 +19,7 @@
 
 mod ui_support;
 
-use ui_support::{send, silent};
+use ui_support::text;
 
 use std::{
     path::{Path, PathBuf},
@@ -267,7 +267,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
         };
     let Some(mut harness) = Harness::prepare(
         DAEMON,
-        &json!({"responses":[send("Got it, thanks."),silent(),silent()]}),
+        &json!({"responses":[text("Got it, thanks."),text("Saved."),text("Delivered.")]}),
     ) else {
         eprintln!("SKIP: hermetic daemon prerequisites are missing");
         return;
@@ -377,23 +377,20 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
     ui.eval("document.querySelector('.composer-send[type=submit]').click(); true")
         .await;
     ui.wait(
-        "the shared message in the assistant's thread",
-        "location.pathname === '/agents/chief' && document.body.innerText.includes('https://example.com/cool') \
+        "the shared message in its new chat",
+        "location.pathname.startsWith('/sessions/') && document.body.innerText.includes('https://example.com/cool') \
            && document.body.innerText.includes('Got it, thanks.')",
     )
     .await;
     ui.capture(&mut cdp, "share-sent-390x844").await;
-    // Home hands shares to the assistant's one continuous thread, not to a new conversation.
-    let agents = harness.request("GET", "/v1/agents", None).await;
-    let home = agents.body["agents"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["id"] == "chief")
-        .unwrap_or_else(|| panic!("no assistant: {}", agents.body))["home_session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    // Home's Ask starts a new chat (D1: no persona thread); the share lands there.
+    let opened_chat = |ui_path: Value| -> String {
+        let path = ui_path.as_str().unwrap_or_default().to_owned();
+        path.strip_prefix("/sessions/")
+            .unwrap_or_else(|| panic!("not a chat: {path}"))
+            .to_owned()
+    };
+    let home = opened_chat(ui.eval("decodeURIComponent(location.pathname)").await);
     let attachments = |body: &Value| -> Vec<Value> {
         body["artifacts"]
             .as_array()
@@ -407,11 +404,6 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
         .request("GET", &format!("/v1/sessions/{home}/artifacts"), None)
         .await;
     assert_eq!(attachments(&artifacts.body).len(), 1, "{}", artifacts.body);
-    let sessions_before = harness.request("GET", "/v1/sessions", None).await.body["sessions"]
-        .as_array()
-        .unwrap()
-        .len();
-
     // 2. A photo over the 2 MiB budget is re-encoded to fit and still sends.
     ui.goto("/").await;
     ui.share(json!({"title":"","text":"","url":""}), BIG_IMAGE)
@@ -424,13 +416,22 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
     .await;
     ui.eval("document.querySelector('.composer-send[type=submit]').click(); true")
         .await;
+    ui.wait(
+        "the photo's new chat",
+        &format!(
+            "location.pathname.startsWith('/sessions/') && decodeURIComponent(location.pathname) !== {}",
+            json!(format!("/sessions/{home}"))
+        ),
+    )
+    .await;
+    let photo_chat = opened_chat(ui.eval("decodeURIComponent(location.pathname)").await);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
     let photo = loop {
         let artifacts = harness
-            .request("GET", &format!("/v1/sessions/{home}/artifacts"), None)
+            .request("GET", &format!("/v1/sessions/{photo_chat}/artifacts"), None)
             .await;
         let list = attachments(&artifacts.body);
-        if list.len() == 2 {
+        if list.len() == 1 {
             break list
                 .into_iter()
                 .find(|a| a["path"].as_str().is_some_and(|p| p.contains("IMG_2041")))
@@ -438,7 +439,7 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the photo never reached the assistant's thread: {}",
+            "the photo never reached its chat: {}",
             artifacts.body
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -449,11 +450,20 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
         "attachment is {size} bytes: {photo}"
     );
 
+    let sessions_before = harness.request("GET", "/v1/sessions", None).await.body["sessions"]
+        .as_array()
+        .unwrap()
+        .len();
+
     // 3. Offline: the message is queued in IndexedDB and reaches the thread once the daemon is back.
-    ui.goto("/agents/chief").await;
+    let home_path = format!("/sessions/{home}");
+    ui.goto(&home_path).await;
     ui.wait(
-        "the assistant's thread",
-        "location.pathname === '/agents/chief' && !!document.querySelector('.composer textarea')",
+        "the shared chat",
+        &format!(
+            "decodeURIComponent(location.pathname) === {} && !!document.querySelector('.composer textarea')",
+            json!(home_path)
+        ),
     )
     .await;
     cdp.offline(true).await;
@@ -481,9 +491,12 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
 
     cdp.offline(false).await;
     ui.wait(
-        "the queued message to be delivered in the assistant's thread",
-        "location.pathname === '/agents/chief' && document.body.innerText.includes('Written in a tunnel') \
-           && !document.querySelector('.outbox-notice')",
+        "the queued message to be delivered in the chat",
+        &format!(
+            "decodeURIComponent(location.pathname) === {} && document.body.innerText.includes('Written in a tunnel') \
+               && !document.querySelector('.outbox-notice')",
+            json!(home_path)
+        ),
     )
     .await;
     ui.capture(&mut cdp, "outbox-delivered-390x844").await;
@@ -493,11 +506,11 @@ async fn phone_share_target_offline_outbox_and_install_surfaces() {
             .unwrap()
             .len(),
         sessions_before,
-        "messages to the assistant never create another conversation"
+        "a message sent in a chat never creates another conversation"
     );
 
     // 4. The install banner appears on a phone once the browser offers installation.
-    ui.goto("/agents/chief").await;
+    ui.goto(&home_path).await;
     ui.eval(
         "(() => { const e = new Event('beforeinstallprompt', { cancelable: true }); \
            e.prompt = async () => undefined; e.userChoice = Promise.resolve({ outcome: 'dismissed' }); \

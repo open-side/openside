@@ -76,8 +76,10 @@ const HELPERS: &str = r#"(() => {
     submit(form) {
       return form.querySelector('button[type=submit]:not(:disabled)');
     },
+    // A final reply carries its footer (Copy, Branch, time) inside the bubble, so the answer is
+    // read from its Markdown body.
     finalText(text) {
-      return Array.from(document.querySelectorAll('.bubble.assistant[data-final=true]')).some((b) => b.textContent === text)
+      return Array.from(document.querySelectorAll('.bubble.assistant[data-final=true] > .markdown')).some((m) => m.textContent === text)
         && document.querySelector('main.session')?.dataset.status === 'idle';
     },
   };
@@ -350,12 +352,14 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
         "__os.fill(document.querySelector('.composer textarea'), 'Delegate the report /rep'); true",
     )
     .await;
+    // The `/` menu also lists commands whose description matches the query, so only its
+    // Skills rows are compared.
     ui.wait(
         "skill picker",
-        "Array.from(document.querySelectorAll('#skill-mentions [role=option]'), (o) => o.querySelector('strong').textContent).join() === '/report-style'",
+        "Array.from(document.querySelectorAll('#context-menu [role=option][id^=\"context-skill-\"] .context-menu-title'), (o) => o.textContent).join() === '/report-style'",
     )
     .await;
-    ui.eval("document.querySelector('#skill-mentions [role=option]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); true")
+    ui.eval("document.querySelector('#context-menu [role=option][id=\"context-skill-report-style\"]').click(); true")
         .await;
     ui.wait(
         "skill chip",
@@ -429,7 +433,7 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
     .await;
     let bubbles = ui
         .eval(
-            "Array.from(document.querySelectorAll('.bubble.assistant')).map((b) => b.textContent)",
+            "Array.from(document.querySelectorAll('.bubble.assistant > .markdown')).map((m) => m.textContent)",
         )
         .await;
     // turn.ended arrives before assistant.final; the answer still renders once.
@@ -597,7 +601,7 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
         .await;
     assert_eq!(chief.status, 200, "{}", chief.body);
     let home = chief.body["home_session_id"].as_str().unwrap();
-    ui.goto("/agents/chief").await;
+    ui.goto(&format!("/sessions/{home}")).await;
     ui.wait(
         "chief composer",
         "!!document.querySelector('.composer textarea')",
@@ -658,7 +662,7 @@ async fn web_ui_subagent_view_and_approval_resume_same_call_and_reload_rebuilds_
     )
     .await;
     let before = ui.eval(SCREEN).await;
-    ui.goto("/agents/chief").await;
+    ui.goto(&format!("/sessions/{home}")).await;
     ui.wait(
         "chief thread rebuilt from durable events",
         &format!(

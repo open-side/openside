@@ -322,13 +322,15 @@ async fn ready(harness: &Harness, transport: Transport) -> String {
 }
 
 async fn desktop_offer(desktop: &mut Cdp, transport: Transport, name: &str, out: &Path) -> String {
+    // Remote Control lives in Settings › Developers; the pairing flow opens in its Connect your phone dialog,
+    // which stays open on the paired result between phones.
     desktop
         .wait(
-            "remote screen",
-            "!!document.querySelector('[data-section=remote]')",
+            "remote control section",
+            "!!document.querySelector('.remote-result') || Array.from(document.querySelectorAll('[data-section=developers] button.ui-row--action .ui-row-title')).some(t => t.textContent.trim() === 'Connect your phone')",
         )
         .await;
-    desktop.eval("Array.from(document.querySelectorAll('.remote-result button')).find(b => b.textContent.trim() === 'Connect another phone')?.click(); true").await;
+    desktop.eval("(() => { const another = Array.from(document.querySelectorAll('.remote-result button')).find(b => b.textContent.trim() === 'Connect another phone'); if (another) { another.click(); return true; } Array.from(document.querySelectorAll('[data-section=developers] button.ui-row--action')).find(b => b.querySelector('.ui-row-title')?.textContent.trim() === 'Connect your phone').click(); return true; })()").await;
     // The code is issued on arrival with the default name; the name and permissions sit behind a toggle.
     desktop
         .wait(
@@ -469,17 +471,19 @@ async fn phone(
         page.wait("team menu toggle", "!!document.querySelector('button[aria-label=\"Open menu\"]')").await;
         page.click("document.querySelector('button[aria-label=\"Open menu\"]')").await;
         page.click_until(
-            "document.querySelector('.ui-drawer a[href=\"/history\"]')",
-            "location.pathname === '/history'",
+            "document.querySelector('.ui-drawer a[href=\"/chats\"]')",
+            "location.pathname === '/chats'",
         ).await;
-        page.wait("existing conversation history", "!!document.querySelector('.history-list .session-title') && document.body.innerText.includes('Existing conversation')").await;
+        page.wait("existing conversation in Chats", "!!document.querySelector('.chats-list .chats-title-text') && document.body.innerText.includes('Existing conversation')").await;
         page.capture(&out.join(format!("{profile}-conversations.png"))).await;
         page.click("document.querySelector('button[aria-label=\"Open menu\"]')").await;
+        // The assistant's chat is an ordinary chat in the drawer's recent list (D1: no persona pages).
+        let chat_path = format!("/sessions/{session}");
         page.click_until(
-            "document.querySelector('.ui-drawer [data-agent=\"chief\"] .person-link')",
-            "location.pathname === '/agents/chief'",
+            &format!("document.querySelector('.ui-drawer a[href=\"{chat_path}\"]')"),
+            &format!("location.pathname === '{chat_path}'"),
         ).await;
-        page.wait("chief thread closes the phone drawer", "location.pathname === '/agents/chief' && document.querySelector('.ui-drawer') === null && !!document.querySelector('main.session .composer textarea')").await;
+        page.wait("chief thread closes the phone drawer", &format!("location.pathname === '{chat_path}' && document.querySelector('.ui-drawer') === null && !!document.querySelector('main.session .composer textarea')")).await;
         page.capture(&out.join(format!("{profile}-chief-thread.png"))).await;
         let message = format!("Show the remote {profile} phone browser and request my approval.");
         page.fill(".composer textarea", &message).await;
@@ -731,7 +735,7 @@ async fn journey(transport: Transport) {
             .navigate(
                 OWNER,
                 &tab,
-                &format!("http://127.0.0.1:{}/remote", port.trim()),
+                &format!("http://127.0.0.1:{}/settings/developers", port.trim()),
             )
             .await
             .unwrap();

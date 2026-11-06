@@ -129,62 +129,82 @@ async fn web_pip_updates_jpeg_pixels_when_the_agent_navigates_without_a_takeover
     ui.navigate(OWNER, &tab, &format!("{origin}/sessions/{session}"))
         .await
         .unwrap();
-    // The live browser card docks by itself once the conversation has used the browser. The
-    // frame is matched by its alt text: the card's footer also carries the site's favicon.
-    wait(
-        &ui,
-        &tab,
-        "!!document.querySelector('.browser-card img[alt=\"Remote browser tab\"]')?.naturalWidth",
-    )
-    .await;
-    const PIXEL: &str = "(()=>{const i=document.querySelector('.browser-card img[alt=\"Remote browser tab\"]');if(!i?.naturalWidth)return null;const c=document.createElement('canvas');c.width=i.naturalWidth;c.height=i.naturalHeight;const x=c.getContext('2d');x.drawImage(i,0,0);return Array.from(x.getImageData(500,300,1,1).data).slice(0,3)})()";
-    let red = ui.evaluate(&tab, PIXEL).await.unwrap();
+    // At this desktop width the Agent Tabs column docks by itself beside the thread once the
+    // conversation has used the browser; neither the inline card nor the PiP draws while it is
+    // open. The frame is matched by its alt text: the card's bar also carries the favicon.
+    const COLUMN: &str = "document.querySelector('.conversation[data-agent-tabs=\"open\"] .agent-tabs-panel .agent-tab-card img[alt=\"Remote browser tab\"]')";
+    wait(&ui, &tab, &format!("!!{COLUMN}?.naturalWidth && !document.querySelector('.browser-card') && !document.querySelector('.pip')")).await;
+    let pixel = |image: &str| {
+        format!("(()=>{{const i={image};if(!i?.naturalWidth)return null;const c=document.createElement('canvas');c.width=i.naturalWidth;c.height=i.naturalHeight;const x=c.getContext('2d');x.drawImage(i,0,0);return Array.from(x.getImageData(500,300,1,1).data).slice(0,3)}})()")
+    };
+    let red = ui.evaluate(&tab, &pixel(COLUMN)).await.unwrap();
     assert!(
         red[0].as_u64().unwrap() > 180 && red[2].as_u64().unwrap() < 30,
         "{red}"
     );
-    ui.evaluate(
-        &tab,
-        "window.__previewBefore=document.querySelector('.browser-card img[alt=\"Remote browser tab\"]').src; true",
-    )
-    .await
-    .unwrap();
+    ui.evaluate(&tab, &format!("window.__previewBefore={COLUMN}.src; true"))
+        .await
+        .unwrap();
     submit(&harness, &session, "navigate blue").await;
-    wait(&ui,&tab,"(() => { const i = document.querySelector('.browser-card img[alt=\"Remote browser tab\"]'); return i?.src!==window.__previewBefore && !!i?.complete && !!i?.naturalWidth })()").await;
-    let blue = ui.evaluate(&tab, PIXEL).await.unwrap();
+    wait(
+        &ui,
+        &tab,
+        &format!("(() => {{ const i = {COLUMN}; return i?.src!==window.__previewBefore && !!i?.complete && !!i?.naturalWidth }})()"),
+    )
+    .await;
+    let blue = ui.evaluate(&tab, &pixel(COLUMN)).await.unwrap();
     assert!(
         blue[2].as_u64().unwrap() > 180 && blue[0].as_u64().unwrap() < 30,
         "{blue}"
     );
-    let size: Value = ui.evaluate(&tab,"(() => { const i = document.querySelector('.browser-card img[alt=\"Remote browser tab\"]'); return [i.naturalWidth, i.naturalHeight] })()").await.unwrap();
+    let size: Value = ui
+        .evaluate(
+            &tab,
+            &format!(
+                "(() => {{ const i = {COLUMN}; return [i.naturalWidth, i.naturalHeight] }})()"
+            ),
+        )
+        .await
+        .unwrap();
     assert_eq!(size, json!([720, 450]));
-    // The card is named after the live tab from the tab ledger. `ledger` fetches
+    // Cards are named after the live tab from the tab ledger. `ledger` fetches
     // GET /v1/browser/tabs with this device's token and returns the title of the entry for the
-    // blue page, so each check compares the UI with the API's current answer. The card may have
-    // folded to its slim pill after the run; both forms carry the expand button.
+    // blue page, so each check compares the UI with the API's current answer. The ledger follows
+    // Target.targetInfoChanged, so it converges to the document title.
     let blue_url = format!("{site_origin}/blue");
     let ledger = format!(
         "fetch('/v1/browser/tabs',{{headers:{{Authorization:'Bearer '+localStorage.getItem('openside.token')}}}}).then(r=>r.json()).then(b=>b.tabs.find(t=>t.url==={})?.title)",
         json!(blue_url)
     );
-    const EXPAND: &str = "document.querySelector('.browser-card button[aria-label^=\"Expand \"]')";
-    wait(&ui, &tab, &format!("{ledger}.then(t => t !== undefined && {EXPAND}?.getAttribute('aria-label') === 'Expand ' + t)")).await;
-    // The ledger follows Target.targetInfoChanged, so it converges to the document title.
     wait(&ui, &tab, &format!("{ledger}.then(t => t === 'Blue')")).await;
     wait(
         &ui,
         &tab,
-        &format!("{EXPAND}?.getAttribute('aria-label') === 'Expand Blue'"),
+        "document.querySelector('.agent-tabs-panel .agent-tab-card .agent-tab-title')?.textContent === 'Blue'",
     )
     .await;
-    // At this desktop width the Agent Tabs column shows the same tab beside the thread, titled
-    // from the ledger with its live frame, and the PiP stays away while the column is open.
+    // Hiding the column from the header brings back the inline live card, which carries the same
+    // live frame. The card may have folded to its slim pill after the run; both forms carry the
+    // expand button.
+    ui.evaluate(
+        &tab,
+        "document.querySelector('.agent-tabs-toggle[aria-pressed=\"true\"]').click(); true",
+    )
+    .await
+    .unwrap();
+    const CARD: &str = "document.querySelector('.browser-card img[alt=\"Remote browser tab\"]')";
+    const EXPAND: &str = "document.querySelector('.browser-card button[aria-label^=\"Expand \"]')";
     wait(
         &ui,
         &tab,
-        "(() => { const c = document.querySelector('.conversation[data-agent-tabs=\"open\"] .agent-tabs-panel .agent-tab-card'); return c?.querySelector('.agent-tab-title')?.textContent === 'Blue' && !!c.querySelector('img[alt=\"Remote browser tab\"]')?.naturalWidth && !document.querySelector('.pip') })()",
+        &format!("!document.querySelector('.conversation[data-agent-tabs=\"open\"]') && !!{CARD}?.naturalWidth && {EXPAND}?.getAttribute('aria-label') === 'Expand Blue'"),
     )
     .await;
+    let blue = ui.evaluate(&tab, &pixel(CARD)).await.unwrap();
+    assert!(
+        blue[2].as_u64().unwrap() > 180 && blue[0].as_u64().unwrap() < 30,
+        "{blue}"
+    );
     ui.evaluate(&tab, &format!("{EXPAND}.click(); true"))
         .await
         .unwrap();

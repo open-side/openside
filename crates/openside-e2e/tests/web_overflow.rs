@@ -12,10 +12,11 @@ const OVERFLOWING: &str = r#"(() => {
   const failures = [];
   if (document.documentElement.scrollWidth > innerWidth)
     failures.push(`document: ${document.documentElement.scrollWidth} > ${innerWidth}`);
-  const innerScroller = '.table-scroll, .oc-table-scroll, .code-block pre, .tool-body pre, .subagent-events';
-  // Home's card carousels (Suggested and Recent tasks on phones) scroll their cards sideways in
-  // place: a card's own position is the scroll, but nothing inside a card may leave the card.
-  const carouselCard = '.suggested-list > li, .recent-tasks-list > li';
+  // The welcome art (`.onb-art`) clips a miniature window that bleeds off its edge on purpose.
+  const innerScroller = '.table-scroll, .oc-table-scroll, .code-block pre, .tool-body pre, .subagent-events, .onb-art';
+  // Home's Suggested tasks carousel (phones) scrolls its cards sideways in place: a card's own
+  // position is the scroll, but nothing inside a card may leave the card.
+  const carouselCard = '.suggested-list > li';
   for (const el of document.querySelectorAll('body *')) {
     if (!el.getClientRects().length || !el.checkVisibility({visibilityProperty:true,contentVisibilityAuto:true}) ||
         el.closest('.sr-only, .oc-sr, .ui-offscreen, [hidden]') || el.matches('svg *')) continue;
@@ -41,6 +42,23 @@ async fn check(ui: &mut Ui, place: &str, failures: &mut Vec<String>) {
     if result != json!([]) {
         failures.push(format!("{place}: {result}"));
     }
+}
+
+/// Every registered Settings page, read from the web app's own list so a new page is covered too.
+fn settings_pages() -> Vec<&'static str> {
+    const NAV: &str = include_str!("../../../web/src/settings/nav.ts");
+    let start = NAV
+        .find("export const SETTINGS_PAGES = [")
+        .expect("SETTINGS_PAGES in web/src/settings/nav.ts");
+    let list = &NAV[start..];
+    let list = &list[list.find('[').unwrap() + 1..list.find("] as const").unwrap()];
+    let pages: Vec<&str> = list
+        .split(',')
+        .map(|entry| entry.trim().trim_matches('"'))
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    assert!(pages.len() > 10, "parsed {pages:?}");
+    pages
 }
 
 #[tokio::test]
@@ -124,14 +142,11 @@ async fn every_route_and_surface_fits_all_supported_widths() {
                     .await;
             }
         }
+        // Where the Agent Tabs column fits beside the thread it stands in for the inline browser card.
+        let picture = "Array.from(document.querySelectorAll('.browser-card-screen img, .browser-card-thumb img, .agent-tabs-panel .agent-tab-screen img')).find(i => i.complete && i.naturalWidth > 0)";
+        ui.cdp.wait(&format!("!!{picture}")).await;
         ui.cdp
-            .wait("!!document.querySelector('.browser-card-screen, .browser-card-thumb')")
-            .await;
-        ui.cdp.wait("Array.from(document.querySelectorAll('.browser-card-screen img, .browser-card-thumb img')).some(i => i.complete && i.naturalWidth > 0)").await;
-        ui.cdp
-            .eval(
-                "document.querySelector('.browser-card-screen, .browser-card-thumb').click(); true",
-            )
+            .eval(&format!("{picture}.closest('button').click(); true"))
             .await;
         ui.cdp
             .wait("!!document.querySelector('.browser-sheet')")
@@ -142,11 +157,13 @@ async fn every_route_and_surface_fits_all_supported_widths() {
             &mut failures,
         )
         .await;
-        ui.goto(
-            "/",
-            "!!document.querySelector('.home-title') && !!document.querySelector('.composer')",
-        )
-        .await;
+        // A freshly loaded `/` opens in Search (Settings › New tab mode); Ask holds the composer.
+        ui.goto("/", "!!document.querySelector('.home-modes [role=tab]')")
+            .await;
+        ui.cdp.eval("Array.from(document.querySelectorAll('.home-modes [role=tab]')).find(b => b.textContent === 'Ask').click(); true").await;
+        ui.cdp
+            .wait("!!document.querySelector('main.home .composer')")
+            .await;
         check(
             &mut ui,
             &format!("{width}px new chat and code-request dock"),
@@ -172,30 +189,16 @@ async fn every_route_and_surface_fits_all_supported_widths() {
             &mut failures,
         )
         .await;
-        for (path, title) in [
-            ("/settings", "Settings"),
-            ("/workspace", "Workspace"),
-            ("/skills", "Skills"),
-            ("/devices", "Devices"),
-            ("/routines", "Routines"),
-            ("/memory", "Memory"),
-            ("/models", "Models & accounts"),
-            ("/vault", "Vault"),
-            ("/config", "Configuration"),
-            ("/agents", "Agents"),
-            ("/sync", "Sync"),
-            ("/policy", "Policy"),
-            ("/diagnostics", "Diagnostics"),
-        ] {
-            ui.goto(path, &format!("Array.from(document.querySelectorAll('.ui-dialog-title')).some(e => e.textContent === {}) && !document.querySelector('[data-starting-style]')", json!(title))).await;
+        for page in settings_pages() {
+            let path = format!("/settings/{page}");
+            // Desktop titles the page in its column, a phone in its header; both carry this id.
+            ui.goto(&path, &format!("location.pathname === {} && !!document.getElementById('settings-page-title')?.textContent", json!(path))).await;
             ui.cdp
-                .wait("!document.querySelector('.ui-dialog .loading-row')")
+                .wait("!document.querySelector('.settings-scroll .loading-row')")
                 .await;
             check(&mut ui, &format!("{width}px {path}"), &mut failures).await;
         }
-        for step in [
-            "welcome", "models", "agents", "import", "vault", "pair", "done",
-        ] {
+        for step in ["welcome", "import", "passwords", "subscription", "done"] {
             ui.goto(
                 &format!("/welcome?step={step}"),
                 "!!document.querySelector('.onb-body h1')",
@@ -216,20 +219,24 @@ async fn every_route_and_surface_fits_all_supported_widths() {
             )
             .await;
             ui.cdp.eval("Array.from(document.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === 'Open menu' && b.getClientRects().length).click(); true").await;
-            ui.cdp.wait(&format!("!!document.querySelector('.ui-drawer[aria-label=\"Team menu\"]') && document.querySelector('.ui-drawer').innerText.includes({}) && !document.querySelector('[data-starting-style]')", json!(long_name))).await;
-            check(&mut ui, &format!("{width}px team drawer"), &mut failures).await;
-            ui.goto("/history", &format!("!!document.querySelector('.history-page') && document.querySelector('.history-list')?.innerText.includes({})", json!(KOREAN_TITLE))).await;
+            ui.cdp.wait(&format!("!!document.querySelector('.ui-drawer[aria-label=\"Menu\"]') && document.querySelector('.ui-drawer').innerText.includes({}) && !document.querySelector('[data-starting-style]')", json!(KOREAN_TITLE))).await;
+            check(&mut ui, &format!("{width}px sidebar drawer"), &mut failures).await;
+            ui.goto("/chats", &format!("!!document.querySelector('.chats-page') && document.querySelector('.chats-list')?.innerText.includes({})", json!(KOREAN_TITLE))).await;
             check(
                 &mut ui,
-                &format!("{width}px history long titles"),
+                &format!("{width}px chats long titles"),
                 &mut failures,
             )
             .await;
-            ui.cdp.eval("(() => { const el=document.querySelector('.history-search input[type=search]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,'example'); el.dispatchEvent(new Event('input',{bubbles:true})); return true; })()").await;
+            ui.cdp.eval("document.querySelector('.chats-tools button[aria-label=\"Search chats\"]').click(); true").await;
             ui.cdp
-                .wait("document.querySelectorAll('.history-list [data-session]').length === 1")
+                .wait("!!document.querySelector('.chats-search input[type=search]')")
                 .await;
-            check(&mut ui, &format!("{width}px history search"), &mut failures).await;
+            ui.cdp.eval("(() => { const el=document.querySelector('.chats-search input[type=search]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,'example'); el.dispatchEvent(new Event('input',{bubbles:true})); return true; })()").await;
+            ui.cdp
+                .wait("document.querySelectorAll('.chats-list [data-session]').length === 1")
+                .await;
+            check(&mut ui, &format!("{width}px chats search"), &mut failures).await;
             ui.goto("/", "!!document.querySelector('.home-modes [role=tab]')")
                 .await;
             ui.cdp.eval("Array.from(document.querySelectorAll('.home-modes [role=tab]')).find(b => b.textContent === 'Search').click(); true").await;
@@ -238,7 +245,7 @@ async fn every_route_and_surface_fits_all_supported_widths() {
                 .await;
             ui.cdp.eval("(() => { const el=document.querySelector('.home-omnibox input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,'example'); el.dispatchEvent(new Event('input',{bubbles:true})); return true; })()").await;
             ui.cdp
-                .wait("!!document.querySelector('.home-results a')")
+                .wait("document.querySelector('.home-omnibox input')?.value === 'example'")
                 .await;
             check(&mut ui, &format!("{width}px home search"), &mut failures).await;
         }

@@ -136,8 +136,8 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
     ))
     .await;
     page.wait(
-        "conversation list",
-        "!!document.querySelector('.session-list')",
+        "sidebar chats",
+        "!!document.querySelector('.sidebar-chats')",
     )
     .await;
     assert_eq!(
@@ -146,44 +146,12 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
         true
     );
 
-    // `/` is Home now; model selection belongs to the assistant profile in its thread.
+    // A freshly loaded `/` opens in Search (Settings › New tab mode), so the chat is created over the API.
     page.wait(
         "home",
-        "!!document.querySelector('.home .composer') && !!document.querySelector('.person-row[data-agent=chief] .person-link')",
+        "!!document.querySelector('main.home .home-omnibox')",
     )
     .await;
-    page.eval("document.querySelector('.person-row[data-agent=chief] .person-link').click(); true")
-        .await;
-    page.wait(
-        "assistant profile",
-        "location.pathname === '/agents/chief' && !!document.querySelector('.person-heading')",
-    )
-    .await;
-    page.eval("document.querySelector('.person-heading').click(); true")
-        .await;
-    page.wait(
-        "profile model picker",
-        "!!document.querySelector('.profile-sheet .model-picker button')",
-    )
-    .await;
-    page.eval("document.querySelector('.model-picker button').click(); true")
-        .await;
-    page.wait(
-        "configured default model",
-        "Array.from(document.querySelectorAll('[role=dialog] [role=radio]')).some((o) => o.textContent === 'Default (script)' && o.getAttribute('aria-checked') === 'true')",
-    )
-    .await;
-    page.eval(
-        "(() => { Array.from(document.querySelectorAll('[role=dialog] [role=radio]')).find((o) => o.textContent === 'Default (script)').click(); return true })()",
-    )
-    .await;
-    page.wait(
-        "model dialog closed",
-        "!document.querySelector('.model-options')",
-    )
-    .await;
-    page.eval("document.querySelector('.profile-sheet button[aria-label=Close]').click(); true")
-        .await;
     let created = harness
         .request(
             "POST",
@@ -228,7 +196,7 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
         .to_owned();
     page.wait(
         "untitled session before the first reply",
-        "document.querySelector('.session-heading')?.textContent === 'New session'",
+        "document.querySelector('.thread-header-title')?.textContent === 'New session'",
     )
     .await;
 
@@ -259,7 +227,7 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
         .await;
     page.wait(
         "resumed final answer",
-        "Array.from(document.querySelectorAll('.bubble.assistant[data-final=true]')).some((b) => b.textContent === 'blue selected') \
+        "Array.from(document.querySelectorAll('.bubble.assistant[data-final=true] > .markdown')).some((b) => b.textContent === 'blue selected') \
          && document.querySelector('main.session')?.dataset.status === 'idle'",
     )
     .await;
@@ -282,7 +250,7 @@ async fn web_ui_answers_ask_user_ticket_and_session_resumes() {
     assert_eq!(ticket["resolution"]["answer"], "blue");
     page.wait(
         "model conversation title",
-        "document.querySelector('.session-heading')?.textContent === 'Discuss the request'",
+        "document.querySelector('.thread-header-title')?.textContent === 'Discuss the request'",
     )
     .await;
     assert_eq!(ticket["tool_call_id"], "ask-call");

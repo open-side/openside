@@ -12,7 +12,9 @@ use std::{
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 pub const OWNER: &str = "web-visual-acceptance";
-pub const LONG_TITLE: &str = "https://example.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+// One unbreakable run, but not a single repeated letter: the model stream's loop guard ends any
+// visible text that repeats a short unit back to back (as 200 × "a" would) as a stalled stream.
+pub const LONG_TITLE: &str = "https://example.test/quarterlyrevenueforecastworkbookwithregionalbreakdownsandcurrencyadjustmentsforeverysubsidiaryincludingnotesfromtheauditcommitteeandthelatestboardpresentationdraftsharedbyfinanceoperationsbeforethedeadline";
 pub const KOREAN_TITLE: &str = "다음 주 팀 워크숍 장소 예약과 참석자 일정 조율, 그리고 발표 자료 초안까지 한꺼번에 정리해 달라는 요청에 대한 긴 대화";
 
 pub fn text(value: &str) -> Value {
@@ -376,18 +378,18 @@ pub async fn assert_transient_status(ui: &mut Ui, harness: &Harness, session: &s
     )
     .await;
     submit(harness, session, "thinking", "Please answer").await;
-    // Once the agent has started on the message, typing dots stand in for a text status.
+    // Once the agent has started on the message, the open work line says Working with Thinking under it.
     ui.cdp
-        .wait("!!document.querySelector('.typing .typing-dot')")
+        .wait("!!document.querySelector('details.work[data-live] .work-thinking[role=status]')")
         .await;
-    // The dots sit on the canvas where the reply will start (web/DESIGN.md), not in a framed pill.
-    let style = ui.cdp.eval("(() => { const el=document.querySelector('.typing'); const s=getComputedStyle(el); return {background:s.backgroundColor, border:parseFloat(s.borderTopWidth), dots:el.querySelectorAll('.typing-dot').length}; })()").await;
+    // The line sits on the canvas above where the reply will start (web/DESIGN.md), not in a framed pill.
+    let style = ui.cdp.eval("(() => { const el=document.querySelector('details.work[data-live] > .work-summary'); const s=getComputedStyle(el); return {background:s.backgroundColor, border:parseFloat(s.borderTopWidth), working:el.textContent.startsWith('Working'), thinking:document.querySelector('.work-thinking').textContent}; })()").await;
     assert_eq!(
         style,
-        json!({"background":"rgba(0, 0, 0, 0)","border":0,"dots":3}),
-        "typing dots sit on the canvas: {style}"
+        json!({"background":"rgba(0, 0, 0, 0)","border":0,"working":true,"thinking":"Thinking"}),
+        "the work line sits on the canvas: {style}"
     );
-    ui.cdp.wait("document.body.innerText.includes('The answer is ready.') && !document.querySelector('.typing')").await;
+    ui.cdp.wait("document.body.innerText.includes('The answer is ready.') && !document.querySelector('details.work[data-live]')").await;
     let mut stream = harness.events(session, 0).await;
     tokio::time::timeout(Duration::from_secs(30), async {
         while !matches!(stream.next().await.kind, EventKind::SessionSettled {}) {}

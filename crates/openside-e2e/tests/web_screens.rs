@@ -12,20 +12,19 @@
 //! Run through `tools/qa/web-screens.sh [out-dir]`, which rebuilds `web/dist` first. Env:
 //! - `OPENSIDE_SCREENS_DIR`: output directory (default `/tmp/openside-qa/redesign/core`).
 //! - `OPENSIDE_SCREENS_ROUTES`: extra comma-separated app paths to capture, such as
-//!   `/skills,/settings`; each is saved as `route-<path>`.
+//!   `/settings/plugins,/settings/account`; each is saved as `route-<path>`.
 //! - `OPENSIDE_SCREENS_ONLY`: comma-separated screen names to limit a run to: home, home-search
-//!   (Home's Search mode with matches), home-suggestion (a suggested task picked into Ask), assistant,
-//!   profile, conversation, long-thread-top, tool-activity, code-response, ticket, agents,
+//!   (Home's Search mode with an address typed), home-suggestion (a suggested task picked into Ask),
+//!   conversation, long-thread-top, tool-activity, code-response, ticket, agents,
 //!   visuals, files, short-thread, streaming, stop-confirm, working, failed, ask-options, ask-text, secret, otp,
-//!   takeover, device, routine, login, form, form-filled, takeover-tab, queue-menu, queue-edit, session-menu, drawer (phone only), people (the
-//!   sidebar roster and agent tabs, in the drawer on phones), account-menu (the sidebar's account
-//!   row menu), archived, composer-plus, composer-permission, composer-model, composer-effort,
-//!   composer-speed (Home's new-task toolbar menus), composer-set (choices made, text typed),
-//!   composer-at (the `@` context menu in the assistant's thread),
+//!   takeover, device, routine, login, form, form-filled, takeover-tab, queue-menu, queue-edit, session-menu, drawer (phone only), account-menu (the sidebar's account
+//!   row menu), archived, composer-plus, composer-permission (the `+` menu's Permission submenu),
+//!   composer-model, composer-effort (Home's new-task toolbar menus), composer-set (choices made,
+//!   text typed),
+//!   composer-at (the `@` context menu in the assistant's chat),
 //!   search, search-empty, palette (the Mod+Shift+A search palette over Home), palette-results
-//!   (the palette with a typed query), settings, appearance, shortcuts (Settings' keyboard
-//!   shortcut table), theme-preset (Solarized light / Nord dark palettes), offline (captured
-//!   last: the daemon is stopped for it).
+//!   (the palette with a typed query), settings, appearance, settings-security, settings-archived,
+//!   offline (captured last: the daemon is stopped for it).
 //! - `OPENSIDE_SCREENS_SKIP_LIVE=1`: skip seeding the otp and secret states, which drive a live
 //!   agent tab (and so also the cross-conversation code dock on every other screen).
 //!
@@ -583,6 +582,8 @@ async fn otp_site() -> (String, tokio::task::JoinHandle<()>) {
 
 /// Every conversation besides the long one, each left in the state its screen shows.
 struct Seeded {
+    /// The assistant's own chat, holding the earbuds Task's result cards and a hire suggestion.
+    assistant: String,
     short: String,
     streaming: String,
     working: String,
@@ -593,8 +594,6 @@ struct Seeded {
     otp: String,
     takeover: String,
     device: String,
-    suggestion: String,
-    admin: String,
     cards: CardStates,
 }
 
@@ -782,9 +781,9 @@ fn result_card(kind: &str, title: &str, rows: &[(&str, u64, &str)]) -> Value {
 
 /// The team behind the people sidebar: teammates, one retired for History, and the assistant's
 /// thread with result cards and a hire suggestion waiting (a pending ticket holds a thread's queue,
-/// so it is the only request there). Returns the open
-/// suggestion's ticket and an admin token, to turn the suggestion off once the capture is done.
-async fn seed_team(harness: &Harness) -> (String, String) {
+/// so it is the only request there).
+/// Seeds the team and the assistant's chat; returns that chat's session id.
+async fn seed_team(harness: &Harness) -> String {
     // Hiring and retiring need `admin` on a person's device; the shared fixture person has none.
     let paired = harness
         .request(
@@ -915,8 +914,8 @@ async fn seed_team(harness: &Harness) -> (String, String) {
         matches!(&event.kind, EventKind::SubagentEnded { .. })
     })
     .await;
-    let suggestion = pending("hire", Some("inbox-triage")).await;
-    (suggestion, admin)
+    pending("hire", Some("inbox-triage")).await;
+    home
 }
 
 async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<()>) {
@@ -1111,10 +1110,11 @@ async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<
         .await;
     assert!(archive.status < 300, "{}", archive.body);
 
-    let (suggestion, admin) = seed_team(harness).await;
+    let assistant = seed_team(harness).await;
 
     (
         Seeded {
+            assistant,
             short,
             streaming,
             working,
@@ -1125,8 +1125,6 @@ async fn seed_states(harness: &mut Harness) -> (Seeded, tokio::task::JoinHandle<
             otp,
             takeover,
             device,
-            suggestion,
-            admin,
             cards,
         },
         server,
@@ -1420,7 +1418,7 @@ async fn web_screens_capture() {
                 ui.goto("/").await;
                 ui.wait(
                     "home",
-                    "!!document.querySelector('main.home .composer textarea')",
+                    "!!document.querySelector('main.home .home-omnibox-area')",
                 )
                 .await;
                 ui.snap(&file("home")).await;
@@ -1440,12 +1438,12 @@ async fn web_screens_capture() {
                     "(() => {{ const el = document.querySelector('.home-omnibox input'); \
                        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, {}); \
                        el.dispatchEvent(new Event('input', {{ bubbles: true }})); return true }})()",
-                    json!("release")
+                    json!("example.com")
                 ))
                 .await;
                 ui.wait(
-                    "home search results",
-                    "!!document.querySelector('.home-results a')",
+                    "home search address typed",
+                    "document.querySelector('.home-omnibox input')?.value === 'example.com'",
                 )
                 .await;
                 ui.snap(&file("home-search")).await;
@@ -1457,47 +1455,60 @@ async fn web_screens_capture() {
                     "!!document.querySelector('.suggested-card')",
                 )
                 .await;
-                ui.eval("document.querySelector('.suggested-card[data-suggestion=\"compare\"]').click(); true")
+                ui.eval("document.querySelector('.suggested-card[data-suggestion=\"routines\"]').click(); true")
                     .await;
                 ui.wait(
                     "the picked prompt",
-                    "(document.querySelector('main.home .composer textarea')?.value ?? '').startsWith('Compare')",
+                    "(document.querySelector('main.home .composer textarea')?.value ?? '').startsWith('Look through')",
                 )
                 .await;
                 ui.snap(&file("home-suggestion")).await;
             }
-            // The new-task toolbar: each menu open over Home, then the choices made.
-            for (screen, trigger, menu) in [
+            // A freshly loaded `/` follows Settings › New tab mode; Ask holds the new-task composer.
+            let home_ask = || async {
+                ui.goto("/").await;
+                ui.wait("home", "!!document.querySelector('.home-modes')")
+                    .await;
+                ui.eval("__qs.text(document.querySelector('.home-modes'), 'Ask').click(); true")
+                    .await;
+                ui.wait(
+                    "new-task composer",
+                    "!!document.querySelector('main.home .composer textarea')",
+                )
+                .await;
+            };
+            // The new-task toolbar: each menu open over Home, then the choices made. Permission
+            // lives in the `+` menu as a submenu.
+            for (screen, trigger, submenu, menu) in [
                 (
                     "composer-plus",
-                    "button.composer-attach[aria-label='Add files and options']",
-                    "Add to this task",
+                    "button.composer-plus[aria-label='Add files and options']",
+                    None,
+                    ".composer-plus-menu",
                 ),
                 (
                     "composer-permission",
-                    "button.composer-option[aria-label^='Permission']",
-                    "Permission",
+                    "button.composer-plus[aria-label='Add files and options']",
+                    Some("Permission"),
+                    ".composer-permission-menu",
                 ),
                 (
                     "composer-model",
-                    "button.composer-option[aria-label^='Model']",
-                    "Model",
+                    "button.composer-model-chip",
+                    None,
+                    ".composer-model-menu",
                 ),
                 (
                     "composer-effort",
-                    "button.composer-option[aria-label^='Effort']",
-                    "Effort",
-                ),
-                (
-                    "composer-speed",
-                    "button.composer-option[aria-label^='Speed']",
-                    "Speed",
+                    "button.composer-effort-chip",
+                    None,
+                    ".composer-effort-menu",
                 ),
             ] {
                 if !wanted(screen) {
                     continue;
                 }
-                ui.goto("/").await;
+                home_ask().await;
                 ui.wait(
                     "new-task toolbar",
                     &format!("!!document.querySelector({})", json!(trigger)),
@@ -1508,46 +1519,41 @@ async fn web_screens_capture() {
                     json!(trigger)
                 ))
                 .await;
+                if let Some(item) = submenu {
+                    let find = format!(
+                        "Array.from(document.querySelectorAll('.composer-plus-menu [role=menuitem]')).find((row) => row.textContent.trim().startsWith({}))",
+                        json!(item)
+                    );
+                    ui.wait("submenu row", &format!("!!{find}")).await;
+                    ui.eval(&format!("__qs.press({find})")).await;
+                }
                 ui.wait(
                     "toolbar menu",
-                    &format!(
-                        "!!document.querySelector('.composer-menu[aria-label={}]')",
-                        json!(menu)
-                    ),
+                    &format!("!!document.querySelector({})", json!(menu)),
                 )
                 .await;
                 ui.snap(&file(screen)).await;
             }
             if wanted("composer-set") {
-                ui.goto("/").await;
-                for (trigger, choice) in [
-                    ("Effort", "High"),
-                    ("Effort", "Ultrabrowse"),
-                    ("Speed", "Fast"),
-                ] {
-                    let selector = format!("button.composer-option[aria-label^='{trigger}']");
+                home_ask().await;
+                for choice in ["High", "Ultrabrowse"] {
+                    ui.eval("__qs.press(document.querySelector('button.composer-effort-chip'))")
+                        .await;
                     ui.wait(
-                        "toolbar trigger",
-                        &format!("!!document.querySelector({})", json!(selector)),
+                        "effort menu",
+                        "!!document.querySelector('.composer-effort-menu [role=menuitemradio]')",
                     )
                     .await;
                     ui.eval(&format!(
-                        "__qs.press(document.querySelector({}))",
-                        json!(selector)
-                    ))
-                    .await;
-                    ui.wait(
-                        "toolbar menu",
-                        "!!document.querySelector('.composer-menu [role=menuitemradio]')",
-                    )
-                    .await;
-                    ui.eval(&format!(
-                        "__qs.press(Array.from(document.querySelectorAll('.composer-menu [role=menuitemradio]')).find((item) => item.textContent.startsWith({})))",
+                        "__qs.press(Array.from(document.querySelectorAll('.composer-effort-menu [role=menuitemradio]')).find((item) => item.textContent.startsWith({})))",
                         json!(choice)
                     ))
                     .await;
-                    ui.wait("menu closed", "!document.querySelector('.composer-menu')")
-                        .await;
+                    ui.wait(
+                        "menu closed",
+                        "!document.querySelector('.composer-effort-menu')",
+                    )
+                    .await;
                 }
                 ui.eval(&format!(
                     "(() => {{ const el = document.querySelector('main.home .composer textarea'); \
@@ -1558,8 +1564,9 @@ async fn web_screens_capture() {
                 .await;
                 ui.snap(&file("composer-set")).await;
             }
+            let assistant = format!("/sessions/{}", seeded.assistant);
             if wanted("composer-at") {
-                ui.goto("/agents/chief").await;
+                ui.goto(&assistant).await;
                 ui.wait("composer", "!!document.querySelector('.composer textarea')")
                     .await;
                 ui.eval(
@@ -1571,27 +1578,6 @@ async fn web_screens_capture() {
                 ui.wait("context menu", "!!document.querySelector('.context-menu')")
                     .await;
                 ui.snap(&file("composer-at")).await;
-            }
-            if wanted("assistant") || wanted("profile") {
-                ui.goto("/agents/chief").await;
-                ui.wait(
-                    "assistant thread",
-                    "!!document.querySelector('.person-heading')",
-                )
-                .await;
-                if wanted("assistant") {
-                    ui.snap(&file("assistant")).await;
-                }
-                if wanted("profile") {
-                    ui.eval("document.querySelector('.person-heading').click()")
-                        .await;
-                    ui.wait(
-                        "profile sheet",
-                        "!!document.querySelector('.profile-sheet')",
-                    )
-                    .await;
-                    ui.snap(&file("profile")).await;
-                }
             }
             // Composer at rest, one line, three lines and past its height cap.
             for (name, text) in [
@@ -1612,7 +1598,7 @@ async fn web_screens_capture() {
                 if !wanted(name) {
                     continue;
                 }
-                ui.goto("/agents/chief").await;
+                ui.goto(&assistant).await;
                 ui.wait("composer", "!!document.querySelector('.composer textarea')")
                     .await;
                 ui.eval(&format!(
@@ -1755,20 +1741,8 @@ async fn web_screens_capture() {
                 open_drawer().await;
                 ui.snap(&file("drawer")).await;
             }
-            if wanted("people") {
-                ui.goto("/agents/chief").await;
-                ui.wait(
-                    "people sidebar",
-                    "!!document.querySelector('.person-heading') && document.querySelectorAll('.person-row').length >= 4",
-                )
-                .await;
-                if phone {
-                    open_drawer().await;
-                }
-                ui.snap(&file("people")).await;
-            }
             if wanted("account-menu") {
-                ui.goto("/agents/chief").await;
+                ui.goto(&assistant).await;
                 if phone {
                     open_drawer().await;
                 }
@@ -1796,7 +1770,7 @@ async fn web_screens_capture() {
             .iter()
             .any(|screen| wanted(screen))
             {
-                ui.goto("/agents/chief").await;
+                ui.goto(&assistant).await;
                 ui.wait(
                     "assistant thread with cards",
                     "!!document.querySelector('.oc-card[data-kind=hire][data-status=pending]') \
@@ -1851,21 +1825,21 @@ async fn web_screens_capture() {
                     ui.snap(&file("chief-expanded")).await;
                 }
             }
-            if wanted("history") {
-                ui.goto("/history").await;
+            if wanted("chats") {
+                ui.goto("/chats").await;
                 ui.wait(
-                    "history",
-                    "document.querySelectorAll('.history-scroll a').length > 2",
+                    "chats",
+                    "document.querySelectorAll('.chats-list .chats-link').length > 2",
                 )
                 .await;
-                ui.snap(&file("history")).await;
+                ui.snap(&file("chats")).await;
             }
             // The search palette over Home: the opening list, then a typed query.
             if wanted("palette") || wanted("palette-results") {
                 ui.goto("/").await;
                 ui.wait(
                     "home",
-                    "!!document.querySelector('main.home .composer textarea')",
+                    "!!document.querySelector('main.home .home-omnibox-area')",
                 )
                 .await;
                 ui.eval("window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyA', key: 'A', ctrlKey: true, shiftKey: true, bubbles: true })); true")
@@ -1888,13 +1862,13 @@ async fn web_screens_capture() {
                     .await;
                     ui.wait(
                         "palette results",
-                        "!!document.querySelector('.search-palette-row[data-kind=\"conversation\"]') || !!document.querySelector('.search-palette-empty')",
+                        "!!document.querySelector('.search-palette-row[data-kind=\"chat\"]') || !!document.querySelector('.search-palette-empty')",
                     )
                     .await;
                     ui.snap(&file("palette-results")).await;
                 }
             }
-            // History holds the archived filter and the conversation search, results and none.
+            // Chats holds the archived filter and the chat search, results and none.
             for (screen, query, ready) in [
                 (
                     "archived",
@@ -1904,31 +1878,30 @@ async fn web_screens_capture() {
                 (
                     "search",
                     Some("release"),
-                    "!!document.querySelector('.history-list a')",
+                    "!!document.querySelector('.chats-list .chats-link')",
                 ),
                 (
                     "search-empty",
                     Some("quarterly tax filing"),
-                    "document.body.innerText.includes('No conversations match')",
+                    "document.body.innerText.includes('No chats found')",
                 ),
             ] {
                 if !wanted(screen) {
                     continue;
                 }
-                ui.goto("/history").await;
-                ui.wait(
-                    "history search",
-                    "!!document.querySelector('.history-search input')",
-                )
-                .await;
                 match query {
-                    None => {
-                        ui.eval("__qs.text(document.querySelector('.history-views'), 'Archived').click(); true")
-                            .await;
-                    }
+                    None => ui.goto("/chats?show=archived").await,
                     Some(query) => {
+                        ui.goto("/chats").await;
+                        ui.wait("chats tools", "!!document.querySelector('.chats-tools button[aria-label=\"Search chats\"]')").await;
+                        ui.eval("document.querySelector('.chats-tools button[aria-label=\"Search chats\"]').click(); true").await;
+                        ui.wait(
+                            "chats search",
+                            "!!document.querySelector('.chats-search input')",
+                        )
+                        .await;
                         ui.eval(&format!(
-                            "(() => {{ const el = document.querySelector('.history-search input'); \
+                            "(() => {{ const el = document.querySelector('.chats-search input'); \
                                Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, {}); \
                                el.dispatchEvent(new Event('input', {{ bubbles: true }})); return true }})()",
                             json!(query)
@@ -1939,11 +1912,14 @@ async fn web_screens_capture() {
                 ui.wait(screen, ready).await;
                 ui.snap(&file(screen)).await;
             }
-            // Workspace sections deep-linked without a screen behind them open as dialogs over Home.
+            // Settings pages deep-linked straight into the tab.
             for (screen, route, title) in [
-                ("team", "/team", "Team"),
-                ("connections", "/connections", "Connections"),
-                ("diagnostics", "/diagnostics", "Diagnostics"),
+                (
+                    "settings-security",
+                    "/settings/security",
+                    "Security & Privacy",
+                ),
+                ("settings-archived", "/settings/archived", "Archived chats"),
             ] {
                 if !wanted(screen) {
                     continue;
@@ -1951,101 +1927,60 @@ async fn web_screens_capture() {
                 ui.goto(route).await;
                 ui.wait(
                     screen,
-                    &format!("Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === {})", json!(title)),
+                    &format!(
+                        "document.getElementById('settings-page-title')?.textContent === {}",
+                        json!(title)
+                    ),
                 )
                 .await;
                 ui.snap(&file(screen)).await;
             }
-            if wanted("welcome-name") {
-                ui.goto("/welcome?step=assistant").await;
-                ui.wait("name step", "!!document.querySelector('.onb-assistant')")
-                    .await;
-                ui.snap(&file("welcome-name")).await;
-            }
-            if wanted("settings") || wanted("appearance") || wanted("shortcuts") {
-                open_conversation().await;
-                let scope = if phone {
-                    open_drawer().await;
-                    ".ui-drawer"
-                } else {
-                    ".shell-sidebar"
-                };
-                ui.eval(&format!(
-                    "__qs.text(document.querySelector({}), 'Settings').click()",
-                    json!(scope)
-                ))
-                .await;
+            if wanted("welcome") {
+                ui.goto("/welcome").await;
                 ui.wait(
-                    "settings dialog",
-                    "Array.from(document.querySelectorAll('.ui-dialog-title')).some((t) => t.textContent === 'Settings')",
+                    "welcome step",
+                    "!!document.querySelector('.onb-window[data-step=welcome] #onb-title')",
                 )
                 .await;
+                ui.snap(&file("welcome")).await;
+            }
+            if wanted("settings") || wanted("appearance") {
+                open_conversation().await;
+                // Mod+, opens Settings from any screen.
+                ui.eval("document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Comma', key: ',', ctrlKey: true, bubbles: true })); true")
+                    .await;
+                if phone {
+                    ui.wait("settings list", "location.pathname === '/settings' && !!document.querySelector('nav.settings-nav')")
+                        .await;
+                } else {
+                    ui.wait(
+                        "settings tab",
+                        "document.getElementById('settings-page-title')?.textContent === 'General'",
+                    )
+                    .await;
+                }
                 if wanted("settings") {
                     ui.snap(&file("settings")).await;
                 }
-                let found = ui
-                    .eval("(() => { const el = document.querySelector('.ui-dialog .appearance'); if (!el) return false; el.scrollIntoView({ block: 'start' }); return true })()")
+                if wanted("appearance") {
+                    ui.goto("/settings/appearance").await;
+                    ui.wait(
+                        "appearance page",
+                        "!!document.querySelector('.settings-scroll .appearance')",
+                    )
                     .await;
-                if wanted("appearance") && found == true {
                     ui.snap(&file("appearance")).await;
-                } else if wanted("appearance") {
-                    eprintln!("skipped appearance: the Settings dialog has no .appearance");
                 }
-                if wanted("shortcuts") {
-                    ui.eval("document.querySelector('.ui-dialog section[aria-label=\"Keyboard shortcuts\"]').scrollIntoView({ block: 'start' }); true")
-                        .await;
-                    ui.snap(&file("shortcuts")).await;
-                }
-            }
-            // A preset palette per scheme, applied the way the Appearance settings store it.
-            if wanted("theme-preset") {
-                ui.eval(
-                    "localStorage.setItem('openside.palette', JSON.stringify({ \
-                       light: { id: 'solarized-light', background: '#fdf6e3', foreground: '#657b83', accent: '#b58900' }, \
-                       dark: { id: 'nord-dark', background: '#2e3440', foreground: '#d8dee9', accent: '#88c0d0' } })); true",
-                )
-                .await;
-                open_conversation().await;
-                ui.snap(&file("theme-preset")).await;
-                ui.eval("localStorage.removeItem('openside.palette'); true")
-                    .await;
             }
             for route in &routes {
                 ui.goto(route).await;
                 let name = route.trim_matches('/').replace('/', "-");
                 let name = if name.is_empty() { "root".into() } else { name };
                 ui.snap(&file(&format!("route-{name}"))).await;
-                if route == "/devices" {
+                if route == "/settings/account" {
                     ui.eval("Array.from(document.querySelectorAll('[role=radio]')).find(button => button.textContent === 'Connect an agent / CLI').click(); true").await;
                     ui.snap(&file("route-devices-agent")).await;
                 }
-            }
-        }
-    }
-    // The assistant's open suggestion is turned off for good; Team then lists it as declined.
-    if wanted("team-suppressed") {
-        let declined = harness
-            .tcp_request(
-                "POST",
-                &format!("/v1/tickets/{}/resolve", seeded.suggestion),
-                Some(&seeded.admin),
-                Some(json!({"value":"never"})),
-            )
-            .await;
-        assert_eq!(declined.status, 200, "{}", declined.body);
-        for theme in ["light", "dark"] {
-            ui.emulation.lock().await.scheme(theme).await;
-            for viewport in &VIEWPORTS {
-                ui.emulation.lock().await.viewport(viewport).await;
-                ui.goto("/team").await;
-                ui.wait(
-                    "suppressed suggestions",
-                    "document.body.innerText.includes('Suggestions you turned off') && document.body.innerText.includes('Inbox triage')",
-                )
-                .await;
-                ui.eval("Array.from(document.querySelectorAll('.ui-dialog h3, .ui-dialog h2')).find((h) => h.textContent.includes('Suggestions you turned off')).scrollIntoView({ block: 'center' }); true").await;
-                ui.snap(&out.join(format!("{theme}-{}-team-suppressed.png", viewport.name)))
-                    .await;
             }
         }
     }

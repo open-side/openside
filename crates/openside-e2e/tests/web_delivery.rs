@@ -1,5 +1,6 @@
 //! Visual QA for message delivery feedback (ignored by default): a message sent from the web
-//! composer shows Sent, then Read, then bouncing typing dots, then the reply takes over.
+//! composer shows Sending…, then the live work line (Working with Thinking under it), then the
+//! reply takes over and the line folds.
 //! Drives headless Chromium against the hermetic daemon on a scripted model whose reply is
 //! delayed, so every state lasts long enough to capture, and writes timed screenshots plus
 //! `timeline.json` (state, milliseconds since the click) to `OPENSIDE_DELIVERY_DIR`
@@ -31,19 +32,18 @@ const HELPERS: &str = r#"(() => {
       return true;
     },
     state() {
+      if (document.querySelector('.bubble.assistant')) return 'reply';
+      if (document.querySelector('details.work[data-live]'))
+        return document.querySelector('details.work[data-live] .work-thinking') ? 'working+thinking' : 'working';
       const last = Array.from(document.querySelectorAll('.timeline > li.bubble.user')).at(-1);
       const receipt = last && last.querySelector('.receipt');
-      const typing = !!document.querySelector('.typing');
-      const reply = !!document.querySelector('.bubble.assistant');
-      if (reply) return 'reply';
-      const note = receipt ? receipt.textContent.trim() : 'none';
-      return typing ? note + '+typing' : note;
+      return receipt ? receipt.textContent.trim() : 'none';
     },
-    dots() {
-      return Array.from(document.querySelectorAll('.typing-dot')).map((dot) => {
-        const s = getComputedStyle(dot);
-        return { transform: s.transform, opacity: s.opacity, animation: s.animationName };
-      });
+    shimmer() {
+      const text = document.querySelector('details.work[data-live] .work-thinking .shimmer-text');
+      if (!text) return null;
+      const s = getComputedStyle(text);
+      return { animation: s.animationName, position: s.backgroundPosition };
     },
   };
   return true;
@@ -93,15 +93,15 @@ async fn walk(ui: &mut Ui, out: &Path, label: &str, message: &str) -> Vec<Value>
             ui.cdp.capture(&out.join(&name)).await;
             seen.push(json!({"state": state, "at_ms": at, "file": name}));
             last = state.clone();
-            if state.ends_with("+typing") {
-                // Two samples apart show the dots moving (or fading, under reduced motion).
-                let first = ui.cdp.eval("__d.dots()").await;
+            if state == "working+thinking" {
+                // Two samples apart show the Thinking shimmer moving (or still, under reduced motion).
+                let first = ui.cdp.eval("__d.shimmer()").await;
                 tokio::time::sleep(Duration::from_millis(350)).await;
-                let second = ui.cdp.eval("__d.dots()").await;
+                let second = ui.cdp.eval("__d.shimmer()").await;
                 ui.cdp
-                    .capture(&out.join(format!("{label}-typing-later.png")))
+                    .capture(&out.join(format!("{label}-thinking-later.png")))
                     .await;
-                seen.push(json!({"state":"typing-dots","first":first,"second":second}));
+                seen.push(json!({"state":"thinking-shimmer","first":first,"second":second}));
             }
             if state == "reply" {
                 return seen;
@@ -115,7 +115,7 @@ async fn walk(ui: &mut Ui, out: &Path, label: &str, message: &str) -> Vec<Value>
 fn states(seen: &[Value]) -> Vec<String> {
     seen.iter()
         .filter_map(|entry| entry["state"].as_str())
-        .filter(|state| *state != "typing-dots")
+        .filter(|state| *state != "thinking-shimmer")
         .map(str::to_owned)
         .collect()
 }
@@ -137,7 +137,7 @@ fn assert_in_order(seen: &[Value], wanted: &[&str]) {
 
 #[tokio::test]
 #[ignore = "visual QA harness; see the module docs"]
-async fn delivery_states_sent_read_typing_reply() {
+async fn delivery_states_sending_working_reply() {
     let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
     assert!(dist.join("index.html").is_file(), "build web/dist first");
     let executable = openside_config::discover_browser(&openside_config::Config::default())
@@ -177,7 +177,7 @@ async fn delivery_states_sent_read_typing_reply() {
     let mut ui = Ui::open(executable, &harness, &token, Vec::new()).await;
     let mut report = serde_json::Map::new();
 
-    // Desktop, light, full motion: the dots bounce.
+    // Desktop, light, full motion: the Thinking shimmer moves.
     ui.cdp.viewport(1440, 900, "light").await;
     motion(&mut ui, false).await;
     session_page(&mut ui, &harness, "Delivery desktop").await;
@@ -188,18 +188,19 @@ async fn delivery_states_sent_read_typing_reply() {
         "Compare the two pricing pages for me.",
     )
     .await;
-    assert_in_order(&desktop, &["Sent", "Read+typing", "reply"]);
-    let dots = desktop
+    assert_in_order(&desktop, &["working+thinking", "reply"]);
+    let shimmer = desktop
         .iter()
-        .find(|entry| entry["state"] == "typing-dots")
-        .expect("typing frames");
+        .find(|entry| entry["state"] == "thinking-shimmer")
+        .expect("thinking frames");
+    assert_eq!(shimmer["first"]["animation"], "status-shimmer", "{shimmer}");
     assert_ne!(
-        dots["first"], dots["second"],
-        "dots must move between samples under full motion"
+        shimmer["first"]["position"], shimmer["second"]["position"],
+        "the shimmer must move between samples under full motion"
     );
     report.insert("desktop-light".into(), json!(desktop));
 
-    // Phone, dark, reduced motion: the same states with a fade instead of movement.
+    // Phone, dark, reduced motion: the same states with the shimmer held still.
     harness.replace_script(&script("Done. Anything else?"));
     ui.cdp.viewport(390, 844, "dark").await;
     motion(&mut ui, true).await;
@@ -211,12 +212,12 @@ async fn delivery_states_sent_read_typing_reply() {
         "Book me a table for two.",
     )
     .await;
-    assert_in_order(&phone, &["Sent", "Read+typing", "reply"]);
-    let dots = phone
+    assert_in_order(&phone, &["working+thinking", "reply"]);
+    let shimmer = phone
         .iter()
-        .find(|entry| entry["state"] == "typing-dots")
-        .expect("typing frames");
-    assert_eq!(dots["first"][0]["animation"], "typing-pulse", "{dots}");
+        .find(|entry| entry["state"] == "thinking-shimmer")
+        .expect("thinking frames");
+    assert_eq!(shimmer["first"]["animation"], "none", "{shimmer}");
     report.insert("phone-dark-reduced".into(), json!(phone));
 
     // A POST the daemon refuses: Not sent with Retry, then the retry goes through.
@@ -264,7 +265,7 @@ async fn delivery_states_sent_read_typing_reply() {
     motion(&mut ui, false).await;
     session_page(&mut ui, &harness, "Delivery reload").await;
     ui.cdp.eval("__d.send('Reload while you work.')").await;
-    ui.cdp.wait("__d.state().startsWith('Read')").await;
+    ui.cdp.wait("__d.state().startsWith('working')").await;
     let path = ui.cdp.eval("location.pathname").await;
     ui.goto(
         path.as_str().unwrap(),
@@ -272,7 +273,7 @@ async fn delivery_states_sent_read_typing_reply() {
     )
     .await;
     ui.cdp.eval(HELPERS).await;
-    ui.cdp.wait("__d.state().startsWith('Read')").await;
+    ui.cdp.wait("__d.state().startsWith('working')").await;
     ui.cdp.capture(&out.join("reload-01-restored.png")).await;
     ui.cdp.wait("__d.state() === 'reply'").await;
     report.insert(
