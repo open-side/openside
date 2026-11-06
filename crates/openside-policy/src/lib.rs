@@ -25,7 +25,7 @@ mod origin;
 
 use std::path::{Component, Path, PathBuf};
 
-pub use egress::{Egress, EgressError};
+pub use egress::{is_loopback_host, Egress, EgressError};
 pub use glob::glob_match;
 pub use origin::{Origin, OriginLists, OriginPattern};
 
@@ -58,8 +58,16 @@ pub enum Capability {
     VaultUse,
     /// Payment, publishing a post, sending a message. Target: origin or description.
     Sensitive,
-    /// Access private imported records. The tool additionally requires a session person grant.
+    /// Access private imported records or the person's open tabs. The tool additionally
+    /// requires a session person grant or an attachment.
     PrivacyRead,
+    /// Act in a tab of the person's own browser (click, type, navigate). Target: origin.
+    /// Guard asks; full access allows.
+    PersonBrowser,
+    /// Click, type or scroll in the desktop app window the person connected. Target:
+    /// `app:<app>/<connection id>`. Guard asks; full access allows. Connecting the app itself
+    /// is `Sensitive`, so the person always picks the app.
+    ComputerUse,
 }
 
 /// One requested action.
@@ -173,6 +181,9 @@ pub struct Policy {
     pub layers: Vec<RuleLayer>,
     /// Per-origin restrictions, checked right after Deny rules.
     pub origins: OriginLists,
+    /// The chat asks before writing files or running commands even where the mode would
+    /// allow them; a matching Allow rule still allows.
+    pub confirm_first: bool,
 }
 
 impl Policy {
@@ -238,8 +249,15 @@ impl Policy {
         }
 
         // 5. Mode default.
+        let mut effect = self.mode_default(action);
+        if self.confirm_first
+            && effect == Effect::Allow
+            && matches!(action.capability, Capability::FsWrite | Capability::Exec)
+        {
+            effect = Effect::Ask;
+        }
         Decision {
-            effect: self.mode_default(action),
+            effect,
             reason: Reason::Mode(self.mode),
         }
     }
@@ -249,7 +267,7 @@ impl Policy {
         match self.mode {
             Mode::ReadOnly => match action.capability {
                 FsRead | Browse | Fetch | PrivacyRead => Effect::Allow,
-                FsWrite | Exec | VaultUse => Effect::Deny,
+                FsWrite | Exec | VaultUse | PersonBrowser | ComputerUse => Effect::Deny,
                 Sensitive => Effect::Deny,
             },
             Mode::Guard => match action.capability {
@@ -261,7 +279,7 @@ impl Policy {
                         Effect::Ask
                     }
                 }
-                Sensitive => Effect::Ask,
+                Sensitive | PersonBrowser | ComputerUse => Effect::Ask,
             },
             Mode::FullAccess => match action.capability {
                 Sensitive => Effect::Ask,
@@ -278,7 +296,10 @@ impl Policy {
 
     fn origin_block(&self, action: &Action) -> Option<Reason> {
         use Capability::*;
-        if !matches!(action.capability, Browse | Fetch | VaultUse | Sensitive) {
+        if !matches!(
+            action.capability,
+            Browse | Fetch | VaultUse | Sensitive | PersonBrowser
+        ) {
             return None;
         }
         self.origins.block(&Origin::parse(&action.target)?)
@@ -331,7 +352,12 @@ pub const SENSITIVE_KEYWORDS: &[&str] = &[
 fn mutates(c: Capability) -> bool {
     matches!(
         c,
-        Capability::FsWrite | Capability::Exec | Capability::VaultUse | Capability::Sensitive
+        Capability::FsWrite
+            | Capability::Exec
+            | Capability::VaultUse
+            | Capability::Sensitive
+            | Capability::PersonBrowser
+            | Capability::ComputerUse
     )
 }
 
@@ -374,10 +400,11 @@ mod tests {
                 .collect(),
             layers,
             origins: OriginLists::default(),
+            confirm_first: false,
         }
     }
 
-    const ALL: [Capability; 8] = [
+    const ALL: [Capability; 10] = [
         Capability::FsRead,
         Capability::FsWrite,
         Capability::Exec,
@@ -386,6 +413,8 @@ mod tests {
         Capability::VaultUse,
         Capability::Sensitive,
         Capability::PrivacyRead,
+        Capability::PersonBrowser,
+        Capability::ComputerUse,
     ];
 
     fn target(capability: Capability, inside: bool) -> String {
@@ -408,12 +437,12 @@ mod tests {
         let expected = |mode: Mode, capability: Capability, inside: bool| match mode {
             Mode::ReadOnly => match capability {
                 FsRead | Browse | Fetch | PrivacyRead => Allow,
-                FsWrite | Exec | VaultUse | Sensitive => Deny,
+                FsWrite | Exec | VaultUse | Sensitive | PersonBrowser | ComputerUse => Deny,
             },
             Mode::Guard => match capability {
                 Browse | Fetch | VaultUse | PrivacyRead => Allow,
                 FsRead | FsWrite | Exec if inside => Allow,
-                FsRead | FsWrite | Exec | Sensitive => Ask,
+                FsRead | FsWrite | Exec | Sensitive | PersonBrowser | ComputerUse => Ask,
             },
             Mode::FullAccess => match capability {
                 Sensitive => Ask,
@@ -435,6 +464,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn confirm_first_turns_mode_allowed_writes_and_commands_into_asks() {
+        for mode in [Mode::Guard, Mode::FullAccess] {
+            let mut policy = guard(&["/work"], vec![]);
+            policy.mode = mode;
+            policy.confirm_first = true;
+            for capability in ALL {
+                let action = Action::new(capability, target(capability, true));
+                let mut plain = policy.clone();
+                plain.confirm_first = false;
+                let expected = match (capability, plain.decide(&action).effect) {
+                    (Capability::FsWrite | Capability::Exec, Effect::Allow) => Effect::Ask,
+                    (_, effect) => effect,
+                };
+                assert_eq!(
+                    policy.decide(&action).effect,
+                    expected,
+                    "{mode:?} {capability:?}"
+                );
+            }
+        }
+        // ReadOnly still refuses rather than asks, and an explicit Allow rule still allows.
+        let mut read_only = guard(&["/work"], vec![]);
+        read_only.mode = Mode::ReadOnly;
+        read_only.confirm_first = true;
+        let write = Action::new(Capability::FsWrite, target(Capability::FsWrite, true));
+        assert_eq!(read_only.decide(&write).effect, Effect::Deny);
+        let mut ruled = guard(
+            &["/work"],
+            vec![layer(vec![Rule::new(
+                Effect::Allow,
+                Capability::FsWrite,
+                "**",
+            )])],
+        );
+        ruled.confirm_first = true;
+        assert_eq!(ruled.decide(&write).effect, Effect::Allow);
     }
 
     #[test]

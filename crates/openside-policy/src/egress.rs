@@ -134,6 +134,12 @@ pub(crate) fn is_loopback(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback() || ip.to_canonical().is_loopback())
 }
 
+/// Whether `host` (as it appears in a URL: brackets, a trailing dot and any case allowed) is
+/// one [`Egress`] treats as loopback, so callers pin sockets with the same rule it admits by.
+pub fn is_loopback_host(host: &str) -> bool {
+    is_loopback(&normalize_host(host))
+}
+
 fn host_matches(pattern: &str, host: &str) -> bool {
     match pattern.strip_prefix("*.") {
         Some(domain) => host
