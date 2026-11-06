@@ -256,3 +256,129 @@ async fn declined_and_expired_requests_grant_nothing_and_agents_cannot_ask() {
     );
     daemon.shutdown().await;
 }
+
+#[tokio::test]
+async fn an_admin_renames_a_device_and_an_agent_only_itself() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let unix = api::router(daemon.shared.clone(), true);
+    let tcp = api::router(daemon.shared.clone(), false);
+    let (phone_id, _) = paired(
+        &daemon,
+        vec![CapabilityScope::Read],
+        DeviceKind::PersonDevice,
+    )
+    .await;
+    let (_, laptop) = paired(
+        &daemon,
+        vec![CapabilityScope::Admin],
+        DeviceKind::PersonDevice,
+    )
+    .await;
+    let (agent_id, agent) = paired(
+        &daemon,
+        vec![CapabilityScope::Admin],
+        DeviceKind::AgentClient,
+    )
+    .await;
+    let (_, reader) = paired(
+        &daemon,
+        vec![CapabilityScope::Read],
+        DeviceKind::PersonDevice,
+    )
+    .await;
+    let phone = format!("/v1/devices/{phone_id}");
+
+    let (status, device) = send(
+        &tcp,
+        request(
+            "PATCH",
+            &phone,
+            json!({"name": "  Mina's phone "}),
+            Some(&laptop),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (device["device_id"].as_str(), device["name"].as_str()),
+        (Some(phone_id.as_str()), Some("Mina's phone"))
+    );
+    let (_, list) = send(
+        &tcp,
+        request("GET", "/v1/devices", Value::Null, Some(&laptop)),
+    )
+    .await;
+    assert!(list["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["device_id"] == phone_id.as_str() && d["name"] == "Mina's phone"));
+
+    let (status, error) = send(
+        &tcp,
+        request("PATCH", &phone, json!({"name": "Agent"}), Some(&agent)),
+    )
+    .await;
+    assert_eq!(
+        (status, error["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("person_approval_required"))
+    );
+    let (status, device) = send(
+        &tcp,
+        request(
+            "PATCH",
+            &format!("/v1/devices/{agent_id}"),
+            json!({"name": "CI agent"}),
+            Some(&agent),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (status, device["name"].as_str()),
+        (StatusCode::OK, Some("CI agent"))
+    );
+    let (status, _) = send(
+        &tcp,
+        request("PATCH", &phone, json!({"name": "Reader"}), Some(&reader)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    for name in ["   ", &"x".repeat(101)] {
+        let (status, error) = send(
+            &unix,
+            request("PATCH", &phone, json!({ "name": name }), None),
+        )
+        .await;
+        assert_eq!(
+            (status, error["code"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid_value"))
+        );
+    }
+    let (status, error) = send(
+        &unix,
+        request(
+            "PATCH",
+            "/v1/devices/missing",
+            json!({"name": "Ghost"}),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(
+        (status, error["code"].as_str()),
+        (StatusCode::NOT_FOUND, Some("not_found"))
+    );
+    let (status, device) = send(
+        &unix,
+        request("PATCH", &phone, json!({"name": "Phone"}), None),
+    )
+    .await;
+    assert_eq!(
+        (status, device["name"].as_str()),
+        (StatusCode::OK, Some("Phone"))
+    );
+    daemon.shutdown().await;
+}

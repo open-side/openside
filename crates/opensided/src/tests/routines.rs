@@ -200,6 +200,94 @@ async fn routine_crud_validates_input_and_requires_admin_for_writes() {
 }
 
 #[tokio::test]
+async fn rrule_routines_are_created_rescheduled_and_validated_through_the_api() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon_with_model(root.path(), &TestRuntime::default()).await;
+    let router = api::router(daemon.shared.clone(), true);
+
+    // 2099-01-01 is a Thursday, so Friday 09:00 in Seoul is the first occurrence.
+    let (status, created) = send(
+        &router,
+        "POST",
+        "/v1/routines",
+        json!({"name":"Standup","schedule":{"type":"rrule",
+            "rule":"RRULE:FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=9;BYMINUTE=0",
+            "timezone":"Asia/Seoul","start":"2099-01-01T09:00:00"},
+            "action":new_session_action("standup")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(
+        created["schedule"],
+        json!({"type":"rrule","rule":"FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=9;BYMINUTE=0",
+            "timezone":"Asia/Seoul","start":"2099-01-01T09:00:00"})
+    );
+    assert_eq!(created["next_run_at"], "2099-01-02T00:00:00Z");
+    let id = created["id"].as_str().unwrap().to_owned();
+
+    let once = json!({"type":"rrule","rule":"FREQ=DAILY;COUNT=1","start":"2099-03-01T12:00:00"});
+    let (status, patched) = send(
+        &router,
+        "PATCH",
+        &format!("/v1/routines/{id}"),
+        json!({"schedule":once}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(patched["schedule"], once);
+    assert_eq!(patched["next_run_at"], "2099-03-01T12:00:00Z");
+
+    for (schedule, code) in [
+        (
+            json!({"type":"rrule","rule":"FREQ=DAILY;COUNT=1","start":"2000-01-01T00:00:00"}),
+            "invalid_schedule",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=MINUTELY"}),
+            "invalid_schedule",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=DAILY;BYHOUR=99"}),
+            "invalid_schedule",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=DAILY","timezone":"Mars/Base"}),
+            "invalid_timezone",
+        ),
+    ] {
+        let (status, error) = send(
+            &router,
+            "PATCH",
+            &format!("/v1/routines/{id}"),
+            json!({"schedule":schedule}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert_eq!(error["code"], code, "{schedule}");
+    }
+    let (_, unchanged) = send(&router, "GET", &format!("/v1/routines/{id}"), json!({})).await;
+    assert_eq!(
+        unchanged["schedule"], once,
+        "rejected patches change nothing"
+    );
+
+    // Without `start`, the daemon stores the creation minute so restarts keep the series.
+    let (status, anchored) = send(
+        &router,
+        "POST",
+        "/v1/routines",
+        json!({"name":"Daily","schedule":{"type":"rrule","rule":"FREQ=DAILY"},
+            "action":new_session_action("daily")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{anchored}");
+    let start = anchored["schedule"]["start"].as_str().unwrap();
+    assert!(start.ends_with(":00"), "{start}");
+    assert!(anchored["next_run_at"].is_string());
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn run_now_creates_a_session_that_settles_and_the_run_completes() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();

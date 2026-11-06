@@ -71,7 +71,7 @@ async fn deletion_route_refuses_chief_and_teammate_home_conversations() {
 }
 
 #[tokio::test]
-async fn session_model_is_creation_metadata_and_usage_never_rewrites_its_title() {
+async fn session_model_is_the_chats_choice_and_usage_never_rewrites_it_or_its_title() {
     let root = tempfile::tempdir().unwrap();
     let d = daemon(root.path(), &TestRuntime::default()).await;
     let session = create_session(&d, "model-history", PolicyMode::Guard, None).await;
@@ -85,6 +85,7 @@ async fn session_model_is_creation_metadata_and_usage_never_rewrites_its_title()
                 input_tokens: 1,
                 output_tokens: 1,
                 effort: None,
+                context_window: None,
             },
         )
         .await
@@ -106,8 +107,8 @@ async fn session_model_is_creation_metadata_and_usage_never_rewrites_its_title()
     let description = schema["properties"]["model"]["description"]
         .as_str()
         .unwrap();
-    assert!(description.contains("when the session was created"));
-    assert!(description.contains("not its effective current model"));
+    assert!(description.contains("the chat uses for its next request"));
+    assert!(description.contains("later per-chat change"));
     d.shutdown().await;
 }
 

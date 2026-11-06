@@ -872,3 +872,545 @@ async fn private_memory_context_and_consolidation_are_scoped_unlogged_and_atomic
         ToolOutcome::Denied { .. }
     ));
 }
+
+#[tokio::test]
+async fn memory_files_round_trip_edits_and_refuse_stale_saves() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    let router = api::router(daemon.shared.clone(), true);
+    for (content, tags) in [
+        ("Prefers dark mode", json!(["profile"])),
+        ("Project uses Rust", json!(["work"])),
+        ("Old note", json!([])),
+    ] {
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/v1/memory",
+            json!({"content": content, "tags": tags}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (status, list) = send(&router, "GET", "/v1/memory/files", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let items: Vec<(String, u64, bool)> = list["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| {
+            (
+                file["name"].as_str().unwrap().to_owned(),
+                file["items"].as_u64().unwrap(),
+                file["editable"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("MEMORY.md".to_owned(), 2, true),
+            ("USER.md".to_owned(), 1, true),
+            ("TAXONOMY.md".to_owned(), 2, false),
+        ]
+    );
+
+    let (_, file) = send(&router, "GET", "/v1/memory/files/MEMORY.md", Value::Null).await;
+    let markdown = file["markdown"].as_str().unwrap().to_owned();
+    assert!(markdown.starts_with("# MEMORY\n"));
+    assert!(markdown.contains("Project uses Rust") && markdown.contains("Old note"));
+    assert!(!markdown.contains("dark mode"));
+    assert!(markdown.contains("tags=[\"work\"]"));
+
+    // Unchanged file: nothing to do.
+    let (status, saved) = send(
+        &router,
+        "PUT",
+        "/v1/memory/files/MEMORY.md",
+        json!({"revision": file["revision"], "markdown": markdown}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        (&saved["created"], &saved["updated"], &saved["deleted"]),
+        (&json!(0), &json!(0), &json!(0))
+    );
+    assert_eq!(saved["file"]["markdown"], markdown);
+
+    // Edit one note, drop another, add a third.
+    let edited = markdown
+        .split("\n<!-- memory")
+        .filter(|block| !block.contains("Old note"))
+        .collect::<Vec<_>>()
+        .join("\n<!-- memory")
+        .replace("Project uses Rust\n", "Project uses Rust 1.80\n")
+        + "\n<!-- memory -->\nShip on Fridays\n";
+    let (status, saved) = send(
+        &router,
+        "PUT",
+        "/v1/memory/files/MEMORY.md",
+        json!({"revision": file["revision"], "markdown": edited}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        (&saved["created"], &saved["updated"], &saved["deleted"]),
+        (&json!(1), &json!(1), &json!(1))
+    );
+    let after = saved["file"]["markdown"].as_str().unwrap();
+    assert!(after.contains("Project uses Rust 1.80") && after.contains("Ship on Fridays"));
+    assert!(!after.contains("Old note"));
+
+    // Text before the first marker of USER.md becomes a profile note.
+    let (_, user) = send(&router, "GET", "/v1/memory/files/USER.md", Value::Null).await;
+    let user_markdown =
+        user["markdown"]
+            .as_str()
+            .unwrap()
+            .replacen("# USER\n", "# USER\nLives in Seoul\n", 1);
+    let (status, saved) = send(
+        &router,
+        "PUT",
+        "/v1/memory/files/USER.md",
+        json!({"revision": user["revision"], "markdown": user_markdown}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["created"], 1);
+    let (_, found) = send(&router, "GET", "/v1/memory?q=Seoul", Value::Null).await;
+    assert_eq!(found["hits"][0]["memory"]["tags"], json!(["profile"]));
+
+    // A note changed elsewhere after the GET fails the whole save.
+    let (_, file) = send(&router, "GET", "/v1/memory/files/MEMORY.md", Value::Null).await;
+    let stale = file["markdown"]
+        .as_str()
+        .unwrap()
+        .replace("Fridays", "Mondays");
+    let id = file["markdown"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("<!-- memory id=")
+                .filter(|_| line.contains("work"))
+                .and_then(|rest| rest.split_whitespace().next())
+        })
+        .unwrap()
+        .to_owned();
+    let (status, _) = send(
+        &router,
+        "PATCH",
+        &format!("/v1/memory/{id}"),
+        json!({"content": "Project uses Rust 1.81"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = send(
+        &router,
+        "PUT",
+        "/v1/memory/files/MEMORY.md",
+        json!({"revision": file["revision"], "markdown": stale.replace("1.80", "1.82")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "memory_conflict");
+    let (_, unchanged) = send(&router, "GET", "/v1/memory?q=Fridays", Value::Null).await;
+    assert_eq!(unchanged["hits"].as_array().unwrap().len(), 1);
+    let (status, body) = send(
+        &router,
+        "PUT",
+        "/v1/memory/files/MEMORY.md",
+        json!({"revision": i64::MAX, "markdown": stale.replace("1.80", "1.82")}),
+    )
+    .await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::CONFLICT, &json!("memory_conflict"))
+    );
+
+    let (status, body) = send(
+        &router,
+        "PUT",
+        "/v1/memory/files/TAXONOMY.md",
+        json!({"revision": 0, "markdown": "# TAXONOMY\n"}),
+    )
+    .await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::BAD_REQUEST, &json!("read_only_view"))
+    );
+    let (status, _) = send(&router, "GET", "/v1/memory/files/NOTES.md", Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, taxonomy) = send(&router, "GET", "/v1/memory/files/TAXONOMY.md", Value::Null).await;
+    assert!(taxonomy["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("- profile: 2"));
+
+    // Global change log, newest first, paged.
+    let (status, page) = send(&router, "GET", "/v1/memory/history?limit=2", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["changes"].as_array().unwrap().len(), 2);
+    assert_eq!(page["changes"][0]["op"], "update");
+    let before = page["next_before"].as_i64().unwrap();
+    let (_, older) = send(
+        &router,
+        "GET",
+        &format!("/v1/memory/history?limit=200&before={before}"),
+        Value::Null,
+    )
+    .await;
+    assert!(older["next_before"].is_null());
+    assert!(older["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|change| change["op"] == "delete" && change["content"].is_null()));
+
+    let (status, rebuilt) = send(&router, "POST", "/v1/memory/rebuild", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rebuilt["reindexed"], 4);
+    let (_, found) = send(&router, "GET", "/v1/memory?q=Fridays", Value::Null).await;
+    assert_eq!(found["hits"].as_array().unwrap().len(), 1);
+    daemon.shutdown().await;
+}
+
+async fn memory_file(router: &axum::Router, name: &str) -> (Value, String) {
+    let (status, file) = send(
+        router,
+        "GET",
+        &format!("/v1/memory/files/{name}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    let markdown = file["markdown"].as_str().unwrap().to_owned();
+    (file["revision"].clone(), markdown)
+}
+
+async fn save_memory_file(
+    router: &axum::Router,
+    name: &str,
+    revision: &Value,
+    markdown: &str,
+) -> (StatusCode, Value) {
+    send(
+        router,
+        "PUT",
+        &format!("/v1/memory/files/{name}"),
+        json!({"revision": revision, "markdown": markdown}),
+    )
+    .await
+}
+
+fn marker_ids(markdown: &str) -> Vec<String> {
+    markdown
+        .lines()
+        .filter_map(|line| line.strip_prefix("<!-- memory id="))
+        .map(|rest| rest.split_whitespace().next().unwrap().to_owned())
+        .collect()
+}
+
+fn saved_counts(saved: &Value) -> (u64, u64, u64) {
+    (
+        saved["created"].as_u64().unwrap(),
+        saved["updated"].as_u64().unwrap(),
+        saved["deleted"].as_u64().unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn memory_files_keep_text_move_notes_and_save_all_or_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = daemon(root.path(), &TestRuntime::default()).await;
+    let router = api::router(daemon.shared.clone(), true);
+    let spaced = "  Résumé 😀 한국어\r\n\tindented  \n\n";
+    let mut ids = Vec::new();
+    for (content, tags) in [
+        (spaced, json!(["say \"hi\"", "back\\slash", "한국어"])),
+        ("Second note", json!(["work"])),
+        ("<!-- memory -->\nnot a new note", json!([])),
+        ("Likes tea", json!(["profile"])),
+    ] {
+        let (status, created) = send(
+            &router,
+            "POST",
+            "/v1/memory",
+            json!({"content": content, "tags": tags}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+        ids.push(created["id"].as_str().unwrap().to_owned());
+    }
+    let memory_ids = ids[..3].to_vec();
+
+    // Unicode, escaped JSON tags, outer whitespace and a marker-shaped line survive an
+    // unchanged save: nothing is updated, created or deleted.
+    let (revision, markdown) = memory_file(&router, "MEMORY.md").await;
+    assert!(
+        markdown.contains(r#"tags=["say \"hi\"","back\\slash","한국어"] -->"#),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("\nRésumé 😀 한국어\n\tindented\n"),
+        "{markdown}"
+    );
+    assert!(markdown.contains("\n\\<!-- memory -->\nnot a new note\n"));
+    assert_eq!(marker_ids(&markdown), memory_ids);
+    let (status, saved) = save_memory_file(&router, "MEMORY.md", &revision, &markdown).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved_counts(&saved), (0, 0, 0));
+    assert_eq!(saved["file"]["markdown"], markdown);
+    let (_, stored) = send(
+        &router,
+        "GET",
+        &format!("/v1/memory/{}", ids[0]),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        (&stored["content"], &stored["version"]),
+        (&json!(spaced), &json!(1))
+    );
+
+    // Adding `profile` moves a note to USER.md, in creation order; dropping it moves it back
+    // to its old place.
+    let moved = markdown.replace(r#"tags=["work"] -->"#, r#"tags=["work","profile"] -->"#);
+    let (status, saved) = save_memory_file(&router, "MEMORY.md", &revision, &moved).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved_counts(&saved), (0, 1, 0));
+    let after = saved["file"]["markdown"].as_str().unwrap();
+    assert!(!after.contains("Second note"));
+    assert_eq!(marker_ids(after), [ids[0].clone(), ids[2].clone()]);
+    let (user_revision, user) = memory_file(&router, "USER.md").await;
+    assert_eq!(marker_ids(&user), [ids[1].clone(), ids[3].clone()]);
+    let back = user.replace(r#"tags=["work","profile"] -->"#, r#"tags=["work"] -->"#);
+    let (status, saved) = save_memory_file(&router, "USER.md", &user_revision, &back).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved_counts(&saved), (0, 1, 0));
+    assert_eq!(
+        marker_ids(saved["file"]["markdown"].as_str().unwrap()),
+        [ids[3].clone()]
+    );
+    let (revision, markdown) = memory_file(&router, "MEMORY.md").await;
+    assert_eq!(marker_ids(&markdown), memory_ids);
+
+    // Every failed save leaves the file exactly as it was.
+    const CANARY: &str = "ghp_memfilescanary0123456789abcdefABCDEF";
+    let bad_tag = format!(
+        "{}\n<!-- memory tags=[\"{}\"] -->\nbad tag\n",
+        markdown.replace("Second note", "Second note edited"),
+        "x".repeat(65)
+    );
+    let mut emptied = markdown
+        .split("\n<!-- memory")
+        .map(|block| {
+            if block.contains("Second note") {
+                block.replace("Second note", "")
+            } else {
+                block.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n<!-- memory");
+    emptied.push_str(&format!("\n<!-- memory -->\ntoken {CANARY}\n"));
+    let second_block = markdown
+        .split("\n<!-- memory")
+        .find(|block| block.contains("Second note"))
+        .unwrap();
+    let duplicated = format!("{markdown}\n<!-- memory{second_block}");
+    let malformed = format!("{markdown}\n<!-- memory id=a id=b -->\nx\n");
+    for (case, edited, code) in [
+        ("invalid tag after an update", bad_tag, "invalid_value"),
+        ("secret after a delete", emptied, "secret_detected"),
+        ("duplicate marker", duplicated, "invalid_value"),
+        ("malformed marker", malformed, "invalid_value"),
+    ] {
+        let (status, body) = save_memory_file(&router, "MEMORY.md", &revision, &edited).await;
+        assert_eq!(
+            (status, &body["code"]),
+            (StatusCode::BAD_REQUEST, &json!(code)),
+            "{case}: {body}"
+        );
+        let (now, unchanged) = memory_file(&router, "MEMORY.md").await;
+        assert_eq!((&now, &unchanged), (&revision, &markdown), "{case}");
+    }
+    assert!(!contains(&data_bytes(&daemon), CANARY));
+
+    // A note showing a masked Vault value can be saved unchanged but not edited.
+    let (status, door) = send(
+        &router,
+        "POST",
+        "/v1/memory",
+        json!({"content": "door code hint is sunflower-4402"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{door}");
+    daemon
+        .shared
+        .registry
+        .redactors
+        .write()
+        .push(Redactor::new([&Secret::new("sunflower-4402".into())]));
+    let (revision, markdown) = memory_file(&router, "MEMORY.md").await;
+    assert!(markdown.contains("door code hint") && !markdown.contains("sunflower-4402"));
+    let (status, saved) = save_memory_file(&router, "MEMORY.md", &revision, &markdown).await;
+    assert_eq!(
+        (status, saved_counts(&saved)),
+        (StatusCode::OK, (0, 0, 0)),
+        "{saved}"
+    );
+    let edited = markdown
+        .replace("door code hint", "door code")
+        .replace("Second note", "Second note edited");
+    let (status, body) = save_memory_file(&router, "MEMORY.md", &revision, &edited).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::BAD_REQUEST, &json!("redacted_memory"))
+    );
+    assert_eq!(memory_file(&router, "MEMORY.md").await.1, markdown);
+
+    // Read access can see the files but not save or rebuild.
+    let (_, read) = daemon
+        .shared
+        .db
+        .pair(vec![CapabilityScope::Read])
+        .await
+        .unwrap();
+    let remote = api::router(daemon.shared.clone(), false);
+    for (method, path, body, expected) in [
+        ("GET", "/v1/memory/files", Value::Null, StatusCode::OK),
+        (
+            "PUT",
+            "/v1/memory/files/MEMORY.md",
+            json!({"revision": revision, "markdown": markdown}),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "POST",
+            "/v1/memory/rebuild",
+            Value::Null,
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let status = remote
+            .clone()
+            .oneshot(request(method, path, body, Some(&read)))
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, expected, "{method} {path}");
+    }
+    daemon.shutdown().await;
+}
+
+static REVEALED: parking_lot::Mutex<Vec<std::path::PathBuf>> = parking_lot::Mutex::new(Vec::new());
+
+fn record_reveal(path: &std::path::Path) -> std::io::Result<()> {
+    REVEALED.lock().push(path.to_owned());
+    Ok(())
+}
+
+#[tokio::test]
+async fn reveal_writes_a_private_copy_and_opens_it_only_for_local_callers() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = TestRuntime::default();
+    let daemon = daemon(root.path(), &runtime).await;
+    daemon.shared.memory.set_opener(record_reveal);
+    let local = api::router(daemon.shared.clone(), true);
+    let remote = api::router(daemon.shared.clone(), false);
+    for (content, tags) in [
+        ("Prefers dark mode", json!(["profile"])),
+        ("Project uses Rust", json!(["work"])),
+    ] {
+        let (status, _) = send(
+            &local,
+            "POST",
+            "/v1/memory",
+            json!({"content": content, "tags": tags}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let folder = openside_config::data_layout::DataPath::MemoryModel
+        .path(&daemon.shared.config.data_dir)
+        .join("files");
+
+    let (_, admin) = daemon
+        .shared
+        .db
+        .pair(vec![CapabilityScope::Admin])
+        .await
+        .unwrap();
+    let refused = remote
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/memory/reveal",
+            Value::Null,
+            Some(&admin),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(refused).await["code"], "local_access_required");
+    assert!(REVEALED.lock().is_empty());
+    assert!(!folder.exists());
+
+    // A stale, loosened copy is replaced and tightened.
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("MEMORY.md"),
+        "old text that is much longer than the new file",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            folder.join("MEMORY.md"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
+
+    let (status, body) = send(&local, "POST", "/v1/memory/reveal", Value::Null).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(*REVEALED.lock(), vec![folder.clone()]);
+    for name in ["MEMORY.md", "USER.md", "TAXONOMY.md"] {
+        let (status, file) = send(
+            &local,
+            "GET",
+            &format!("/v1/memory/files/{name}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let written = std::fs::read_to_string(folder.join(name)).unwrap();
+        assert_eq!(written, file["markdown"].as_str().unwrap(), "{name}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(folder.join(name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{name}");
+        }
+    }
+    assert!(std::fs::read_to_string(folder.join("USER.md"))
+        .unwrap()
+        .contains("Prefers dark mode"));
+    assert!(std::fs::read_to_string(folder.join("MEMORY.md"))
+        .unwrap()
+        .contains("Project uses Rust"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&folder).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+    daemon.shutdown().await;
+}

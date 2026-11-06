@@ -19,23 +19,31 @@ use crate::{engine::Shared, persistence::Result};
 
 pub(crate) mod api_call;
 pub(crate) mod browser;
+mod browser_downloads;
+pub(crate) mod computer;
 pub(crate) mod connections;
 mod files;
 pub(crate) mod forms;
 mod human;
+pub(crate) mod image;
 mod imports;
 pub(crate) mod login;
 pub(crate) mod memory;
 pub(crate) mod otp;
+mod person_tabs;
 pub(crate) mod present;
 pub(crate) mod repl;
 mod shell;
 pub(crate) mod vault;
+mod web;
+mod web_text;
 
 /// Tool call id prefix of calls an API client made directly (`/repl`, `/tools/{name}`). Their
 /// tickets are claimed by the API caller, never delivered to the agent runtime, and the front
 /// agent's acting restriction does not apply to them.
 pub(crate) const API_CALL_PREFIX: &str = "api-";
+/// `privacy_read` target of the agent's reads of the person's open-tab list.
+pub(crate) const PERSON_TABS_TARGET: &str = "person-browser/tabs";
 
 pub(crate) struct ToolEnv {
     pub(crate) shared: Shared,
@@ -56,6 +64,9 @@ pub(crate) struct ToolEnv {
     /// Set only by `POST /v1/sessions/{id}/repl`; the call may use the session's persistent
     /// REPL context. Never derived from the call itself, which a model or sidecar supplies.
     pub(crate) repl_context: bool,
+    /// The session is private, as read when this environment was built; tools that must never
+    /// run in private chats hide themselves with it and still re-read the state before acting.
+    pub(crate) incognito: bool,
 }
 
 impl ToolEnv {
@@ -74,6 +85,7 @@ impl ToolEnv {
             // Session-level rules only; host::execute layers the live daemon policy beneath.
             layers: Vec::new(),
             origins: Default::default(),
+            confirm_first: state.confirmation == openside_proto::ChatConfirmation::AskFirst,
         };
         Self {
             profile: crate::profiles::for_session(&shared, state),
@@ -90,6 +102,7 @@ impl ToolEnv {
             cancellation: Default::default(),
             browser_probe: None,
             repl_context: false,
+            incognito: state.incognito,
         }
     }
     pub(crate) fn target(&self, capability: Capability) -> std::result::Result<&Path, ToolError> {
@@ -111,7 +124,7 @@ impl ToolEnv {
 pub(crate) struct ToolError(pub(crate) String);
 
 pub(crate) trait DaemonTool: Send + Sync {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
     fn spec(&self) -> ToolSpec;
     fn visible(&self, ctx: &ToolEnv) -> bool;
     fn actions<'a>(
@@ -190,11 +203,19 @@ pub(crate) struct SecretSinkError {
 }
 
 pub(crate) struct Registry {
-    tools: BTreeMap<&'static str, Arc<dyn DaemonTool>>,
+    tools: BTreeMap<String, Arc<dyn DaemonTool>>,
+    /// Tools of connected MCP servers, replaced as a whole by [`crate::mcp::Hub`].
+    mcp: RwLock<Arc<BTreeMap<String, Arc<dyn DaemonTool>>>>,
+    /// Bumped on every MCP tool-set change so open runtimes pick up the new specs.
+    mcp_generation: std::sync::atomic::AtomicU64,
     pub(crate) secret_sink: RwLock<Option<Arc<dyn SecretSink>>>,
     pub(crate) redactors: Arc<RwLock<Vec<Redactor>>>,
     pub(crate) browser: Arc<browser::Controller>,
     pub(crate) vault: vault::Service,
+    /// The person's own browser, reached through the openside extension in it.
+    pub(crate) person_browser: Arc<crate::person_browser::Hub>,
+    /// The person's own browser's settings and native tools, through its person-role gateway.
+    pub(crate) person_gateway: crate::person_gateway::PersonGateway,
 }
 
 impl Registry {
@@ -213,6 +234,7 @@ impl Registry {
             Arc::new(browser::BrowserTool(browser::Kind::Act)),
             Arc::new(browser::BrowserTool(browser::Kind::Screenshot)),
             Arc::new(browser::BrowserTool(browser::Kind::Close)),
+            Arc::new(browser_downloads::BrowserDownloads),
             Arc::new(browser::cua::BrowserPointer),
             Arc::new(vault::Login),
             Arc::new(vault::Otp),
@@ -225,8 +247,19 @@ impl Registry {
             Arc::new(present::Present),
             Arc::new(vault::Passkey),
             Arc::new(memory::MemorySearch),
+            Arc::new(web::WebSearch),
+            Arc::new(web::WebFetch),
             Arc::new(memory::MemoryWrite),
             Arc::new(imports::ImportLookup),
+            Arc::new(person_tabs::UserTabs),
+            Arc::new(person_tabs::AttachTab),
+            Arc::new(person_tabs::TabSnapshot),
+            Arc::new(person_tabs::TabAct),
+            Arc::new(computer::Apps),
+            Arc::new(computer::Connect),
+            Arc::new(computer::Screenshot),
+            Arc::new(computer::Act),
+            Arc::new(computer::Stop),
             Arc::new(connections::ConnectionTool(connections::Kind::List)),
             Arc::new(connections::ConnectionTool(connections::Kind::Open)),
             Arc::new(connections::ConnectionTool(connections::Kind::Check)),
@@ -242,6 +275,7 @@ impl Registry {
             Arc::new(crate::tasks::TaskTool::Status),
             Arc::new(crate::tasks::TaskTool::Message),
             Arc::new(crate::tasks::document::WriteDocument),
+            Arc::new(image::GenerateImage),
             Arc::new(crate::tasks::model_routing::Models),
             Arc::new(crate::routines::proposals::ProposeRoutine),
             Arc::new(crate::team::TeamTool::Hire),
@@ -267,25 +301,56 @@ impl Registry {
         let sink: Arc<dyn SecretSink> = browser.clone();
         let secret_sink = browser.available().then_some(sink);
         Self {
-            tools: tools.into_iter().map(|tool| (tool.name(), tool)).collect(),
+            tools: tools
+                .into_iter()
+                .map(|tool| (tool.name().to_owned(), tool))
+                .collect(),
+            mcp: RwLock::default(),
+            mcp_generation: std::sync::atomic::AtomicU64::new(0),
             secret_sink: RwLock::new(secret_sink),
             redactors,
             browser,
             vault: vault::Service::new(),
+            person_browser: Arc::default(),
+            person_gateway: crate::person_gateway::PersonGateway::new(
+                config
+                    .loaded
+                    .paths
+                    .runtime_dir
+                    .join(crate::person_gateway::RUNTIME_SUBDIR),
+            ),
         }
     }
-    pub(crate) fn get(&self, name: &str) -> Option<&Arc<dyn DaemonTool>> {
-        self.tools.get(name)
+    pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn DaemonTool>> {
+        if let Some(tool) = self.tools.get(name) {
+            return Some(tool.clone());
+        }
+        if name.starts_with(crate::mcp::TOOL_PREFIX) {
+            return self.mcp.read().get(name).cloned();
+        }
+        None
     }
     /// Every registered tool, so tests can prove properties for the whole registry instead
     /// of a hand-picked list.
     #[cfg(test)]
-    pub(crate) fn names(&self) -> Vec<&'static str> {
-        self.tools.keys().copied().collect()
+    pub(crate) fn names(&self) -> Vec<&str> {
+        self.tools.keys().map(String::as_str).collect()
+    }
+    /// Swap in the tools of all connected MCP servers.
+    pub(crate) fn set_mcp_tools(&self, tools: BTreeMap<String, Arc<dyn DaemonTool>>) {
+        *self.mcp.write() = Arc::new(tools);
+        self.mcp_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub(crate) fn mcp_generation(&self) -> u64 {
+        self.mcp_generation
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
     pub(crate) fn specs(&self, ctx: &ToolEnv) -> Vec<ToolSpec> {
+        let mcp = self.mcp.read().clone();
         self.tools
             .values()
+            .chain(mcp.values())
             .filter_map(|tool| {
                 if !tool.visible(ctx) || !crate::profiles::allows(ctx.profile, tool.name()) {
                     return None;
@@ -522,6 +587,8 @@ pub(crate) fn event_keep(tag: &str) -> Vec<Vec<&'static str>> {
         "tab.opened" | "tab.closed" | "tab.asleep" => &[&["tab_id"]],
         "session.created" => &[&["model"], &["mode"], &["workspace"], &["agent_id"]],
         "session.updated" => &[&["mode"]],
+        "session.branched" => &[&["from_session"], &["from_message"]],
+        "session.folder_changed" => &[&["project_id"], &["workspace"]],
         "session.driver_recorded" => &[&["device_id"]],
         "runtime.started" => &[&["tools", "*"]],
         "runtime.error" => &[&["code"]],
@@ -562,6 +629,8 @@ pub(crate) fn touches_browser(name: &str) -> bool {
                 | "request_choice"
                 | "request_form"
                 | "wait_for_approval"
+                | "websearch"
+                | "webfetch"
         )
 }
 

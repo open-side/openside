@@ -59,6 +59,9 @@ fn concrete(path: &str) -> String {
         .replace("{space_id}", "space")
         .replace("{transaction_id}", "transaction")
         .replace("{tab_id}", "tab")
+        .replace("{share_id}", "share")
+        .replace("{artifact}", "0")
+        .replace("{session_id}", "session")
         .replace("{id}", "session");
     assert!(!out.contains('{'), "unsubstituted path parameter in {out}");
     out

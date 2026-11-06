@@ -221,6 +221,176 @@ fn interval_words(secs: u64) -> String {
     }
 }
 
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// Plain words for the RRULE shapes the routines page builds; anything else shows the rule
+/// the agent proposed. Fields the rule leaves out come from `start`, as the scheduler reads them.
+fn rrule_words(rule: &str, start: Option<chrono::NaiveDateTime>) -> String {
+    use chrono::{Datelike, Timelike};
+
+    let rule = rule.trim();
+    let rule = match rule.get(..6) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("RRULE:") => &rule[6..],
+        _ => rule,
+    };
+    let raw = || format!("On the recurrence rule {rule}");
+    let mut freq = None;
+    let mut interval = 1u32;
+    let mut count = None;
+    let mut until = None;
+    let mut days: Vec<&str> = Vec::new();
+    let mut month_day = None;
+    let mut hour = None;
+    let mut minute = None;
+    for part in rule.split(';').filter(|part| !part.is_empty()) {
+        let Some((key, value)) = part.split_once('=') else {
+            return raw();
+        };
+        let number = || value.parse::<u32>().ok();
+        let key = key.to_ascii_uppercase();
+        match key.as_str() {
+            "FREQ" => freq = Some(value.to_ascii_uppercase()),
+            "UNTIL" => match chrono::NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%SZ") {
+                Ok(time) => until = Some(time),
+                Err(_) => return raw(),
+            },
+            "BYDAY" => days = value.split(',').collect(),
+            "WKST" => {}
+            // Lists such as BYHOUR=9,17 have no short wording; they fail to parse here.
+            "INTERVAL" | "COUNT" | "BYMONTHDAY" | "BYHOUR" | "BYMINUTE" => {
+                let Some(n) = number() else {
+                    return raw();
+                };
+                match key.as_str() {
+                    "INTERVAL" if n > 0 => interval = n,
+                    "COUNT" if n > 0 => count = Some(n),
+                    "BYMONTHDAY" => month_day = Some(n),
+                    "BYHOUR" => hour = Some(n),
+                    "BYMINUTE" => minute = Some(n),
+                    _ => return raw(),
+                }
+            }
+            _ => return raw(),
+        }
+    }
+    let Some(freq) = freq else {
+        return raw();
+    };
+    if count == Some(1) {
+        // A one-time routine fires at `start` unless a BY part moves it.
+        return match start {
+            Some(start)
+                if days.is_empty()
+                    && month_day.is_none()
+                    && hour.unwrap_or(start.hour()) == start.hour()
+                    && minute.unwrap_or(start.minute()) == start.minute() =>
+            {
+                format!("Once on {}", start.format("%Y-%m-%d at %H:%M"))
+            }
+            _ => raw(),
+        };
+    }
+    let minute = minute.or(start.map(|s| s.minute()));
+    let time = match (hour.or(start.map(|s| s.hour())), minute) {
+        (Some(h), Some(m)) if h < 24 && m < 60 => Some(format!("{h:02}:{m:02}")),
+        _ => None,
+    };
+    let names: Option<Vec<&str>> = days
+        .iter()
+        .map(|day| {
+            let index = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]
+                .iter()
+                .position(|code| day.eq_ignore_ascii_case(code))?;
+            Some(WEEKDAYS[index])
+        })
+        .collect();
+    let Some(names) = names else {
+        return raw();
+    };
+    let every = |unit: &str| {
+        if interval == 1 {
+            format!("Every {unit}")
+        } else {
+            format!("Every {interval} {unit}s")
+        }
+    };
+    let base = match (freq.as_str(), time) {
+        ("HOURLY", _) if hour.is_none() && names.is_empty() && month_day.is_none() => {
+            match minute {
+                Some(m) if m < 60 => format!("{} at :{m:02}", every("hour")),
+                _ => return raw(),
+            }
+        }
+        ("DAILY", Some(time)) if month_day.is_none() => match names.as_slice() {
+            [] => format!("{} at {time}", every("day")),
+            ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] if interval == 1 => {
+                format!("Weekdays at {time}")
+            }
+            _ => return raw(),
+        },
+        ("WEEKLY", Some(time)) if month_day.is_none() => {
+            let names = if names.is_empty() {
+                match start {
+                    Some(start) => vec![WEEKDAYS[start.weekday().num_days_from_sunday() as usize]],
+                    None => return raw(),
+                }
+            } else {
+                names
+            };
+            let list = match names.split_last() {
+                Some((last, [])) => (*last).to_owned(),
+                Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+                None => return raw(),
+            };
+            if interval == 1 {
+                format!("Every {list} at {time}")
+            } else {
+                format!("Every {interval} weeks on {list} at {time}")
+            }
+        }
+        ("MONTHLY", Some(time)) if names.is_empty() => match month_day.or(start.map(|s| s.day())) {
+            Some(day) if (1..=31).contains(&day) => {
+                let months = if interval == 1 {
+                    "every month".to_owned()
+                } else {
+                    format!("every {interval} months")
+                };
+                format!("On day {day} of {months} at {time}")
+            }
+            _ => return raw(),
+        },
+        ("YEARLY", Some(time)) if names.is_empty() && month_day.is_none() => match start {
+            Some(start) => format!(
+                "{} on {} {} at {time}",
+                every("year"),
+                MONTHS[start.month0() as usize],
+                start.day()
+            ),
+            None => return raw(),
+        },
+        _ => return raw(),
+    };
+    match (count, until) {
+        (Some(n), None) if n > 1 => format!("{base}, {n} times"),
+        (None, Some(until)) => format!("{base}, until {} UTC", until.format("%Y-%m-%d %H:%M")),
+        (None, None) => base,
+        _ => raw(),
+    }
+}
+
 /// Longest routine message shown in a card row; a longer one keeps the full instructions too.
 const ROUTINE_PROMPT_SHOWN: usize = 1_000;
 /// Longest agent-written reason shown on a sign-in card.
@@ -251,6 +421,21 @@ fn routine_rows(ticket: &Ticket) -> Option<(Vec<KvRow>, bool)> {
             "Schedule",
             format!("{}, counted from when you approve", interval_words(*secs)),
         )),
+        RoutineSchedule::Rrule {
+            rule,
+            timezone,
+            start,
+        } => {
+            out.push(row("Schedule", rrule_words(rule, *start)));
+            out.push(row(
+                "Starts",
+                start.map_or_else(
+                    || "When you approve".to_owned(),
+                    |start| start.format("%Y-%m-%d %H:%M").to_string(),
+                ),
+            ));
+            out.push(row("Time zone", timezone.as_deref().unwrap_or("UTC")));
+        }
     }
     let (target, prompt) = match &request.action {
         RoutineAction::NewSession { prompt, .. } => ("A new conversation each time".into(), prompt),

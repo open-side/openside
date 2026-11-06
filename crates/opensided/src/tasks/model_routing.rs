@@ -58,7 +58,7 @@ pub(super) async fn validate(ctx: &ToolEnv, model: &str) -> Result<(), ToolExec>
         .flat_map(|provider| &provider.models)
         .find(|candidate| candidate.id == model)
         .ok_or_else(|| denied("model_unavailable"))?;
-    if !candidate.available {
+    if !candidate.available || candidate.kind != openside_proto::ModelKind::Chat {
         return Err(denied("model_unavailable"));
     }
     let restriction = restriction(ctx).await?;
@@ -103,7 +103,7 @@ fn reset(account: &ModelAccount) -> Option<f64> {
 }
 
 fn row(model: &CatalogModel, restriction: Option<&[ModelAccountRef]>) -> Option<Value> {
-    if !model.available {
+    if !model.available || model.kind != openside_proto::ModelKind::Chat {
         return None;
     }
     let accounts: Vec<_> = model

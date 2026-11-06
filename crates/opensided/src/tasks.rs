@@ -103,8 +103,10 @@ struct StartArgs {
     goal: String,
     /// Tool names the Task may use; defaults to every acting tool.
     tools: Option<Vec<String>>,
-    /// Available connected model from get_models; omitted uses the reasoning model.
+    /// Available connected model from get_models; usually omit it and set `role`.
     model: Option<String>,
+    /// `standard` (default) for ordinary work, `deep` for hard reasoning, planning, judging or synthesis, `visual` for reading images, screenshots or page visuals; picks that role's configured model.
+    role: Option<crate::models_api::TaskRole>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -301,16 +303,24 @@ impl DaemonTool for TaskTool {
                     let Some(model) = subagents::session_model(ctx).await else {
                         return ToolExec::Failed("Session state is unavailable".into());
                     };
-                    let model = if let Some(selected) = args.model {
+                    let admitted = if let Some(selected) = args.model {
                         if let Err(error) = model_routing::validate(ctx, &selected).await {
                             return error;
                         }
-                        selected
+                        subagents::admit(
+                            &args.goal,
+                            Some(selected.clone()),
+                            None,
+                            args.tools,
+                            "fresh",
+                            ctx,
+                            selected,
+                        )
                     } else {
-                        model
+                        subagents::admit(
+                            &args.goal, None, args.role, args.tools, "fresh", ctx, model,
+                        )
                     };
-                    let admitted =
-                        subagents::admit(&args.goal, None, args.tools, "fresh", ctx, model);
                     subagents::record_start(ctx, &args.goal, admitted, true).await
                 }
                 Self::Steer => {

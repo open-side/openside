@@ -64,6 +64,9 @@ fn concrete(path: &str) -> String {
         .replace("{space_id}", "space")
         .replace("{transaction_id}", "transaction")
         .replace("{tab_id}", "tab")
+        .replace("{share_id}", "share")
+        .replace("{artifact}", "0")
+        .replace("{session_id}", "session")
         .replace("{id}", "session");
     assert!(!out.contains('{'), "unsubstituted path parameter in {out}");
     out
@@ -94,6 +97,28 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("GET", "/v1/team/proposals/suppressed", Read),
         ("DELETE", "/v1/team/proposals/{key}", Admin),
         ("GET", "/v1/browser/tabs", Read),
+        ("GET", "/v1/browser/prefs", Read),
+        ("PATCH", "/v1/browser/prefs", Admin),
+        ("GET", "/v1/browser/person/tabs", Read),
+        ("POST", "/v1/browser/person/tabs/command", Steer),
+        ("POST", "/v1/browser/person/native-tools", Steer),
+        ("GET", "/v1/browser/person/recently-closed", Read),
+        (
+            "POST",
+            "/v1/browser/person/recently-closed/{session_id}/restore",
+            Steer,
+        ),
+        ("GET", "/v1/browser/person/history", Read),
+        ("GET", "/v1/browser/person/bookmarks", Read),
+        ("POST", "/v1/browser/person/bookmarks", Steer),
+        ("DELETE", "/v1/browser/person/bookmarks/{id}", Steer),
+        ("POST", "/v1/browser/person/clear-data", Steer),
+        ("GET", "/v1/browser/person/downloads", Read),
+        ("GET", "/v1/browser/person/extensions", Read),
+        ("GET", "/v1/browser/person/bridge", Steer),
+        ("GET", "/v1/sessions/{id}/attached-tabs", Read),
+        ("POST", "/v1/sessions/{id}/attached-tabs", Steer),
+        ("DELETE", "/v1/sessions/{id}/attached-tabs/{tab_id}", Steer),
         ("GET", "/v1/sessions", Read),
         ("POST", "/v1/sessions", Steer),
         ("GET", "/v1/sessions/{id}", Read),
@@ -105,6 +130,13 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("POST", "/v1/sessions/{id}/queue/{mid}/promote", Steer),
         ("POST", "/v1/sessions/{id}/queue/{mid}/move", Steer),
         ("POST", "/v1/sessions/{id}/stop", Steer),
+        ("POST", "/v1/sessions/{id}/fork", Steer),
+        ("PUT", "/v1/sessions/{id}/folder", Steer),
+        ("GET", "/v1/projects", Read),
+        ("POST", "/v1/projects", Admin),
+        ("GET", "/v1/projects/{id}", Read),
+        ("PATCH", "/v1/projects/{id}", Admin),
+        ("DELETE", "/v1/projects/{id}", Admin),
         ("POST", "/v1/sessions/{id}/prewarm", Steer),
         ("POST", "/v1/browser/prewarm", Steer),
         ("GET", "/v1/sessions/{id}/events", Read),
@@ -120,11 +152,29 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("GET", "/v1/sessions/{id}/artifacts/{path}", Read),
         ("GET", "/v1/sessions/{id}/artifacts/{path}/preview", Read),
         ("GET", "/v1/sessions/{id}/visuals", Read),
+        ("GET", "/v1/sessions/{id}/shares", Read),
+        ("POST", "/v1/sessions/{id}/shares", Steer),
+        ("DELETE", "/v1/sessions/{id}/shares/{share_id}", Steer),
+        ("GET", "/v1/shares/{share_id}", Read),
+        ("GET", "/v1/shares/{share_id}/artifacts/{artifact}", Read),
         ("GET", "/v1/settings", Read),
+        ("GET", "/v1/settings/preferences", Read),
+        ("PATCH", "/v1/settings/preferences", Admin),
+        ("GET", "/v1/settings/cli", Read),
+        ("PATCH", "/v1/settings/cli", Admin),
+        ("GET", "/v1/computer-use", Read),
+        ("GET", "/v1/sessions/{id}/computer-use", Read),
+        ("GET", "/v1/sessions/{id}/computer-use/frames", Browse),
+        ("POST", "/v1/sessions/{id}/computer-use/stop", Steer),
+        ("GET", "/v1/about", Read),
+        ("POST", "/v1/about/update-check", Read),
+        ("GET", "/v1/stt", Read),
+        ("POST", "/v1/stt", Steer),
         ("GET", "/v1/settings/config", Admin),
         ("PUT", "/v1/settings/config", Admin),
         ("GET", "/v1/settings/models", Read),
         ("PUT", "/v1/settings/models", Admin),
+        ("GET", "/v1/settings/models/providers", Read),
         ("GET", "/v1/settings/keys", Admin),
         ("POST", "/v1/settings/keys/{provider}", Admin),
         ("PUT", "/v1/settings/keys/{provider}/{key_id}", Admin),
@@ -235,6 +285,19 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("GET", "/v1/memory", Read),
         ("POST", "/v1/memory", Admin),
         ("GET", "/v1/memory/health", Read),
+        ("GET", "/v1/memory/history", Read),
+        ("POST", "/v1/memory/rebuild", Admin),
+        ("POST", "/v1/memory/reveal", Admin),
+        ("POST", "/v1/folders/pick", Admin),
+        ("GET", "/v1/memory/files", Read),
+        ("GET", "/v1/memory/files/{name}", Read),
+        ("PUT", "/v1/memory/files/{name}", Admin),
+        ("GET", "/v1/mcp/servers", Read),
+        ("POST", "/v1/mcp/servers", Admin),
+        ("GET", "/v1/mcp/servers/{id}", Read),
+        ("PATCH", "/v1/mcp/servers/{id}", Admin),
+        ("DELETE", "/v1/mcp/servers/{id}", Admin),
+        ("POST", "/v1/mcp/servers/{id}/refresh", Admin),
         ("GET", "/v1/memory/{id}", Read),
         ("PATCH", "/v1/memory/{id}", Admin),
         ("DELETE", "/v1/memory/{id}", Admin),
@@ -266,6 +329,13 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("POST", "/v1/vault/lock", Admin),
         ("POST", "/v1/vault/items", Admin),
         ("DELETE", "/v1/vault/items/{id}", Admin),
+        ("GET", "/v1/vault/settings", Admin),
+        ("PATCH", "/v1/vault/settings", Admin),
+        ("GET", "/v1/vault/biometrics", Admin),
+        ("POST", "/v1/vault/export", Admin),
+        ("POST", "/v1/vault/clear", Admin),
+        ("POST", "/v1/vault/recovery-key", Admin),
+        ("POST", "/v1/vault/recover", Admin),
         ("GET", "/v1/pinned-tabs", Read),
         ("POST", "/v1/pinned-tabs", Admin),
         ("DELETE", "/v1/pinned-tabs/{id}", Admin),
@@ -288,6 +358,7 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("POST", "/v1/daemon/restart", Admin),
         ("POST", "/v1/devices/pair", Admin),
         ("DELETE", "/v1/devices/{id}", Admin),
+        ("PATCH", "/v1/devices/{id}", Admin),
         ("GET", "/v1/devices", Admin),
         ("GET", "/v1/devices/me", Read),
         ("POST", "/v1/devices/me/access-requests", Read),
@@ -313,6 +384,8 @@ const EXPECTED_SCOPES: &[(&str, &str, CapabilityScope)] = {
         ("PUT", "/v1/remote/tailscale", Admin),
         ("PUT", "/v1/remote/cloudflare", Admin),
         ("PUT", "/v1/remote/relay", Admin),
+        ("POST", "/v1/remote/disable", Admin),
+        ("POST", "/v1/remote/enable", Admin),
         ("POST", "/v1/pairing", Admin),
         ("POST", "/v1/pairing/exchange", Admin),
         ("GET", "/v1/push/vapid", Read),
@@ -1057,12 +1130,15 @@ const SEED: &str = "JBSWY3DPEHPK3PXP";
 /// Tools whose `actions()` is empty by design: they touch no file, process, origin or
 /// credential. A new tool with no policy action fails the gate test until it is listed here
 /// with a reason: `ask_user` and `request_human_step` only open tickets, `browser_tabs`
-/// lists the session's own tabs, `memory_*`/`skill` use the daemon's own stores (secrets are
+/// lists the session's own tabs, `browser_downloads` asks Browse only for the origins of the
+/// downloads it reports (none in this rig), `memory_*`/`skill` use the daemon's own stores (secrets are
 /// refused on write), `delegate` and `create_task` admit children whose calls re-enter
-/// this hook, Task management touches only their lifecycle, and `browser_repl`
-/// evaluates policy per operation inside the snippet.
-const NO_POLICY_CAPABILITY: [&str; 27] = [
+/// this hook, Task management touches only their lifecycle, `browser_repl`
+/// evaluates policy per operation inside the snippet, and `generate_image` only admits a
+/// provider call whose credential lease and artifact store the daemon gates separately.
+const NO_POLICY_CAPABILITY: [&str; 29] = [
     "ask_user",
+    "browser_downloads",
     "browser_repl",
     "browser_tabs",
     "cancel_task",
@@ -1071,6 +1147,7 @@ const NO_POLICY_CAPABILITY: [&str; 27] = [
     "connections_list",
     "create_task",
     "delegate",
+    "generate_image",
     "get_models",
     "get_tasks",
     "memory_search",
@@ -1132,6 +1209,9 @@ async fn rig(root: &Path, orchestration: openside_config::Orchestration) -> Opti
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let good = format!("http://localhost:{}", listener.local_addr().unwrap().port());
+    // Results page for `websearch`: the canary page has no result headings, so the call
+    // reports the empty page honestly and echoes the query in its note.
+    config.loaded.config.search.engine = Some(format!("{good}/other?q={{query}}"));
     let page = format!(
         "<!doctype html><title>{CANARY}</title><body style='margin:0'><h1>{CANARY} page</h1>\
          <label>Username<input id='username'></label><label>Password<input id='password' type='password'></label>\
@@ -1228,6 +1308,26 @@ async fn run(rig: &Rig, name: &str, args: Value, id: &str) -> ToolOutcome {
             .get_or_insert_with(|| Killer(browser.process_id()));
     }
     outcome
+}
+
+/// Every durable event after `after`: one `events` call returns a single page, and a full
+/// tool sweep appends more than one page.
+async fn events_after(rig: &Rig, mut after: u64) -> Vec<openside_proto::Event> {
+    let mut events = Vec::new();
+    loop {
+        let page = rig
+            .daemon
+            .shared
+            .db
+            .events(&rig.session, after)
+            .await
+            .unwrap();
+        let Some(last) = page.last() else {
+            return events;
+        };
+        after = last.seq;
+        events.extend(page);
+    }
 }
 
 /// The fixture page as the tools see it: tab, accessibility refs by name, and viewport
@@ -1331,8 +1431,34 @@ fn tool_calls(
             account_space: None,
         })
         .unwrap();
+    // The person's own browser: a fake extension showing the canary page, attached as tab 7.
+    let person_page = format!("{}/{CANARY}", rig.good);
+    let hub = rig.daemon.shared.registry.person_browser.clone();
+    super::person_browser::fake_extension(
+        hub.clone(),
+        "core-gaps",
+        super::person_browser::standard_browser(person_page.clone(), CANARY.into()),
+    );
+    super::person_browser::attach_fixture(&hub, &rig.session, &person_page, CANARY);
     let mut calls = vec![
         ("browser_import_lookup", json!({"kind":"bookmarks"})),
+        ("browser_user_tabs", json!({})),
+        // Tab 7 is pre-attached for the read and act probes; attach a tab no chat has yet.
+        ("browser_user_tab_attach", json!({"tab_id": 10})),
+        ("browser_user_tab_snapshot", json!({"tab_id": 7})),
+        (
+            "browser_user_tab_act",
+            json!({"tab_id": 7, "action": "click", "ref": "u1"}),
+        ),
+        // Hidden unless the person turned computer use on (off here); probed in computer_use.rs.
+        ("computer_use_apps", json!({})),
+        ("computer_use_connect", json!({"window_id": "w1"})),
+        ("computer_use_screenshot", json!({})),
+        (
+            "computer_use_act",
+            json!({"action": "type", "text": CANARY}),
+        ),
+        ("computer_use_stop", json!({})),
         ("connections_list", json!({})),
         ("connection_check", json!({"connection_id":connection.id})),
         (
@@ -1356,6 +1482,7 @@ fn tool_calls(
             json!({"url": format!("{}/{CANARY}?q={CANARY}", rig.good)}),
         ),
         ("browser_tabs", json!({})),
+        ("browser_downloads", json!({})),
         ("browser_snapshot", json!({"tab_id": id})),
         ("browser_screenshot", json!({"tab_id": id})),
         (
@@ -1403,6 +1530,8 @@ fn tool_calls(
             json!({"content": format!("note about {CANARY}")}),
         ),
         ("memory_search", json!({"query": CANARY})),
+        ("websearch", json!({"query": CANARY})),
+        ("webfetch", json!({"url": format!("{}/{CANARY}", rig.good)})),
         ("skill", json!({"name": "gapskill"})),
         (
             "ask_user",
@@ -1427,6 +1556,10 @@ fn tool_calls(
         (
             "write_document",
             json!({"title":"Report","markdown":"A short report."}),
+        ),
+        (
+            "generate_image",
+            json!({"prompt": format!("draw {CANARY}")}),
         ),
         (
             "propose_routine",
@@ -1503,6 +1636,10 @@ fn sensitive_calls(tab: &Tab) -> Vec<(&'static str, Value)> {
             json!({"tab_id": id, "target": pay, "action": "click"}),
         ),
         (
+            "browser_user_tab_act",
+            json!({"tab_id": 7, "action": "click", "ref": "u2"}),
+        ),
+        (
             "browser_pointer",
             json!({"tab_id": id, "action": "click", "x": tab.pay.0, "y": tab.pay.1}),
         ),
@@ -1527,6 +1664,8 @@ fn capability_name(capability: Capability) -> &'static str {
         Capability::VaultUse => "vault_use",
         Capability::Sensitive => "sensitive",
         Capability::PrivacyRead => "privacy_read",
+        Capability::PersonBrowser => "person_browser",
+        Capability::ComputerUse => "computer_use",
     }
 }
 
@@ -1831,7 +1970,7 @@ async fn check_policy_hooks(orchestration: openside_config::Orchestration) {
     );
 
     // Acting calls retain paired events; output-only calls must not add timeline bookkeeping.
-    let events = rig.daemon.shared.db.events(&rig.session, 0).await.unwrap();
+    let events = events_after(&rig, 0).await;
     let ended: BTreeSet<_> = events
         .iter()
         .filter_map(|e| match &e.kind {
@@ -1897,7 +2036,7 @@ async fn run_every_tool(rig: &Rig, label: &str) -> Vec<(&'static str, String)> {
         let outcome = tokio::time::timeout(Duration::from_secs(60), run(rig, name, args, &id))
             .await
             .unwrap_or_else(|_| panic!("{name} did not finish"));
-        let events = rig.daemon.shared.db.events(&rig.session, 0).await.unwrap();
+        let events = events_after(rig, 0).await;
         let recorded: Vec<_> = events
             .iter()
             .filter_map(|event| match &event.kind {
@@ -1919,7 +2058,7 @@ async fn run_every_tool(rig: &Rig, label: &str) -> Vec<(&'static str, String)> {
 /// Exactly the tools whose result carries text that a page, file, note, URL or the model's own
 /// arguments control. The control run must leak the canary through these and no others, so a
 /// tool that starts echoing page text (or stops) changes this list under review.
-const TEXT_RETURNING: [&str; 12] = [
+const TEXT_RETURNING: [&str; 18] = [
     "bash",
     "browser_navigate",
     "browser_open_tab",
@@ -1927,11 +2066,17 @@ const TEXT_RETURNING: [&str; 12] = [
     "browser_repl",
     "browser_snapshot",
     "browser_tabs",
+    "browser_user_tab_act",
+    "browser_user_tab_attach",
+    "browser_user_tab_snapshot",
+    "browser_user_tabs",
     "connection_fetch",
     "get_tasks",
     "memory_search",
     "read",
     "skill",
+    "webfetch",
+    "websearch",
 ];
 
 /// A-7 / D-4: the after-call hook redacts secrets from every tool result before the model or
@@ -1951,16 +2096,7 @@ async fn check_redaction_hooks(orchestration: openside_config::Orchestration) {
         return;
     };
     let control = run_every_tool(&rig, "control").await;
-    let control_last_seq = rig
-        .daemon
-        .shared
-        .db
-        .events(&rig.session, 0)
-        .await
-        .unwrap()
-        .last()
-        .unwrap()
-        .seq;
+    let control_last_seq = events_after(&rig, 0).await.last().unwrap().seq;
     rig.daemon
         .shared
         .registry
@@ -1999,13 +2135,7 @@ async fn check_redaction_hooks(orchestration: openside_config::Orchestration) {
     }
     // Not only tool.ended: every event the redacted run appended (tool.started arguments,
     // tickets, tab and subagent events, replies) is clean.
-    let later = rig
-        .daemon
-        .shared
-        .db
-        .events(&rig.session, control_last_seq)
-        .await
-        .unwrap();
+    let later = events_after(&rig, control_last_seq).await;
     assert!(
         later.len() > redacted.len(),
         "the redacted run left too few events: {}",

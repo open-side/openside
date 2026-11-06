@@ -8,6 +8,8 @@
 //! a running daemon.
 
 use axum::{extract::State, http::StatusCode, Extension, Json};
+use openside_config::PreferencesConfig;
+use openside_core::MessageAuthorKind;
 use openside_proto::{DeviceKind, SettingsDocument, UpdateSettingsRequest};
 use serde_json::Value;
 
@@ -53,6 +55,8 @@ fn running(s: &Shared) -> Result<Value, HttpError> {
     running.channels = s.channels.config();
     running.skills.agents = s.ops.agents.read().clone();
     running.sync = crate::sync::effective(s);
+    running.preferences = s.preferences.get();
+    s.registry.vault.settings(s).apply_to(&mut running.vault);
     public(&running)
 }
 
@@ -128,10 +132,11 @@ pub(crate) async fn put(
     State(s): State<Shared>,
     Extension(caller): Extension<crate::api::Caller>,
     Extension(local): Extension<crate::remote::LocalAuthority>,
+    Extension(author): Extension<MessageAuthorKind>,
     Json(request): Json<UpdateSettingsRequest>,
 ) -> Result<Json<SettingsDocument>, HttpError> {
     // Local callers also need cancellation-safe serialization through rename and audit.
-    tokio::spawn(put_owned(s, caller, local, request))
+    tokio::spawn(put_owned(s, caller, local, author, request))
         .await
         .map_err(|_| HttpError::internal())?
 }
@@ -140,6 +145,7 @@ async fn put_owned(
     s: Shared,
     caller: crate::api::Caller,
     local: crate::remote::LocalAuthority,
+    author: MessageAuthorKind,
     request: UpdateSettingsRequest,
 ) -> Result<Json<SettingsDocument>, HttpError> {
     let invalid = || HttpError(StatusCode::BAD_REQUEST, "invalid_config");
@@ -194,6 +200,38 @@ async fn put_owned(
             return Err(HttpError(StatusCode::FORBIDDEN, "local_access_required"));
         }
     }
+    // Same rule as `PATCH /v1/settings/preferences`: only a person flips the MCP server or
+    // computer use, never an MCP client or agent client that has local authority. A malformed
+    // section is left for `persist` to reject.
+    let next = object.get("preferences").cloned().map_or_else(
+        || Ok(PreferencesConfig::default()),
+        serde_json::from_value::<PreferencesConfig>,
+    );
+    if let Ok(next) = next {
+        let keys: Vec<&str> = [
+            (
+                next.mcp_server != current.preferences.mcp_server,
+                "preferences.mcp_server",
+            ),
+            (
+                next.computer_use != current.preferences.computer_use,
+                "preferences.computer_use",
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(changed, key)| changed.then_some(key))
+        .collect();
+        if !keys.is_empty() && crate::takeover::person_only(&caller, author).is_err() {
+            crate::pairing::audit(
+                &s,
+                "settings",
+                "refused_agent",
+                serde_json::json!({"device_id": caller.0, "keys": keys}),
+            )
+            .await;
+            return Err(HttpError(StatusCode::FORBIDDEN, "person_access_required"));
+        }
+    }
     for section in FILE_ONLY {
         let kept = serde_json::to_value(&current)
             .map_err(|_| HttpError::internal())?
@@ -204,6 +242,10 @@ async fn put_owned(
         }
     }
     persist(&s, config).await?;
+    // Preferences apply live; everything else in the document waits for a restart.
+    if let Ok(written) = stored(&s).await {
+        s.preferences.replace(written.preferences);
+    }
     crate::pairing::audit(
         &s,
         "settings",
@@ -215,14 +257,20 @@ async fn put_owned(
 }
 
 /// Keys a paired person device without local authority may change: ticket lifetimes, model
-/// choice, agent tuning, memory retention and sleep inhibition. Each is plain behaviour and
-/// names no executable, path, listener, credential or trust list; everything else needs local
-/// authority.
+/// choice, agent tuning, memory retention, sleep inhibition and the person's preferences. Each
+/// is plain behaviour and names no executable, path, listener, credential or trust list;
+/// everything else needs local authority. `preferences.mcp_server` turns on a listener for
+/// local MCP clients, so it is not listed.
 pub(crate) const REMOTE_EDITABLE: &[&str] = &[
     "tickets.",
     "models.default",
     "models.fallback",
     "models.front",
+    "models.standard",
+    "models.deep",
+    "models.visual",
+    "models.image",
+    "models.image_off",
     "memory.default_retention",
     "memory.history",
     "agent.startup_timeout_ms",
@@ -232,6 +280,13 @@ pub(crate) const REMOTE_EDITABLE: &[&str] = &[
     "agent.compaction_keep_messages",
     "agent.orchestration",
     "service.inhibit_sleep",
+    "preferences.name",
+    "preferences.notifications",
+    "preferences.completion_sound",
+    "preferences.follow_up",
+    "preferences.confirmation",
+    "preferences.agent_tab_cleanup_minutes",
+    "preferences.save_sessions",
 ];
 
 pub(crate) fn remote_editable(path: &str) -> bool {

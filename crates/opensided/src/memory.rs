@@ -4,6 +4,7 @@
 
 pub(crate) mod consolidation;
 pub(crate) mod context;
+pub(crate) mod views;
 
 use std::{sync::Arc, time::Duration};
 
@@ -34,6 +35,31 @@ pub(crate) struct MemoryService {
     /// Writers share it; a sync run holds it exclusively so no memory changes between the
     /// run's snapshot and its applies (docs/specs/sync.md).
     pub(crate) writers: Arc<tokio::sync::RwLock<()>>,
+    /// Shows a folder in the desktop file manager; tests swap in a recorder.
+    opener: RwLock<FolderOpener>,
+}
+
+pub(crate) type FolderOpener = fn(&std::path::Path) -> std::io::Result<()>;
+
+/// Hand the folder to the platform's file manager. The path is an argument, never shell
+/// text, and the child is reaped on its own thread so it never lingers as a zombie.
+#[cfg_attr(test, allow(dead_code))]
+fn open_folder(path: &std::path::Path) -> std::io::Result<()> {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let mut child = std::process::Command::new(program)
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 impl MemoryService {
@@ -78,6 +104,12 @@ impl MemoryService {
                 problem,
                 history: memory.history,
                 writers: Arc::default(),
+                // Route sweeps call every route on the socket; no test may launch a real
+                // file manager. A test that checks the call installs its own recorder.
+                #[cfg(test)]
+                opener: RwLock::new((|_| Ok(())) as FolderOpener),
+                #[cfg(not(test))]
+                opener: RwLock::new(open_folder as FolderOpener),
             })
         })
         .await?
@@ -132,6 +164,15 @@ impl MemoryService {
     pub(crate) fn history_enabled(&self) -> bool {
         self.history
     }
+
+    pub(crate) fn open_folder(&self, path: &std::path::Path) -> std::io::Result<()> {
+        (*self.opener.read())(path)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_opener(&self, opener: FolderOpener) {
+        *self.opener.write() = opener;
+    }
 }
 
 fn load_embedder(dir: &std::path::Path) -> (Option<Arc<dyn Embedder>>, Option<String>) {
@@ -181,6 +222,7 @@ fn error(err: openside_memory::Error) -> HttpError {
         openside_memory::Error::SecretDetected | openside_memory::Error::Invalid(_) => {
             StatusCode::BAD_REQUEST
         }
+        openside_memory::Error::Conflict => StatusCode::CONFLICT,
         openside_memory::Error::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     HttpError(status, err.code())

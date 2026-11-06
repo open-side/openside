@@ -121,6 +121,11 @@ pub(crate) struct Policy {
     report_rate: HashMap<SessionId, (tokio::time::Instant, u32)>,
     models: HashMap<SessionId, Vec<String>>,
     fallbacks: HashMap<SessionId, Vec<String>>,
+    /// Role models (visual) any agent of the session, parent or child, may request.
+    roles: HashMap<SessionId, Vec<String>>,
+    /// Image generation ids from the model index; accounts report only chat catalogs, so
+    /// those reports never exclude these.
+    pub(crate) image_models: HashSet<String>,
 }
 
 fn now() -> u64 {
@@ -334,12 +339,7 @@ pub(crate) async fn inventory(s: &Shared) -> Inventory {
         }
     }
     let models = s.models.models();
-    for model in models
-        .default
-        .iter()
-        .chain(models.front.iter())
-        .chain(&models.fallback)
-    {
+    for model in models.selected() {
         if let Some((provider, _)) = model.split_once(':') {
             providers.insert(provider.into());
         }
@@ -569,12 +569,7 @@ pub(crate) async fn pools(
         .map(|account| account.provider.clone())
         .collect();
     let models = s.models.models();
-    for model in models
-        .default
-        .iter()
-        .chain(models.front.iter())
-        .chain(&models.fallback)
-    {
+    for model in models.selected() {
         if let Some((provider, _)) = model.split_once(':') {
             providers.insert(provider.into());
         }
@@ -639,6 +634,7 @@ impl Policy {
         self.report_rate.remove(session);
         self.models.remove(session);
         self.fallbacks.remove(session);
+        self.roles.remove(session);
     }
     fn shared_report_allowed(&mut self, session: &SessionId) -> bool {
         let current = tokio::time::Instant::now();
@@ -720,6 +716,7 @@ impl Policy {
         };
         let mut until = account.blocked_until.filter(|until| *until > now());
         if !model.is_empty()
+            && !self.image_models.contains(model)
             && !account.models.is_empty()
             && !account.models.iter().any(|candidate| {
                 candidate == model
@@ -811,6 +808,12 @@ struct IndexModel {
     tier: openside_proto::ModelTier,
     #[serde(default)]
     strengths: String,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    kind: openside_proto::ModelKind,
+    #[serde(default)]
+    default_effort: Option<openside_proto::ThinkingEffort>,
 }
 
 pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
@@ -824,7 +827,13 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
             .filter(|account| account.reference.source == crate::model_plugins::SOURCE)
             .map(|account| &account.provider),
     );
-    let config = json!({"models":s.models.models(),"provider_names":provider_names});
+    // The sidecar resolves each model's unpicked effort from the orchestration that decides
+    // which agent the person talks to.
+    let config = json!({
+        "models": s.models.models(),
+        "provider_names": provider_names,
+        "orchestration": s.config.loaded.config.agent.orchestration.as_str(),
+    });
     let environment = openside_config::runtime_environment(&s.models.credentials_config());
     let deadline = Duration::from_millis(s.config.loaded.config.agent.startup_timeout_ms)
         .max(Duration::from_secs(10));
@@ -887,12 +896,7 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
             .iter()
             .map(|m| (m.id.clone(), m.clone()))
             .collect();
-        for id in models
-            .default
-            .iter()
-            .chain(models.front.iter())
-            .chain(&models.fallback)
-        {
+        for id in models.selected() {
             let qualified = if id.contains(':') {
                 id.clone()
             } else {
@@ -914,9 +918,18 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                         in_catalog: false,
                         tier: openside_proto::ModelTier::Reasoning,
                         strengths: "Explicitly configured model; capabilities not curated".into(),
+                        display_name: String::new(),
+                        kind: openside_proto::ModelKind::Chat,
+                        default_effort: None,
                     });
             }
         }
+        policy.image_models.extend(
+            candidates
+                .values()
+                .filter(|model| model.kind == openside_proto::ModelKind::Image)
+                .map(|model| model.id.clone()),
+        );
         // A source can stop reporting a pinned account (broker credential ids change when the
         // broker re-creates a login); the catalog names those members either way.
         let unreported = unreported(&pool, &inventory);
@@ -946,7 +959,10 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                             &id,
                             routed.accounts.contains(&account.reference),
                         );
-                        if !account.models.is_empty()
+                        // Accounts report their chat catalog; image models share the
+                        // provider lease without appearing there.
+                        if metadata.kind == openside_proto::ModelKind::Chat
+                            && !account.models.is_empty()
                             && !account.models.iter().any(|candidate| {
                                 candidate == &id
                                     || id
@@ -976,6 +992,13 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
                     tier: metadata.tier,
                     strengths: metadata.strengths,
                     id,
+                    display_name: if metadata.display_name.is_empty() {
+                        metadata.label.clone()
+                    } else {
+                        metadata.display_name
+                    },
+                    kind: metadata.kind,
+                    default_effort: metadata.default_effort,
                     label: metadata.label,
                     available: selected.is_some() || plugin_ok,
                     reason: selected.map(|row| {
@@ -1012,16 +1035,31 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
             })
             .collect();
         providers.push(ModelProvider {
+            display_name: crate::models_api::provider_display_name(&provider.provider).into(),
             provider: provider.provider.clone(),
             models,
             pool,
         });
     }
     providers.sort_by(|a, b| a.provider.cmp(&b.provider));
+    let image_model = crate::models_api::image_choice(&models);
+    let effective_image_model = if models.image_off {
+        None
+    } else {
+        models
+            .image
+            .clone()
+            .or_else(|| crate::models_api::best_image_model(&providers))
+    };
     Ok(ModelCatalog {
         providers,
         default_model: models.default,
         fast_model: models.front,
+        standard_model: models.standard,
+        deep_model: models.deep,
+        visual_model: models.visual,
+        image_model,
+        effective_image_model,
         fallback_models: models.fallback,
         cached_for_ms: 5000,
         truncated: false,
@@ -1098,6 +1136,7 @@ async fn resolve(
         "vault" => {
             let vault = s.registry.vault.vault.lock().await;
             let vault = vault.as_ref().ok_or(())?;
+            s.registry.vault.touch(s);
             let version = vault
                 .provider_keys(&context())
                 .map_err(|_| ())?
@@ -1265,6 +1304,77 @@ async fn resolve(
     }
 }
 
+const OPENAI: &str = "openai";
+const TRANSCRIPTION_MODEL: &str = "openai:gpt-4o-mini-transcribe";
+
+/// Usable accounts of the `openai` routing pool, in pool order. ChatGPT-plan sign-ins live
+/// under `openai-codex` (CLI login or OAuth) and are never candidates: those tokens have no
+/// documented transcription endpoint, and OAuth sign-ins are skipped for the same reason.
+async fn openai_key_candidates(s: &Shared) -> Vec<Account> {
+    let inventory = inventory(s).await;
+    let Ok(pools) = pools(s, &inventory).await else {
+        return Vec::new();
+    };
+    let Some(pool) = routing_pool(s, pools.get(OPENAI), &inventory, OPENAI) else {
+        return Vec::new();
+    };
+    pool.accounts
+        .iter()
+        .filter_map(|reference| {
+            inventory
+                .accounts
+                .iter()
+                .find(|account| account.provider == OPENAI && &account.reference == reference)
+        })
+        .filter(|account| {
+            account.enabled
+                && account.ready
+                && account.blocked_until.map_or(true, |until| until <= now())
+                && account.reference.source != crate::model_oauth::SOURCE
+        })
+        .cloned()
+        .collect()
+}
+
+/// The account's key when it is a first-party OpenAI API key.
+async fn first_party_key(s: &Shared, account: &Account) -> Option<Zeroizing<String>> {
+    let (mut auth, _) = resolve(s, account, false, TRANSCRIPTION_MODEL).await.ok()?;
+    first_party(&auth).then(|| Zeroizing::new(std::mem::take(&mut auth.value)))
+}
+
+/// Only a plain API key qualifies: a relay (a private `base_url`) would receive audio meant for
+/// OpenAI, and an OAuth or bearer token has no documented transcription endpoint.
+pub(crate) fn first_party(auth: &CredentialAuth) -> bool {
+    auth.kind == CredentialAuthKind::ApiKey && auth.base_url.is_none() && !auth.value.is_empty()
+}
+
+/// Whether `openai_transcription_key` would find a key, without releasing one.
+pub(crate) async fn openai_transcription_ready(s: &Shared) -> bool {
+    for account in openai_key_candidates(s).await {
+        match account.reference.source.as_str() {
+            // Releasing a vault key writes an audit record and a credential command runs a
+            // program; a status probe does neither. Both always yield a first-party API key.
+            "vault" | "command" => return true,
+            _ => {
+                if first_party_key(s, &account).await.is_some() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The first first-party OpenAI API key of the `openai` routing pool, for person dictation.
+pub(crate) async fn openai_transcription_key(s: &Shared) -> Option<Zeroizing<String>> {
+    for account in openai_key_candidates(s).await {
+        if let Some(key) = first_party_key(s, &account).await {
+            return Some(key);
+        }
+    }
+    None
+}
+
 async fn permitted(
     s: &Shared,
     session: &SessionId,
@@ -1304,7 +1414,12 @@ async fn permitted(
     }
     let effective_model =
         crate::engine::session_model(s, &state, agent.as_ref()).ok_or_else(invalid)?;
-    let valid_model = if let Some(child) = &request.subagent {
+    let image_grant =
+        s.models
+            .image_lease_allowed(session, request.subagent.as_deref(), &request.model);
+    let valid_model = if image_grant {
+        true
+    } else if let Some(child) = &request.subagent {
         let child = crate::subagents::get(s, session, child)
             .await
             .map_err(|_| invalid())?;
@@ -1315,16 +1430,25 @@ async fn permitted(
                     || policy
                         .fallbacks
                         .get(session)
-                        .is_some_and(|chain| chain.contains(&request.model)))
+                        .is_some_and(|chain| chain.contains(&request.model))
+                    || policy
+                        .roles
+                        .get(session)
+                        .is_some_and(|roles| roles.contains(&request.model)))
         })
     } else {
         let policy = s.models.policy.lock().await;
         if let Some(binding) = policy.models.get(session) {
             binding.contains(&request.model)
+                || policy
+                    .roles
+                    .get(session)
+                    .is_some_and(|roles| roles.contains(&request.model))
         } else {
             request.model == effective_model
                 || models.fallback.contains(&request.model)
                 || models.front.as_ref() == Some(&request.model)
+                || models.visual.as_ref() == Some(&request.model)
         }
     };
     if !valid_model {
@@ -2161,9 +2285,11 @@ pub(crate) async fn bind_session(
     if let Some(front) = s.models.front_model() {
         allowed.push(front);
     }
+    let roles: Vec<String> = s.models.models().visual.into_iter().collect();
     let mut policy = s.models.policy.lock().await;
     policy.models.insert(session.clone(), allowed);
     policy.fallbacks.insert(session.clone(), fallback.to_vec());
+    policy.roles.insert(session.clone(), roles);
 }
 
 #[cfg(test)]

@@ -30,6 +30,8 @@ pub(crate) const TICKET_KEEP: &[&[&str]] = &[
     &["tool", "args", "schedule", "type"],
     &["tool", "args", "schedule", "expr"],
     &["tool", "args", "schedule", "timezone"],
+    &["tool", "args", "schedule", "rule"],
+    &["tool", "args", "schedule", "start"],
     &["tool", "args", "action", "type"],
     &["tool", "args", "action", "mode"],
     &["tool", "args", "action", "agent_id"],
@@ -74,7 +76,7 @@ impl DaemonTool for ProposeRoutine {
     fn spec(&self) -> ToolSpec {
         tools::spec::<CreateRoutineRequest>(
             self.name(),
-            "Propose a scheduled routine for the person's approval. Supply its exact name, schedule and action (prompt and target). Nothing is scheduled until the confirmation is approved. Prefer an agent target for recurring chief/teammate work. Changed payloads require a new proposal; never claim a proposal is already running.",
+            "Propose a scheduled routine (exact name, schedule, action) for the person's approval; nothing runs until approved. Prefer an agent target for recurring chief/teammate work. A changed payload needs a new proposal; never claim one is running.",
             ApprovalTier::Read,
             false,
         )

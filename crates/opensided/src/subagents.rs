@@ -45,8 +45,10 @@ enum Context {
 struct DelegateArgs {
     /// Self-contained task for the subagent; its final answer is returned to you.
     task: String,
-    /// Model for the subagent: this session's model (default) or a configured fallback.
+    /// Model for the subagent: this session's model, a configured fallback or a role model. Usually omit it and set `role`.
     model: Option<String>,
+    /// `standard` (default) for ordinary work, `deep` for hard reasoning, planning, judging or synthesis, `visual` for reading images, screenshots or page visuals; picks that role's configured model.
+    role: Option<crate::models_api::TaskRole>,
     /// Tool names the subagent may use; defaults to all of your tools except `delegate`.
     tools: Option<Vec<String>>,
     /// `fresh` (default) or `fork` to share this conversation's history.
@@ -56,10 +58,12 @@ struct DelegateArgs {
 pub(crate) struct Delegate;
 
 /// Admit a child: the daemon picks its id and checks its model and tools. Children never get
-/// `delegate` or the front agent's task tools.
+/// `delegate` or the front agent's task tools. Without an explicit model the child runs the
+/// `role` model (Standard by default), which falls back to the session model when unset.
 pub(crate) fn admit(
     task: &str,
     model: Option<String>,
+    role: Option<crate::models_api::TaskRole>,
     tools: Option<Vec<String>>,
     context: &'static str,
     ctx: &ToolEnv,
@@ -72,15 +76,22 @@ pub(crate) fn admit(
         };
     }
     let models = ctx.shared.models.models();
-    let model = model.unwrap_or_else(|| session_model.clone());
+    let model = model.unwrap_or_else(|| {
+        ctx.shared
+            .models
+            .task_model(role.unwrap_or_default(), &session_model)
+    });
     if model != session_model
         && models.default.as_deref() != Some(model.as_str())
         && !models.fallback.contains(&model)
+        && ![&models.standard, &models.deep, &models.visual]
+            .into_iter()
+            .any(|role| role.as_deref() == Some(model.as_str()))
     {
         return ToolExec::Denied {
             reason: "model_not_allowed".into(),
             hint: Some(
-                "Omit model, or use this session's model or a configured fallback model".into(),
+                "Omit model and set role, or use this session's model or a configured fallback model".into(),
             ),
         };
     }
@@ -191,6 +202,7 @@ impl DaemonTool for Delegate {
             let admitted = admit(
                 &args.task,
                 args.model,
+                args.role,
                 args.tools,
                 context,
                 ctx,

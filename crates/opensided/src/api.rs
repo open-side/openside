@@ -8,7 +8,7 @@ use axum::{
         sse::{Event as SseEvent, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
     Extension, Json, Router,
 };
 use chrono::Utc;
@@ -196,8 +196,25 @@ impl Caller {
         Ok(())
     }
 
+    /// A paired agent-client token: software acting on its own, not the person. The local
+    /// socket is the person's own computer and never counts as one.
+    pub(crate) fn is_agent_token(&self) -> bool {
+        self.0.is_some() && self.1 == DeviceKind::AgentClient
+    }
+
+    /// For what only a person may choose, such as a project's pre-approved folder or the
+    /// instructions every chat in a project receives as a system prompt part.
+    pub(crate) fn require_person(&self) -> Result<()> {
+        if self.is_agent_token() {
+            return Err(HttpError(StatusCode::FORBIDDEN, "person_device_required"));
+        }
+        Ok(())
+    }
+
     /// A paired device must not widen what the agent may do: choosing a mode looser than the
-    /// daemon default or a workspace outside the default sandbox is for the local socket only.
+    /// daemon default or naming a workspace is for the local socket only. Callers pass no
+    /// `workspace` when it needs no approval: a project's folder chosen by a person, or one
+    /// named by a device with local authority.
     pub(crate) fn widens(
         &self,
         shared: &Shared,
@@ -263,10 +280,103 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             axum::routing::delete(crate::agents::api::clear_proposal),
         )
         .route("/v1/browser/tabs", get(crate::browser_tabs_api::list))
+        .route(
+            "/v1/browser/prefs",
+            get(crate::browser_prefs_api::get).patch(crate::browser_prefs_api::patch),
+        )
+        .route(
+            "/v1/browser/person/tabs",
+            get(crate::person_browser_api::tabs),
+        )
+        .route(
+            "/v1/browser/person/tabs/command",
+            post(crate::person_browser_api::command),
+        )
+        .route(
+            "/v1/browser/person/native-tools",
+            post(crate::person_native_api::open),
+        )
+        .route(
+            "/v1/browser/person/recently-closed",
+            get(crate::person_browser_api::recently_closed),
+        )
+        .route(
+            "/v1/browser/person/recently-closed/{session_id}/restore",
+            post(crate::person_browser_api::restore),
+        )
+        .route(
+            "/v1/browser/person/history",
+            get(crate::person_browser_api::history),
+        )
+        .route(
+            "/v1/browser/person/bookmarks",
+            get(crate::person_browser_api::bookmarks)
+                .post(crate::person_browser_api::create_bookmark),
+        )
+        .route(
+            "/v1/browser/person/bookmarks/{id}",
+            axum::routing::delete(crate::person_browser_api::delete_bookmark),
+        )
+        .route(
+            "/v1/browser/person/clear-data",
+            axum::routing::post(crate::person_browser_api::clear_data),
+        )
+        .route(
+            "/v1/browser/person/downloads",
+            get(crate::person_browser_api::downloads),
+        )
+        .route(
+            "/v1/browser/person/extensions",
+            get(crate::person_browser_api::extensions),
+        )
+        .route(
+            "/v1/browser/person/bridge",
+            get(crate::person_browser::bridge),
+        )
+        .route(
+            "/v1/sessions/{id}/attached-tabs",
+            get(crate::person_browser_api::attached).post(crate::person_browser_api::attach),
+        )
+        .route(
+            "/v1/sessions/{id}/attached-tabs/{tab_id}",
+            axum::routing::delete(crate::person_browser_api::detach),
+        )
         .route("/v1/settings", get(crate::session_meta::settings))
+        .route(
+            "/v1/settings/preferences",
+            get(crate::preferences::get).patch(crate::preferences::patch),
+        )
+        .route(
+            "/v1/settings/cli",
+            get(crate::cli_defaults::get).patch(crate::cli_defaults::patch),
+        )
+        .route("/v1/computer-use", get(crate::computer_use::get_status))
+        .route(
+            "/v1/sessions/{id}/computer-use",
+            get(crate::computer_use::get_session),
+        )
+        .route(
+            "/v1/sessions/{id}/computer-use/frames",
+            get(crate::computer_use::frames),
+        )
+        .route(
+            "/v1/sessions/{id}/computer-use/stop",
+            post(crate::computer_use::post_stop),
+        )
+        .route("/v1/about", get(crate::about::get))
+        .route("/v1/about/update-check", post(crate::about::update_check))
+        // The handler reads its own body against the live `channels.max_audio_bytes`.
+        .route(
+            "/v1/stt",
+            get(crate::stt::status).post(crate::stt::transcribe),
+        )
         .route(
             "/v1/settings/models",
             get(crate::models_api::get).put(crate::models_api::put),
+        )
+        .route(
+            "/v1/settings/models/providers",
+            get(crate::models_api::providers),
         )
         .route("/v1/settings/keys", get(crate::models_api::keys))
         .route(
@@ -360,6 +470,17 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
                 .patch(crate::session_meta::update)
                 .delete(crate::session_delete::delete),
         )
+        .route("/v1/sessions/{id}/folder", put(crate::projects::set_folder))
+        .route(
+            "/v1/projects",
+            get(crate::projects::list).post(crate::projects::create),
+        )
+        .route(
+            "/v1/projects/{id}",
+            get(crate::projects::get)
+                .patch(crate::projects::update)
+                .delete(crate::projects::delete),
+        )
         .route(
             "/v1/sessions/{id}/messages",
             post(submit).layer(axum::extract::DefaultBodyLimit::max(
@@ -377,10 +498,24 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             get(crate::artifacts::preview),
         )
         .route("/v1/sessions/{id}/visuals", get(crate::artifacts::visuals))
+        .route(
+            "/v1/sessions/{id}/shares",
+            get(crate::shares::list).post(crate::shares::create),
+        )
+        .route(
+            "/v1/sessions/{id}/shares/{share_id}",
+            delete(crate::shares::revoke),
+        )
+        .route("/v1/shares/{share_id}", get(crate::shares::get))
+        .route(
+            "/v1/shares/{share_id}/artifacts/{artifact}",
+            get(crate::shares::artifact),
+        )
         .route("/v1/sessions/{id}/queue/{mid}", patch(edit).delete(remove))
         .route("/v1/sessions/{id}/queue/{mid}/promote", post(promote))
         .route("/v1/sessions/{id}/queue/{mid}/move", post(reorder))
         .route("/v1/sessions/{id}/stop", post(stop))
+        .route("/v1/sessions/{id}/fork", post(crate::fork::fork))
         .route("/v1/sessions/{id}/prewarm", post(prewarm_session))
         .route("/v1/browser/prewarm", post(prewarm_browser))
         .route("/v1/sessions/{id}/events", get(events))
@@ -422,7 +557,10 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             get(crate::preview::thumbnail),
         )
         .route("/v1/devices/pair", post(pair))
-        .route("/v1/devices/{id}", delete(revoke))
+        .route(
+            "/v1/devices/{id}",
+            delete(revoke).patch(crate::pairing::rename),
+        )
         .route(
             "/v1/routines",
             get(crate::routines::list).post(crate::routines::create),
@@ -444,6 +582,29 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             get(crate::memory::search).post(crate::memory::create),
         )
         .route("/v1/memory/health", get(crate::memory::health))
+        .route("/v1/memory/history", get(crate::memory::views::changes))
+        .route("/v1/memory/rebuild", post(crate::memory::views::rebuild))
+        .route("/v1/memory/reveal", post(crate::memory::views::reveal))
+        .route("/v1/folders/pick", post(crate::folder_picker::pick))
+        .route("/v1/memory/files", get(crate::memory::views::list))
+        .route(
+            "/v1/memory/files/{name}",
+            get(crate::memory::views::get).put(crate::memory::views::put),
+        )
+        .route(
+            "/v1/mcp/servers",
+            get(crate::mcp::api::list).post(crate::mcp::api::create),
+        )
+        .route(
+            "/v1/mcp/servers/{id}",
+            get(crate::mcp::api::get)
+                .patch(crate::mcp::api::update)
+                .delete(crate::mcp::api::delete),
+        )
+        .route(
+            "/v1/mcp/servers/{id}/refresh",
+            post(crate::mcp::api::refresh),
+        )
         .route("/v1/memory/model", get(crate::memory_model::status))
         .route(
             "/v1/memory/model/download",
@@ -563,6 +724,18 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
         )
         .route("/v1/vault/audit", get(crate::vault_api::audit))
         .route(
+            "/v1/vault/settings",
+            get(crate::vault_manage::settings).patch(crate::vault_manage::update_settings),
+        )
+        .route("/v1/vault/biometrics", get(crate::vault_manage::biometrics))
+        .route("/v1/vault/export", post(crate::vault_manage::export))
+        .route("/v1/vault/clear", post(crate::vault_manage::clear))
+        .route(
+            "/v1/vault/recovery-key",
+            post(crate::vault_manage::recovery_key),
+        )
+        .route("/v1/vault/recover", post(crate::vault_manage::recover))
+        .route(
             "/v1/pinned-tabs",
             get(crate::sync::list_pinned).post(crate::sync::pin),
         )
@@ -610,6 +783,8 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             "/v1/remote/relay",
             axum::routing::put(crate::remote::configure_relay),
         )
+        .route("/v1/remote/disable", post(crate::remote::disable))
+        .route("/v1/remote/enable", post(crate::remote::enable))
         .route("/v1/push/vapid", get(crate::push::vapid))
         .route(
             "/v1/push/subscriptions",
@@ -627,8 +802,27 @@ pub(crate) fn router(shared: Shared, unix: bool) -> Router {
             authorize,
         ))
         .layer(middleware::from_fn(json_rejections))
-        .with_state(shared);
-    crate::ui::attach(api, ui.as_deref())
+        .with_state(shared.clone());
+    let app = crate::ui::attach(api, ui.as_deref());
+    if unix {
+        app
+    } else {
+        app.layer(middleware::from_fn_with_state(shared, remote_gate))
+    }
+}
+
+/// While Remote Control is off the TCP listener serves only requests made directly on this
+/// computer (`remote::direct`). It wraps the whole listener, public routes, the web UI and
+/// unknown paths included, and runs before any token is looked at.
+async fn remote_gate(
+    State(shared): State<Shared>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !crate::remote::enabled(&shared) && !crate::remote::direct(&request) {
+        return HttpError(StatusCode::FORBIDDEN, "remote_disabled").into_response();
+    }
+    next.run(request).await
 }
 
 /// Axum rejects malformed bodies and queries with a bare text response; clients of this API parse
@@ -685,10 +879,33 @@ pub(crate) const SOCKET_ONLY: &[(&str, &str)] = &[
 pub(crate) const LOCAL_REQUIRED: &[(&str, &str)] = &[
     ("PUT", "/v1/sync/config"),
     ("POST", "/v1/daemon/restart"),
+    // Opens a window on this computer's screen, which only its person should trigger.
+    ("POST", "/v1/memory/reveal"),
+    // Opens a modal dialog on this computer's screen and blocks until its person answers;
+    // a remote device could neither see it nor should it be able to pop one up.
+    ("POST", "/v1/folders/pick"),
+    // A project's folder becomes the Guard root of every chat in it; only the person at this
+    // computer approves which folder that is.
+    ("POST", "/v1/projects"),
     ("PUT", "/v1/policy"),
     ("PUT", "/v1/policy/network"),
     ("PUT", "/v1/external-agents/{id}"),
     ("DELETE", "/v1/external-agents/{id}"),
+    // Writes files into a coding agent's skills folder, which that agent then trusts.
+    ("POST", "/v1/external-agents/{id}/browser-skill"),
+    ("POST", "/v1/mcp/servers"),
+    ("PATCH", "/v1/mcp/servers/{id}"),
+    ("DELETE", "/v1/mcp/servers/{id}"),
+    ("POST", "/v1/mcp/servers/{id}/refresh"),
+    ("POST", "/v1/vault/export"),
+    ("POST", "/v1/vault/clear"),
+    ("POST", "/v1/vault/recovery-key"),
+    ("POST", "/v1/vault/recover"),
+    // The CLI's default browser profile on this computer, chosen by its person.
+    ("PATCH", "/v1/settings/cli"),
+    // Remote Control on/off: only the person at this computer opens or closes the way in.
+    ("POST", "/v1/remote/disable"),
+    ("POST", "/v1/remote/enable"),
 ];
 
 pub(crate) const LOCAL_AWARE: &[(&str, &str)] = &[
@@ -698,6 +915,15 @@ pub(crate) const LOCAL_AWARE: &[(&str, &str)] = &[
     ("POST", "/v1/sync/setup"),
     ("POST", "/v1/sync/pair"),
     ("POST", "/v1/sync/unlock"),
+    ("PATCH", "/v1/vault/settings"),
+    // `preferences.mcp_server` and `preferences.computer_use` need local authority; the rest
+    // of the request does not.
+    ("PATCH", "/v1/settings/preferences"),
+    // A workspace named by a device with local access is not a widening.
+    ("POST", "/v1/sessions"),
+    ("PUT", "/v1/sessions/{id}/folder"),
+    // `confirm_root` approves a project's folder again, which only this computer may do.
+    ("PATCH", "/v1/projects/{id}"),
 ];
 
 /// WebSocket routes (GET templates) whose browser clients may authenticate by subprotocol.
@@ -707,6 +933,7 @@ pub(crate) const WEBSOCKET_ROUTES: &[&str] = &[
     "/v1/tickets/{id}/takeover",
     "/v1/sessions/{id}/browser/preview",
     "/v1/sessions/{id}/browser/tabs/{tab_id}/control",
+    "/v1/browser/person/bridge",
 ];
 
 /// The subprotocol bearer of a genuine RFC 6455 handshake (GET, `Connection: upgrade`,
@@ -747,6 +974,16 @@ fn websocket_bearer<'a>(request: &'a axum::extract::Request, route: &str) -> Opt
         })
 }
 
+/// `openside mcp` marks every request it sends (`x-openside-client: mcp`). While Enable MCP
+/// server is off the daemon refuses them, so the switch holds even for a server that started
+/// before it was turned off. Reading the preferences stays open, so the CLI can say why.
+fn mcp_refused(shared: &Shared, request: &axum::extract::Request, agent_client: bool) -> bool {
+    agent_client
+        && !shared.preferences.get().mcp_server
+        && !(request.method() == axum::http::Method::GET
+            && request.uri().path() == "/v1/settings/preferences")
+}
+
 pub(crate) async fn authorize(
     State((shared, unix)): State<(Shared, bool)>,
     mut request: axum::extract::Request,
@@ -762,6 +999,9 @@ pub(crate) async fn authorize(
         .get("x-openside-client")
         .is_some_and(|value| value == "channel");
     if unix {
+        if mcp_refused(&shared, &request, agent_client) {
+            return HttpError(StatusCode::FORBIDDEN, "mcp_server_disabled").into_response();
+        }
         request
             .extensions_mut()
             .insert(Access(vec![CapabilityScope::Admin]));
@@ -856,30 +1096,58 @@ pub(crate) async fn authorize(
     if shared.remote.is_revoked(&device) {
         return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
+    if mcp_refused(&shared, &request, agent_client) {
+        return HttpError(StatusCode::FORBIDDEN, "mcp_server_disabled").into_response();
+    }
     request.extensions_mut().insert(access);
     request
         .extensions_mut()
         .insert(Caller(Some(device.clone()), kind));
-    request
-        .extensions_mut()
-        .insert(if agent_client || kind == DeviceKind::AgentClient {
-            MessageAuthorKind::AgentClient
-        } else if channel_client {
-            MessageAuthorKind::Channel
-        } else {
-            MessageAuthorKind::Person
-        });
-    // Never admit a device-controlled, unfinished body into a commit gate.
-    let body_limit = if route.path == "/v1/sessions/{id}/messages" {
-        crate::artifacts::SUBMIT_BODY_LIMIT
+    let author = if agent_client || kind == DeviceKind::AgentClient {
+        MessageAuthorKind::AgentClient
+    } else if channel_client {
+        MessageAuthorKind::Channel
     } else {
-        2 * 1024 * 1024
+        MessageAuthorKind::Person
+    };
+    request.extensions_mut().insert(author);
+    // A clip body is up to ~11 MB: refuse agents and oversubscription from the headers alone,
+    // before reading it, and let the handler hold the admission through transcription.
+    if route.path == "/v1/stt" && route.method.as_str() == "POST" {
+        let admission = crate::takeover::person_only(&Caller(Some(device.clone()), kind), author)
+            .and_then(|()| crate::stt::admit());
+        match admission {
+            Ok(admission) => {
+                request.extensions_mut().insert(admission);
+            }
+            Err(error) => return error.into_response(),
+        }
+    }
+    // Never admit a device-controlled, unfinished body into a commit gate.
+    let body_limit = match route.path {
+        "/v1/sessions/{id}/messages" => crate::artifacts::SUBMIT_BODY_LIMIT,
+        "/v1/stt" => crate::stt::body_limit(&shared),
+        _ => 2 * 1024 * 1024,
     };
     let (parts, body) = request.into_parts();
+    // An admitted clip holds one of the few STT places, so a stalled body must not keep it.
+    let stt_read_deadline = async {
+        if route.path == "/v1/stt" {
+            tokio::time::sleep(crate::stt::BODY_READ_TIMEOUT).await
+        } else {
+            std::future::pending().await
+        }
+    };
     let bytes = tokio::select! {
+        () = stt_read_deadline => return crate::stt::body_timeout().into_response(),
         bytes = axum::body::to_bytes(body, body_limit) => match bytes {
             Ok(bytes) => bytes,
-            Err(_) => return HttpError(StatusCode::PAYLOAD_TOO_LARGE, "body_too_large").into_response(),
+            Err(_) => {
+                // A clip over the route's cap is the one way to get here on /v1/stt; answer
+                // with that route's own code so the composer can say the recording is too long.
+                let code = if route.path == "/v1/stt" { "audio_too_large" } else { "body_too_large" };
+                return HttpError(StatusCode::PAYLOAD_TOO_LARGE, code).into_response();
+            }
         },
         () = crate::pairing::until_revoked(&shared, &mut revoked, &device) => {
             return HttpError(StatusCode::UNAUTHORIZED, "unauthorized").into_response();
@@ -942,6 +1210,8 @@ async fn health() -> Json<Health> {
 async fn create(
     State(s): State<Shared>,
     Extension(caller): Extension<Caller>,
+    Extension(author): Extension<MessageAuthorKind>,
+    Extension(local): Extension<crate::remote::LocalAuthority>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<Session>)> {
     let _agent_gate = s.agents.gate.lock().await;
@@ -962,8 +1232,17 @@ async fn create(
     if agent.is_some() && (request.incognito || request.browser_space != BrowserSpace::Shared) {
         return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_browser_space"));
     }
-    if caller.widens(&s, request.mode, request.workspace.as_deref()) || caller.raises_cost(&request)
-    {
+    if request.project_id.is_some() && request.workspace.is_some() {
+        return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_workspace"));
+    }
+    if request.project_id.is_some() {
+        caller.require_person()?;
+    }
+    // The person at this computer may name any folder; a project's folder was approved there
+    // when the project was made, and only a person may start a chat in it, so it never counts
+    // as a widening.
+    let named = request.workspace.as_deref().filter(|_| !local.0);
+    if caller.widens(&s, request.mode, named) || caller.raises_cost(&request) {
         return Err(HttpError(StatusCode::FORBIDDEN, "local_socket_required"));
     }
     let id = SessionId::new(random_id());
@@ -977,6 +1256,11 @@ async fn create(
             .title
             .as_deref()
             .is_some_and(|title| !title.trim().is_empty());
+    // Only a person's pick becomes the next chat's default; agents and MCP clients never move it.
+    let chosen = request
+        .model
+        .clone()
+        .filter(|_| request.agent_id.is_none() && author == MessageAuthorKind::Person);
     let model = request
         .model
         .or_else(|| agent.as_ref().and_then(|agent| agent.model.clone()))
@@ -987,6 +1271,13 @@ async fn create(
     let mode = match &agent {
         Some(agent) => crate::agents::ceiling(&s, agent, mode)?,
         None => mode,
+    };
+    // Held until the chat is committed, so the project cannot be deleted in between and leave
+    // a member it never detached.
+    let _project_gate = s.projects.gate.lock().await;
+    let project = match request.project_id.as_deref() {
+        Some(id) => Some(s.projects.intact(id).await?),
+        None => None,
     };
     let workspace = match request.workspace {
         Some(path) => {
@@ -1001,7 +1292,7 @@ async fn create(
             }
             Some(canonical.to_string_lossy().into_owned())
         }
-        None => None,
+        None => project.as_ref().map(|project| project.root.clone()),
     };
     let incognito = request.incognito;
     let browser_space = request.browser_space;
@@ -1010,27 +1301,39 @@ async fn create(
     if incognito && browser_space == openside_proto::BrowserSpace::Isolated {
         return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_browser_space"));
     }
-    let event =
-        s.db.store(move |db| {
-            Ok(db.append(
-                &stored_id,
-                None,
-                EventKind::SessionCreated {
-                    agent_id: request.agent_id,
-                    title,
-                    model,
-                    mode,
-                    workspace,
-                    incognito,
-                    browser_space,
-                    effort: request.effort,
-                    speed: request.speed,
-                    profile: request.profile,
-                },
-            )?)
-        })
-        .await?;
-    let _ = s.events.send(event);
+    let confirmation = request
+        .confirmation
+        .unwrap_or_else(|| s.preferences.confirmation());
+    let folder = project.map(|project| EventKind::SessionFolderChanged {
+        project_id: Some(project.id),
+        workspace: Some(project.root),
+    });
+    let mut kinds = vec![EventKind::SessionCreated {
+        agent_id: request.agent_id,
+        title,
+        model,
+        mode,
+        workspace,
+        incognito,
+        browser_space,
+        effort: request.effort,
+        speed: request.speed,
+        profile: request.profile,
+    }];
+    kinds.extend(folder);
+    // One commit: a crash must not leave a chat working in a project's folder without
+    // belonging to the project.
+    let events =
+        s.db.store(move |db| Ok(db.create_with_history(&stored_id, kinds)?))
+            .await?;
+    for event in events {
+        let _ = s.events.send(event);
+    }
+    if let Some(chosen) = chosen {
+        // The last model picked in the composer becomes the default for the next chat.
+        let s = s.clone();
+        tokio::spawn(async move { crate::models_api::remember_default(&s, &chosen).await });
+    }
     if lock_default_title {
         s.emit(
             &id,
@@ -1040,6 +1343,20 @@ async fn create(
                 title: Some(DEFAULT_SESSION_TITLE.into()),
                 pinned: None,
                 archived: None,
+            },
+        )
+        .await?;
+    }
+    // `session.created` predates the setting; a chat that asks first records it right away.
+    if confirmation != openside_proto::ChatConfirmation::default() {
+        s.emit(
+            &id,
+            None,
+            EventKind::SessionOptionsUpdated {
+                model: None,
+                effort: None,
+                mode: None,
+                confirmation: Some(confirmation),
             },
         )
         .await?;

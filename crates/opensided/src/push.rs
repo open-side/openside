@@ -11,7 +11,7 @@
 
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -24,7 +24,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use openside_proto::{
-    CreatePushSubscriptionRequest, EventKind, PushNotification, PushPresenceRequest,
+    CreatePushSubscriptionRequest, EventKind, MessageId, PushNotification, PushPresenceRequest,
     PushSubscription, PushSubscriptionList, SessionId, Ticket, TicketKind, TicketStatus,
     VapidPublicKey, PUSH_FOCUS_TTL_SECS,
 };
@@ -180,35 +180,6 @@ fn known_push_service(host: &str) -> bool {
             })
 }
 
-/// Globally routable unicast; everything else is this host, its LAN or special-purpose.
-pub(crate) fn public_ip(ip: IpAddr) -> bool {
-    match ip.to_canonical() {
-        IpAddr::V4(ip) => {
-            let [a, b, ..] = ip.octets();
-            !(ip.is_loopback()
-                || ip.is_private()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.is_multicast()
-                || a == 0
-                || (a == 100 && (64..128).contains(&b))
-                || (a == 198 && (b == 18 || b == 19))
-                || a >= 240)
-        }
-        IpAddr::V6(ip) => {
-            let first = ip.segments()[0];
-            !(ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80
-                || first == 0x2001 && ip.segments()[1] == 0x0db8)
-        }
-    }
-}
-
 struct Destination {
     host: String,
     port: u16,
@@ -254,7 +225,10 @@ async fn vet(s: &Shared, endpoint: &str) -> Option<SocketAddr> {
             .ok()?
             .collect();
     if addresses.is_empty()
-        || !(destination.explicit || addresses.iter().all(|address| public_ip(address.ip())))
+        || !(destination.explicit
+            || addresses
+                .iter()
+                .all(|address| crate::net_guard::public_ip(address.ip())))
     {
         crate::diag!("opensided: push endpoint resolves to a non-public address; not sending");
         return None;
@@ -746,6 +720,10 @@ pub(crate) fn start(shared: &Shared) {
     let mut shutdown = shared.shutdown.subscribe();
     tokio::spawn(async move {
         let mut answers = Answers::default();
+        // The message that started each session's current run: who asked decides whether
+        // its settlement is a task or a routine notification.
+        let mut starters: std::collections::HashMap<SessionId, MessageId> =
+            std::collections::HashMap::new();
         loop {
             let event = tokio::select! {
                 _ = shutdown.recv() => break,
@@ -757,30 +735,51 @@ pub(crate) fn start(shared: &Shared) {
                 // attach an answer that might be stale.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                     answers.by_session.clear();
+                    starters.clear();
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             match event.kind {
                 EventKind::TicketOpened { ticket } if ticket.status == TicketStatus::Pending => {
+                    if !s
+                        .preferences
+                        .notifies(openside_config::NotificationKindSetting::NeedsAttention)
+                    {
+                        continue;
+                    }
                     let ttl = (ticket.expires_at - Utc::now())
                         .num_seconds()
                         .clamp(60, 86_400);
                     tokio::spawn(notify(s.clone(), ticket_notification(&ticket), ttl as u32));
                 }
+                EventKind::MessageInjected { message_id } => {
+                    starters.entry(event.session_id).or_insert(message_id);
+                }
                 EventKind::AssistantFinal { text, .. } => {
                     answers.record(event.session_id, &text);
                 }
-                EventKind::TurnStarted {}
-                | EventKind::SessionStopped {}
-                | EventKind::SessionDeleted {} => {
+                EventKind::TurnStarted {} => {
                     answers.take(&event.session_id);
+                }
+                EventKind::SessionStopped {} | EventKind::SessionDeleted {} => {
+                    answers.take(&event.session_id);
+                    starters.remove(&event.session_id);
                 }
                 EventKind::SessionSettled {} => {
                     let excerpt = answers.take(&event.session_id);
+                    let starter = starters.remove(&event.session_id);
                     let Ok(state) = s.db.state(&event.session_id).await else {
                         continue;
                     };
+                    let kind = if starter.is_some_and(|id| routine_message(&state, &id)) {
+                        openside_config::NotificationKindSetting::RoutineCompleted
+                    } else {
+                        openside_config::NotificationKindSetting::TaskCompleted
+                    };
+                    if !s.preferences.notifies(kind) {
+                        continue;
+                    }
                     // A run that ended waiting for a human already pushed its ticket.
                     if state
                         .tickets
@@ -808,6 +807,13 @@ pub(crate) fn start(shared: &Shared) {
             }
         }
     });
+}
+
+/// Schedules queue their prompt as an internal message with no sending agent; team reports
+/// name their sender and person, device and channel messages have their own author kinds.
+pub(crate) fn routine_message(state: &openside_sessions::SessionState, id: &MessageId) -> bool {
+    state.message_authors.get(id) == Some(&openside_proto::MessageAuthorKind::Internal)
+        && !state.message_senders.contains_key(id)
 }
 
 #[cfg(test)]

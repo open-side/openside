@@ -61,6 +61,8 @@ impl Host {
         relogin_step: Option<&str>,
     ) -> Result<(ToolOutcome, Option<Value>)> {
         let shared = &self.env.shared;
+        // Agent tab cleanup must not close a tab while any tool call of this chat runs.
+        let _in_use = crate::tab_cleanup::in_use(&self.env.session);
         if cancellation.is_cancelled() {
             return Ok((denied("subagent_finished", "The subagent has ended"), None));
         }
@@ -78,6 +80,22 @@ impl Host {
                 denied("agent_retired", "Restore the teammate before continuing"),
                 None,
             ));
+        }
+        // A project's folder was approved as the folder it was then; one moved or replaced
+        // since approves nothing, so no tool runs against it. A project that no longer exists
+        // leaves a plain workspace, checked like any other.
+        if let Some(project_id) = current.project_id.as_deref() {
+            if let Err(error) = shared.projects.intact(project_id).await {
+                if error.1 != "project_not_found" {
+                    return Ok((
+                        denied(
+                            "project_root_changed",
+                            "The project's folder was moved, replaced or not yet confirmed; confirm it in Settings › Projects or recreate the project",
+                        ),
+                        None,
+                    ));
+                }
+            }
         }
         let current_env = ToolEnv::new(shared.clone(), &current);
         if !tools::visible(tool.as_ref(), &current_env) {
@@ -474,6 +492,7 @@ impl Host {
             browser_probe: browser_probe.clone(),
             profile: self.env.profile,
             repl_context: self.env.repl_context,
+            incognito: self.env.incognito,
         };
         let tracker = crate::artifacts::Tracker::before(&env, &call.name).await;
         let used_tab = args
@@ -708,6 +727,14 @@ impl Host {
                 for_model_json: safe.to_string(),
             });
         }
+        if call.name == crate::tools::image::STORE {
+            return Ok(crate::tools::image::store(
+                &self.env,
+                call.subagent.as_deref(),
+                &call.arguments_json,
+            )
+            .await);
+        }
         if matches!(
             call.name.as_str(),
             "__memory_context" | "__memory_consolidate"
@@ -910,6 +937,8 @@ impl Host {
                         "browser_close_tab" => "Closed the page",
                         "present" => "Shared the result",
                         "memory_search" => "Checked saved information",
+                        "websearch" => "Searched the web",
+                        "webfetch" => "Read a page",
                         name if name.starts_with("browser_") => "Completed a browser step",
                         _ => "Completed a step",
                     }
@@ -967,6 +996,8 @@ fn approval_binding(args: &Value, actions: &[Action]) -> Result<[u8; 32]> {
                 Capability::VaultUse => "vault_use",
                 Capability::Sensitive => "sensitive",
                 Capability::PrivacyRead => "privacy_read",
+                Capability::PersonBrowser => "person_browser",
+                Capability::ComputerUse => "computer_use",
             };
             json!({"capability": capability, "target": action.target})
         })
@@ -1034,6 +1065,10 @@ impl HostToolHandler for Host {
     }
 }
 
+/// Approval targets of computer use: `app:<app>/<window>:<pid>` for connecting (`sensitive`)
+/// and `app:<app>/<connection>` for acting (`computer_use`).
+pub(crate) const COMPUTER_TARGET_PREFIX: &str = "app:";
+
 fn approval_question(
     tool: &str,
     action: Option<&Action>,
@@ -1058,6 +1093,13 @@ fn approval_question(
             }
             label
         });
+    if let Some(rest) = action.target.strip_prefix(crate::mcp::ACTION_PREFIX) {
+        let tool = rest.split_once('/').map_or(rest, |(_, tool)| tool);
+        return match label {
+            Some(server) => format!("Allow openside to use the {tool} tool from {server}?"),
+            None => format!("Allow openside to use the {tool} tool?"),
+        };
+    }
     let name = std::path::Path::new(&action.target)
         .file_name()
         .and_then(|name| name.to_str())
@@ -1085,8 +1127,30 @@ fn approval_question(
             "Allow openside to use your saved sign-in for {}?",
             host.unwrap_or("this site")
         ),
+        Capability::PrivacyRead if action.target == crate::tools::PERSON_TABS_TARGET => {
+            "Allow openside to see the tabs open in your browser?".into()
+        }
         Capability::PrivacyRead => {
             "Let this task look through your imported bookmarks and history?".into()
+        }
+        Capability::PersonBrowser => format!(
+            "Allow openside to act in your own tab on {}?",
+            host.unwrap_or("this site")
+        ),
+        Capability::ComputerUse => {
+            let app = action
+                .target
+                .strip_prefix(COMPUTER_TARGET_PREFIX)
+                .and_then(|rest| rest.rsplit_once('/'))
+                .map_or("the connected app", |(app, _)| app);
+            match label {
+                Some(what) => format!("Allow openside to {what} in {app}?"),
+                None => format!("Allow openside to use {app}?"),
+            }
+        }
+        Capability::Sensitive if action.target.starts_with(COMPUTER_TARGET_PREFIX) => {
+            let app = label.unwrap_or_else(|| "this app".into());
+            format!("Allow openside to see and control {app}?")
         }
         Capability::Sensitive => {
             let target = label

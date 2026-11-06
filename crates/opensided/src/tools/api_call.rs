@@ -38,6 +38,7 @@ const TOOLS: &[(&str, CapabilityScope)] = &[
     ("ask_user", CapabilityScope::Browse),
     ("browser_act", CapabilityScope::Browse),
     ("browser_close_tab", CapabilityScope::Browse),
+    ("browser_downloads", CapabilityScope::Browse),
     ("browser_navigate", CapabilityScope::Browse),
     ("browser_open_tab", CapabilityScope::Browse),
     ("browser_pointer", CapabilityScope::Browse),

@@ -32,21 +32,29 @@ mod access_requests;
 mod agents;
 mod artifacts;
 mod browser;
+mod browser_downloads;
+mod browser_prefs;
 mod browser_snap;
 mod browser_space;
 mod browser_tabs;
 mod cards;
 mod channels;
+mod chat_settings;
+mod cli_defaults;
+mod computer_use;
 mod connection_tools;
 mod connections;
 mod core_gaps;
 mod credential_paths;
+mod download_gaps;
 mod favicons;
+mod folder_picker;
 mod hire;
 mod import_delivery;
 mod login;
 #[path = "managed_subscriptions/tests.rs"]
 mod managed_subscriptions;
+mod mcp;
 mod memory;
 mod message_authority;
 mod model_oauth;
@@ -55,11 +63,14 @@ mod models;
 mod onboarding;
 mod operator;
 mod otp;
+mod person_browser;
 mod person_only;
 mod policy;
 mod preview;
 mod profiles;
+mod projects;
 mod remote;
+mod remote_off;
 mod remote_setup;
 mod remote_transport;
 mod repl;
@@ -67,7 +78,9 @@ mod resource_limits;
 mod routines;
 mod session_effort;
 mod session_help;
+mod shares;
 mod skills;
+mod stt;
 mod subagents;
 mod sync;
 mod takeover;
@@ -77,6 +90,7 @@ mod tool_output;
 mod tools_api;
 mod vault;
 mod web;
+mod web_tools;
 
 #[derive(Default)]
 struct TestState {
@@ -125,6 +139,7 @@ impl AgentRuntime for TestRuntime {
             tools: spec.tools.iter().map(|t| t.name.clone()).collect(),
             pending_deferred: state.ready_deferred.clone(),
             startup_ms: 1,
+            agent_version: "0.2.0".into(),
         };
         let id = spec.session.clone();
         state.opened.push(spec);
@@ -231,6 +246,9 @@ pub(crate) fn resolved_config(root: &Path) -> Resolved {
     product.agent.command = Some(vec!["unused-test-command".into()]);
     product.agent.orchestration = openside_config::Orchestration::Single;
     product.browser.executable = Some(root.join("missing-browser"));
+    // Most tests act as a paired remote device; a fresh install starts with Remote Control
+    // off, which `tests::remote_off` covers by replacing the whole `[remote]` section.
+    product.remote.enabled = Some(true);
     let loaded = openside_config::Loaded {
         config: product,
         paths: openside_config::Paths {
@@ -569,6 +587,9 @@ async fn every_protocol_method_and_path_is_routed() {
             .replace("{ticket}", "ticket")
             .replace("{transaction_id}", "transaction")
             .replace("{tab_id}", "tab")
+            .replace("{share_id}", "share")
+            .replace("{artifact}", "0")
+            .replace("{session_id}", "closed")
             .replace("{id}", id);
         assert!(
             !path.contains('{'),

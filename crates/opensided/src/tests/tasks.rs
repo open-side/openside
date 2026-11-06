@@ -141,6 +141,70 @@ async fn front_model_override_does_not_change_task_admission_model() {
 }
 
 #[tokio::test]
+async fn task_roles_route_to_their_models_and_fall_back_to_the_session_model() {
+    for configured in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = TestRuntime::default();
+        let mut config = resolved_config(root.path());
+        config.loaded.config.agent.orchestration = openside_config::Orchestration::Front;
+        config.loaded.config.models.default = Some("openai:gpt-6.1-sol".into());
+        if configured {
+            config.loaded.config.models.standard = Some("openai:gpt-6-luna".into());
+            config.loaded.config.models.deep = Some("openai:gpt-6-astra".into());
+            config.loaded.config.models.visual = Some("google:gemini-3.8-flash".into());
+        }
+        let daemon = Daemon::open_runtime(config, runtime.clone()).await.unwrap();
+        let session = daemon
+            .shared
+            .agents
+            .get("chief")
+            .unwrap()
+            .unwrap()
+            .home_session_id;
+        daemon
+            .shared
+            .command(&session, crate::engine::Action::Recover)
+            .await
+            .unwrap();
+        let opened = runtime.0.lock().opened.clone();
+        let agent: Value = serde_json::from_str(&opened[0].agent_json).unwrap();
+        assert_eq!(
+            agent["model_roles"]["visual"].as_str(),
+            configured.then_some("google:gemini-3.8-flash")
+        );
+        let parent = host(&daemon, &session).await;
+        let expected = |role: &str| match (configured, role) {
+            (false, _) => "openai:gpt-6.1-sol",
+            (true, "deep") => "openai:gpt-6-astra",
+            (true, "visual") => "google:gemini-3.8-flash",
+            (true, _) => "openai:gpt-6-luna",
+        };
+        for (index, role) in [None, Some("standard"), Some("deep"), Some("visual")]
+            .into_iter()
+            .enumerate()
+        {
+            let mut args = json!({"goal": "work on this"});
+            if let Some(role) = role {
+                args["role"] = json!(role);
+            }
+            let result = parent
+                .call(call("create_task", args, &format!("start-{index}")))
+                .await;
+            let ToolOutcome::Done { for_model_json, .. } = result else {
+                panic!("Task admission failed: {result:?}");
+            };
+            let admitted: Value = serde_json::from_str(&for_model_json).unwrap();
+            assert_eq!(
+                admitted["model"],
+                expected(role.unwrap_or("standard")),
+                "{role:?}"
+            );
+        }
+        daemon.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn restart_repairs_a_task_end_without_a_report_and_never_queues_it_twice() {
     let root = tempfile::tempdir().unwrap();
     let runtime = TestRuntime::default();

@@ -567,7 +567,42 @@ fn cards_routine_proposal_states_schedule_zone_target_and_prompt() {
             json!({"type":"interval","secs":21600}),
             "Every 6 hours, counted from when you approve",
         ),
+        (
+            json!({"type":"rrule","rule":"FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=9;BYMINUTE=0"}),
+            "Every Monday and Friday at 09:00",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0"}),
+            "Weekdays at 09:00",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=DAILY;COUNT=1","start":"2026-11-06T18:30:00"}),
+            "Once on 2026-11-06 at 18:30",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=MONTHLY;BYMONTHDAY=31;BYHOUR=8;BYMINUTE=0;COUNT=6"}),
+            "On day 31 of every month at 08:00, 6 times",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=DAILY;INTERVAL=2;UNTIL=20261231T145959Z","start":"2026-11-06T09:00:00"}),
+            "Every 2 days at 09:00, until 2026-12-31 14:59 UTC",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=HOURLY;BYMINUTE=15"}),
+            "Every hour at :15",
+        ),
+        (
+            json!({"type":"rrule","rule":"FREQ=YEARLY;BYWEEKNO=1"}),
+            "On the recurrence rule FREQ=YEARLY;BYWEEKNO=1",
+        ),
     ] {
+        let starts = (schedule["type"] == "rrule").then(|| {
+            schedule["start"]
+                .as_str()
+                .map_or("When you approve".to_owned(), |start| {
+                    start.replacen('T', " ", 1)[..16].to_owned()
+                })
+        });
         let mut t = legacy_ticket(TicketKind::Confirm);
         t.tool = Some(TicketTool {
             name: crate::routines::proposals::PROPOSE_ROUTINE.into(),
@@ -580,6 +615,11 @@ fn cards_routine_proposal_states_schedule_zone_target_and_prompt() {
             .find(|(l, _)| l == "Time zone")
             .map(|(_, z)| z.as_str());
         assert_eq!(zone, (!words.starts_with("Every 6")).then_some("UTC"));
+        let shown = rows
+            .iter()
+            .find(|(l, _)| l == "Starts")
+            .map(|(_, s)| s.clone());
+        assert_eq!(shown, starts, "{words}");
     }
 
     // A message too long for a row is shortened there, and the full instructions stay.

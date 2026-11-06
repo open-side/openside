@@ -1511,3 +1511,591 @@ async fn task_credentials_admit_only_the_captured_fallback_chain() {
         .unwrap();
     daemon.shutdown().await;
 }
+
+async fn fixture_with_image(root: &Path) -> (Daemon, axum::Router) {
+    let mut config = resolved_config(root);
+    config.loaded.config.vault.path = Some(root.join("model-vault"));
+    config.loaded.config.models.default = Some("anthropic:test-ready".into());
+    config.loaded.config.credentials =
+        json!({"order":{"anthropic":["vault"]},"env":{"anthropic":[]}});
+    let index = json!({"providers":[{"provider":"anthropic","models":[
+        {"id":"anthropic:test-ready","label":"test-ready","display_name":"Test Ready","recommended_for":"reasoning","in_catalog":true,"tier":"reasoning","strengths":"coding"},
+        {"id":"anthropic:test-second","label":"test-second","display_name":"Test Second","recommended_for":"fast","in_catalog":true,"tier":"fast","strengths":"quick"},
+        {"id":"anthropic:test-image","label":"test-image","display_name":"Test Image","kind":"image","in_catalog":true,"strengths":"image generation"}]}]});
+    config.argv = vec!["sh".into(), "-c".into(), format!("printf '%s' '{index}'")];
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let vault = Vault::create(
+        root.join("model-vault"),
+        root.join("model-vault-audit.jsonl"),
+        &Secret::new("fixture-provider-passphrase".into()),
+        Box::new(PassphraseLock::default()) as Box<dyn PlatformLock + Send>,
+    )
+    .unwrap();
+    *daemon.shared.registry.vault.vault.lock().await = Some(vault);
+    let router = api::router(daemon.shared.clone(), true);
+    let key = add(&router, KEY, "Work").await;
+    pool(&router, &[&key]).await;
+    (daemon, router)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn role_model_selection_checks_kind_keeps_omitted_and_clears_null() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, router) = fixture_with_image(root.path()).await;
+    let (_, catalog) = call(&router, "GET", "/v1/settings/models", json!({}), None).await;
+    let models = &catalog["providers"][0]["models"];
+    let image = models
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == "anthropic:test-image")
+        .unwrap();
+    assert_eq!(image["kind"], "image");
+    assert_eq!(image["display_name"], "Test Image");
+    assert!(image["available"].as_bool().unwrap());
+    assert_eq!(catalog["providers"][0]["display_name"], "Claude");
+    let put = |body: Value| call(&router, "PUT", "/v1/settings/models", body, None);
+    let base = json!({"default_model":"anthropic:test-ready","fallback_models":[]});
+    let with = |extra: Value| {
+        let mut body = base.clone();
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        body
+    };
+    for wrong in [
+        json!({"image_model":"anthropic:test-ready"}),
+        json!({"standard_model":"anthropic:test-image"}),
+        json!({"deep_model":"anthropic:test-image"}),
+        json!({"visual_model":"anthropic:test-image"}),
+        json!({"fast_model":"anthropic:test-image"}),
+    ] {
+        let (status, body) = put(with(wrong.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong}");
+        assert!(body.to_string().contains("invalid_model_kind"), "{wrong}");
+    }
+    let (status, body) = put(with(json!({"deep_model":"openai:missing"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.to_string().contains("model_unavailable"));
+    let (status, body) = put(with(json!({
+        "standard_model":"anthropic:test-second",
+        "deep_model":"anthropic:test-ready",
+        "visual_model":"anthropic:test-second",
+        "image_model":"anthropic:test-image"
+    })))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["image_model"], "anthropic:test-image");
+    let models = daemon.shared.models.models();
+    assert_eq!(models.standard.as_deref(), Some("anthropic:test-second"));
+    assert_eq!(models.visual.as_deref(), Some("anthropic:test-second"));
+    // Omitted roles keep their values (the CLI never sends them).
+    let (status, body) = put(base.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["standard_model"], "anthropic:test-second");
+    assert_eq!(body["deep_model"], "anthropic:test-ready");
+    assert_eq!(body["image_model"], "anthropic:test-image");
+    // Explicit null clears back to "use the session model".
+    let (status, body) = put(with(json!({"standard_model":null,"image_model":null}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["standard_model"], Value::Null);
+    assert_eq!(body["image_model"], Value::Null);
+    assert_eq!(body["visual_model"], "anthropic:test-second");
+    let stored = crate::settings_api::stored(&daemon.shared).await.unwrap();
+    assert_eq!(stored.models.standard, None);
+    assert_eq!(stored.models.image, None);
+    assert_eq!(
+        stored.models.visual.as_deref(),
+        Some("anthropic:test-second")
+    );
+    // A cleared image model is automatic: the best available one serves the tool.
+    assert_eq!(
+        daemon.shared.models.image_model().as_deref(),
+        Some("anthropic:test-image")
+    );
+    daemon.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn image_generation_is_automatic_until_turned_off_and_off_survives_a_reload() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, router) = fixture_with_image(root.path()).await;
+    let get = || call(&router, "GET", "/v1/settings/models", json!({}), None);
+    let put = |body: Value| call(&router, "PUT", "/v1/settings/models", body, None);
+    let with_image = |image: Value| json!({"default_model":"anthropic:test-ready","fallback_models":[],"image_model":image});
+
+    // Unset: automatic, resolved to the best available image model.
+    let (_, catalog) = get().await;
+    assert_eq!(catalog["image_model"], Value::Null);
+    assert_eq!(catalog["effective_image_model"], "anthropic:test-image");
+    assert_eq!(
+        daemon.shared.models.image_model().as_deref(),
+        Some("anthropic:test-image")
+    );
+    let session = model_session(&daemon, "auto-image").await;
+    let h = host(&daemon, &session).await;
+    let ToolOutcome::Done { for_model_json, .. } = h
+        .call(super::call(
+            "generate_image",
+            json!({"prompt":"a red kite"}),
+            "auto-1",
+        ))
+        .await
+    else {
+        panic!("automatic image generation was not admitted");
+    };
+    let admitted: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(admitted["model"], "anthropic:test-image");
+
+    // Off: stored apart from the model id, nothing effective, the tool hidden.
+    let (status, body) = put(with_image(json!("off"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["image_model"], "off");
+    let (_, catalog) = get().await;
+    assert_eq!(catalog["image_model"], "off");
+    assert_eq!(catalog["effective_image_model"], Value::Null);
+    assert_eq!(daemon.shared.models.image_model(), None);
+    match h
+        .call(super::call(
+            "generate_image",
+            json!({"prompt":"a red kite"}),
+            "off-1",
+        ))
+        .await
+    {
+        ToolOutcome::Denied { reason, .. } => {
+            assert_eq!(reason, "Tool is not exposed in this session");
+        }
+        other => panic!("image generation ran while off: {other:?}"),
+    }
+    let stored = crate::settings_api::stored(&daemon.shared).await.unwrap();
+    assert!(stored.models.image_off);
+    assert_eq!(stored.models.image, None);
+    // A daemon reading the file again keeps it off.
+    let reloaded = crate::models_api::Service::new(&stored);
+    assert!(reloaded.models().image_off);
+    assert_eq!(reloaded.image_model(), None);
+    // A save that leaves image_model out (the CLI) keeps it off.
+    let (status, body) =
+        put(json!({"default_model":"anthropic:test-ready","fallback_models":[]})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["image_model"], "off");
+
+    // An explicit image model is honoured and switches generation back on.
+    let (status, body) = put(with_image(json!("anthropic:test-image"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["image_model"], "anthropic:test-image");
+    let (_, catalog) = get().await;
+    assert_eq!(catalog["image_model"], "anthropic:test-image");
+    assert_eq!(catalog["effective_image_model"], "anthropic:test-image");
+    let stored = crate::settings_api::stored(&daemon.shared).await.unwrap();
+    assert!(!stored.models.image_off);
+
+    // A chat model never serves image generation.
+    let (status, body) = put(with_image(json!("anthropic:test-ready"))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.to_string().contains("invalid_model_kind"), "{body}");
+
+    // Null returns to automatic.
+    let (status, body) = put(with_image(Value::Null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["image_model"], Value::Null);
+    let (_, catalog) = get().await;
+    assert_eq!(catalog["effective_image_model"], "anthropic:test-image");
+    daemon.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn provider_rows_collapse_accounts_without_internal_ids_in_display_fields() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, router) = fixture_with_image(root.path()).await;
+    let (status, body) = call(
+        &router,
+        "GET",
+        "/v1/settings/models/providers",
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body["providers"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{body}");
+    let row = &rows[0];
+    assert_eq!(row["id"], "anthropic/api_key");
+    assert_eq!(row["provider"], "anthropic");
+    assert_eq!(row["kind"], "api_key");
+    assert_eq!(row["display_name"], "Anthropic API key");
+    assert_eq!(row["status"], "connected");
+    let key_id = row["accounts"][0]["account_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(row["accounts"][0]["source"], "vault");
+    for field in ["id", "display_name", "status", "kind"] {
+        let text = row[field].as_str().unwrap();
+        assert!(!text.contains(&key_id) && !text.contains("Work") && !text.contains("vault"));
+    }
+    assert!(!body.to_string().contains(KEY));
+    daemon.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn image_store_and_image_leases_exist_only_inside_an_admitted_call() {
+    use base64::Engine as _;
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, router) = fixture_with_image(root.path()).await;
+    let session = model_session(&daemon, "images").await;
+    let h = host(&daemon, &session).await;
+    let image_lease = |id: &str| CredentialRequest {
+        model: "anthropic:test-image".into(),
+        ..acquire(id, 0)
+    };
+    let png = {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&[0u8; 32]);
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    };
+    let store = |id: &str, index: usize, data: Option<&str>, last: bool| {
+        let mut args = json!({"tool_call_id": id, "index": index, "last": last});
+        if let Some(data) = data {
+            args["data_base64"] = json!(data);
+        }
+        super::call("__image_store", args, &format!("store-{id}-{index}"))
+    };
+    let refused = |outcome: ToolOutcome| match outcome {
+        ToolOutcome::Denied { reason, .. } => reason,
+        other => panic!("expected a refusal: {other:?}"),
+    };
+
+    // Image generation turned off: the tool is hidden and no lease is possible.
+    let (status, _) = call(
+        &router,
+        "PUT",
+        "/v1/settings/models",
+        json!({"default_model":"anthropic:test-ready","fallback_models":[],"image_model":"off"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        refused(
+            h.call(super::call(
+                "generate_image",
+                json!({"prompt":"a red kite"}),
+                "early"
+            ))
+            .await
+        ),
+        "Tool is not exposed in this session"
+    );
+    assert_eq!(
+        refused(h.call(store("early", 0, Some(&png), true)).await),
+        "image_not_admitted"
+    );
+    assert_eq!(
+        h.credentials(image_lease("before")).await.unwrap_err().code,
+        CredentialErrorCode::InvalidCredentialRequest
+    );
+
+    let (status, _) = call(
+        &router,
+        "PUT",
+        "/v1/settings/models",
+        json!({"default_model":"anthropic:test-ready","fallback_models":[],"image_model":"anthropic:test-image"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ToolOutcome::Done { for_model_json, .. } = h
+        .call(super::call(
+            "generate_image",
+            json!({"prompt":"a red kite over a beach","count":2,"aspect_ratio":"16:9"}),
+            "gen-1",
+        ))
+        .await
+    else {
+        panic!("generate_image was not admitted");
+    };
+    let admitted: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(
+        admitted,
+        json!({"status":"admitted","model":"anthropic:test-image","count":2,"aspect_ratio":"16:9"})
+    );
+    // During the call the image model is leasable for this session's parent only.
+    let lease = h.credentials(image_lease("during")).await.unwrap();
+    h.credential_report(report(&lease, CredentialOutcome::Success, false))
+        .await
+        .unwrap();
+    assert_eq!(
+        h.credentials(CredentialRequest {
+            subagent: Some("other-child".into()),
+            ..image_lease("child")
+        })
+        .await
+        .unwrap_err()
+        .code,
+        CredentialErrorCode::InvalidCredentialRequest
+    );
+
+    assert_eq!(
+        refused(
+            h.call(store("gen-1", 0, Some("bm90IGFuIGltYWdl"), false))
+                .await
+        ),
+        "invalid_image_data"
+    );
+    let oversize = "A".repeat(4_000_000);
+    assert_eq!(
+        refused(h.call(store("gen-1", 0, Some(&oversize), false)).await),
+        "image_too_large"
+    );
+    assert_eq!(
+        refused(h.call(store("gen-1", 2, Some(&png), false)).await),
+        "image_not_admitted"
+    );
+    assert_eq!(
+        refused(h.call(store("other-call", 0, Some(&png), false)).await),
+        "image_not_admitted"
+    );
+    let ToolOutcome::Done { for_model_json, .. } =
+        h.call(store("gen-1", 0, Some(&png), false)).await
+    else {
+        panic!("first image refused");
+    };
+    let stored: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(stored["path"], "images/gen-1-1.png");
+    assert_eq!(
+        refused(h.call(store("gen-1", 0, Some(&png), false)).await),
+        "image_not_admitted",
+        "a slot is stored once"
+    );
+    assert!(matches!(
+        h.call(store("gen-1", 1, Some(&png), true)).await,
+        ToolOutcome::Done { .. }
+    ));
+    let events = daemon.shared.db.events(&session, 0).await.unwrap();
+    let saved: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::ArtifactSaved {
+                path,
+                tool,
+                tool_call_id,
+                mime,
+                ..
+            } => Some((
+                path.clone(),
+                tool.clone(),
+                tool_call_id.clone(),
+                mime.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(saved.len(), 2, "{saved:?}");
+    assert_eq!(saved[1].0, "images/gen-1-2.png");
+    assert_eq!(saved[1].1, "generate_image");
+    assert_eq!(saved[1].2, "gen-1");
+    assert_eq!(saved[1].3, "image/png");
+    // The last image ended the grant: no more stores and no more image leases.
+    assert_eq!(
+        refused(h.call(store("gen-1", 1, Some(&png), true)).await),
+        "image_not_admitted"
+    );
+    assert_eq!(
+        h.credentials(image_lease("after")).await.unwrap_err().code,
+        CredentialErrorCode::InvalidCredentialRequest
+    );
+
+    // An expired grant stores nothing and leases nothing.
+    assert!(matches!(
+        h.call(super::call(
+            "generate_image",
+            json!({"prompt":"a blue kite"}),
+            "gen-2"
+        ))
+        .await,
+        ToolOutcome::Done { .. }
+    ));
+    daemon.shared.models.expire_image_grants();
+    assert_eq!(
+        refused(h.call(store("gen-2", 0, Some(&png), true)).await),
+        "image_not_admitted"
+    );
+    assert_eq!(
+        h.credentials(image_lease("expired"))
+            .await
+            .unwrap_err()
+            .code,
+        CredentialErrorCode::InvalidCredentialRequest
+    );
+
+    // A failed generation ends its grant explicitly.
+    assert!(matches!(
+        h.call(super::call(
+            "generate_image",
+            json!({"prompt":"a green kite"}),
+            "gen-3"
+        ))
+        .await,
+        ToolOutcome::Done { .. }
+    ));
+    assert!(matches!(
+        h.call(store("gen-3", 0, None, true)).await,
+        ToolOutcome::Done { .. }
+    ));
+    assert_eq!(
+        h.credentials(image_lease("ended")).await.unwrap_err().code,
+        CredentialErrorCode::InvalidCredentialRequest
+    );
+    daemon.shutdown().await;
+}
+
+/// Only a person's model pick (composer or chat options) moves the default for new chats; an
+/// agent-client token or `openside mcp` on the local socket changes only its own chat.
+#[tokio::test]
+async fn only_a_persons_model_pick_becomes_the_default() {
+    let root = tempfile::tempdir().unwrap();
+    let (daemon, _) = fixture(root.path()).await;
+    let unix = api::router(daemon.shared.clone(), true);
+    let tcp = api::router(daemon.shared.clone(), false);
+    let key = add(&unix, KEY, "Work").await;
+    pool(&unix, &[&key]).await;
+    let (_, agent) = daemon
+        .shared
+        .db
+        .pair_as(
+            "bot".into(),
+            vec![CapabilityScope::Steer],
+            DeviceKind::AgentClient,
+        )
+        .await
+        .unwrap();
+    let mcp = |method: &str, path: &str, body: Value| {
+        let mut request = request(method, path, body, None);
+        request.headers_mut().insert(
+            "x-openside-client",
+            axum::http::HeaderValue::from_static("mcp"),
+        );
+        let unix = unix.clone();
+        async move { unix.oneshot(request).await.unwrap().status() }
+    };
+    let default = || daemon.shared.models.default_model();
+    let session = create_session(&daemon, "sticky-default", PolicyMode::Full, None).await;
+    let path = format!("/v1/sessions/{}", session.as_str());
+    let settle = || tokio::time::sleep(Duration::from_millis(300));
+
+    let (status, body) = call(
+        &tcp,
+        "PATCH",
+        &path,
+        json!({"model":"anthropic:test-second"}),
+        Some(&agent),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["model"], "anthropic:test-second");
+    settle().await;
+    assert_eq!(default().as_deref(), Some("anthropic:test-ready"));
+
+    let (status, _) = call(
+        &unix,
+        "PATCH",
+        &path,
+        json!({"model":"anthropic:test-ready"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        mcp("PATCH", &path, json!({"model":"anthropic:test-second"})).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        mcp(
+            "POST",
+            "/v1/sessions",
+            json!({"model":"anthropic:test-second"})
+        )
+        .await,
+        StatusCode::CREATED
+    );
+    settle().await;
+    assert_eq!(default().as_deref(), Some("anthropic:test-ready"));
+    assert_eq!(
+        daemon.shared.db.state(&session).await.unwrap().model,
+        "anthropic:test-second",
+        "the chat itself did change"
+    );
+
+    let (status, _) = call(
+        &unix,
+        "PATCH",
+        &path,
+        json!({"model":"anthropic:test-ready"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &unix,
+        "PATCH",
+        &path,
+        json!({"model":"anthropic:test-second"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while default().as_deref() != Some("anthropic:test-second") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a person's pick becomes the default");
+    daemon.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn catalog_carries_the_sidecar_default_effort_for_the_configured_orchestration() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = resolved_config(root.path());
+    config.loaded.config.models.default = Some("anthropic:test-ready".into());
+    config.loaded.config.agent.orchestration = openside_config::Orchestration::Single;
+    config.loaded.config.credentials =
+        json!({"order":{"anthropic":["vault"]},"env":{"anthropic":[]}});
+    let seen = root.path().join("catalog-config.json");
+    let index = json!({"providers":[{"provider":"anthropic","models":[
+        {"id":"anthropic:test-ready","label":"test-ready","default_effort":"low"},
+        {"id":"anthropic:test-image","label":"test-image","kind":"image","default_effort":null}]}]});
+    config.argv = vec![
+        "sh".into(),
+        "-c".into(),
+        format!(
+            "printf '%s' \"$OPENSIDE_DOCTOR_CONFIG\" > '{}'; printf '%s' '{index}'",
+            seen.display()
+        ),
+    ];
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    let router = api::router(daemon.shared.clone(), true);
+    let (status, catalog) = call(&router, "GET", "/v1/settings/models", json!({}), None).await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    let models = catalog["providers"][0]["models"].as_array().unwrap();
+    let effort =
+        |id: &str| models.iter().find(|model| model["id"] == id).unwrap()["default_effort"].clone();
+    assert_eq!(effort("anthropic:test-ready"), json!("low"));
+    assert_eq!(effort("anthropic:test-image"), Value::Null);
+    // The sidecar resolves the level for the agent the person actually talks to.
+    let sent: Value = serde_json::from_str(&std::fs::read_to_string(seen).unwrap()).unwrap();
+    assert_eq!(sent["orchestration"], "single");
+    daemon.shutdown().await;
+}

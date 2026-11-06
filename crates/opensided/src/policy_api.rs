@@ -94,6 +94,7 @@ fn effective_with(live: &Live, session: &Policy) -> Policy {
         approved_roots: session.approved_roots.clone(),
         layers,
         origins: live.origins.clone(),
+        confirm_first: session.confirm_first,
     }
 }
 
@@ -197,6 +198,7 @@ pub(crate) async fn test(
         approved_roots: workspace.into_iter().collect(),
         layers: Vec::new(),
         origins: OriginLists::default(),
+        confirm_first: false,
     };
     let decision = effective(&shared, &session)
         .decide(&Action::new(request.capability.into(), request.target));

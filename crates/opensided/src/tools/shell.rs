@@ -1,4 +1,8 @@
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
 
 use futures_util::future::BoxFuture;
 use openside_core::ApprovalTier;
@@ -148,6 +152,13 @@ async fn execute(args: Value, ctx: &ToolEnv) -> ToolExec {
                 command.arg("--ro-bind").arg("/dev/null").arg(path);
             }
         }
+        for (path, directory) in daemon_access_masks(ctx, workspace) {
+            if directory {
+                command.arg("--tmpfs").arg(path);
+            } else {
+                command.arg("--ro-bind").arg("/dev/null").arg(path);
+            }
+        }
         command
             .arg("--chdir")
             .arg(cwd)
@@ -251,6 +262,62 @@ async fn execute(args: Value, ctx: &ToolEnv) -> ToolExec {
         }
         _ => failed(),
     }
+}
+
+/// Paths inside `workspace` that would give the shell the daemon's own authority, each with
+/// whether it is a directory (hidden by a tmpfs) or a file (hidden by `/dev/null`). The local
+/// socket is trusted as the person (admin scope, the default model, the MCP switch); the
+/// runtime directories also hold the browser gateway and sidecar sockets; the channel and
+/// remote token files are bearer credentials; the active config file, the vault and the
+/// data and state directories are what a person's settings, secrets and device tokens are
+/// made of, and writing them would change what the daemon allows. Outside the workspace they
+/// are never mounted, and the loopback listener is out of reach because `--unshare-all`
+/// gives a new network.
+#[cfg(unix)]
+fn daemon_access_masks(ctx: &ToolEnv, workspace: &Path) -> Vec<(PathBuf, bool)> {
+    let resolve = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let workspace = resolve(workspace);
+    let config = &ctx.shared.config;
+    let paths = &config.loaded.paths;
+    let mut directories = vec![
+        resolve(&paths.runtime_dir),
+        resolve(&config.data_dir),
+        resolve(&paths.state_dir),
+    ];
+    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
+        directories.push(resolve(&Path::new(&xdg).join("openside")));
+    }
+    let product = &config.loaded.config;
+    let files: Vec<PathBuf> = [config.socket.as_path(), paths.config_file.as_path()]
+        .into_iter()
+        .chain(paths.cli_file().as_deref())
+        .chain(product.vault.path.as_deref())
+        .chain(product.channels.token_file.as_deref())
+        .chain(product.remote.cloudflare.token_file.as_deref())
+        .chain(product.remote.relay.token_file.as_deref())
+        .map(resolve)
+        .collect();
+    // A directory that holds the workspace (a project folder under the data directory, say)
+    // cannot be hidden without hiding the workspace.
+    let directories: Vec<PathBuf> = directories
+        .into_iter()
+        .filter(|path| path.starts_with(&workspace) && *path != workspace && path.exists())
+        .collect();
+    let mut masks: Vec<(PathBuf, bool)> = directories
+        .iter()
+        .map(|path| (path.clone(), true))
+        .collect();
+    for file in files {
+        if file.starts_with(&workspace)
+            && file.exists()
+            && !directories.iter().any(|hidden| file.starts_with(hidden))
+        {
+            masks.push((file, false));
+        }
+    }
+    masks.sort();
+    masks.dedup();
+    masks
 }
 
 #[cfg(not(unix))]

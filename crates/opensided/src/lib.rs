@@ -53,20 +53,35 @@
 //! `docs/specs/routines.md`. `DELETE /v1/sessions/{id}` stops a session, appends a durable
 //! `session.deleted` tombstone and hides it; `session_delete::on_session_deleted` is the
 //! internal hook that pauses routines targeting the session.
+//!
+//! `POST /v1/sessions/{id}/fork` branches a chat at a finished reply: the copied messages and
+//! replies are committed as already delivered together with `session.branched`, and every
+//! start of the branch's runtime gets that conversation as context (`fork`). Once a minute
+//! `tab_cleanup` closes the agent-opened tabs of chats idle for
+//! `preferences.agent_tab_cleanup_minutes` (0 never); person tabs, takeovers, running turns and
+//! tool calls keep their tabs.
+//!
+//! Projects (`projects`, `docs/specs/projects.md`) live in `projects.json`: a chat in a project
+//! works in the project's folder (`session.folder_changed`) and its agent gets the project's
+//! instructions as a system prompt part.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod about;
 mod access_requests;
 mod accounts;
 mod agents;
 mod api;
 mod artifacts;
 mod browser;
+mod browser_prefs_api;
 mod browser_state;
 mod browser_tabs_api;
 mod card_media;
 mod cards;
 mod channels_api;
+mod cli_defaults;
+mod computer_use;
 mod config;
 mod connections;
 mod crash;
@@ -76,8 +91,11 @@ mod credential_paths;
 #[doc(hidden)]
 pub mod diag;
 mod doctor_api;
+mod downloads;
 mod engine;
 mod favicons;
+mod folder_picker;
+mod fork;
 mod host;
 mod host_calls;
 mod import_api;
@@ -85,6 +103,7 @@ mod import_delivery;
 mod inhibit;
 mod lifecycle;
 mod managed_subscriptions;
+mod mcp;
 mod memory;
 mod memory_model;
 mod model_accounts;
@@ -94,15 +113,22 @@ mod model_oauth_api;
 mod model_plugins;
 mod model_subscriptions_api;
 mod models_api;
+mod net_guard;
 mod onboarding;
 mod operator;
 mod otp_ingest;
 mod pairing;
 mod persistence;
+mod person_browser;
+mod person_browser_api;
+mod person_gateway;
+mod person_native_api;
 mod person_only;
 mod policy_api;
+mod preferences;
 mod preview;
 mod profiles;
+mod projects;
 mod prompt;
 mod push;
 mod remote;
@@ -111,9 +137,12 @@ mod runtime;
 mod session_delete;
 mod session_meta;
 mod settings_api;
+mod shares;
 mod skills;
+mod stt;
 mod subagents;
 mod sync;
+mod tab_cleanup;
 mod takeover;
 mod tasks;
 mod team;
@@ -122,6 +151,7 @@ mod tool_output;
 mod tools;
 mod ui;
 mod vault_api;
+mod vault_manage;
 mod ws_stream;
 
 #[cfg(all(test, unix))]

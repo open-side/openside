@@ -40,6 +40,7 @@ pub(crate) struct Shared {
     pub(crate) shutdown: broadcast::Sender<()>,
     pub(crate) routines: Arc<crate::routines::Slot>,
     pub(crate) memory: Arc<crate::memory::MemoryService>,
+    pub(crate) mcp: Arc<crate::mcp::Hub>,
     pub(crate) policy: Arc<crate::policy_api::LivePolicy>,
     pub(crate) sync: Arc<crate::sync::Service>,
     pub(crate) remote: Arc<crate::pairing::Remote>,
@@ -56,6 +57,9 @@ pub(crate) struct Shared {
     pub(crate) import_delivery: Arc<crate::import_delivery::DeliveryState>,
     pub(crate) connections: Arc<crate::connections::Service>,
     pub(crate) ops: Arc<crate::operator::State>,
+    pub(crate) preferences: Arc<crate::preferences::Live>,
+    pub(crate) computer: Arc<crate::computer_use::Service>,
+    pub(crate) projects: Arc<crate::projects::Service>,
 }
 
 pub(crate) enum Action {
@@ -200,6 +204,11 @@ impl Daemon {
             &config.loaded.config.channels,
         ));
         let ops = Arc::new(crate::operator::State::new(&config.loaded.config));
+        let preferences = Arc::new(crate::preferences::Live::new(
+            &config.loaded.config.preferences,
+        ));
+        let mcp = Arc::new(crate::mcp::Hub::new(&config.loaded.config.mcp));
+        let projects = Arc::new(crate::projects::Service::open(&config.data_dir));
         let transports = crate::lifecycle::take_handoff(&config.data_dir)
             .map(crate::remote::Transports::with_secret)
             .unwrap_or_default();
@@ -218,6 +227,7 @@ impl Daemon {
             shutdown,
             routines: Default::default(),
             memory,
+            mcp,
             policy,
             sync: Default::default(),
             remote: Default::default(),
@@ -234,9 +244,13 @@ impl Daemon {
             import_delivery: Default::default(),
             connections,
             ops,
+            preferences,
+            computer: Default::default(),
+            projects,
         };
         crate::agents::bootstrap(&shared).await?;
         shared.registry.vault.unlock(&shared).await;
+        crate::vault_manage::start(&shared);
         crate::model_accounts::initialize(&shared)
             .await
             .map_err(|_| "Credential pool migration unavailable")?;
@@ -272,6 +286,7 @@ impl Daemon {
         }
         crate::tickets::expire(&daemon.shared).await?;
         crate::artifacts::sweep_deleted(&daemon.shared).await;
+        crate::stt::sweep(&daemon.shared).await;
         for session in sessions {
             // Children still waiting must be matched against the restored sidecar snapshot
             // before their tickets are allowed to hold the session's queue.
@@ -327,6 +342,9 @@ impl Daemon {
             .await
             .map_err(|_| "team recovery failed")?;
         crate::memory::start(&daemon.shared);
+        crate::mcp::start(&daemon.shared);
+        crate::tab_cleanup::start(&daemon.shared);
+        crate::shares::start(&daemon.shared);
         let shared = daemon.shared.clone();
         let mut shutdown = shared.shutdown.subscribe();
         tokio::spawn(async move {
@@ -619,6 +637,7 @@ impl Shared {
             self.connections.navigation.release(&agent, &ids);
         }
         crate::preview::committed(self, &event);
+        crate::computer_use::committed(self, &event);
         let _ = self.events.send(event.clone());
         Ok(event)
     }
@@ -761,6 +780,12 @@ struct Live {
     persona_version: Option<u64>,
     model: Option<String>,
     model_generation: Option<u64>,
+    mcp_generation: u64,
+    /// The effort the open runtime was started with; a per-chat change reopens it.
+    effort: Option<openside_proto::ThinkingEffort>,
+    /// The workspace and project instructions the open runtime was started with; moving the
+    /// chat or editing its project's instructions reopens it.
+    folder: (Option<String>, Option<String>),
     batch_deadline: Option<tokio::time::Instant>,
 }
 
@@ -1141,20 +1166,36 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
         return Err("agent_retired".into());
     }
     let model = session_model(shared, &state, agent.as_ref()).ok_or("model_not_configured")?;
+    let project = state
+        .project_id
+        .as_deref()
+        .and_then(|id| shared.projects.get(id))
+        .filter(|project| !project.instructions.trim().is_empty());
+    let folder = (
+        state.workspace.clone(),
+        project.as_ref().map(|project| project.instructions.clone()),
+    );
     let model_generation = agent
         .as_ref()
         .filter(|agent| agent.home_session_id == state.id)
         .map(|_| shared.models.default_generation());
+    let mcp_generation = shared.registry.mcp_generation();
     if live.session.is_some() {
         if live.running
             || (live.persona_version == persona_version
                 && live.model.as_ref() == Some(&model)
-                && live.model_generation == model_generation)
+                && live.model_generation == model_generation
+                && live.mcp_generation == mcp_generation
+                && live.effort == state.effort
+                && live.folder == folder)
         {
             return Ok(());
         }
         close_runtime(shared, id, live).await;
     }
+    live.mcp_generation = mcp_generation;
+    live.effort = state.effort;
+    live.folder = folder;
     live.persona_version = persona_version;
     live.model = Some(model.clone());
     live.model_generation = model_generation;
@@ -1177,6 +1218,12 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
         agent.as_ref(),
     )
     .await;
+    if let Some(branch) = crate::fork::context(shared, &state).await? {
+        system_prompt_parts.push(branch);
+    }
+    if let Some(project) = &project {
+        system_prompt_parts.push(crate::projects::prompt_part(project));
+    }
     if agent
         .as_ref()
         .is_some_and(|agent| agent.kind == openside_proto::AgentKind::Chief)
@@ -1243,6 +1290,10 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
             agent_json["front_model"] = serde_json::json!(front);
         }
     }
+    if let Some(visual) = shared.models.visual_model() {
+        // Requests whose newest input carries an image run on the Visual model.
+        agent_json["model_roles"] = serde_json::json!({ "visual": visual });
+    }
     let generation = shared.models.credentials_generation();
     let mut spec = SessionSpec {
         session: id.clone(),
@@ -1272,6 +1323,7 @@ async fn open_runtime(shared: &Shared, id: &SessionId, live: &mut Live) -> Resul
             return Err(error.into());
         }
     };
+    crate::about::record_runtime_version(&session.info().agent_version);
     shared
         .emit(
             id,
@@ -1435,6 +1487,7 @@ async fn front_pending(
 async fn dispatch(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()> {
     let mut batched = 0usize;
     let mut batch_bytes = 0usize;
+    let mut tools_rechecked = false;
     loop {
         let state = shared.db.state(id).await?;
         if holds_queue(shared, id, &state).await? {
@@ -1489,6 +1542,22 @@ async fn dispatch(shared: &Shared, id: &SessionId, live: &mut Live) -> Result<()
             return Ok(());
         }
         if !matches!(current.queue.status(mid), Some(MessageStatus::Queued(_))) {
+            continue;
+        }
+        // An MCP tool-set change that landed after the runtime was (re)opened would reach the
+        // model a turn late. Reopen once per dispatch, without a new batching delay, so a
+        // server spamming changes cannot hold the queue.
+        if !live.running
+            && !tools_rechecked
+            && live.mcp_generation != shared.registry.mcp_generation()
+        {
+            tools_rechecked = true;
+            drop(admission);
+            if mode == QueueMode::Queue {
+                batched -= 1;
+                batch_bytes -= text.len();
+            }
+            live.batch_deadline = Some(tokio::time::Instant::now());
             continue;
         }
         shared
@@ -1859,6 +1928,7 @@ async fn record(shared: &Shared, id: &SessionId, event: RuntimeEvent) -> Result<
             input_tokens,
             output_tokens,
             effort,
+            context_window,
         } => EventKind::Usage {
             model,
             input_tokens,
@@ -1866,6 +1936,7 @@ async fn record(shared: &Shared, id: &SessionId, event: RuntimeEvent) -> Result<
             // The sidecar is not trusted to name new tiers; an unknown one is dropped.
             effort: effort
                 .and_then(|effort| serde_json::from_value(serde_json::Value::String(effort)).ok()),
+            context_window,
         },
         RuntimeEvent::MessageResult {
             id: message_id,

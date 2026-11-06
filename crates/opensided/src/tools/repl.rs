@@ -294,15 +294,19 @@ impl PolicyGuard {
         let Some(folder) = &self.downloads else {
             return Verdict::Deny("this session has no download folder".into());
         };
-        let folder = folder.to_string_lossy();
-        match self
-            .policy
-            .decide(&Action::new(Capability::FsWrite, folder.as_ref()))
-            .effect
-        {
-            Effect::Deny => Verdict::Deny(format!("policy denies writing downloads to {folder}")),
-            _ => Verdict::Allow,
+        // Both spellings: a rule may name the configured data directory or where it really is.
+        for folder in [folder.clone(), crate::artifacts::resolved(folder)] {
+            let folder = folder.to_string_lossy();
+            if self
+                .policy
+                .decide(&Action::new(Capability::FsWrite, folder.as_ref()))
+                .effect
+                == Effect::Deny
+            {
+                return Verdict::Deny(format!("policy denies writing downloads to {folder}"));
+            }
         }
+        Verdict::Allow
     }
 }
 
@@ -1403,5 +1407,39 @@ mod guard_tests {
             ),
             Verdict::Deny(_)
         ));
+    }
+
+    /// A write rule on the real directory still covers a download folder reached through a
+    /// symlinked data directory, and the configured spelling stays covered too.
+    #[cfg(unix)]
+    #[test]
+    fn download_folder_rules_see_through_a_symlinked_data_directory() {
+        use openside_policy::{Rule, RuleLayer};
+        let root = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(root.path()).unwrap().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let configured = link.join("artifacts/s1/downloads");
+        let actual = real.join("artifacts/s1/downloads");
+        assert_eq!(crate::artifacts::resolved(&configured), actual);
+        for pattern in [&actual, &configured] {
+            let mut guard = guard(Mode::FullAccess, None);
+            guard.downloads = Some(configured.clone());
+            guard.policy.layers = vec![RuleLayer {
+                rules: vec![Rule::new(
+                    Effect::Deny,
+                    Capability::FsWrite,
+                    pattern.to_string_lossy(),
+                )],
+            }];
+            assert!(
+                matches!(
+                    download(&guard, "https://files.example/report.csv"),
+                    Verdict::Deny(_)
+                ),
+                "{pattern:?}"
+            );
+        }
     }
 }

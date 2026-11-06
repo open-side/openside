@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
@@ -13,11 +13,13 @@ use axum::{
 use chrono::{TimeZone, Utc};
 use openside_config::{Config, ModelsConfig};
 use openside_proto::{
-    CreateProviderKeyRequest, DeviceKind, ModelCatalog, ModelSelection, ProviderKeyInfo,
-    ProviderKeyList, SetProviderKeyRequest, UpdateModelsRequest, UpdateProviderKeyRequest,
+    CreateProviderKeyRequest, DeviceKind, ModelCatalog, ModelKind, ModelSelection,
+    ProviderConnection, ProviderConnectionKind, ProviderConnectionList, ProviderConnectionStatus,
+    ProviderKeyInfo, ProviderKeyList, SessionId, SetProviderKeyRequest, UpdateModelsRequest,
+    UpdateProviderKeyRequest,
 };
 use openside_vault::{AuditContext, Entry, Error, Secret};
-use parking_lot::RwLock;
+use parking_lot::{Mutex as SyncMutex, RwLock};
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, RwLock as AsyncRwLock, RwLockReadGuard, RwLockWriteGuard};
 use zeroize::Zeroize;
@@ -36,6 +38,38 @@ pub(crate) struct Service {
     pub(crate) policy: Mutex<crate::model_accounts::Policy>,
     catalog_refresh: Mutex<()>,
     pub(crate) plugins: crate::model_plugins::Cache,
+    image_grants: SyncMutex<HashMap<(SessionId, String), ImageGrant>>,
+    /// Best available image model from the last fresh catalog; serves an unset `models.image`.
+    auto_image: RwLock<Option<String>>,
+}
+
+/// Wire value of `image_model` that turns image generation off (stored as `models.image_off`).
+pub(crate) const IMAGE_OFF: &str = "off";
+
+/// One admitted `generate_image` call: the sidecar may lease `model` for it and store up to
+/// `count` images under its tool call id until `expires`.
+struct ImageGrant {
+    model: String,
+    subagent: Option<String>,
+    count: usize,
+    stored: HashSet<usize>,
+    expires: Instant,
+}
+
+/// Long enough for a slow hosted image request plus its credential retries.
+const IMAGE_GRANT_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// Which role a subagent or Task serves; resolved against `[models]` with session fallback.
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TaskRole {
+    /// Ordinary subagent work.
+    #[default]
+    Standard,
+    /// Hard reasoning, planning, judging or synthesis.
+    Deep,
+    /// Interpreting images, screenshots, CAPTCHAs or page visuals.
+    Visual,
 }
 
 pub(crate) struct CredentialChange<'a> {
@@ -61,6 +95,8 @@ impl Service {
             policy: Mutex::new(crate::model_accounts::Policy::default()),
             catalog_refresh: Mutex::new(()),
             plugins: crate::model_plugins::Cache::default(),
+            image_grants: SyncMutex::new(HashMap::new()),
+            auto_image: RwLock::new(None),
         }
     }
     pub(crate) fn default_generation(&self) -> u64 {
@@ -77,6 +113,119 @@ impl Service {
     }
     pub(crate) fn front_model(&self) -> Option<String> {
         self.live.read().0.front.clone()
+    }
+    pub(crate) fn visual_model(&self) -> Option<String> {
+        self.live.read().0.visual.clone()
+    }
+    /// The model `generate_image` uses: none when turned off, else the chosen one, else the best
+    /// available image model seen by the last catalog refresh.
+    pub(crate) fn image_model(&self) -> Option<String> {
+        let live = self.live.read();
+        if live.0.image_off {
+            return None;
+        }
+        live.0
+            .image
+            .clone()
+            .or_else(|| self.auto_image.read().clone())
+    }
+    /// The configured model for `role`, or `session_model` when that role is unset.
+    pub(crate) fn task_model(&self, role: TaskRole, session_model: &str) -> String {
+        let live = self.live.read();
+        match role {
+            TaskRole::Standard => live.0.standard.as_ref(),
+            TaskRole::Deep => live.0.deep.as_ref(),
+            TaskRole::Visual => live.0.visual.as_ref(),
+        }
+        .cloned()
+        .unwrap_or_else(|| session_model.to_owned())
+    }
+    pub(crate) fn grant_image(
+        &self,
+        session: &SessionId,
+        tool_call_id: &str,
+        subagent: Option<&str>,
+        model: &str,
+        count: usize,
+    ) {
+        let now = Instant::now();
+        let mut grants = self.image_grants.lock();
+        grants.retain(|_, grant| grant.expires > now);
+        grants.insert(
+            (session.clone(), tool_call_id.to_owned()),
+            ImageGrant {
+                model: model.to_owned(),
+                subagent: subagent.map(str::to_owned),
+                count,
+                stored: HashSet::new(),
+                expires: now + IMAGE_GRANT_TTL,
+            },
+        );
+    }
+    /// A credential request for an image model is valid only inside an admitted call.
+    pub(crate) fn image_lease_allowed(
+        &self,
+        session: &SessionId,
+        subagent: Option<&str>,
+        model: &str,
+    ) -> bool {
+        let now = Instant::now();
+        self.image_grants.lock().iter().any(|((owner, _), grant)| {
+            owner == session
+                && grant.expires > now
+                && grant.subagent.as_deref() == subagent
+                && grant.model == model
+        })
+    }
+    /// Claims image slot `index` of an admitted call; `last` ends the grant.
+    pub(crate) fn claim_image(
+        &self,
+        session: &SessionId,
+        tool_call_id: &str,
+        subagent: Option<&str>,
+        index: usize,
+        last: bool,
+    ) -> bool {
+        let now = Instant::now();
+        let mut grants = self.image_grants.lock();
+        let key = (session.clone(), tool_call_id.to_owned());
+        let Some(grant) = grants.get_mut(&key) else {
+            return false;
+        };
+        if grant.expires <= now
+            || grant.subagent.as_deref() != subagent
+            || index >= grant.count
+            || !grant.stored.insert(index)
+        {
+            return false;
+        }
+        if last || grant.stored.len() == grant.count {
+            grants.remove(&key);
+        }
+        true
+    }
+    #[cfg(test)]
+    pub(crate) fn expire_image_grants(&self) {
+        let past = Instant::now() - Duration::from_secs(1);
+        for grant in self.image_grants.lock().values_mut() {
+            grant.expires = past;
+        }
+    }
+    /// Ends a grant whose generation failed, so its model stops being leasable.
+    pub(crate) fn end_image(
+        &self,
+        session: &SessionId,
+        tool_call_id: &str,
+        subagent: Option<&str>,
+    ) {
+        let key = (session.clone(), tool_call_id.to_owned());
+        let mut grants = self.image_grants.lock();
+        if grants
+            .get(&key)
+            .is_some_and(|grant| grant.subagent.as_deref() == subagent)
+        {
+            grants.remove(&key);
+        }
     }
     pub(crate) fn credentials_config(&self) -> Value {
         self.live.read().1.clone()
@@ -195,6 +344,7 @@ pub(crate) async fn catalog(s: &Shared) -> Result<ModelCatalog, HttpError> {
     drop(cache);
     let generation = s.models.credentials_generation();
     let report = crate::model_accounts::catalog(s).await?;
+    *s.models.auto_image.write() = best_image_model(&report.providers);
     if generation == s.models.credentials_generation() {
         *s.models.catalog.lock().await = Some((Instant::now(), generation, report.clone()));
     }
@@ -259,6 +409,32 @@ pub(crate) async fn get(State(s): State<Shared>) -> Result<Json<ModelCatalog>, H
     catalog(&s).await.map(Json)
 }
 
+/// The first usable image model in catalog order: what an unset `models.image` resolves to.
+pub(crate) fn best_image_model(providers: &[openside_proto::ModelProvider]) -> Option<String> {
+    providers
+        .iter()
+        .flat_map(|provider| &provider.models)
+        .find(|model| model.available && model.kind == ModelKind::Image)
+        .map(|model| model.id.clone())
+}
+
+/// The wire form of the stored image choice: null (automatic), "off", or the chosen id.
+pub(crate) fn image_choice(models: &ModelsConfig) -> Option<String> {
+    if models.image_off {
+        Some(IMAGE_OFF.into())
+    } else {
+        models.image.clone()
+    }
+}
+
+/// `request.x` when present (an explicit null clears), else the current value.
+fn patched(request: &Option<Option<String>>, current: &Option<String>) -> Option<String> {
+    match request {
+        Some(value) => value.clone(),
+        None => current.clone(),
+    }
+}
+
 pub(crate) async fn put(
     State(s): State<Shared>,
     Extension(caller): Extension<Caller>,
@@ -270,12 +446,28 @@ pub(crate) async fn put(
         let _writer = crate::settings_api::WRITE.lock().await;
         authorized(&s, &caller)?;
         let mut current = crate::settings_api::stored(&s).await?;
-        let fast_model = request
+        let mut next = current.models.clone();
+        next.front = request
             .fast_model
+            .clone()
             .filter(|model| model != &request.default_model);
-        current.models.front = fast_model.clone();
-        current.models.default = Some(request.default_model.clone());
-        current.models.fallback = request.fallback_models.clone();
+        next.default = Some(request.default_model.clone());
+        next.fallback = request.fallback_models.clone();
+        next.standard = patched(&request.standard_model, &current.models.standard);
+        next.deep = patched(&request.deep_model, &current.models.deep);
+        next.visual = patched(&request.visual_model, &current.models.visual);
+        match &request.image_model {
+            None => {}
+            Some(Some(value)) if value == IMAGE_OFF => {
+                next.image = None;
+                next.image_off = true;
+            }
+            Some(value) => {
+                next.image.clone_from(value);
+                next.image_off = false;
+            }
+        }
+        current.models = next.clone();
         crate::settings_api::persist(
             &s,
             serde_json::to_value(current).map_err(|_| HttpError::internal())?,
@@ -283,21 +475,23 @@ pub(crate) async fn put(
         .await?;
         {
             let mut live = s.models.live.write();
-            let changed = live.0.default.as_deref() != Some(request.default_model.as_str())
-                || live.0.fallback != request.fallback_models
-                || live.0.front != fast_model;
-            live.0.default = Some(request.default_model.clone());
-            live.0.fallback = request.fallback_models.clone();
-            live.0.front = fast_model.clone();
+            let selected = |models: &ModelsConfig| models.selected().cloned().collect::<Vec<_>>();
+            let changed = selected(&live.0) != selected(&next) || live.0.front != next.front;
+            live.0 = next.clone();
             if changed {
                 s.models.default_generation.fetch_add(1, Ordering::Release);
             }
         }
         s.models.invalidate(&s).await;
         crate::pairing::audit(&s, "models", "written", json!({})).await;
+        let image_model = image_choice(&next);
         Ok(Json(ModelSelection {
             default_model: request.default_model,
-            fast_model,
+            fast_model: next.front,
+            standard_model: next.standard,
+            deep_model: next.deep,
+            visual_model: next.visual,
+            image_model,
             fallback_models: request.fallback_models,
             restart_required: false,
             effective: "new_sessions_and_home_next_turn".into(),
@@ -319,20 +513,173 @@ fn validate_selection(
     {
         return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_models"));
     }
-    for id in std::iter::once(&request.default_model)
-        .chain(&request.fallback_models)
-        .chain(request.fast_model.iter())
-    {
-        if !catalog
+    let roles = |kind: ModelKind| {
+        let ids: Vec<&String> = match kind {
+            ModelKind::Chat => std::iter::once(&request.default_model)
+                .chain(&request.fallback_models)
+                .chain(request.fast_model.iter())
+                .chain(
+                    [
+                        &request.standard_model,
+                        &request.deep_model,
+                        &request.visual_model,
+                    ]
+                    .into_iter()
+                    .filter_map(|role| role.as_ref().and_then(Option::as_ref)),
+                )
+                .collect(),
+            ModelKind::Image => request
+                .image_model
+                .as_ref()
+                .and_then(Option::as_ref)
+                .filter(|id| *id != IMAGE_OFF)
+                .into_iter()
+                .collect(),
+        };
+        ids.into_iter().map(move |id| (id, kind))
+    };
+    for (id, kind) in roles(ModelKind::Chat).chain(roles(ModelKind::Image)) {
+        if id.len() > 256 {
+            return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_models"));
+        }
+        let Some(model) = catalog
             .providers
             .iter()
             .flat_map(|provider| &provider.models)
-            .any(|model| &model.id == id && model.available)
-        {
+            .find(|model| &model.id == id && model.available)
+        else {
             return Err(HttpError(StatusCode::BAD_REQUEST, "model_unavailable"));
+        };
+        if model.kind != kind {
+            return Err(HttpError(StatusCode::BAD_REQUEST, "invalid_model_kind"));
         }
     }
     Ok(())
+}
+
+/// The composer's model choice becomes the default for new chats ("last used model").
+/// Best effort: an unavailable or image model, or a failed write, leaves the default alone.
+pub(crate) async fn remember_default(s: &Shared, model: &str) {
+    if s.models.default_model().as_deref() == Some(model) {
+        return;
+    }
+    let Ok(catalog) = catalog(s).await else {
+        return;
+    };
+    if !catalog
+        .providers
+        .iter()
+        .flat_map(|provider| &provider.models)
+        .any(|candidate| {
+            candidate.id == model && candidate.available && candidate.kind == ModelKind::Chat
+        })
+    {
+        return;
+    }
+    let _writer = crate::settings_api::WRITE.lock().await;
+    let Ok(mut current) = crate::settings_api::stored(s).await else {
+        return;
+    };
+    current.models.default = Some(model.to_owned());
+    // A fallback equal to the default would be tried twice.
+    current.models.fallback.retain(|id| id != model);
+    if current.models.front.as_deref() == Some(model) {
+        current.models.front = None;
+    }
+    let next = current.models.clone();
+    let Ok(value) = serde_json::to_value(current) else {
+        return;
+    };
+    if crate::settings_api::persist(s, value).await.is_err() {
+        return;
+    }
+    {
+        let mut live = s.models.live.write();
+        live.0.default = next.default;
+        live.0.fallback = next.fallback;
+        live.0.front = next.front;
+        s.models.default_generation.fetch_add(1, Ordering::Release);
+    }
+    s.models.invalidate(s).await;
+}
+
+/// Product name of an SDK provider namespace for the UI.
+pub(crate) fn provider_display_name(provider: &str) -> &str {
+    match provider {
+        "anthropic" => "Claude",
+        "openai-codex" => "ChatGPT",
+        "openai" | "openai-responses" | "openai-chat" => "OpenAI",
+        "google" => "Gemini",
+        "google-gemini-cli" => "Gemini CLI",
+        "google-antigravity" => "Antigravity",
+        "github-copilot" => "GitHub Copilot",
+        "openrouter" => "OpenRouter",
+        other => other,
+    }
+}
+
+/// Signed-in subscriptions versus person-supplied keys; quiet plugin routes are neither.
+fn connection_kind(source: &str) -> Option<ProviderConnectionKind> {
+    match source {
+        "vault" | "env" | "command" | "builtin" => Some(ProviderConnectionKind::ApiKey),
+        crate::model_plugins::SOURCE => None,
+        _ => Some(ProviderConnectionKind::Subscription),
+    }
+}
+
+/// One row per provider and connection kind, collapsing every account behind it.
+pub(crate) fn connections(accounts: &[crate::model_accounts::Account]) -> ProviderConnectionList {
+    let mut rows: BTreeMap<(String, &'static str), ProviderConnection> = BTreeMap::new();
+    for account in accounts {
+        let Some(kind) = connection_kind(&account.reference.source) else {
+            continue;
+        };
+        // Environment probes and the default CLI-home accounts exist whether or not anything
+        // was ever connected; only a ready one counts as a connection.
+        if !account.ready
+            && (matches!(account.reference.source.as_str(), "env" | "builtin")
+                || account.reference.account_id == "default")
+        {
+            continue;
+        }
+        let tag = match kind {
+            ProviderConnectionKind::Subscription => "subscription",
+            ProviderConnectionKind::ApiKey => "api_key",
+        };
+        let row = rows
+            .entry((account.provider.clone(), tag))
+            .or_insert_with(|| {
+                let name = provider_display_name(&account.provider);
+                ProviderConnection {
+                    id: format!("{}/{tag}", account.provider),
+                    provider: account.provider.clone(),
+                    kind,
+                    display_name: match kind {
+                        ProviderConnectionKind::Subscription => name.to_owned(),
+                        ProviderConnectionKind::ApiKey => match account.provider.as_str() {
+                            "anthropic" => "Anthropic API key".to_owned(),
+                            _ => format!("{name} API key"),
+                        },
+                    },
+                    status: ProviderConnectionStatus::NeedsAttention,
+                    accounts: Vec::new(),
+                }
+            });
+        if account.enabled && account.ready {
+            row.status = ProviderConnectionStatus::Connected;
+        }
+        row.accounts.push(account.reference.clone());
+    }
+    ProviderConnectionList {
+        providers: rows.into_values().collect(),
+    }
+}
+
+pub(crate) async fn providers(
+    State(s): State<Shared>,
+) -> Result<Json<ProviderConnectionList>, HttpError> {
+    let inventory = crate::model_accounts::inventory(&s).await;
+    Ok(Json(connections(&inventory.accounts)))
 }
 
 fn info(info: openside_vault::ProviderKeyInfo) -> Result<ProviderKeyInfo, HttpError> {
@@ -458,11 +805,15 @@ async fn write_key(
                 return Err(unavailable());
             }
             service
-                .setup(&s, &mut guard, caller.id(), None)
+                .setup(&s, &mut guard, caller.id(), None, false)
                 .await
-                .map_err(|_| unavailable())?;
+                .map_err(|error| match error {
+                    (403, "biometric_required") => crate::vault_api::lifecycle(error),
+                    _ => unavailable(),
+                })?;
         }
         let vault = guard.as_mut().ok_or_else(unavailable)?;
+        s.registry.vault.touch(&s);
         let previous = vault
             .provider_keys(&context(caller.id()))
             .map_err(key_error)?
@@ -511,6 +862,7 @@ pub(crate) async fn update_key(
         let change = s.models.change_credentials().await;
         let mut guard = s.registry.vault.vault.lock().await;
         authorized(&s, &caller)?;
+        s.registry.vault.touch(&s);
         let result = guard.as_mut().ok_or_else(unavailable)?.update_provider_key(
             &context(caller.id()),
             &provider,
@@ -542,6 +894,7 @@ pub(crate) async fn delete_key(
         let change = s.models.change_credentials().await;
         let mut guard = s.registry.vault.vault.lock().await;
         authorized(&s, &caller)?;
+        s.registry.vault.touch(&s);
         let result = guard.as_mut().ok_or_else(unavailable)?.delete_provider_key(
             &context(caller.id()),
             &provider,

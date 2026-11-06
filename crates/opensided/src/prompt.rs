@@ -10,7 +10,9 @@ pub(crate) const FINAL_ANSWER: &str = "Final answers are short and lead with the
 
 const FILES: &str = "Files you produce for the person (exports, generated documents) belong in this session's workspace, which the person sees in Files; write elsewhere only where the person named the place. In the answer, name each delivered file by its path. A browser download (browser_repl download.saveAs) lands in the session's browser downloads folder, not in Files, and no tool copies it there: say it is in the browser's downloads and name the file. Never claim a file was saved, downloaded or attached without a tool result that shows it.";
 
-const ROUTINES: &str = "When the person asks to schedule recurring or later work (a reminder, a daily check), call propose_routine with the exact name, schedule and action. Cron schedules take an IANA timezone (UTC if omitted); interval schedules have none. The action is new_session (prompt in a fresh session), agent (an agent's home thread) or heartbeat (a follow-up in an existing session). It only proposes: nothing is scheduled until the person approves, so say it awaits their approval and never describe it as created or running before the approval result. When they only ask whether something can be scheduled, describe the routine you would propose without proposing it.";
+const ROUTINES: &str = "When the person asks to schedule recurring or later work (a reminder, a daily check), call propose_routine with the exact name, schedule and action. Cron and rrule schedules take an IANA timezone (UTC if omitted); interval schedules have none. An rrule schedule is an RFC 5545 RRULE (FREQ HOURLY to YEARLY; COUNT or UNTIL ends it) with start as wall-clock time in its timezone; a one-time task is FREQ=DAILY;COUNT=1 with start set to that time. The action is new_session (prompt in a fresh session), agent (an agent's home thread) or heartbeat (a follow-up in an existing session). It only proposes: nothing is scheduled until the person approves, so say it awaits their approval and never describe it as created or running before the approval result. When they only ask whether something can be scheduled, describe the routine you would propose without proposing it.";
+
+const WEB_RESEARCH: &str = "For research across several topics, start with websearch, then read the strongest sources with webfetch or the browser before answering; a search snippet alone is not a source you read.";
 
 pub(crate) fn parts() -> Vec<String> {
     vec![
@@ -23,6 +25,7 @@ pub(crate) fn parts() -> Vec<String> {
         FILL_ONLY.into(),
         FILES.into(),
         ROUTINES.into(),
+        WEB_RESEARCH.into(),
         "To show a chart or diagram, put self-contained markup in a fenced block whose info string is `html visual` or `svg visual`; the app renders it in a sandboxed preview with no network access where scripts do not run, so draw with inline SVG and CSS and embed images as data URLs.".into(),
         "Browser screenshots are internal observations by default, not user outputs. When the person asks for a screenshot, or you deliberately deliver one, call browser_screenshot with output=true to save it in their Files. Do not share observation screenshots or claim they were saved.".into(),
         FINAL_ANSWER.into(),
@@ -43,6 +46,7 @@ mod tests {
             FILL_ONLY,
             FILES,
             ROUTINES,
+            WEB_RESEARCH,
             FINAL_ANSWER,
         ] {
             assert_eq!(

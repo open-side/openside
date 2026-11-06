@@ -323,3 +323,107 @@ async fn managed_subscription_files_and_hardlink_aliases_are_protected() {
     std::fs::remove_file(&secret).unwrap();
     assert!(protected.check_fd(&file).is_err());
 }
+
+/// The local socket is trusted as the person (admin scope, the default model, the MCP
+/// switch), so sandboxed bash must not reach it even when its workspace contains the daemon's
+/// runtime directory or a custom socket path; nor may it read or rewrite the config file, the
+/// data and state directories or a token file that happen to sit in the workspace.
+#[tokio::test]
+async fn sandboxed_bash_cannot_reach_the_daemon_socket_config_or_state() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = std::fs::canonicalize(root.path()).unwrap();
+    let mut config = resolved_config(&workspace);
+    config.bwrap = openside_config::find_on_path("bwrap");
+    config.socket = workspace.join("custom.sock");
+    let token = workspace.join("channels.token");
+    std::fs::write(&token, "channels-token-canary").unwrap();
+    config.loaded.config.channels.token_file = Some(token);
+    let runtime = config.loaded.paths.runtime_dir.clone();
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::write(runtime.join("canary.txt"), CANARY).unwrap();
+    let config_file = config.loaded.paths.config_file.clone();
+    let config_text = "# config-file-canary\n";
+    std::fs::write(&config_file, config_text).unwrap();
+    std::fs::write(workspace.join("cli.toml"), "# cli-file-canary\n").unwrap();
+    std::fs::create_dir_all(&config.loaded.paths.state_dir).unwrap();
+    std::fs::write(
+        config.loaded.paths.state_dir.join("state.txt"),
+        "state-dir-canary",
+    )
+    .unwrap();
+    let _default = std::os::unix::net::UnixListener::bind(runtime.join("opensided.sock")).unwrap();
+    let _custom = std::os::unix::net::UnixListener::bind(&config.socket).unwrap();
+    let daemon = Daemon::open_runtime(config, TestRuntime::default())
+        .await
+        .unwrap();
+    if daemon.shared.config.bwrap.is_none() {
+        eprintln!("SKIP: daemon socket sandbox regression requires bubblewrap on PATH");
+        daemon.shutdown().await;
+        return;
+    }
+    let session = create_session(&daemon, "socket", PolicyMode::Full, Some(&workspace)).await;
+    let result = host(&daemon, &session)
+        .await
+        .call(call(
+            "bash",
+            json!({"command":"ls -A run; ls -A data; ls -A state; cat run/canary.txt channels.token config.toml cli.toml state/state.txt; printf x >> config.toml 2>/dev/null && echo config-writable; printf x >> cli.toml 2>/dev/null && echo cli-writable; test -S run/opensided.sock && echo default-socket; test -S custom.sock && echo custom-socket; echo control"}),
+            "socket",
+        ))
+        .await;
+    let ToolOutcome::Done { for_model_json } = result else {
+        panic!("sandbox must run its positive control: {result:?}");
+    };
+    let output: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(
+        output["stdout"].as_str().unwrap().trim(),
+        "control",
+        "{output}"
+    );
+    for canary in [
+        CANARY,
+        "channels-token-canary",
+        "config-file-canary",
+        "cli-file-canary",
+        "state-dir-canary",
+        "events.db",
+    ] {
+        assert!(
+            !for_model_json.contains(canary),
+            "{canary}: {for_model_json}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&config_file).unwrap(), config_text);
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("cli.toml")).unwrap(),
+        "# cli-file-canary\n"
+    );
+    assert!(
+        daemon.shared.config.data_dir.join("events.db").exists(),
+        "the data directory is in use"
+    );
+
+    // The usual layout: a workspace beside the runtime directory never sees it at all.
+    let beside = workspace.join("project");
+    std::fs::create_dir_all(&beside).unwrap();
+    let session = create_session(&daemon, "socket-beside", PolicyMode::Full, Some(&beside)).await;
+    let command = format!(
+        "test -e {run} && echo runtime-visible; test -S {run}/opensided.sock && echo default-socket; echo control",
+        run = runtime.display()
+    );
+    let result = host(&daemon, &session)
+        .await
+        .call(call("bash", json!({"command": command}), "socket-beside"))
+        .await;
+    let ToolOutcome::Done { for_model_json } = result else {
+        panic!("sandbox must run its positive control: {result:?}");
+    };
+    let output: Value = serde_json::from_str(&for_model_json).unwrap();
+    assert_eq!(
+        output["stdout"].as_str().unwrap().trim(),
+        "control",
+        "{output}"
+    );
+    // The host still has both sockets; only the sandbox lost sight of them.
+    assert!(runtime.join("opensided.sock").exists() && workspace.join("custom.sock").exists());
+    daemon.shutdown().await;
+}
