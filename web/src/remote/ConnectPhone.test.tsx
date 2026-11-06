@@ -9,23 +9,23 @@ import { ToastProvider } from "../ui";
 import { ConnectPhone } from "./ConnectPhone";
 import { offer, offStatus, pairingRequests, quickTunnel, remoteDaemon, type RemoteDaemon, tailscaleOn } from "./testDaemon";
 
-function tree(daemon: RemoteDaemon, status: RemoteStatus, onPaired: () => void, onStatusStale: () => void) {
+function tree(daemon: RemoteDaemon, status: RemoteStatus, onStatusStale: () => void) {
   return (
     <MemoryRouter>
       <ClientContext.Provider value={daemon.client}>
         <ToastProvider>
-          <ConnectPhone status={status} onStatusStale={onStatusStale} onPaired={onPaired} />
+          <ConnectPhone status={status} onStatusStale={onStatusStale} />
         </ToastProvider>
       </ClientContext.Provider>
     </MemoryRouter>
   );
 }
 
-function open(daemon: RemoteDaemon, status: RemoteStatus = tailscaleOn(), onPaired = vi.fn(), onStatusStale = vi.fn()) {
-  const view = render(tree(daemon, status, onPaired, onStatusStale));
+function open(daemon: RemoteDaemon, status: RemoteStatus = tailscaleOn(), onStatusStale = vi.fn()) {
+  const view = render(tree(daemon, status, onStatusStale));
   /** The status poll of the screen around it delivers a new status object. */
-  const update = (next: RemoteStatus) => view.rerender(tree(daemon, next, onPaired, onStatusStale));
-  return { onPaired, onStatusStale, update };
+  const update = (next: RemoteStatus) => view.rerender(tree(daemon, next, onStatusStale));
+  return { onStatusStale, update };
 }
 
 const tick = (ms: number) =>
@@ -67,6 +67,20 @@ describe("ConnectPhone without a connection", () => {
     await user.click(screen.getByRole("button", { name: "Turn on Tailscale" }));
     await waitFor(() => expect(onStatusStale).toHaveBeenCalled());
     expect(daemon.calls.find((call) => call.method === "PUT")?.body).toEqual({ enabled: true });
+    expect(pairingRequests(daemon.calls)).toEqual([]);
+  });
+
+  it("shows no saved address while Remote Control is off, and turns it back on in one click", async () => {
+    const user = userEvent.setup();
+    const daemon = remoteDaemon({ status: tailscaleOn({ enabled: false, modes: [], public_url: null }) });
+    const { onStatusStale } = open(daemon, daemon.state.status);
+    expect(screen.getByText("Remote Control is off, so no phone can reach this computer.")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.queryByText(/desk\.tail1234/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Turn on Remote Control" }));
+    await waitFor(() => expect(onStatusStale).toHaveBeenCalled());
+    // Tailscale is saved as on, so turning Remote Control on brings it back; nothing else is turned on.
+    expect(daemon.calls.filter((call) => call.method !== "GET").map((call) => `${call.method} ${call.path}`)).toEqual(["POST /v1/remote/enable"]);
     expect(pairingRequests(daemon.calls)).toEqual([]);
   });
 
@@ -183,7 +197,7 @@ describe("ConnectPhone with a connection", () => {
   it("counts down, notices the new phone, says who connected and offers another", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const daemon = remoteDaemon({ status: tailscaleOn() });
-    const { onPaired } = open(daemon);
+    open(daemon);
     await screen.findByRole("timer");
 
     await tick(5_000);
@@ -198,8 +212,7 @@ describe("ConnectPhone with a connection", () => {
     await tick(3_100);
     expect(await screen.findByText("Connected as My phone")).toBeInTheDocument();
     expect(screen.queryByRole("img")).toBeNull();
-    expect(onPaired).toHaveBeenCalledWith(expect.objectContaining({ device_id: "d2" }));
-    expect(screen.getByRole("link", { name: "See paired devices" })).toHaveAttribute("href", "/devices");
+    expect(screen.getByRole("link", { name: "See paired devices" })).toHaveAttribute("href", "/settings/account");
 
     await user.click(screen.getByRole("button", { name: "Connect another phone" }));
     await screen.findByRole("img");

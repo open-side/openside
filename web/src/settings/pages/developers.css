@@ -1,0 +1,98 @@
+/* Settings › Developers (vm2/developers-0/1): hero split button, menus, MCP snippet and the FAQ rows. */
+
+/* The black "Reinstall | ⌄" split button (vm2/developers-0): two 30px halves joined by a hairline. */
+.dev-split {
+  display: inline-flex;
+  gap: 1px;
+}
+.dev-split > .ui-button:first-child {
+  border-radius: var(--radius-control) 0 0 var(--radius-control);
+}
+.dev-split > .dev-split-more {
+  width: 26px;
+  padding: 0;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+}
+.dev-split > .dev-split-more > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dev-menu-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.dev-code {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-control);
+  background: var(--control-bg);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* FAQ rows: 43px apart like vm2/developers-1 (42px button + the card's 1px divider); the ⌄ turns over while open. */
+.dev-faq {
+  background: var(--card-bg);
+}
+.dev-faq-heading {
+  margin: 0;
+  font: inherit;
+}
+.dev-faq-question {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 18px 8px 13px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--row-title);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: 17px;
+  text-align: left;
+  cursor: pointer;
+}
+.dev-faq-question:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hover) 50%, var(--card-bg));
+}
+.dev-faq-question:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.dev-faq-question > span {
+  flex: 1;
+}
+.dev-faq-chevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  transition: transform var(--fast) var(--ease);
+}
+.dev-faq-question[aria-expanded="true"] .dev-faq-chevron {
+  transform: rotate(180deg);
+}
+.dev-faq-answer {
+  padding: 0 18px 12px 13px;
+}
+.dev-faq-answer p {
+  margin: 0;
+  color: var(--row-desc);
+  font-size: var(--text-sm, 0.8125rem);
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dev-faq-chevron {
+    transition: none;
+  }
+}

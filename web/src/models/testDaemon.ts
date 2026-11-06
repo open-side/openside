@@ -1,4 +1,4 @@
-import type { AccountsResponse, ModelAccountRef, ModelCatalog, OAuthAccount, OAuthMethod, OAuthProviderInfo, OAuthTransaction, ProviderKeyInfo, SubscriptionAccount } from "../api/types";
+import type { AccountsResponse, ModelAccountRef, ModelCatalog, OAuthAccount, OAuthMethod, OAuthProviderInfo, OAuthTransaction, ProviderConnection, ProviderConnectionList, ProviderKeyInfo, SubscriptionAccount } from "../api/types";
 import { fakeClient, json, type Call } from "../test/fakeDaemon";
 import { TERMINAL_STATUS } from "./OAuthDialogs";
 
@@ -8,6 +8,8 @@ const NOT_IN_POOL = "No account is in the rotation.";
 interface Curated {
   id: string;
   label: string;
+  display_name: string;
+  kind: "chat" | "image";
   recommended_for: "fast" | "reasoning" | null;
   tier: "fast" | "reasoning" | "frontier";
   strengths: string;
@@ -16,15 +18,16 @@ interface Curated {
 
 const CURATED: Record<string, Curated[]> = {
   anthropic: [
-    { id: "anthropic:claude-sonnet-5-5", label: "Claude Sonnet 5.5", recommended_for: "reasoning", tier: "reasoning", strengths: "Multi-step research, coding", in_catalog: true },
-    { id: "anthropic:claude-haiku-5-5", label: "Claude Haiku 5.5", recommended_for: "fast", tier: "fast", strengths: "Quick lookups, simple edits", in_catalog: true },
+    { id: "anthropic:claude-sonnet-5-5", label: "Claude Sonnet 5.5", display_name: "Claude Sonnet 5.5", kind: "chat", recommended_for: "reasoning", tier: "reasoning", strengths: "Multi-step research, coding", in_catalog: true },
+    { id: "anthropic:claude-haiku-5-5", label: "Claude Haiku 5.5", display_name: "Claude Haiku 5.5", kind: "chat", recommended_for: "fast", tier: "fast", strengths: "Quick lookups, simple edits", in_catalog: true },
   ],
   openai: [
-    { id: "openai:gpt-6.1-sol", label: "GPT-6.1 Sol", recommended_for: "reasoning", tier: "reasoning", strengths: "Multi-step research, coding", in_catalog: true },
-    { id: "openai:gpt-6-astra", label: "GPT-6 Astra", recommended_for: "reasoning", tier: "frontier", strengths: "Hard reasoning, architecture", in_catalog: true },
-    { id: "openai:gpt-6-luna", label: "GPT-6 Luna", recommended_for: "fast", tier: "fast", strengths: "Quick lookups, simple edits", in_catalog: true },
+    { id: "openai:gpt-6.1-sol", label: "GPT-6.1 Sol", display_name: "GPT-6.1 Sol", kind: "chat", recommended_for: "reasoning", tier: "reasoning", strengths: "Multi-step research, coding", in_catalog: true },
+    { id: "openai:gpt-6-astra", label: "GPT-6 Astra", display_name: "GPT-6 Astra", kind: "chat", recommended_for: "reasoning", tier: "frontier", strengths: "Hard reasoning, architecture", in_catalog: true },
+    { id: "openai:gpt-6-luna", label: "GPT-6 Luna", display_name: "GPT-6 Luna", kind: "chat", recommended_for: "fast", tier: "fast", strengths: "Quick lookups, simple edits", in_catalog: true },
+    { id: "openai:gpt-image-2", label: "GPT Image 2", display_name: "GPT Image 2", kind: "image", recommended_for: null, tier: "reasoning", strengths: "", in_catalog: true },
   ],
-  google: [{ id: "google-gla:gemini-2.5-pro", label: "Gemini 2.5 Pro", recommended_for: null, tier: "reasoning", strengths: "", in_catalog: false }],
+  google: [{ id: "google-gla:gemini-2.5-pro", label: "Gemini 2.5 Pro", display_name: "", kind: "chat", recommended_for: null, tier: "reasoning", strengths: "", in_catalog: false }],
 };
 
 const SUBSCRIPTION_PROVIDER: Record<string, string> = { "claude-code": "anthropic", "codex-cli": "openai" };
@@ -54,20 +57,21 @@ export interface ModelState {
   installed: Record<string, boolean>;
   pools: Record<string, ModelAccountRef[]>;
   defaultModel: string | null;
-  /** Null: the fast role follows the reasoning model. */
+  /** Null: the fast role follows the session model. */
   fastModel: string | null;
+  standardModel: string | null;
+  deepModel: string | null;
+  visualModel: string | null;
+  /** Null: automatic (the first usable image model); "off": image generation off. */
+  imageModel: string | null;
   fallbacks: string[];
   accounts: AccountsResponse;
   /** Every key value the daemon was sent, for "never rendered back" assertions. */
   received: string[];
   /** Answer key writes with 409 vault_unavailable. */
   vaultLocked: boolean;
-  /** Sessions' preferred account, as the daemon last accepted it. */
-  sessionAccounts: Record<string, ModelAccountRef | null>;
   /** Accounts of other sources (broker, env, ...) per provider, as the catalog lists them. */
   extra: Record<string, Partial<Candidate>[]>;
-  /** Accounts whose next GET reports a finished sign-in. */
-  signInLands: string[];
   oauthAccounts: OAuthAccount[];
   oauthTransactions: Record<string, FakeTransaction>;
   /** What the next poll of a transaction reports: `ready` commits it, any other value fails it with that reason. */
@@ -88,13 +92,15 @@ export function modelState(patch: Partial<ModelState> = {}): ModelState {
     pools: {},
     defaultModel: null,
     fastModel: null,
+    standardModel: null,
+    deepModel: null,
+    visualModel: null,
+    imageModel: null,
     fallbacks: [],
     accounts: { sources: [], cached_for_ms: 0, truncated: false },
     received: [],
     vaultLocked: false,
-    sessionAccounts: {},
     extra: {},
-    signInLands: [],
     oauthAccounts: [],
     oauthTransactions: {},
     oauthOutcome: {},
@@ -311,25 +317,36 @@ function candidates(state: ModelState, provider: string): Candidate[] {
 }
 
 function catalog(state: ModelState): ModelCatalog {
+  const providers = Object.entries(CURATED).map(([provider, models]) => {
+    const rows = candidates(state, provider);
+    const usable = rows.find((row) => row.available);
+    return {
+      provider,
+      models: models.map((model) => ({
+        ...model,
+        available: usable !== undefined,
+        reason: usable ? "" : rows.length ? (rows.find((row) => row.reason)?.reason ?? NEEDS_CREDENTIAL) : NEEDS_CREDENTIAL,
+        source: usable?.source ?? null,
+        account_id: usable?.account_id ?? null,
+        accounts: rows,
+      })),
+      pool: state.pools[provider] ?? [],
+    };
+  });
+  // Like the daemon: "off" resolves to nothing, null to the first usable image model.
+  const effective =
+    state.imageModel === "off"
+      ? null
+      : (state.imageModel ?? providers.flatMap((provider) => provider.models).find((model) => model.available && model.kind === "image")?.id ?? null);
   return {
-    providers: Object.entries(CURATED).map(([provider, models]) => {
-      const rows = candidates(state, provider);
-      const usable = rows.find((row) => row.available);
-      return {
-        provider,
-        models: models.map((model) => ({
-          ...model,
-          available: usable !== undefined,
-          reason: usable ? "" : rows.length ? (rows.find((row) => row.reason)?.reason ?? NEEDS_CREDENTIAL) : NEEDS_CREDENTIAL,
-          source: usable?.source ?? null,
-          account_id: usable?.account_id ?? null,
-          accounts: rows,
-        })),
-        pool: state.pools[provider] ?? [],
-      };
-    }),
+    providers,
     default_model: state.defaultModel,
     fast_model: state.fastModel,
+    standard_model: state.standardModel,
+    deep_model: state.deepModel,
+    visual_model: state.visualModel,
+    image_model: state.imageModel,
+    effective_image_model: effective,
     fallback_models: state.fallbacks,
     cached_for_ms: 0,
     truncated: false,
@@ -339,6 +356,42 @@ function catalog(state: ModelState): ModelCatalog {
 const forbidden = () => json(403, { code: "forbidden", message: "needs admin" });
 const absent = () => json(404, { code: "key_not_found", message: "none" });
 
+const PRODUCT: Record<string, string> = {
+  anthropic: "Claude",
+  "openai-codex": "ChatGPT",
+  openai: "OpenAI",
+  google: "Gemini",
+  "google-gemini-cli": "Gemini CLI",
+  "google-antigravity": "Antigravity",
+  "github-copilot": "GitHub Copilot",
+};
+
+/** Like the daemon: one row per provider and connection kind, connected when any account is usable. */
+function connections(state: ModelState): ProviderConnectionList {
+  const rows = new Map<string, ProviderConnection>();
+  const add = (provider: string, source: string, accountId: string, ready: boolean) => {
+    const kind = ["vault", "env", "command", "builtin"].includes(source) ? "api_key" : "subscription";
+    const id = `${provider}/${kind}`;
+    const name = PRODUCT[provider] ?? provider;
+    const row = rows.get(id) ?? {
+      id,
+      provider,
+      kind,
+      display_name: kind === "subscription" ? name : provider === "anthropic" ? "Anthropic API key" : `${name} API key`,
+      status: "needs_attention",
+      accounts: [],
+    };
+    if (ready) row.status = "connected";
+    row.accounts.push({ source, account_id: accountId });
+    rows.set(id, row);
+  };
+  for (const key of state.keys) add(key.provider, "vault", key.key_id, key.enabled);
+  for (const sub of state.subscriptions) add(sub.provider, sub.source, sub.account_id, sub.enabled && sub.logged_in);
+  for (const account of state.oauthAccounts) add(account.provider, "pi-oauth", account.account_id, account.enabled && !account.auth_invalid);
+  for (const [provider, extras] of Object.entries(state.extra)) for (const extra of extras) add(provider, extra.source!, extra.account_id!, extra.ready ?? true);
+  return { providers: [...rows.values()].sort((a, b) => (a.id < b.id ? -1 : 1)) };
+}
+
 /** The Models & accounts endpoints of the daemon; undefined for any other request. */
 export function modelRoutes(state: ModelState): (call: Call) => Response | Promise<Response> | undefined {
   return (call) => {
@@ -346,6 +399,7 @@ export function modelRoutes(state: ModelState): (call: Call) => Response | Promi
     const key = `${call.method} ${path}`;
     const body = (call.body ?? {}) as Record<string, unknown>;
     if (key === "GET /v1/settings/models") return json(200, catalog(state));
+    if (key === "GET /v1/settings/models/providers") return json(200, connections(state));
     if (key === "GET /v1/accounts") return json(200, state.accounts);
     if (key === "GET /v1/settings/pools") return json(200, { pools: Object.entries(state.pools).map(([provider, accounts]) => ({ provider, accounts })) });
     if (!state.admin) {
@@ -365,26 +419,39 @@ export function modelRoutes(state: ModelState): (call: Call) => Response | Promi
       });
     }
     if (key === "PUT /v1/settings/models") {
-      const request = call.body as { default_model: string; fast_model?: string | null; fallback_models: string[] };
+      const request = call.body as { default_model: string; fast_model?: string | null; fallback_models: string[]; standard_model?: string | null; deep_model?: string | null; visual_model?: string | null; image_model?: string | null };
       const all = catalog(state).providers.flatMap((provider) => provider.models);
-      const unusable = [request.default_model, request.fast_model, ...request.fallback_models].find((id) => id && !all.some((model) => model.id === id && model.available));
+      const usable = (id: string | null | undefined, kind: string) => !id || all.some((model) => model.id === id && model.available && model.kind === kind);
+      const chat = [request.default_model, request.fast_model, request.standard_model, request.deep_model, request.visual_model, ...request.fallback_models];
+      const image = request.image_model === "off" ? null : request.image_model;
+      const unusable = chat.find((id) => !usable(id, "chat")) ?? (usable(image, "image") ? undefined : image);
       if (unusable) return json(400, { code: "model_unavailable", message: `${unusable} is unavailable` });
       state.defaultModel = request.default_model;
-      // Like the daemon: a fast model equal to the reasoning model is stored as null.
+      // Like the daemon: a fast model equal to the default is stored as null.
       state.fastModel = request.fast_model && request.fast_model !== request.default_model ? request.fast_model : null;
+      // Omitted roles keep their value; an explicit null clears it.
+      if (request.standard_model !== undefined) state.standardModel = request.standard_model;
+      if (request.deep_model !== undefined) state.deepModel = request.deep_model;
+      if (request.visual_model !== undefined) state.visualModel = request.visual_model;
+      if (request.image_model !== undefined) state.imageModel = request.image_model;
       state.fallbacks = request.fallback_models;
-      return json(200, { default_model: request.default_model, fast_model: state.fastModel, fallback_models: request.fallback_models, restart_required: false, effective: "new_sessions_and_home_next_turn" });
+      return json(200, {
+        default_model: request.default_model,
+        fast_model: state.fastModel,
+        standard_model: state.standardModel,
+        deep_model: state.deepModel,
+        visual_model: state.visualModel,
+        image_model: state.imageModel,
+        fallback_models: request.fallback_models,
+        restart_required: false,
+        effective: "new_sessions_and_home_next_turn",
+      });
     }
 
     const pool = /^PUT \/v1\/settings\/pools\/([^/]+)$/.exec(key);
     if (pool) {
       state.pools[pool[1]!] = body.accounts as ModelAccountRef[];
       return json(200, { provider: pool[1], accounts: state.pools[pool[1]!] });
-    }
-    const session = /^PUT \/v1\/sessions\/([^/]+)\/account$/.exec(key);
-    if (session) {
-      state.sessionAccounts[session[1]!] = body.account as ModelAccountRef | null;
-      return json(200, { session_id: session[1], provider: "anthropic", account: body.account, explicit: body.account !== null, effective: "next_request" });
     }
 
     const keys = /^(POST|PUT|PATCH|DELETE) \/v1\/settings\/keys\/([^/]+)(?:\/([^/]+))?$/.exec(key);
@@ -434,10 +501,7 @@ export function modelRoutes(state: ModelState): (call: Call) => Response | Promi
         state.pools[stored.provider] = (state.pools[stored.provider] ?? []).filter((ref) => ref.account_id !== accountId);
         return new Response(null, { status: 204 });
       }
-      if (method === "GET") {
-        if (state.signInLands.includes(stored.account_id)) Object.assign(stored, { logged_in: true, available: true, reason: "" });
-        return json(200, stored);
-      }
+      if (method === "GET") return json(200, stored);
       if (typeof body.label === "string") stored.label = body.label;
       if (typeof body.enabled === "boolean") stored.enabled = body.enabled;
       if (typeof body.reserve_percent === "number") stored.reserve_percent = body.reserve_percent;

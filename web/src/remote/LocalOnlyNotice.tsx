@@ -1,6 +1,8 @@
 import { LockKeyhole } from "lucide-react";
 import { useId, useState } from "react";
 import { loadLocalSecret } from "../auth";
+import { t } from "../i18n";
+import { tNodes } from "../i18n/react";
 import { applyLocalAccess, parseLocalAccess } from "../localAccess";
 import { Button, copyText, ICON_STROKE, useToast } from "../ui";
 import "./remote.css";
@@ -22,7 +24,7 @@ export function LocalOnlyNotice({ what, onChanged }: { what: string; onChanged: 
   function submit() {
     const access = parseLocalAccess(value);
     if (!access) {
-      setError("That does not look like the output of openside remote local-access.");
+      setError(t("connections.localOnly.notParsed"));
       return;
     }
     const tokenChanged = applyLocalAccess(access);
@@ -34,39 +36,32 @@ export function LocalOnlyNotice({ what, onChanged }: { what: string; onChanged: 
   }
 
   async function copyCommand() {
-    toast.notify((await copyText("openside remote local-access --json")) ? "Command copied" : "Could not copy; select the command instead", "success");
+    toast.notify((await copyText("openside remote local-access --json")) ? t("connections.localOnly.commandCopied") : t("connections.localOnly.copyFailed"), "success");
   }
 
   return (
     <div className="remote-local" role="note">
       <p className="remote-local-title">
         <LockKeyhole size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        {stale ? "Reopen openside from this computer" : `To ${what}, use openside on the computer that runs it`}
+        {stale ? t("connections.localOnly.staleTitle") : t("connections.localOnly.title", { what })}
       </p>
       <p className="remote-note">
-        {stale ? (
-          <>This tab lost its link to the computer, usually because openside restarted. Reopen openside with <code>openside-browser</code> to continue.</>
-        ) : (
-          <>
-            This is only possible from the computer itself, so a lost phone can never open your computer to the internet. Open openside there with{" "}
-            <code>openside-browser</code>.
-          </>
-        )}
+        {tNodes(stale ? "connections.localOnly.staleBody" : "connections.localOnly.body", { command: <code>openside-browser</code> })}
       </p>
       <button type="button" className="row-disclosure" aria-expanded={open} onClick={() => setOpen(!open)}>
-        I already have a local access link
+        {t("connections.localOnly.haveLink")}
       </button>
       {open && (
         <div className="remote-local-form">
           <p className="remote-note">
-            Run <code>openside remote local-access --json</code> on the computer and paste what it prints.
+            {tNodes("connections.localOnly.runCommand", { command: <code>openside remote local-access --json</code> })}
           </p>
           <div className="remote-copy-row">
-            <Button size="compact" variant="ghost" aria-label="Copy the local access command" onClick={() => void copyCommand()}>
-              Copy command
+            <Button variant="ghost" aria-label={t("connections.localOnly.copyCommandLabel")} onClick={() => void copyCommand()}>
+              {t("connections.localOnly.copyCommand")}
             </Button>
           </div>
-          <label htmlFor={fieldId}>Local access output</label>
+          <label htmlFor={fieldId}>{t("connections.localOnly.outputLabel")}</label>
           <textarea
             id={fieldId}
             rows={3}
@@ -82,7 +77,7 @@ export function LocalOnlyNotice({ what, onChanged }: { what: string; onChanged: 
           )}
           <div className="remote-actions">
             <Button variant="secondary" disabled={!value.trim()} onClick={submit}>
-              Use this
+              {t("connections.localOnly.useThis")}
             </Button>
           </div>
         </div>

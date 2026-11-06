@@ -1,0 +1,287 @@
+/*
+ * Settings › Plugins & MCPs (`L 49`, `V plugins-*`, `V plugins-mcps-*`): a Skills | MCPs strip with
+ * the black Import split button at its end, then groups of 56px icon rows.
+ */
+/* The strip's top sits 11px into the header gap and the Import button ends 14px inside the card edge. */
+.plugins-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  margin-top: -11px;
+  padding-right: 14px;
+}
+.plugins-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 14px 0 14px;
+}
+/* Text 14px; the active tab gets a 1px ink underline 20px below the label's centre line. */
+.plugins-tab {
+  position: relative;
+  height: 36px;
+  padding: 5px 4px 11px;
+  border: 0;
+  background: transparent;
+  color: var(--placeholder);
+  font: inherit;
+  font-size: var(--text-md);
+  line-height: 20px;
+  cursor: pointer;
+}
+.plugins-tab:hover {
+  color: var(--text);
+}
+.plugins-tab--selected {
+  color: var(--text);
+}
+.plugins-tab--selected::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 0;
+  left: 4px;
+  height: 1px;
+  background: var(--text);
+}
+.plugins-tab:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+/* "+ Import | ⌄": two black segments split by a hairline of the page behind them. */
+.plugins-split {
+  display: inline-flex;
+  flex: none;
+  gap: 1px;
+}
+.plugins-split .plugins-split-main {
+  gap: 6px;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+.plugins-split .plugins-split-more {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.plugins-groups {
+  margin-top: 20px;
+}
+.plugins-group-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.plugins-count {
+  color: var(--faint);
+}
+.plugins-footnote {
+  margin: 8px 0 0;
+  padding: 0 14px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.plugins-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.plugins-group .ui-card > .ui-banner {
+  border-bottom: 0;
+}
+
+/* Icon rows start their 30px (skills) or 28px (MCP) tile 10px in from the card edge. */
+.plugins-row {
+  padding-left: 10px;
+}
+.plugins-row-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+button.plugins-row-open {
+  cursor: pointer;
+}
+button.plugins-row-open:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.plugins-row:has(> button.plugins-row-open:hover) {
+  background: color-mix(in srgb, var(--hover) 50%, var(--card-bg));
+}
+.plugins-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugins-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-control);
+  background: var(--empty-tile);
+  color: var(--muted);
+}
+.plugins-icon[data-size="28"] {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+.plugins-icon > svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+}
+.plugins-row--muted .ui-row-title {
+  color: var(--muted);
+}
+.plugins-muted {
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+.plugins-row[data-status="failed"] .plugins-status {
+  color: var(--danger);
+}
+
+/* The last row of the Servers card: "+ Connect", 52px, plain weight. */
+.plugins-connect-item {
+  display: grid;
+}
+.plugins-connect {
+  gap: 8px;
+  padding-left: 14px;
+  color: var(--text);
+}
+.plugins-connect > svg {
+  flex: none;
+  color: var(--muted);
+}
+.plugins-connect > .ui-row-title {
+  font-weight: 400;
+}
+/* `button` centres its content by default; this row is left-aligned like every other row. */
+.plugins-connect {
+  justify-content: flex-start;
+}
+.plugins-add.ui-icon-button {
+  border-radius: var(--radius-control);
+  background: var(--empty-tile);
+}
+.plugins-add.ui-icon-button:hover {
+  background: var(--hover);
+}
+
+/* Dialog forms. */
+.plugins-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+.plugins-mono {
+  font-family: var(--font-code);
+}
+.plugins-argv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: -8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.plugins-argv > li {
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--badge-bg);
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.plugins-secrets {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.plugins-secrets > legend {
+  margin-bottom: 4px;
+  padding: 0;
+}
+.plugins-secrets > .ui-button {
+  justify-self: start;
+}
+.plugins-secret {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.plugins-folder {
+  display: grid;
+  gap: 8px;
+}
+.plugins-folder > p {
+  margin: 0;
+}
+.plugins-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.plugins-toggle-copy {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+.plugins-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  background: var(--control-bg);
+}
+.plugins-command > code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-code);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 820px) {
+  .plugins-head {
+    margin-top: 0;
+  }
+  .plugins-secret {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .plugins-secret > input:nth-child(2) {
+    grid-row: 2;
+  }
+}

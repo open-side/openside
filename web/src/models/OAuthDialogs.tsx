@@ -1,13 +1,16 @@
 import { Copy, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ApiError, MESSAGES, type Client } from "../api/client";
-import type { OAuthMethod, OAuthProviderInfo, OAuthTransaction, OAuthTransactionStatus } from "../api/types";
+import { ApiError, apiErrorMessage, type Client } from "../api/client";
+import type { OAuthTransaction, OAuthTransactionStatus } from "../api/types";
 import { useClient } from "../context";
-import { errorMessage, useResource } from "../hooks/useResource";
+import { errorMessage } from "../hooks/useResource";
+import { t, type MessageKey } from "../i18n";
 import { ErrorNote } from "../pages/blocks";
 import { formatRelative } from "../pages/format";
 import { Button, copyText, Dialog, DialogActions, IconButton, ICON_STROKE, Spinner, useToast } from "../ui";
-import { LabelField, SECRET_INPUT } from "./AccountDialogs";
+
+/** Keeps password managers and autocorrect away from pasted codes and keys. */
+export const SECRET_INPUT = { autoComplete: "new-password", autoCapitalize: "none", autoCorrect: "off", spellCheck: false } as const;
 
 /** How often a running sign-in is re-read. */
 export const OAUTH_POLL_MS = 1500;
@@ -24,25 +27,21 @@ export const TERMINAL_STATUS: Record<OAuthTransactionStatus, boolean> = {
 };
 
 /** Why a sign-in stopped, per transaction reason code. */
-const REASONS: Record<string, string> = {
-  oauth_callback_busy: "Another sign-in is using the sign-in port on the computer running openside. Finish or cancel it, then try again.",
-  oauth_invalid_grant: "The provider did not accept this sign-in. Try again.",
-  oauth_failed: "The sign-in did not finish. Try again.",
-  oauth_flow_unsupported: "This sign-in method is not available for this provider.",
-  oauth_helper_unavailable: "openside could not start the sign-in on the computer running it. Run openside doctor there, then try again.",
-  oauth_cancelled: "The sign-in was cancelled.",
-  oauth_expired: "The sign-in took too long and expired. Try again.",
-  oauth_account_removed: "This account was removed before the sign-in finished.",
-};
-
-const METHOD_DETAIL: Record<OAuthMethod, string> = {
-  browser: "Sign in on the provider's page",
-  device: "Enter a code on the provider's page",
+const REASONS: Record<string, MessageKey> = {
+  oauth_callback_busy: "models.oauth.reason.oauth_callback_busy",
+  oauth_invalid_grant: "models.oauth.reason.oauth_invalid_grant",
+  oauth_failed: "models.oauth.reason.oauth_failed",
+  oauth_flow_unsupported: "models.oauth.reason.oauth_flow_unsupported",
+  oauth_helper_unavailable: "models.oauth.reason.oauth_helper_unavailable",
+  oauth_cancelled: "models.oauth.reason.oauth_cancelled",
+  oauth_expired: "models.oauth.reason.oauth_expired",
+  oauth_account_removed: "models.oauth.reason.oauth_account_removed",
 };
 
 function reasonCopy(tx: OAuthTransaction): string {
   const reason = tx.reason ?? "";
-  return REASONS[reason] ?? MESSAGES[reason] ?? (tx.status === "expired" ? REASONS.oauth_expired! : REASONS.oauth_failed!);
+  const key = REASONS[reason];
+  return key ? t(key) : (apiErrorMessage(reason) ?? t(tx.status === "expired" ? "models.oauth.reason.oauth_expired" : "models.oauth.reason.oauth_failed"));
 }
 
 /**
@@ -57,7 +56,7 @@ function onOtherDevice(client: Client): boolean {
  * One sign-in transaction at a time: starts it, polls it while it runs and drops answers that
  * belong to a transaction that is no longer current or that were overtaken by a later answer.
  */
-interface SignIn {
+export interface SignIn {
   tx: OAuthTransaction | null;
   /** A start or paste the daemon refused; transaction failures are in `tx.reason`. */
   error: string | null;
@@ -67,7 +66,7 @@ interface SignIn {
   submit: (code: string) => Promise<boolean>;
 }
 
-function useSignIn(onReady: (tx: OAuthTransaction) => void): SignIn {
+export function useSignIn(onReady: (tx: OAuthTransaction) => void): SignIn {
   const client = useClient();
   const [tx, setTx] = useState<OAuthTransaction | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,7 +177,7 @@ function CopyButton({ value, label, done }: { value: string; label: string; done
     <IconButton
       label={label}
       size="small"
-      onClick={() => void copyText(value).then((copied) => toast.notify(copied ? done : "Could not copy. Select the text and copy it.", copied ? undefined : "error"))}
+      onClick={() => void copyText(value).then((copied) => toast.notify(copied ? done : t("models.oauth.copyFailed"), copied ? undefined : "error"))}
     >
       <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
     </IconButton>
@@ -199,35 +198,35 @@ function ManualInput({ onSubmit }: { onSubmit: (code: string) => Promise<boolean
     setSending(false);
   }
   return (
-    <form className="oauth-manual" onSubmit={submit} aria-label="Paste the sign-in code">
+    <form className="oauth-manual" onSubmit={submit} aria-label={t("models.oauth.manual.form")}>
       <label className="field">
-        <span>Paste the code or the final page address</span>
+        <span>{t("models.oauth.manual.label")}</span>
         <input value={value} onChange={(event) => setValue(event.target.value)} maxLength={4096} {...SECRET_INPUT} data-1p-ignore data-lpignore="true" aria-describedby="oauth-manual-help" />
         <small id="oauth-manual-help" className="field-help">
-          Only paste the code or the address the sign-in page ends on. Never paste a password or an access token.
+          {t("models.oauth.manual.help")}
         </small>
       </label>
-      <Button type="submit" size="compact" disabled={sending || !value.trim()}>
-        {sending ? "Sending…" : "Send"}
+      <Button type="submit" disabled={sending || !value.trim()}>
+        {sending ? t("models.oauth.manual.sending") : t("common.send")}
       </Button>
     </form>
   );
 }
 
 /** Where a running sign-in stands, and what the person does next. */
-function SignInSteps({ flow, onRetry, onCancel, onDone }: { flow: SignIn; onRetry: () => void; onCancel: () => void; onDone: () => void }) {
+export function SignInSteps({ flow, onRetry, onCancel, onDone }: { flow: SignIn; onRetry: () => void; onCancel: () => void; onDone: () => void }) {
   const client = useClient();
   const { tx, error, busy } = flow;
 
   if (!tx) {
     return (
       <div className="dialog-form">
-        {error ? <ErrorNote>{error}</ErrorNote> : <Waiting text="Starting sign-in…" />}
+        {error ? <ErrorNote>{error}</ErrorNote> : <Waiting text={t("models.oauth.starting")} />}
         <DialogActions>
-          <Button onClick={onCancel}>{error ? "Close" : "Cancel"}</Button>
+          <Button onClick={onCancel}>{error ? t("common.close") : t("common.cancel")}</Button>
           {error ? (
             <Button variant="primary" disabled={busy} onClick={onRetry}>
-              Try again
+              {t("common.tryAgain")}
             </Button>
           ) : null}
         </DialogActions>
@@ -239,11 +238,11 @@ function SignInSteps({ flow, onRetry, onCancel, onDone }: { flow: SignIn; onRetr
     return (
       <div className="dialog-form">
         <p className="signin-done" role="status">
-          Connected. {tx.account?.label ?? "This account"} is ready to use.
+          {tx.account?.label ? t("models.oauth.readyNamed", { name: tx.account.label }) : t("models.oauth.ready")}
         </p>
         <DialogActions>
           <Button variant="primary" onClick={onDone}>
-            Done
+            {t("common.done")}
           </Button>
         </DialogActions>
       </div>
@@ -255,9 +254,9 @@ function SignInSteps({ flow, onRetry, onCancel, onDone }: { flow: SignIn; onRetr
       <div className="dialog-form">
         <ErrorNote>{reasonCopy(tx)}</ErrorNote>
         <DialogActions>
-          <Button onClick={onDone}>Close</Button>
+          <Button onClick={onDone}>{t("common.close")}</Button>
           <Button variant="primary" disabled={busy} onClick={onRetry}>
-            Try again
+            {t("common.tryAgain")}
           </Button>
         </DialogActions>
       </div>
@@ -268,45 +267,45 @@ function SignInSteps({ flow, onRetry, onCancel, onDone }: { flow: SignIn; onRetr
   const device = tx.method === "device";
   return (
     <div className="dialog-form">
-      {tx.status === "starting" || !authorization ? <Waiting text="Starting sign-in…" /> : null}
-      {tx.status === "exchanging" ? <Waiting text="Finishing sign-in…" /> : null}
+      {tx.status === "starting" || !authorization ? <Waiting text={t("models.oauth.starting")} /> : null}
+      {tx.status === "exchanging" ? <Waiting text={t("models.oauth.finishing")} /> : null}
       {authorization && (tx.status === "awaiting_browser" || tx.status === "awaiting_code") ? (
         <>
           <p className="settings-text">
-            {device ? "Open the sign-in page and enter this code there." : "Open the sign-in page and finish signing in there. This window notices when you are done."}
+            {device ? t("models.oauth.deviceSteps") : t("models.oauth.browserSteps")}
           </p>
           {device && authorization.user_code ? (
             <span className="login-command login-command--block oauth-user-code">
-              <code aria-label="Sign-in code">{authorization.user_code}</code>
-              <CopyButton value={authorization.user_code} label="Copy sign-in code" done="Code copied." />
+              <code aria-label={t("models.oauth.code")}>{authorization.user_code}</code>
+              <CopyButton value={authorization.user_code} label={t("models.oauth.copyCode")} done={t("models.oauth.codeCopied")} />
             </span>
           ) : null}
           {!device && authorization.instructions ? <p className="settings-text">{authorization.instructions}</p> : null}
           <span className="oauth-open">
-            <a className="ui-button ui-button--primary ui-button--compact" href={authorization.url} target="_blank" rel="noopener noreferrer">
+            <a className="ui-button ui-button--primary" href={authorization.url} target="_blank" rel="noopener noreferrer">
               <ExternalLink size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              Open sign-in page
+              {t("models.oauth.openPage")}
             </a>
-            <CopyButton value={authorization.url} label="Copy sign-in link" done="Link copied." />
+            <CopyButton value={authorization.url} label={t("models.oauth.copyLink")} done={t("models.oauth.linkCopied")} />
           </span>
           {!device && onOtherDevice(client) ? (
             <p className="field-help oauth-note" role="note">
-              The sign-in page may end on an address on the computer running openside, which this device cannot open. If it does, copy that page's address and paste it here when asked.
+              {t("models.oauth.otherDevice")}
             </p>
           ) : null}
           {tx.manual_input ? <ManualInput onSubmit={flow.submit} /> : null}
-          <Waiting text={`Waiting for the sign-in… Expires ${formatRelative(tx.expires_at_ms)}.`} />
+          <Waiting text={t("models.oauth.waiting", { when: formatRelative(tx.expires_at_ms) })} />
         </>
       ) : null}
       {error ? <ErrorNote>{error}</ErrorNote> : null}
       <DialogActions>
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={onCancel}>{t("common.cancel")}</Button>
       </DialogActions>
     </div>
   );
 }
 
-function Waiting({ text }: { text: string }) {
+export function Waiting({ text }: { text: string }) {
   return (
     <p className="settings-text signin-wait oauth-wait" role="status">
       <Spinner size={14} />
@@ -315,138 +314,26 @@ function Waiting({ text }: { text: string }) {
   );
 }
 
-interface Choice {
-  info: OAuthProviderInfo;
-  method: OAuthMethod;
-}
-
-const choiceKey = (choice: Choice) => `${choice.info.provider}:${choice.method}`;
-
-/**
- * Connects an account by signing in to the provider: pick a provider and method, name the
- * account, then follow the sign-in. The account exists only once the sign-in is ready.
- */
-export function ConnectAccountDialog({
-  open,
-  isFirst,
-  onClose,
-  onReady,
-}: {
-  open: boolean;
-  /** No account serves this provider yet, so the new one always joins its rotation. */
-  isFirst: (provider: string) => boolean;
-  onClose: () => void;
-  onReady: () => void;
-}) {
-  const client = useClient();
-  const providers = useResource(useCallback(() => client.oauthProviders(), [client]));
-  const [picked, setPicked] = useState<string>("");
-  const [label, setLabel] = useState("");
-  const [named, setNamed] = useState(false);
-  const [join, setJoin] = useState(true);
-  const [started, setStarted] = useState(false);
-  const flow = useSignIn(onReady);
-  const choices: Choice[] = (providers.data?.providers ?? []).flatMap((info) => info.methods.map((method) => ({ info, method })));
-  const choice = choices.find((candidate) => choiceKey(candidate) === picked);
-  const first = choice ? isFirst(choice.info.provider) : false;
-
-  function close() {
-    flow.cancel();
-    setPicked("");
-    setLabel("");
-    setNamed(false);
-    setJoin(true);
-    setStarted(false);
-    onClose();
-  }
-
-  function begin() {
-    if (!choice) return;
-    const { info, method } = choice;
-    const request = { label: label.trim(), join_pool: first || join, ...(info.methods.length > 1 ? { method } : {}) };
-    void flow.start(() => client.createOAuthAccount(info.provider, request));
-  }
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    setStarted(true);
-    begin();
-  }
-
-  function pick(next: Choice) {
-    setPicked(choiceKey(next));
-    if (!named) setLabel(next.info.name);
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onClose={close}
-      title={choice && started ? `Connect ${choice.info.name}` : "Connect an account"}
-      description={started ? undefined : "Sign in with a subscription you already have. The sign-in is kept encrypted in the vault on the computer running openside."}
-    >
-      {started ? (
-        <SignInSteps flow={flow} onRetry={begin} onCancel={close} onDone={close} />
-      ) : (
-        <form className="dialog-form" onSubmit={submit} aria-label="Connect an account">
-          {providers.error ? <ErrorNote>{providers.error}</ErrorNote> : null}
-          {providers.data ? (
-            <fieldset className="oauth-choices">
-              <legend>Provider</legend>
-              {choices.map((candidate) => (
-                <label key={choiceKey(candidate)} className="oauth-choice">
-                  <input type="radio" name="oauth-provider" value={choiceKey(candidate)} checked={picked === choiceKey(candidate)} onChange={() => pick(candidate)} />
-                  <span className="oauth-choice-copy">
-                    <strong>{candidate.info.name}</strong>
-                    <small>{METHOD_DETAIL[candidate.method]}</small>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-          ) : providers.error ? null : (
-            <Waiting text="Loading providers…" />
-          )}
-          <LabelField
-            value={label}
-            onChange={(next) => {
-              setNamed(true);
-              setLabel(next);
-            }}
-          />
-          {choice && !first ? (
-            <label className="check-row">
-              <input type="checkbox" checked={join} onChange={(event) => setJoin(event.target.checked)} />
-              <span>Use it in the rotation right away</span>
-            </label>
-          ) : null}
-          <DialogActions>
-            <Button onClick={close}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={!choice || !label.trim()}>
-              Continue
-            </Button>
-          </DialogActions>
-        </form>
-      )}
-    </Dialog>
-  );
-}
-
-/** Signs an existing account in again; its name, reserve and rotation place are kept. */
+/** Signs an existing account in again; the account keeps its id, so nothing else changes. */
 export function ReloginDialog({
   open,
-  account,
+  provider,
+  accountId,
+  name,
   onClose,
   onReady,
 }: {
   open: boolean;
-  account: { provider: string; account_id: string; label: string };
+  provider: string;
+  accountId: string;
+  /** The provider row's name, for the title. */
+  name: string;
   onClose: () => void;
   onReady: () => void;
 }) {
   const client = useClient();
   const flow = useSignIn(onReady);
   const { start, cancel } = flow;
-  const { provider, account_id: accountId } = account;
   const begin = useCallback(() => void start(() => client.reloginOAuthAccount(provider, accountId)), [start, client, provider, accountId]);
 
   useEffect(() => {
@@ -461,7 +348,7 @@ export function ReloginDialog({
   }
 
   return (
-    <Dialog open={open} onClose={close} title={`Sign in again: ${account.label}`}>
+    <Dialog open={open} onClose={close} title={t("models.oauth.reloginTitle", { name })}>
       <SignInSteps flow={flow} onRetry={begin} onCancel={close} onDone={close} />
     </Dialog>
   );

@@ -1,21 +1,7 @@
 /*
- * Channels: account rows, the callback address and the account dialog. Built on the grouped-list
- * language in pages/pages.css; tokens only, tints mixed from --text over transparent.
+ * Channels: the callback address, notes and test results shared by the account rows on
+ * Settings › Channels and the account dialog. Tokens only, tints mixed from --text over transparent.
  */
-
-.channel-route {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 0.8125rem;
-  line-height: 1.4;
-}
-.channel-route strong {
-  color: var(--text);
-  font-weight: 600;
-}
 
 .channel-callback {
   display: grid;
@@ -71,17 +57,6 @@
 }
 .channel-result--bad {
   color: var(--danger);
-}
-
-.channel-empty {
-  margin: 0;
-  padding: 18px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-group);
-  background: var(--surface-raised);
-  color: var(--muted);
-  font-size: 0.875rem;
-  text-align: center;
 }
 
 .channel-form .field > label {

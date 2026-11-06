@@ -1,46 +1,69 @@
 import type { AgentSummary, Connection, ConnectionAccess, ConnectionAuditAction, ConnectionSource, ConnectionStatus } from "../api/types";
 import { CHIEF_ID } from "../hooks/useAgents";
 import { isImageDataUrl } from "../cards/values";
+import { t, type MessageKey } from "../i18n";
 import type { BadgeTone } from "./blocks";
 
-export const STATUS: Record<ConnectionStatus, { label: string; tone: BadgeTone }> = {
-  active: { label: "Active", tone: "success" },
-  needs_login: { label: "Sign in again", tone: "attention" },
-  expired: { label: "Expired", tone: "danger" },
-  unverified: { label: "Not checked", tone: "neutral" },
-  candidate: { label: "Not checked", tone: "neutral" },
+const STATUS_LABEL: Record<ConnectionStatus, MessageKey> = {
+  active: "connections.status.active",
+  needs_login: "connections.status.needs_login",
+  expired: "connections.status.expired",
+  unverified: "connections.status.unverified",
+  candidate: "connections.status.unverified",
 };
 
-export const SOURCE: Record<ConnectionSource, string> = {
-  login: "Signed in during a chat",
-  vault: "Saved login",
-  takeover: "Signed in by hand",
-  otp: "Signed in with a one-time code",
-  import: "Imported from your browser",
-  sweep: "Found in the browser",
-  share: "Shared from your browser",
+const STATUS_TONE: Record<ConnectionStatus, BadgeTone> = {
+  active: "success",
+  needs_login: "attention",
+  expired: "danger",
+  unverified: "neutral",
+  candidate: "neutral",
 };
 
-export const ACCESS_LABEL: Record<ConnectionAccess, string> = {
-  allowed: "Allowed",
-  ask: "Ask me first",
-  denied: "Blocked",
+export function statusOf(status: ConnectionStatus): { label: string; tone: BadgeTone } {
+  return { label: t(STATUS_LABEL[status]), tone: STATUS_TONE[status] };
+}
+
+const SOURCE_LABEL: Record<ConnectionSource, MessageKey> = {
+  login: "connections.source.login",
+  vault: "connections.source.vault",
+  takeover: "connections.source.takeover",
+  otp: "connections.source.otp",
+  import: "connections.source.import",
+  sweep: "connections.source.sweep",
+  share: "connections.source.share",
 };
 
-export const ACCESS_OPTIONS = (Object.keys(ACCESS_LABEL) as ConnectionAccess[]).map((value) => ({ value, label: ACCESS_LABEL[value] }));
+export const sourceLabel = (source: ConnectionSource) => t(SOURCE_LABEL[source]);
 
-export const AUDIT_LABEL: Record<ConnectionAuditAction, string> = {
-  detected: "Signed in",
-  verified: "Checked",
-  expired: "Expired",
-  needs_login: "Asked to sign in again",
-  relogin: "Sign in again requested",
-  open: "Opened the site",
-  fetch: "Read from the site",
-  grant: "Access changed",
-  forget: "Forgotten",
-  sign_out: "Signed out",
+const ACCESS_LABEL: Record<ConnectionAccess, MessageKey> = {
+  allowed: "connections.access.allowed",
+  ask: "connections.access.ask",
+  denied: "connections.access.denied",
 };
+
+export const accessLabel = (access: ConnectionAccess) => t(ACCESS_LABEL[access]);
+
+export function accessOptions(): { value: ConnectionAccess; label: string }[] {
+  return (Object.keys(ACCESS_LABEL) as ConnectionAccess[]).map((value) => ({ value, label: accessLabel(value) }));
+}
+
+const AUDIT_LABEL: Record<ConnectionAuditAction, MessageKey> = {
+  detected: "connections.auditAction.detected",
+  verified: "connections.auditAction.verified",
+  expired: "connections.auditAction.expired",
+  needs_login: "connections.auditAction.needs_login",
+  relogin: "connections.auditAction.relogin",
+  open: "connections.auditAction.open",
+  fetch: "connections.auditAction.fetch",
+  grant: "connections.auditAction.grant",
+  forget: "connections.auditAction.forget",
+  sign_out: "connections.auditAction.sign_out",
+};
+
+export const AUDIT_ACTIONS = Object.keys(AUDIT_LABEL) as ConnectionAuditAction[];
+
+export const auditLabel = (action: ConnectionAuditAction) => t(AUDIT_LABEL[action]);
 
 /** What an agent may do when nobody set it: the assistant is trusted, teammates ask first. */
 export function accessOf(connection: Connection, agent: Pick<AgentSummary, "id">): ConnectionAccess {
@@ -57,11 +80,11 @@ export function activeAgents(agents: readonly AgentSummary[] | null): AgentSumma
 export function agentName(agents: readonly AgentSummary[] | null, id: string): string {
   const agent = agents?.find((candidate) => candidate.id === id);
   if (agent) return agent.name;
-  return id === CHIEF_ID ? "Your assistant" : id;
+  return id === CHIEF_ID ? t("connections.yourAssistant") : id;
 }
 
 export function identityLine(connection: Connection): string {
-  return connection.identity ?? "Account not identified yet";
+  return connection.identity ?? t("connections.identityUnknown");
 }
 
 /** The page's own favicon (a `data:` URL the daemon bounded), else the site's initial. */

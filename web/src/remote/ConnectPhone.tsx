@@ -1,14 +1,15 @@
 import { Check, ChevronRight, Copy, QrCode as QrIcon, RefreshCw, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link } from "react-router";
 import type { CapabilityScope, Device, PairingOffer, RemoteStatus } from "../api/types";
 import { useClient } from "../context";
+import { t, type MessageKey } from "../i18n";
+import { tNodes } from "../i18n/react";
 import { errorMessage } from "../hooks/useResource";
-import { manageLinkState } from "../pages/manageRoutes";
 import { ErrorNote } from "../pages/blocks";
 import { Button, copyText, ICON_STROKE, QrCode, Segmented, Spinner, useToast } from "../ui";
 import { LocalOnlyNotice } from "./LocalOnlyNotice";
-import { connectionProblem, enableTransport, midSentence, oneClickTransport, pairingOptions, TRANSPORT_NAMES, type ConnectionProblem, type PairingOption, type TransportId } from "./transports";
+import { connectionProblem, enableTransport, midSentence, oneClickTransport, pairingOptions, transportName, turnOnRemote, type ConnectionProblem, type PairingOption, type TransportId } from "./transports";
 import "./remote.css";
 
 const POLL_MS = 3_000;
@@ -16,21 +17,21 @@ const TICK_MS = 1_000;
 
 interface ScopeChoice {
   id: CapabilityScope;
-  label: string;
+  label: MessageKey;
   /** Always granted: a phone that cannot read is not connected to anything. */
   locked?: boolean;
 }
 
 const SCOPE_CHOICES: ScopeChoice[] = [
-  { id: "read", label: "See conversations and results", locked: true },
-  { id: "steer", label: "Start tasks and send messages" },
-  { id: "approve", label: "Approve or reject what the agent asks" },
-  { id: "human_step", label: "Do steps that need a person, such as logins" },
-  { id: "browse", label: "Watch and use the agent’s browser" },
-  { id: "admin", label: "Change settings and manage other devices" },
+  { id: "read", label: "connections.phone.scope.read", locked: true },
+  { id: "steer", label: "connections.phone.scope.steer" },
+  { id: "approve", label: "connections.phone.scope.approve" },
+  { id: "human_step", label: "connections.phone.scope.human_step" },
+  { id: "browse", label: "connections.phone.scope.browse" },
+  { id: "admin", label: "connections.phone.scope.admin" },
 ];
 
-const DEFAULT_NAME = "My phone";
+const defaultName = () => t("connections.phone.defaultName");
 const DEFAULT_SCOPES: CapabilityScope[] = ["read", "steer", "approve", "human_step", "browse"];
 
 interface Request {
@@ -76,12 +77,14 @@ function Unavailable({
   const [error, setError] = useState<string | null>(null);
   const target = problem.kind === "none" ? (chosen ?? oneClickTransport(status)) : problem.id;
   const canChange = status.configure_allowed;
+  // Off outranks any single connection's state: the one fix is the main switch.
+  const off = !status.enabled;
 
   async function turnOn() {
     setBusy(true);
     setError(null);
     try {
-      await enableTransport(client, target, status);
+      await (off ? turnOnRemote(client, status) : enableTransport(client, target, status));
       onStatusStale();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -90,22 +93,26 @@ function Unavailable({
     }
   }
 
-  const name = TRANSPORT_NAMES[target];
+  const name = transportName(target);
   return (
     <div className="pair-frame">
     <div className="pair" data-state={problem.kind === "starting" ? "starting" : "down"}>
       <QrTile state="empty">
         <div className="remote-qr-empty" aria-hidden="true">
-          {problem.kind === "starting" ? <Spinner size={28} /> : problem.kind === "error" ? <TriangleAlert size={36} strokeWidth={ICON_STROKE} /> : <QrIcon size={44} strokeWidth={ICON_STROKE} />}
+          {problem.kind === "starting" && !off ? <Spinner size={28} /> : problem.kind === "error" && !off ? <TriangleAlert size={36} strokeWidth={ICON_STROKE} /> : <QrIcon size={44} strokeWidth={ICON_STROKE} />}
         </div>
       </QrTile>
       <div className="pair-body">
-      {problem.kind === "none" ? (
+      {off ? (
+        <p className="pair-status">
+          <span>{t("connections.phone.remoteOff")}</span>
+        </p>
+      ) : problem.kind === "none" ? (
         <>
           <p className="pair-status">
-            <span>Your phone needs a way to reach this computer.</span>
+            <span>{t("connections.phone.noWay")}</span>
           </p>
-          {target === "cloudflare" && <p className="pair-hint">A Cloudflare quick tunnel needs no account. It opens a temporary public address that only a QR code from here points to.</p>}
+          {target === "cloudflare" && <p className="pair-hint">{t("connections.phone.cloudflareHint")}</p>}
         </>
       ) : problem.kind === "starting" ? (
         <p className="pair-status" role="status">
@@ -121,7 +128,7 @@ function Unavailable({
         <div className="pair-actions">
           <Button variant="primary" disabled={busy} onClick={() => void turnOn()}>
             {busy && <Spinner size={16} />}
-            {problem.kind === "error" ? "Try again" : `Turn on ${midSentence(name)}`}
+            {off ? t("connections.phone.turnOnRemote") : problem.kind === "error" ? t("common.tryAgain") : t("connections.transport.turnOn", { name: midSentence(name) })}
           </Button>
         </div>
       )}
@@ -135,26 +142,23 @@ function Unavailable({
  * Pairs a phone with one glance: opening it already shows the QR code, made for the best
  * connection that is on (the daemon's preferred one). Waiting, connected and expired are one
  * status line under the code; changing the connection, the phone's name and its permissions sit
- * below as secondary controls. Used by Settings → Remote access and the setup guide.
+ * below as secondary controls. Used by Settings → Developers.
  */
 export function ConnectPhone({
   status,
   onStatusStale,
-  onPaired,
 }: {
   status: RemoteStatus;
   /** A call showed that the local-access proof is gone, or a connection changed; the caller should reload `status`. */
   onStatusStale: () => void;
-  onPaired?: (device: Device) => void;
 }) {
   const client = useClient();
   const toast = useToast();
-  const location = useLocation();
   const nameId = useId();
   const options = pairingOptions(status);
   const [choice, setChoice] = useState<string | null>(null);
-  const [request, setRequest] = useState<Request>({ n: 0, name: DEFAULT_NAME, scopes: DEFAULT_SCOPES });
-  const [draftName, setDraftName] = useState(DEFAULT_NAME);
+  const [request, setRequest] = useState<Request>(() => ({ n: 0, name: defaultName(), scopes: DEFAULT_SCOPES }));
+  const [draftName, setDraftName] = useState(defaultName);
   const [draftScopes, setDraftScopes] = useState<CapabilityScope[]>(DEFAULT_SCOPES);
   const [changing, setChanging] = useState(false);
   const [customising, setCustomising] = useState(false);
@@ -185,7 +189,7 @@ export function ConnectPhone({
       try {
         known.current = new Set((await client.listDevices()).devices.map((device) => device.device_id));
         const created = await client.createPairing({
-          name: request.name.trim() || DEFAULT_NAME,
+          name: request.name.trim() || defaultName(),
           scopes: SCOPE_CHOICES.filter((item) => item.locked || request.scopes.includes(item.id)).map((item) => item.id),
           kind: "person_device",
           via: selectedVia,
@@ -217,7 +221,6 @@ export function ConnectPhone({
         const phone = devices.find((device) => !known.current.has(device.device_id));
         if (cancelled || !phone) return;
         setPaired(phone);
-        onPaired?.(phone);
       } catch {
         // A missed poll is retried on the next tick; the code's own expiry ends the wait.
       }
@@ -226,7 +229,7 @@ export function ConnectPhone({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [client, offer, expired, paired, onPaired]);
+  }, [client, offer, expired, paired]);
 
   function refresh() {
     setRequest((current) => ({ ...current, n: current.n + 1 }));
@@ -248,10 +251,10 @@ export function ConnectPhone({
   }
 
   async function copy(text: string) {
-    toast.notify((await copyText(text)) ? "Link copied" : "Could not copy; select the text instead", "success");
+    toast.notify((await copyText(text)) ? t("connections.phone.linkCopied") : t("connections.phone.copyFailed"), "success");
   }
 
-  if (!allowed) return <LocalOnlyNotice what="connect a phone" onChanged={onStatusStale} />;
+  if (!allowed) return <LocalOnlyNotice what={t("connections.phone.localOnlyWhat")} onChanged={onStatusStale} />;
 
   if (paired) {
     return (
@@ -259,14 +262,14 @@ export function ConnectPhone({
         <span className="remote-result-mark" aria-hidden="true">
           <Check size={30} strokeWidth={ICON_STROKE} />
         </span>
-        <p className="remote-result-title">Connected as {paired.name || "New device"}</p>
-        <p className="remote-note">It can follow your tasks now. You can revoke it any time under Paired devices.</p>
+        <p className="remote-result-title">{t("connections.phone.connectedAs", { name: paired.name || t("connections.phone.newDevice") })}</p>
+        <p className="remote-note">{t("connections.phone.connectedNote")}</p>
         <div className="remote-actions">
           <Button variant="secondary" onClick={another}>
-            Connect another phone
+            {t("connections.phone.connectAnother")}
           </Button>
-          <Link className="ui-button ui-button--ghost" to="/devices" replace state={manageLinkState(location)}>
-            See paired devices
+          <Link className="ui-button ui-button--ghost" to="/settings/account">
+            {t("connections.remote.seePairedDevices")}
           </Link>
         </div>
       </div>
@@ -279,7 +282,7 @@ export function ConnectPhone({
   }
 
   const payload = offer ? (offer.url ?? offer.path) : null;
-  const phoneName = request.name.trim() || DEFAULT_NAME;
+  const phoneName = request.name.trim() || defaultName();
   const state = failed ? "failed" : expired ? "expired" : offer ? "waiting" : "creating";
 
   return (
@@ -288,10 +291,10 @@ export function ConnectPhone({
       <QrTile state={expired ? "expired" : payload ? "ready" : "empty"}>
         {payload ? (
           <>
-            <QrCode text={payload} label={`QR code to connect ${phoneName}`} size={264} />
+            <QrCode text={payload} label={t("connections.phone.qrLabel", { name: phoneName })} size={264} />
             {expired && (
               <div className="remote-qr-veil">
-                <span>Expired</span>
+                <span>{t("connections.phone.expired")}</span>
               </div>
             )}
           </>
@@ -309,19 +312,19 @@ export function ConnectPhone({
           <div className="pair-actions">
             <Button variant="primary" onClick={refresh}>
               <RefreshCw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              Try again
+              {t("common.tryAgain")}
             </Button>
           </div>
         </>
       ) : expired ? (
         <>
           <p className="pair-status">
-            <span>This code expired.</span>
+            <span>{t("connections.phone.codeExpired")}</span>
           </p>
           <div className="pair-actions">
             <Button variant="primary" onClick={refresh}>
               <RefreshCw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              Make a new code
+              {t("connections.phone.makeNewCode")}
             </Button>
           </div>
         </>
@@ -329,28 +332,31 @@ export function ConnectPhone({
         <>
           <p className="pair-status" role="status">
             <Spinner size={16} />
-            <span>{offer ? "Waiting for your phone…" : "Getting your code…"}</span>
+            <span>{offer ? t("connections.phone.waiting") : t("connections.phone.gettingCode")}</span>
           </p>
           {payload && (
             <>
-              <p className="pair-hint">Point your phone’s camera at the code, then tap the link that appears.</p>
+              <p className="pair-hint">{t("connections.phone.pointCamera")}</p>
               <div className="remote-url pair-link">
                 <code title={payload}>{payload}</code>
-                <Button size="compact" variant="ghost" aria-label="Copy the pairing link" onClick={() => void copy(payload)}>
+                <Button variant="ghost" aria-label={t("connections.phone.copyLink")} onClick={() => void copy(payload)}>
                   <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                  Copy
+                  {t("common.copy")}
                 </Button>
               </div>
               <p className="pair-expiry">
                 <span>
-                  Expires in{" "}
-                  <span role="timer" aria-live="off">
-                    {countdown(remaining)}
-                  </span>
+                  {tNodes("connections.phone.expiresIn", {
+                    time: (
+                      <span role="timer" aria-live="off">
+                        {countdown(remaining)}
+                      </span>
+                    ),
+                  })}
                 </span>
-                <Button size="compact" variant="ghost" onClick={refresh}>
+                <Button variant="ghost" onClick={refresh}>
                   <RefreshCw size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />
-                  New code
+                  {t("connections.phone.newCode")}
                 </Button>
               </p>
             </>
@@ -362,17 +368,17 @@ export function ConnectPhone({
       <div className="pair-secondary">
         <p className="pair-via">
           <span>
-            Through <strong>{midSentence(selected.label)}</strong>
+            {tNodes("connections.phone.through", { name: <strong>{midSentence(selected.label)}</strong> })}
           </span>
           {options.length > 1 && (
-            <Button size="compact" variant="ghost" aria-expanded={changing} onClick={() => setChanging((open) => !open)}>
-              Change connection
+            <Button variant="ghost" aria-expanded={changing} onClick={() => setChanging((open) => !open)}>
+              {t("connections.phone.changeConnection")}
             </Button>
           )}
         </p>
         {changing && options.length > 1 && (
           <Segmented
-            label="Connect through"
+            label={t("connections.phone.connectThrough")}
             options={options.map((option) => ({ value: String(option.via), label: option.label }))}
             value={String(selected.via)}
             onChange={(value) => {
@@ -383,7 +389,7 @@ export function ConnectPhone({
         )}
         <button type="button" className="row-disclosure pair-options-toggle" aria-expanded={customising} onClick={() => setCustomising((open) => !open)}>
           <ChevronRight size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          Phone name and permissions
+          {t("connections.phone.nameAndPermissions")}
         </button>
         {customising && (
           <form
@@ -394,11 +400,11 @@ export function ConnectPhone({
             }}
           >
             <div className="remote-field">
-              <label htmlFor={nameId}>Phone name</label>
+              <label htmlFor={nameId}>{t("connections.phone.nameLabel")}</label>
               <input id={nameId} value={draftName} maxLength={60} onChange={(event) => setDraftName(event.target.value)} autoComplete="off" />
             </div>
             <fieldset className="remote-scopes">
-              <legend>What the phone may do</legend>
+              <legend>{t("connections.phone.permissions")}</legend>
               {SCOPE_CHOICES.map((item) => (
                 <label key={item.id} className="remote-scope" data-risk={item.id === "admin" ? "high" : undefined}>
                   <input
@@ -407,13 +413,13 @@ export function ConnectPhone({
                     disabled={item.locked}
                     onChange={(event) => toggle(item.id, event.target.checked)}
                   />
-                  <span>{item.label}</span>
+                  <span>{t(item.label)}</span>
                 </label>
               ))}
             </fieldset>
             <div className="remote-actions">
               <Button variant="primary" type="submit">
-                Make a new code
+                {t("connections.phone.makeNewCode")}
               </Button>
             </div>
           </form>

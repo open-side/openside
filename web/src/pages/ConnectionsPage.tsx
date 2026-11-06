@@ -7,6 +7,7 @@ import { Avatar } from "../components/Avatar";
 import { useClient } from "../context";
 import { useTeam } from "../hooks/useAgents";
 import { errorMessage, useResource } from "../hooks/useResource";
+import { t } from "../i18n";
 import { Button, ICON_STROKE, MenuItem, MenuSeparator, Select, useToast } from "../ui";
 import {
   AddButton,
@@ -20,7 +21,7 @@ import {
   useDialogState,
 } from "./blocks";
 import { AccessDialog, AddAccountDialog, RevokeDialog, type RevokeMode } from "./ConnectionDialogs";
-import { ACCESS_LABEL, AUDIT_LABEL, accessOf, activeAgents, agentName, identityLine, SiteMark, SOURCE, STATUS } from "./connectionsView";
+import { accessLabel, accessOf, activeAgents, agentName, AUDIT_ACTIONS, auditLabel, identityLine, SiteMark, sourceLabel, statusOf } from "./connectionsView";
 import { formatDateTime, formatRelative } from "./format";
 import { ScopeNotice } from "./ScopeNotice";
 import "./connections.css";
@@ -40,7 +41,7 @@ export function useFollowSignIn() {
   return useCallback(
     (result: ReloginResult, site: string, done: () => void) => {
       if (result.status === "signed_in") {
-        toast.notify(`Signed in to ${site}.`, "success");
+        toast.notify(t("connections.signedInToast", { site }), "success");
         done();
       } else {
         navigate(ticketPath(result));
@@ -57,17 +58,17 @@ function AgentAccess({ connection, onOpen }: { connection: Connection; onOpen: (
   const counts = { allowed: 0, ask: 0, denied: 0 };
   for (const agent of agents) counts[accessOf(connection, agent)] += 1;
   const summary = [
-    counts.allowed ? `${counts.allowed} allowed` : null,
-    counts.ask ? `${counts.ask} ask first` : null,
-    counts.denied ? `${counts.denied} blocked` : null,
+    counts.allowed ? t("connections.agents.allowed", { count: counts.allowed }) : null,
+    counts.ask ? t("connections.agents.ask", { count: counts.ask }) : null,
+    counts.denied ? t("connections.agents.denied", { count: counts.denied }) : null,
   ]
     .filter(Boolean)
     .join(" · ");
   return (
-    <button type="button" className="conn-agents" onClick={onOpen} aria-label={`Agents with access to ${connection.site}: ${summary}`}>
+    <button type="button" className="conn-agents" onClick={onOpen} aria-label={t("connections.agents.label", { site: connection.site, summary })}>
       <span className="conn-agent-stack">
         {agents.slice(0, 5).map((agent) => (
-          <span key={agent.id} className="conn-agent" data-access={accessOf(connection, agent)} title={`${agent.name}: ${ACCESS_LABEL[accessOf(connection, agent)]}`}>
+          <span key={agent.id} className="conn-agent" data-access={accessOf(connection, agent)} title={t("connections.agents.title", { agent: agent.name, access: accessLabel(accessOf(connection, agent)) })}>
             <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={24} />
           </span>
         ))}
@@ -81,20 +82,22 @@ function AgentAccess({ connection, onOpen }: { connection: Connection; onOpen: (
 function CardMeta({ connection }: { connection: Connection }) {
   const team = useTeam();
   const used = connection.used_at
-    ? `Last used ${formatRelative(connection.used_at)}${connection.used_by ? ` by ${agentName(team.agents, connection.used_by)}` : ""}`
-    : "Not used by an agent yet";
+    ? connection.used_by
+      ? t("connections.card.lastUsedBy", { time: formatRelative(connection.used_at), agent: agentName(team.agents, connection.used_by) })
+      : t("connections.card.lastUsed", { time: formatRelative(connection.used_at) })
+    : t("connections.card.notUsed");
   return (
     <>
       <p className="conn-meta">
         <span>{used}</span>
-        <span>{SOURCE[connection.source]}</span>
-        {connection.expires_at ? <span>Signed in until {formatDateTime(connection.expires_at)}</span> : null}
+        <span>{sourceLabel(connection.source)}</span>
+        {connection.expires_at ? <span>{t("connections.card.signedInUntil", { date: formatDateTime(connection.expires_at) })}</span> : null}
       </p>
       {connection.identity_source === "agent" || connection.account_space || connection.accounts_on_site > 1 ? (
         <div className="resource-card-meta">
-          {connection.identity_source === "agent" ? <span className="tag">Account named by an agent</span> : null}
-          {connection.account_space ? <span className="tag">Separate browser profile</span> : null}
-          {connection.accounts_on_site > 1 ? <span className="tag">{connection.accounts_on_site} accounts on this site</span> : null}
+          {connection.identity_source === "agent" ? <span className="tag">{t("connections.card.namedByAgent")}</span> : null}
+          {connection.account_space ? <span className="tag">{t("connections.card.separateProfile")}</span> : null}
+          {connection.accounts_on_site > 1 ? <span className="tag">{t("connections.card.accountsOnSite", { count: connection.accounts_on_site })}</span> : null}
         </div>
       ) : null}
     </>
@@ -107,7 +110,8 @@ type Handlers = {
   onCheck: (connection: Connection) => void;
   onRelogin: (connection: Connection) => void;
   onAccess: (connection: Connection) => void;
-  onActivity: (connection: Connection) => void;
+  /** Absent where the page is shown without its activity log. */
+  onActivity?: (connection: Connection) => void;
   onAddAccount: (connection: Connection) => void;
   onRevoke: (connection: Connection, mode: RevokeMode) => void;
 };
@@ -115,7 +119,7 @@ type Handlers = {
 function ConnectionCard({ connection, handlers }: { connection: Connection; handlers: Handlers }) {
   const { browser, busy } = handlers;
   const working = busy === connection.id;
-  const status = STATUS[connection.status];
+  const status = statusOf(connection.status);
   const needsSignIn = connection.status === "needs_login" || connection.status === "expired";
   const separate = connection.account_space !== null;
   return (
@@ -130,34 +134,36 @@ function ConnectionCard({ connection, handlers }: { connection: Connection; hand
       trailing={
         <RowMenu name={connection.site}>
           <MenuItem icon={<RefreshCw size={18} strokeWidth={ICON_STROKE} />} disabled={!browser || working} onClick={() => handlers.onCheck(connection)}>
-            Check now
+            {t("connections.menu.check")}
           </MenuItem>
           <MenuItem icon={<Link2 size={18} strokeWidth={ICON_STROKE} />} disabled={!browser || working} onClick={() => handlers.onRelogin(connection)}>
-            Sign in again
+            {t("connections.menu.relogin")}
           </MenuItem>
           <MenuItem icon={<ShieldCheck size={18} strokeWidth={ICON_STROKE} />} onClick={() => handlers.onAccess(connection)}>
-            Agent access…
+            {t("connections.menu.access")}
           </MenuItem>
-          <MenuItem icon={<History size={18} strokeWidth={ICON_STROKE} />} onClick={() => handlers.onActivity(connection)}>
-            Activity
-          </MenuItem>
+          {handlers.onActivity ? (
+            <MenuItem icon={<History size={18} strokeWidth={ICON_STROKE} />} onClick={() => handlers.onActivity?.(connection)}>
+              {t("connections.menu.activity")}
+            </MenuItem>
+          ) : null}
           {separate ? null : (
             <MenuItem icon={<UserPlus size={18} strokeWidth={ICON_STROKE} />} disabled={!browser} onClick={() => handlers.onAddAccount(connection)}>
-              Add another account…
+              {t("connections.menu.addAccount")}
             </MenuItem>
           )}
           <MenuSeparator />
           {separate ? (
             <MenuItem danger icon={<Trash2 size={18} strokeWidth={ICON_STROKE} />} onClick={() => handlers.onRevoke(connection, "sign_out")}>
-              Remove account…
+              {t("connections.menu.removeAccount")}
             </MenuItem>
           ) : (
             <>
               <MenuItem danger icon={<LogOut size={18} strokeWidth={ICON_STROKE} />} onClick={() => handlers.onRevoke(connection, "sign_out")}>
-                Sign out…
+                {t("connections.menu.signOut")}
               </MenuItem>
               <MenuItem danger icon={<Trash2 size={18} strokeWidth={ICON_STROKE} />} onClick={() => handlers.onRevoke(connection, "forget")}>
-                Forget…
+                {t("connections.menu.forget")}
               </MenuItem>
             </>
           )}
@@ -169,12 +175,12 @@ function ConnectionCard({ connection, handlers }: { connection: Connection; hand
       {needsSignIn || connection.status === "unverified" ? (
         <CardActions>
           {needsSignIn ? (
-            <Button variant="primary" size="compact" disabled={!browser || working} onClick={() => handlers.onRelogin(connection)}>
-              Sign in again
+            <Button variant="primary" disabled={!browser || working} onClick={() => handlers.onRelogin(connection)}>
+              {t("connections.menu.relogin")}
             </Button>
           ) : (
-            <Button size="compact" disabled={!browser || working} onClick={() => handlers.onCheck(connection)}>
-              Check now
+            <Button disabled={!browser || working} onClick={() => handlers.onCheck(connection)}>
+              {t("connections.menu.check")}
             </Button>
           )}
         </CardActions>
@@ -189,12 +195,12 @@ function Candidates({ candidates, handlers, onDismiss }: { candidates: Connectio
   return (
     <div className="conn-candidates">
       <Disclosure expanded={open} onToggle={() => setOpen(!open)}>
-        Possibly signed in ({candidates.length})
+        {t("connections.candidates.toggle", { count: candidates.length })}
       </Disclosure>
       {open ? (
         <>
-          <p className="settings-text">The agent browser holds cookies for these sites, but nobody confirmed a sign-in. Check opens the site in the background to find out.</p>
-          <ul className="resource-list" aria-label="Possibly signed in">
+          <p className="settings-text">{t("connections.candidates.note")}</p>
+          <ul className="resource-list" aria-label={t("connections.candidates.label")}>
             {candidates.map((connection) => (
               <li key={connection.id}>
                 <ResourceCard
@@ -203,11 +209,11 @@ function Candidates({ candidates, handlers, onDismiss }: { candidates: Connectio
                   title={connection.site}
                   trailing={
                     <>
-                      <Button size="compact" disabled={!handlers.browser || handlers.busy === connection.id} onClick={() => handlers.onCheck(connection)}>
-                        Check
+                      <Button disabled={!handlers.browser || handlers.busy === connection.id} onClick={() => handlers.onCheck(connection)}>
+                        {t("connections.candidates.check")}
                       </Button>
-                      <Button size="compact" variant="ghost" disabled={handlers.busy === connection.id} onClick={() => onDismiss(connection)}>
-                        Dismiss
+                      <Button variant="ghost" disabled={handlers.busy === connection.id} onClick={() => onDismiss(connection)}>
+                        {t("common.dismiss")}
                       </Button>
                     </>
                   }
@@ -234,37 +240,37 @@ function Audit({ client, connections, filter, onFilter }: { client: Client; conn
   const audit = useResource(load);
   const sites = new Map(connections.map((connection) => [connection.id, connection.site]));
   return (
-    <SectionList title="Activity" label="Connection activity" description="Every use and change of a sign-in, newest first. Cookies and page contents are never recorded.">
-      <div className="conn-filters" role="group" aria-label="Activity filters">
+    <SectionList title={t("connections.audit.title")} label={t("connections.audit.label")} description={t("connections.audit.description")}>
+      <div className="conn-filters" role="group" aria-label={t("connections.audit.filters")}>
         <Select
-          aria-label="Connection"
+          aria-label={t("connections.audit.connection")}
           value={filter}
           onChange={onFilter}
-          options={[{ value: ALL, label: "All connections" }, ...connections.map((connection) => ({ value: connection.id, label: connection.identity ? `${connection.site} · ${connection.identity}` : connection.site }))]}
+          options={[{ value: ALL, label: t("connections.audit.allConnections") }, ...connections.map((connection) => ({ value: connection.id, label: connection.identity ? `${connection.site} · ${connection.identity}` : connection.site }))]}
         />
         <Select
-          aria-label="Agent"
+          aria-label={t("connections.audit.agent")}
           value={agent}
           onChange={setAgent}
-          options={[{ value: ALL, label: "Any agent" }, ...activeAgents(team.agents).map((member) => ({ value: member.id, label: member.name }))]}
+          options={[{ value: ALL, label: t("connections.audit.anyAgent") }, ...activeAgents(team.agents).map((member) => ({ value: member.id, label: member.name }))]}
         />
         <Select
-          aria-label="Action"
+          aria-label={t("connections.audit.action")}
           value={action}
           onChange={(value) => setAction(value as ConnectionAuditAction | typeof ALL)}
-          options={[{ value: ALL, label: "Any action" }, ...(Object.keys(AUDIT_LABEL) as ConnectionAuditAction[]).map((value) => ({ value, label: AUDIT_LABEL[value] }))]}
+          options={[{ value: ALL, label: t("connections.audit.anyAction") }, ...AUDIT_ACTIONS.map((value) => ({ value, label: auditLabel(value) }))]}
         />
       </div>
-      <ResourceView resource={audit} what="connections">
+      <ResourceView resource={audit} what={t("connections.what")}>
         {(data) =>
           data.records.length === 0 ? (
-            <p className="settings-text">No activity matches.</p>
+            <p className="settings-text">{t("connections.audit.empty")}</p>
           ) : (
-            <ol className="resource-list audit-list" aria-label="Activity records">
+            <ol className="resource-list audit-list" aria-label={t("connections.audit.records")}>
               {data.records.map((record, index) => (
                 <li key={`${record.at}-${index}`} data-action={record.action}>
                   <ResourceCard
-                    title={`${AUDIT_LABEL[record.action]} · ${sites.get(record.connection_id) ?? record.site}`}
+                    title={`${auditLabel(record.action)} · ${sites.get(record.connection_id) ?? record.site}`}
                     detail={`${formatDateTime(record.at)} · ${agentName(team.agents, record.agent_id)}`}
                   >
                     {record.detail ? <p className="resource-card-detail">{record.detail}</p> : null}
@@ -282,8 +288,9 @@ function Audit({ client, connections, filter, onFilter }: { client: Client; conn
 /**
  * Connections: the sites the agent browser is signed in to, one card per account. It shows
  * metadata only; cookies and passwords never reach the page. Every route needs the admin scope.
+ * `audit={false}` leaves out the activity log and its filters (Security & Privacy's short sheet).
  */
-export function ConnectionsPage() {
+export function ConnectionsPage({ audit = true }: { audit?: boolean } = {}) {
   const client = useClient();
   const toast = useToast();
   const follow = useFollowSignIn();
@@ -332,21 +339,23 @@ export function ConnectionsPage() {
       onCheck: (connection) =>
         void run(connection, async () => {
           const checked = await client.checkConnection(connection.id);
-          toast.notify(checked.status === "active" ? `${checked.site} is still signed in.` : `${checked.site} needs a new sign-in.`);
+          toast.notify(t(checked.status === "active" ? "connections.check.active" : "connections.check.needsSignIn", { site: checked.site }));
         }),
       onRelogin: (connection) =>
         void run(connection, async () => {
           follow(await client.reloginConnection(connection.id), connection.site, () => undefined);
         }),
       onAccess: (connection) => access.show(connection.id),
-      onActivity: (connection) => {
-        setAuditFilter(connection.id);
-        window.requestAnimationFrame(() => auditRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-      },
+      onActivity: audit
+        ? (connection) => {
+            setAuditFilter(connection.id);
+            window.requestAnimationFrame(() => auditRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+          }
+        : undefined,
       onAddAccount: (connection) => add.show(connection.site),
       onRevoke: (connection, mode) => revoke.show({ connection, mode }),
     }),
-    [list.data?.browser_available, busy, run, client, toast, follow, access, add, revoke],
+    [list.data?.browser_available, busy, run, client, toast, follow, access, add, revoke, audit],
   );
 
   const dismiss = (connection: Connection) =>
@@ -357,7 +366,7 @@ export function ConnectionsPage() {
   if (list.forbidden) {
     return (
       <div className="manage-body" data-section="connections">
-        <ScopeNotice what="connections" onGranted={() => void reload()} />
+        <ScopeNotice what={t("connections.what")} onGranted={() => void reload()} />
       </div>
     );
   }
@@ -367,27 +376,27 @@ export function ConnectionsPage() {
   return (
     <div className="manage-body" data-section="connections">
       <SectionList
-        title="Signed in"
-        label="Connections"
-        description="Openside remembers which sites the agent browser is signed in to, never the passwords or cookies. Agents ask before using one unless you allow it."
-        actions={data?.browser_available ? <AddButton variant="secondary" onClick={() => add.show("")}>Add another account</AddButton> : undefined}
+        title={t("connections.page.title")}
+        label={t("connections.page.label")}
+        description={t("connections.page.description")}
+        actions={data?.browser_available ? <AddButton variant="secondary" onClick={() => add.show("")}>{t("connections.page.addAccount")}</AddButton> : undefined}
       >
-        <ResourceView resource={list} what="connections">
+        <ResourceView resource={list} what={t("connections.what")}>
           {(value) => (
             <>
               {value.browser_available ? null : (
                 <p className="conn-note" role="status">
-                  The agent browser is not available, so openside cannot check sites or sign in again right now.
+                  {t("connections.page.browserUnavailable")}
                 </p>
               )}
               {value.connections.length === 0 ? (
                 <EmptyState
                   icon={Activity}
-                  title="No sign-ins yet"
-                  detail="When an agent signs in to a site for you, it shows up here, and you decide which agents may use it."
+                  title={t("connections.page.emptyTitle")}
+                  detail={t("connections.page.emptyDetail")}
                 />
               ) : (
-                <ul className="resource-list" aria-label="Connections">
+                <ul className="resource-list" aria-label={t("connections.page.label")}>
                   {value.connections.map((connection) => (
                     <li key={connection.id}>
                       <ConnectionCard connection={connection} handlers={handlers} />
@@ -400,7 +409,7 @@ export function ConnectionsPage() {
           )}
         </ResourceView>
       </SectionList>
-      <div ref={auditRef}>{data ? <Audit client={client} connections={data.connections} filter={auditFilter} onFilter={setAuditFilter} /> : null}</div>
+      {audit ? <div ref={auditRef}>{data ? <Audit client={client} connections={data.connections} filter={auditFilter} onFilter={setAuditFilter} /> : null}</div> : null}
 
       <RevokeDialog
         open={revoke.open}
@@ -409,7 +418,9 @@ export function ConnectionsPage() {
         onConfirm={(connection, request) =>
           void run(connection, async () => {
             await client.revokeConnection(connection.id, request);
-            toast.notify(connection.account_space !== null ? `Removed the ${connection.site} account.` : request.sign_out ? `Signed out of ${connection.site}.` : `Forgot ${connection.site}.`);
+            toast.notify(
+              t(connection.account_space !== null ? "connections.page.removedAccount" : request.sign_out ? "connections.page.signedOut" : "connections.page.forgot", { site: connection.site }),
+            );
           })
         }
       />

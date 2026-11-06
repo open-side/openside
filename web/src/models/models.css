@@ -1,8 +1,156 @@
 /*
- * Models & accounts: provider sections, the fast/reasoning model controls and the model picker's
- * provider groups. Built on the grouped-list language in pages/pages.css; tokens only.
+ * Settings › Models (Aside `L 48`), the Connect picker (`L 03`/`L 04`) and the provider sign-in
+ * steps. Tokens only; rows and cards come from ui/Settings.tsx.
  */
 
+.models-page {
+  display: grid;
+}
+
+.models-provider-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.models-provider-list .ui-row-leading {
+  color: var(--text);
+}
+/* Aside's status circle before the row menu: a ring that fills once the provider is usable. */
+.row-actions .models-status-mark {
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+}
+.models-status-mark[data-status="connected"] {
+  border-color: var(--live);
+  background: var(--live);
+}
+.models-status-mark[data-status="needs_attention"] {
+  border-color: var(--warn);
+}
+.models-row-more {
+  border: 0;
+  background: none;
+}
+
+/* "+ Connect": a 52px row with the muted plus and label, no trailing glyph. */
+.models-connect-row {
+  justify-content: flex-start;
+  gap: 8px;
+  color: var(--section-label);
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+.models-connect-row:hover {
+  background: color-mix(in srgb, var(--hover) 50%, var(--card-bg));
+}
+.models-connect-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+/* Connect picker: radio cards, the "Show more options" link and the More options list. */
+.models-choices {
+  display: grid;
+  gap: 2px;
+}
+.models-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+.models-choice:hover,
+.models-choice:has(input:checked) {
+  background: var(--hover);
+}
+/* `.models-choice >` outranks the global `label > span` field-caption rule in styles.css. */
+.models-choice > .models-choice-glyph {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  margin: 0;
+  color: var(--text);
+}
+.models-choice > .models-choice-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: inherit;
+  font-weight: inherit;
+}
+.models-choice-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.models-choice-detail {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.models-choice input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--link-strong);
+}
+.models-more-link {
+  justify-self: center;
+  padding: 4px 8px;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+.models-more-link:hover {
+  text-decoration: underline;
+}
+.models-more-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.models-more-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+}
+.models-more-row:hover,
+.models-more-row:focus-visible {
+  background: var(--hover);
+}
+.models-more-row > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+/* Sign-in steps (OAuthDialogs.tsx). */
 .login-command {
   display: inline-flex;
   max-width: 100%;
@@ -13,178 +161,56 @@
 .login-command code {
   min-width: 0;
 }
-.key-mask {
-  color: var(--text);
-  font-family: var(--font-code);
+.login-command--block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.login-command--block code {
+  overflow-wrap: anywhere;
+}
+.signin-done {
+  margin: 0;
+  font-weight: 600;
+}
+.oauth-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.oauth-user-code code {
+  font-size: var(--text-md);
+  letter-spacing: 0.08em;
+}
+.oauth-manual {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.oauth-manual .field {
+  width: 100%;
+}
+.oauth-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.oauth-note {
+  margin: 0;
+}
+
+/* Also used by the Settings › Channels account dialog (channels/AccountDialog.tsx). */
+.field-help {
+  color: var(--muted);
   font-size: 0.8125rem;
-  letter-spacing: 0.04em;
 }
 .row-actions {
   display: inline-flex;
   align-items: center;
   gap: 2px;
 }
-/* The key buttons would squeeze the title on a phone: they take their own line, aligned with the text. */
-@media (max-width: 520px) {
-  .resource-card-header:has(.row-actions),
-  .resource-card-header:has(> .resource-card-trailing > .ui-button) {
-    flex-wrap: wrap;
-  }
-  .resource-card-trailing:has(.row-actions),
-  .resource-card-trailing:has(> .ui-button) {
-    flex: 1 0 100%;
-    margin: 0 -8px 0 0;
-  }
-  .resource-card-header:has(.resource-card-icon) > .resource-card-trailing:has(.row-actions, > .ui-button) {
-    padding-left: 36px;
-  }
-}
-
-.model-rows {
-  min-width: 0;
-}
-.model-rows > ul {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.model-rows li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2px 12px;
-  min-height: 44px;
-  padding: 6px 4px;
-  border-bottom: 1px solid var(--border);
-}
-.model-rows li:last-child {
-  border-bottom: 0;
-}
-.model-rows li[data-available="false"] .model-row-name strong {
-  color: var(--muted);
-}
-.model-row-name {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 8px;
-  overflow-wrap: anywhere;
-}
-.model-row-name strong {
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-.model-row-name code {
-  color: var(--muted);
-  font-family: var(--font-code);
-  font-size: 0.75rem;
-}
-.model-row-reason {
-  grid-column: 1 / -1;
-  color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.45;
-}
-
-/* Default model */
-
-/* Fast, reasoning and fallback rows: one flat group split by hairlines. */
-.default-model {
-  display: flex;
-  flex-direction: column;
-  padding: 0 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-group);
-  background: var(--surface-raised);
-}
-.default-model > * {
-  min-height: var(--settings-row-height);
-  padding: 10px 0;
-}
-.default-model > * + * {
-  border-top: 1px solid var(--border);
-}
-.default-model-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-}
-.default-model-row > :is(label, span:first-child) {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-.model-role {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-}
-.model-role-copy {
-  flex: 1 1 14rem;
-  min-width: 0;
-}
-.model-role-copy label {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-.model-role-copy p {
-  margin: 2px 0 0;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: var(--leading-ui);
-}
-.model-role > .ui-select,
-.model-role > .default-model-value {
-  flex: 1 1 14rem;
-  max-width: 22rem;
-}
-.default-model .ui-select {
-  width: auto;
-  border-radius: var(--radius-md);
-}
-.default-model-row > .ui-select,
-.default-model-row > .default-model-value {
-  flex: 1 1 14rem;
-  max-width: 22rem;
-}
-.default-model-value {
-  color: var(--muted);
-  font-size: 0.875rem;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-.fallback-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.fallback-chip {
-  display: inline-flex;
-  max-width: 100%;
-  align-items: center;
-  gap: 2px;
-  min-height: 32px;
-  padding: 0 4px 0 12px;
-  border-radius: var(--radius-pill);
-  background: var(--bubble);
-  font-size: var(--text-sm);
-}
-.fallback-chip span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .models-callout {
   display: flex;
   align-items: flex-start;
@@ -210,254 +236,4 @@
 }
 .models-callout--info svg {
   color: var(--muted);
-}
-
-.source-meta {
-  color: var(--muted);
-}
-
-/* Model sheet (quick per-person choice) */
-
-.model-sheet-option .model-option-copy {
-  flex: 1;
-}
-.model-sheet-meta {
-  flex: none;
-  margin-left: 12px;
-  color: var(--muted);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-.model-sheet-option > svg {
-  flex: none;
-  margin-left: 8px;
-}
-.model-sheet .model-group > .section-heading {
-  margin: 0;
-}
-.model-sheet-manage {
-  justify-self: start;
-  color: var(--primary);
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
-  text-decoration: none;
-}
-.model-sheet-manage:hover {
-  text-decoration: underline;
-}
-/* The chip's chevron trails its label. */
-.ui-chip > .model-chip-chevron {
-  order: 1;
-}
-
-/* Model picker: provider groups */
-
-.model-group {
-  display: grid;
-  gap: 2px;
-}
-.model-group + .model-group {
-  margin-top: 10px;
-}
-.model-group-title {
-  margin: 0;
-  padding: 6px 14px 2px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-.model-group-reason {
-  margin: 0;
-  padding: 0 14px 4px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.4;
-}
-.model-option-copy {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-  text-align: left;
-}
-.model-option-copy small {
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 450;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-.model-option:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.model-picker-note[data-top] {
-  margin: 0 0 12px;
-}
-.model-picker-note {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 12px;
-  margin: 12px 0 0;
-  color: var(--muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-}
-
-.check-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.field-help {
-  color: var(--muted);
-  font-size: 0.8125rem;
-}
-.dialog-actions-start {
-  margin-right: auto;
-}
-.login-command--block {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-.login-command--block code {
-  overflow-wrap: anywhere;
-}
-.signin-done {
-  margin: 0;
-  font-weight: 600;
-}
-
-/* Rotation order of one provider's accounts. */
-.rotation {
-  display: grid;
-  gap: 8px;
-  padding: 12px 4px;
-  border-top: 1px solid var(--border);
-}
-.rotation-title {
-  margin: 0;
-  font-size: 0.875rem;
-}
-.rotation-help,
-.rotation-empty {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.8125rem;
-}
-.rotation-list {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding-left: 22px;
-}
-.rotation-list li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-.rotation-name {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.rotation-actions {
-  display: inline-flex;
-  flex: none;
-}
-.rotation-add {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.accounts-empty {
-  margin: 0;
-  padding: 8px 4px;
-}
-.session-accounts {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.session-accounts li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-/* Connect account: provider choice and the sign-in steps. */
-.oauth-choices {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-group);
-  overflow: hidden;
-}
-.oauth-choices legend {
-  padding: 0 0 6px;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-.oauth-choice {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: var(--settings-row-height);
-  padding: 8px 12px;
-  cursor: pointer;
-}
-.oauth-choice + .oauth-choice {
-  border-top: 1px solid var(--border);
-}
-.oauth-choice-copy {
-  display: grid;
-  min-width: 0;
-}
-.oauth-choice-copy strong {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-.oauth-choice-copy small {
-  color: var(--muted);
-  font-size: 0.8125rem;
-}
-.oauth-open,
-.oauth-relogin {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.oauth-relogin {
-  justify-content: space-between;
-}
-.oauth-user-code code {
-  font-size: var(--text-md);
-  letter-spacing: 0.08em;
-}
-.oauth-manual {
-  display: grid;
-  gap: 8px;
-  justify-items: start;
-}
-.oauth-manual .field {
-  width: 100%;
-}
-.oauth-wait {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.oauth-note {
-  margin: 0;
 }

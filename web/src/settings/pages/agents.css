@@ -1,0 +1,170 @@
+/* Settings › Agents and Projects (aside-measure-settings §3, vm2/agents-0/1). */
+.agents-page {
+  display: grid;
+  gap: 32px;
+}
+.agents-page > .ui-section + .ui-section {
+  margin-top: 0;
+}
+/* Completion sound: Preview and Change sit on a line of their own inside the row, no hairline. */
+.agents-sound {
+  display: grid;
+  background: var(--card-bg);
+}
+.agents-sound > .ui-row {
+  min-height: 0;
+  padding-bottom: 4px;
+}
+.agents-sound-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px 10px 13px;
+}
+
+.agents-status {
+  color: var(--row-desc);
+  font-size: var(--text-xs);
+}
+.agents-status[data-on] {
+  color: var(--text);
+}
+.agents-error {
+  display: block;
+  margin-top: 4px;
+  color: var(--danger);
+}
+.agents-note {
+  margin: 0;
+  padding: 0 14px;
+  color: var(--row-desc);
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+
+/* File permissions: a folder line indented under its Can view / Can edit row. */
+.agents-folder {
+  display: flex;
+  box-sizing: border-box;
+  /* A card is a one-column grid: without this the nowrap path widens the card past the screen. */
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 6px 10px 6px 23px;
+  background: var(--card-bg);
+  font-size: var(--text-md);
+}
+.agents-folder-name {
+  flex: none;
+  color: var(--row-title);
+}
+.agents-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--row-desc);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agents-default {
+  display: inline-flex;
+  align-items: center;
+  height: var(--button-small-height);
+  padding: 0 7px;
+  border: 1px solid var(--button-outline-border);
+  border-radius: var(--radius-control);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+/* Tool permissions: "Allow  Run without confirmation." then the rules (or "No allow rules"). */
+.agents-rules {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: baseline;
+  padding: 10px 10px 12px 13px;
+  background: var(--card-bg);
+}
+.agents-rules-effect {
+  min-width: 34px;
+  color: var(--row-title);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.agents-rules-description {
+  color: var(--row-desc);
+  font-size: var(--text-md);
+}
+.agents-rules-list {
+  display: grid;
+  grid-column: 2 / 4;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-md);
+}
+.agents-rules-empty {
+  color: color-mix(in srgb, var(--row-desc) 70%, transparent);
+}
+.agents-rule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.agents-rule-pattern {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--row-desc);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agents-rule > .ui-icon-button {
+  margin-left: auto;
+}
+.agents-rules .ui-button--ghost {
+  height: 24px;
+  padding: 0 6px;
+}
+
+.agents-form {
+  display: grid;
+  gap: 12px;
+}
+.agents-form label {
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.agents-form input {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* Projects: Aside's single "+ Create" card, its text the muted 14px of an empty action. */
+.projects-create {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--settings-row-height-single);
+  padding: 0 13px;
+  border: 0;
+  background: var(--card-bg);
+  color: var(--row-desc);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+}
+.projects-create > svg {
+  width: 14px;
+  height: 14px;
+}

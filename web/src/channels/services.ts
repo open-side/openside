@@ -1,29 +1,34 @@
 import { Hash, MessagesSquare, Send, type LucideIcon } from "lucide-react";
-import { MESSAGES } from "../api/client";
+import { apiErrorMessage } from "../api/client";
 import type { ChannelAccount, ChannelAccountOptions, ChannelAccountStatus, ChannelAccountTest } from "../api/types";
+import { t, type MessageKey } from "../i18n";
 import type { BadgeTone } from "../pages/blocks";
 
 export type ChannelKind = "telegram" | "slack" | "discord";
 
 export type ListKey = "allowed_chats" | "allowed_users" | "allowed_workspaces" | "allowed_channels" | "allowed_guilds";
 
+/** Copy is stored as message keys so the list can be built at import time and translated at render. */
 export interface ListField {
   key: ListKey;
-  label: string;
+  label: MessageKey;
   placeholder: string;
-  hint: string;
+  hint: MessageKey;
 }
 
 export interface Service {
   kind: ChannelKind;
   name: string;
   Icon: LucideIcon;
-  blurb: string;
+  /** The account dialog's subtitle: how the service reaches openside. */
+  blurb: MessageKey;
+  /** The platform row's second line on Settings › Channels while it has no accounts. */
+  tagline: MessageKey;
   lists: ListField[];
   /** Slack verifies inbound callbacks with a signing secret next to the bot token. */
   signingSecret: boolean;
-  /** Slack and Discord call openside back on a signed URL; Telegram is polled. */
-  callback: { field: string; steps: string } | null;
+  /** Slack and Discord call openside back on a signed URL; Telegram is polled. `field` is the service's own (untranslated) field name. */
+  callback: { field: string; steps: MessageKey } | null;
 }
 
 export const SERVICES: Service[] = [
@@ -31,10 +36,11 @@ export const SERVICES: Service[] = [
     kind: "telegram",
     name: "Telegram",
     Icon: Send,
-    blurb: "Each bot is polled by openside, so no public address is needed.",
+    blurb: "models.channels.telegram.blurb",
+    tagline: "models.channels.telegram.tagline",
     lists: [
-      { key: "allowed_chats", label: "Allowed chats", placeholder: "123456789, -1001234567890", hint: "Chat ids this bot may answer." },
-      { key: "allowed_users", label: "Allowed people", placeholder: "987654321", hint: "Telegram user ids; leave empty to allow everyone in an allowed chat." },
+      { key: "allowed_chats", label: "models.channels.telegram.chats", placeholder: "123456789, -1001234567890", hint: "models.channels.telegram.chatsHint" },
+      { key: "allowed_users", label: "models.channels.allowedPeople", placeholder: "987654321", hint: "models.channels.telegram.usersHint" },
     ],
     signingSecret: false,
     callback: null,
@@ -43,27 +49,29 @@ export const SERVICES: Service[] = [
     kind: "slack",
     name: "Slack",
     Icon: Hash,
-    blurb: "One account per Slack workspace app. Slack calls openside back on a signed address.",
+    blurb: "models.channels.slack.blurb",
+    tagline: "models.channels.slack.tagline",
     lists: [
-      { key: "allowed_workspaces", label: "Allowed workspaces", placeholder: "T0123ABCD", hint: "Workspace ids, like T0123ABCD." },
-      { key: "allowed_channels", label: "Allowed channels", placeholder: "C0123ABCD, D0456EFGH", hint: "Channel or conversation ids." },
-      { key: "allowed_users", label: "Allowed people", placeholder: "U0123ABCD", hint: "Slack member ids; leave empty to allow everyone in an allowed channel." },
+      { key: "allowed_workspaces", label: "models.channels.slack.workspaces", placeholder: "T0123ABCD", hint: "models.channels.slack.workspacesHint" },
+      { key: "allowed_channels", label: "models.channels.allowedChannels", placeholder: "C0123ABCD, D0456EFGH", hint: "models.channels.slack.channelsHint" },
+      { key: "allowed_users", label: "models.channels.allowedPeople", placeholder: "U0123ABCD", hint: "models.channels.slack.usersHint" },
     ],
     signingSecret: true,
-    callback: { field: "Request URL", steps: "In your Slack app, open Event Subscriptions, turn them on and paste this address as the Request URL." },
+    callback: { field: "Request URL", steps: "models.channels.slack.steps" },
   },
   {
     kind: "discord",
     name: "Discord",
     Icon: MessagesSquare,
-    blurb: "One account per Discord application. Discord calls openside back on a signed address.",
+    blurb: "models.channels.discord.blurb",
+    tagline: "models.channels.discord.tagline",
     lists: [
-      { key: "allowed_guilds", label: "Allowed servers", placeholder: "112233445566778899", hint: "Server (guild) ids." },
-      { key: "allowed_channels", label: "Allowed channels", placeholder: "998877665544332211", hint: "Channel ids." },
-      { key: "allowed_users", label: "Allowed people", placeholder: "123123123123123123", hint: "Discord user ids; leave empty to allow everyone in an allowed channel." },
+      { key: "allowed_guilds", label: "models.channels.discord.guilds", placeholder: "112233445566778899", hint: "models.channels.discord.guildsHint" },
+      { key: "allowed_channels", label: "models.channels.allowedChannels", placeholder: "998877665544332211", hint: "models.channels.discord.channelsHint" },
+      { key: "allowed_users", label: "models.channels.allowedPeople", placeholder: "123123123123123123", hint: "models.channels.discord.usersHint" },
     ],
     signingSecret: false,
-    callback: { field: "Interactions Endpoint URL", steps: "In the Discord Developer Portal, open your application's General Information and paste this address as the Interactions Endpoint URL." },
+    callback: { field: "Interactions Endpoint URL", steps: "models.channels.discord.steps" },
   },
 ];
 
@@ -91,25 +99,25 @@ export const hasAllowList = (options: ChannelAccountOptions) =>
 export function statusView(status: ChannelAccountStatus): { text: string; tone: BadgeTone } {
   switch (status) {
     case "connected":
-      return { text: "Connected", tone: "success" };
+      return { text: t("models.channels.status.connected"), tone: "success" };
     case "disabled":
-      return { text: "Off", tone: "neutral" };
+      return { text: t("common.off"), tone: "neutral" };
     case "expired":
-      return { text: "Sign in again", tone: "danger" };
+      return { text: t("models.channels.status.signInAgain"), tone: "danger" };
     case "unavailable":
-      return { text: "Unavailable", tone: "attention" };
+      return { text: t("models.channels.status.unavailable"), tone: "attention" };
     case "vault_locked":
-      return { text: "Vault locked", tone: "attention" };
+      return { text: t("models.channels.status.vaultLocked"), tone: "attention" };
     case "restart_required":
-      return { text: "Restart needed", tone: "attention" };
+      return { text: t("models.channels.status.restartNeeded"), tone: "attention" };
   }
 }
 
 /** One sentence for a connection test; codes are the daemon's allow-listed ones, never upstream text. */
 export function testSummary(result: ChannelAccountTest): string {
-  const fallback = result.ok ? "The service accepted this account's credentials." : "The check did not pass.";
-  const message = MESSAGES[result.code === "ok" ? "channel_ok" : result.code] ?? fallback;
-  return result.restart_required ? `${message} Restart openside to start this account.` : message;
+  const fallback = result.ok ? t("models.channels.test.passed") : t("models.channels.test.failed");
+  const message = apiErrorMessage(result.code === "ok" ? "channel_ok" : result.code) ?? fallback;
+  return result.restart_required ? t("models.channels.test.restart", { message }) : message;
 }
 
 /** A callback address on this computer cannot be reached by Slack or Discord. */

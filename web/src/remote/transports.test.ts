@@ -79,6 +79,17 @@ describe("pairingOptions", () => {
       { via: null, label: "Saved address", url: "https://proxy.example.com" },
     ]);
   });
+
+  it("offers nothing while Remote Control is off, not even a saved address", () => {
+    // A status that still names the address, as an older daemon would send, is not trusted either.
+    const off = tailscaleOn({ enabled: false });
+    expect(pairingOptions(off)).toEqual([]);
+    expect(transportViews(off).map((item) => [item.id, item.phase, item.url])).toEqual([
+      ["tailscale", "off", null],
+      ["cloudflare", "off", null],
+      ["relay", "off", null],
+    ]);
+  });
 });
 
 describe("connectionProblem", () => {

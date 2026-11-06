@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { saveScopes } from "../auth";
 import { useClient } from "../context";
+import { t } from "../i18n";
 import { Button, ICON_STROKE, Spinner } from "../ui";
 import "./pages.css";
 import "./signin.css";
@@ -63,34 +64,31 @@ export function ScopeNotice({ what, onGranted }: { what: string; onGranted?: () 
   }
 
   return (
-    <div className="empty-state scope-notice" role="region" aria-label="Access needed">
+    <div className="empty-state scope-notice" role="region" aria-label={t("settings.scope.region")}>
       <span className="empty-state-icon" aria-hidden="true">
         {phase === "granted" ? <Check size={22} strokeWidth={ICON_STROKE} /> : <LockKeyhole size={22} strokeWidth={ICON_STROKE} />}
       </span>
-      <strong>{phase === "granted" ? "This device now has access" : `This device can’t manage ${what} yet`}</strong>
+      <strong>{phase === "granted" ? t("settings.scope.granted") : t("settings.scope.cannotManage", { what })}</strong>
       {phase === "waiting" ? (
         <p role="status">
-          <Spinner size={14} /> Waiting for you to approve it on the computer running openside. The request is shown there.
+          <Spinner size={14} /> {t("settings.scope.waiting")}
         </p>
       ) : phase === "granted" ? (
-        <p role="status">You can manage {what} from this device.</p>
+        <p role="status">{t("settings.scope.grantedDetail", { what })}</p>
       ) : phase === "unsupported" ? (
-        <p>
-          This version of openside cannot grant access from here. Give this device the admin permission on the computer running openside, under
-          Workspace → Devices.
-        </p>
+        <p>{t("settings.scope.unsupported")}</p>
       ) : (
         <>
           <p>
             {phase === "declined"
-              ? "The request was declined or timed out. You can ask again."
+              ? t("settings.scope.declined")
               : phase === "failed"
-                ? "Could not reach openside. Try again."
-                : `Managing ${what} needs permission from the computer running openside. Ask for it here and approve it there.`}
+                ? t("settings.scope.failed")
+                : t("settings.scope.needed", { what })}
           </p>
           {phase === "checking" ? null : (
-            <Button size="compact" variant="primary" disabled={phase === "asking"} onClick={() => void ask()}>
-              {phase === "asking" ? "Asking…" : "Ask for access"}
+            <Button variant="primary" disabled={phase === "asking"} onClick={() => void ask()}>
+              {phase === "asking" ? t("settings.scope.asking") : t("settings.scope.ask")}
             </Button>
           )}
         </>

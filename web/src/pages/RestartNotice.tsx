@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { ApiError } from "../api/client";
 import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
+import { t } from "../i18n";
 import { LocalOnlyNotice } from "../remote/LocalOnlyNotice";
 import { Button, ICON_STROKE, Spinner, useToast } from "../ui";
 import { ErrorNote, useConfirm } from "./blocks";
@@ -72,7 +73,7 @@ export function useDaemonRestart({ onRestarted, pollMs = POLL_MS }: { onRestarte
       try {
         if ((await client.daemonStatus()).boot_id !== previous) {
           setPhase("done");
-          toast.notify("openside restarted.");
+          toast.notify(t("settings.restart.restarted"));
           done.current?.();
           return;
         }
@@ -82,16 +83,16 @@ export function useDaemonRestart({ onRestarted, pollMs = POLL_MS }: { onRestarte
     }
     if (alive.current) {
       setPhase("idle");
-      setError("openside did not come back in time. Check the computer that runs it.");
+      setError(t("settings.restart.timedOut"));
     }
   }, [client, pollMs, toast]);
 
   const request = useCallback(
     () =>
       ask({
-        title: "Restart openside?",
-        description: "Conversations that are running stop and pick up again from their saved history. This page reconnects by itself.",
-        confirmLabel: "Restart",
+        title: t("settings.restart.confirmTitle"),
+        description: t("settings.restart.confirmDescription"),
+        confirmLabel: t("settings.restart.confirm"),
         onConfirm: () => void run(),
       }),
     [ask, run],
@@ -106,16 +107,16 @@ export function RestartStatus({ restart }: { restart: DaemonRestart }) {
     <>
       {restart.phase === "restarting" ? (
         <p className="restart-progress" role="status">
-          <Spinner size={14} /> Restarting openside. This page reconnects when it is back.
+          <Spinner size={14} /> {t("settings.restart.progress")}
         </p>
       ) : null}
       {restart.phase === "done" ? (
         <p className="restart-progress" role="status">
-          <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> openside restarted.
+          <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> {t("settings.restart.restarted")}
         </p>
       ) : null}
       {restart.localOnly ? (
-        <LocalOnlyNotice what="restart openside" onChanged={restart.retry} />
+        <LocalOnlyNotice what={t("settings.restart.localOnlyWhat")} onChanged={restart.retry} />
       ) : restart.error ? (
         <ErrorNote>{restart.error}</ErrorNote>
       ) : null}
@@ -135,9 +136,9 @@ export function RestartNotice({ children, onRestarted }: { children: ReactNode; 
       <div className="restart-notice-row" role="status">
         <p>{children}</p>
         {restart.phase === "idle" ? (
-          <Button size="compact" onClick={restart.ask}>
+          <Button onClick={restart.ask}>
             <RotateCw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            Restart daemon
+            {t("settings.restart.button")}
           </Button>
         ) : null}
       </div>

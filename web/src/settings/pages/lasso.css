@@ -1,0 +1,24 @@
+/* Settings › Lasso: shortcut cards end in an "Add shortcut" row that is a button without a trailing glyph. */
+.lasso-shortcuts .ui-row {
+  gap: 9px;
+}
+.lasso-shortcuts .ui-row-leading {
+  width: 16px;
+}
+/* Aside's shortcut rows are 4px shorter than its other single-line rows; the Add row keeps the usual height. */
+.lasso-shortcuts .ui-row--single:not(.lasso-add) {
+  min-height: calc(var(--settings-row-height-single) - 4px);
+}
+.lasso-add {
+  color: var(--row-desc);
+}
+.lasso-add .ui-row-title {
+  font-weight: var(--weight-regular, 400);
+}
+.lasso-add:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.lasso-add:disabled:hover {
+  background: var(--card-bg);
+}

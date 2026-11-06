@@ -1,0 +1,59 @@
+/* Settings › Projects: the list under Aside's "+ Create" card and the create/edit dialog. */
+.projects-create:not(:disabled) {
+  cursor: pointer;
+}
+.projects-create:not(:disabled):hover {
+  color: var(--text);
+}
+
+/* The card draws hairlines as 1px gaps over its divider colour; the list keeps that grid. */
+.projects-list ul {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.projects-mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  overflow-wrap: anywhere;
+}
+.projects-confirm-note {
+  display: block;
+}
+.projects-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.projects-form {
+  display: grid;
+  gap: 12px;
+}
+.projects-form label,
+.projects-field {
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.projects-field small {
+  color: var(--row-desc);
+  font-size: 0.75rem;
+  font-weight: normal;
+  line-height: 1.5;
+}
+.projects-folder-row {
+  display: flex;
+  gap: 8px;
+}
+.projects-folder-row input {
+  flex: 1;
+  min-width: 0;
+}
+.projects-form textarea {
+  resize: vertical;
+  font: inherit;
+  font-weight: normal;
+}

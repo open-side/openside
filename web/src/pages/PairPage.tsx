@@ -5,6 +5,8 @@ import { decodeKey } from "../api/relay/noise";
 import type { PairDeviceResponse } from "../api/types";
 import { clearTransport, savePairing, saveTransport } from "../auth";
 import { errorMessage } from "../hooks/useResource";
+import { t } from "../i18n";
+import { tNodes } from "../i18n/react";
 import { BrandMark, Spinner } from "../ui";
 import { CliHint } from "./CliHint";
 import "./pages.css";
@@ -31,7 +33,7 @@ function parseFragment(fragment: string): PairingLink {
   try {
     if (!fragment.includes("=")) {
       if (document.querySelector('meta[name="openside-transport"]')?.getAttribute("content") === "relay") {
-        return { code: "", relay: null, error: "This relay needs the full pairing link, including the computer's encryption key. Make a new QR code in openside on the computer (Settings → Remote access → Connect a phone)." };
+        return { code: "", relay: null, error: t("settings.pair.error.relayNeedsFullLink") };
       }
       return { code: decodeURIComponent(fragment).trim(), relay: null };
     }
@@ -40,14 +42,14 @@ function parseFragment(fragment: string): PairingLink {
     const daemonId = fields.get("d");
     const daemonKey = fields.get("k");
     if (fields.get("t") !== "relay" || !daemonId || !daemonKey) {
-      return { code: "", relay: null, error: "This pairing link is incomplete or uses an unknown transport. Scan a new QR code from openside on the computer." };
+      return { code: "", relay: null, error: t("settings.pair.error.incomplete") };
     }
     if (!decodeKey(daemonKey)) {
-      return { code: "", relay: null, error: "This pairing link has an invalid encryption key. Scan a new QR code from openside on the computer." };
+      return { code: "", relay: null, error: t("settings.pair.error.invalidKey") };
     }
     return { code, relay: { kind: "relay", relay: window.location.origin, daemon_id: daemonId, daemon_key: daemonKey } };
   } catch {
-    return { code: "", relay: null, error: "This pairing link is malformed. Scan a new QR code from openside on the computer." };
+    return { code: "", relay: null, error: t("settings.pair.error.malformed") };
   }
 }
 
@@ -55,9 +57,7 @@ function parseFragment(fragment: string): PairingLink {
 export function PairPage({ onPaired }: { onPaired: (token: string) => void }) {
   const [{ code, relay, error: linkError }] = useState(() => parseFragment(window.location.hash.slice(1)));
   const relayOrigin = document.querySelector('meta[name="openside-transport"]')?.getAttribute("content") === "relay";
-  const [error, setError] = useState<string | null>(
-    linkError ?? (code ? null : "This pairing link has no code. On the computer, open Settings → Remote access → Connect a phone and scan the new QR code."),
-  );
+  const [error, setError] = useState<string | null>(linkError ?? (code ? null : t("settings.pair.error.noCode")));
 
   useEffect(() => {
     // A malformed link is still a credential-bearing URL; clear it before showing an error.
@@ -100,22 +100,22 @@ export function PairPage({ onPaired }: { onPaired: (token: string) => void }) {
           <BrandMark size={24} />
           <span>openside</span>
         </div>
-        <h1>{error ? "Pairing didn’t work" : "Pairing this device"}</h1>
+        <h1>{error ? t("settings.pair.failedTitle") : t("settings.pair.title")}</h1>
         {error ? (
           <>
             <p role="alert" className="error-note">
               {error}
             </p>
             <p className="token-help">
-              On the computer, open openside and go to Settings → Remote access → Connect a phone for a new code.
-              {!relayOrigin && !relay && !linkError ? <> Or <a href="/">enter a device token instead</a>.</> : null}
+              {t("settings.pair.help")}
+              {!relayOrigin && !relay && !linkError ? <> {tNodes("settings.pair.orToken", { link: <a href="/">{t("settings.pair.tokenLink")}</a> })}</> : null}
             </p>
             <CliHint command={relayOrigin || relay ? "openside pair --via relay" : "openside pair"} />
           </>
         ) : (
           <p role="status" className="loading-row">
             <Spinner size={16} />
-            <span>Exchanging the one-time code…</span>
+            <span>{t("settings.pair.exchanging")}</span>
           </p>
         )}
       </div>

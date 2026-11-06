@@ -5,6 +5,7 @@ import { fakeClient, json, type Call } from "../test/fakeDaemon";
 /** A computer with nothing turned on, asked from its own browser (local proof accepted). */
 export function offStatus(patch: Partial<RemoteStatus> = {}): RemoteStatus {
   return {
+    enabled: true,
     modes: [],
     public_url: null,
     cloudflare: null,
@@ -90,6 +91,14 @@ export function remoteDaemon(patch: Partial<RemoteDaemonState> = {}): RemoteDaem
     if (key === "GET /v1/remote/status") return json(200, state.status);
     if (key === "GET /v1/devices") return json(200, { devices: state.devices });
     if (key === "POST /v1/pairing") return json(200, (state.offer ?? offer)());
+    if (key === "POST /v1/remote/disable") {
+      state.status = { ...state.status, enabled: false, modes: [], public_url: null };
+      return json(200, { status: state.status, still_on: [] });
+    }
+    if (key === "POST /v1/remote/enable") {
+      state.status = { ...state.status, enabled: true };
+      return json(200, state.status);
+    }
     return json(404, { code: "not_found", message: "nope" });
   });
   return { ...fake, state };

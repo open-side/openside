@@ -1,0 +1,256 @@
+/*
+ * Settings as a tab (SettingsLayout.tsx), measured on Aside's Settings (`local://aside-measure-settings.md`
+ * §0–2): a 214px nav on the frame colour, then the bordered sheet holding a centred 636px column.
+ */
+
+.settings-layout {
+  display: grid;
+  flex: 1;
+  grid-template-columns: var(--settings-nav-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  background: var(--settings-nav-bg);
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 4px 7px 12px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+/* 202×32 at 6px from the column's edge; the rows below are 200 wide at 7px. */
+.settings-nav-search {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  margin: 0 -1px;
+}
+.settings-nav-search > svg {
+  position: absolute;
+  left: 11px;
+  color: var(--placeholder);
+  pointer-events: none;
+}
+.settings-nav-search input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  min-height: 0;
+  padding: 0 10px 0 31px;
+  border: 1px solid var(--settings-search-border);
+  border-radius: var(--radius-control);
+  background: var(--settings-search-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+}
+.settings-nav-search input::placeholder {
+  color: var(--placeholder);
+}
+.settings-nav-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* Heading 16px tall; 14px above it, 7px under it, 15px after a group's last row. */
+.settings-nav-group {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 14px;
+}
+.settings-nav-group + .settings-nav-group {
+  margin-top: 15px;
+}
+.settings-nav-heading {
+  margin: 0 0 5px;
+  padding: 0 9px;
+  color: var(--settings-nav-text);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 16px;
+}
+/* The footer has no heading: 12px more than the row pitch above its first row. */
+.settings-nav-group.settings-nav-footer {
+  margin-top: 13px;
+}
+.settings-nav-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav-row {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px 0 9px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--settings-nav-text);
+  font: inherit;
+  font-size: var(--text-md);
+  line-height: 20px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.settings-nav-row:hover,
+.settings-nav-row[aria-current="page"] {
+  background: var(--settings-nav-selected);
+  color: var(--settings-nav-text-selected);
+}
+.settings-nav-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.settings-nav-icon {
+  flex: none;
+}
+.settings-nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-nav-row > .ui-badge {
+  justify-content: center;
+  min-width: 37px;
+}
+/* Aside's ↗ glyph is 9px with its tip 5px from the row's end; lucide draws the arrow in 10/24 of its box. */
+.settings-nav-external {
+  flex: none;
+  margin-right: 1px;
+}
+
+/* Memory's pages: a hairline 15px into the column, child icons 12px at 34px, labels at 54px. */
+.settings-nav-children {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav-children::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 15px;
+  z-index: 1;
+  width: 1px;
+  background: var(--settings-nav-guide);
+  content: "";
+  pointer-events: none;
+}
+.settings-nav-row--child {
+  padding-left: 34px;
+}
+
+.settings-nav-empty {
+  margin: 14px 0 0;
+  padding: 0 9px;
+  color: var(--settings-nav-text);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The sheet: flush with the nav and the toolbar, 6px from the card's right and bottom edges. */
+.settings-sheet {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 6px 6px 0;
+  overflow: hidden;
+  border: 1px solid var(--settings-sheet-border);
+  border-radius: var(--radius-card);
+  background: var(--settings-sheet-bg);
+}
+.settings-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-color: var(--scroll-thumb) transparent;
+  scrollbar-width: thin;
+}
+.settings-column {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--settings-column);
+  margin: 0 auto;
+  padding: 65px 0 96px;
+}
+/* Title cap at the sheet's top + 72; the first card 49px under the cap. */
+.settings-title {
+  margin: 0 0 27px;
+  padding: 0 14px;
+  color: var(--settings-title);
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
+  line-height: 28px;
+}
+/* The title takes focus after a nav pick only so assistive tech announces the page; it is not a control. */
+#settings-page-title:focus {
+  outline: none;
+}
+/* Aside's ⓘ after "Configure memories": a 16px circled ? in the muted colour, 8px after the title. */
+.settings-title-help {
+  display: inline-flex;
+  margin-left: 8px;
+  color: var(--muted);
+  vertical-align: -2px;
+  cursor: help;
+}
+.settings-title-help > svg {
+  width: 16px;
+  height: 16px;
+}
+/* Two-pane pages (Memory › Overview, History) fill the sheet and scroll inside their panes. */
+.settings-scroll--bleed {
+  display: flex;
+  overflow: hidden;
+}
+.settings-row-link {
+  color: inherit;
+  text-decoration: none;
+}
+.settings-row-link:hover {
+  text-decoration: underline;
+}
+
+/* Phones: Aside has no phone layout. The nav is the first screen and each page drills in. */
+@media (max-width: 820px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    background: var(--settings-sheet-bg);
+  }
+  .settings-phone-heading {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+  .settings-nav {
+    padding: 4px 12px 24px;
+  }
+  .settings-sheet {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+  .settings-column {
+    padding: 8px 16px 48px;
+  }
+  .settings-scroll--bleed {
+    overflow-y: auto;
+  }
+}

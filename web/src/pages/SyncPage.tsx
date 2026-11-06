@@ -3,6 +3,8 @@ import { useCallback, useId, useState, type FormEvent } from "react";
 import type { PinnedTab, SyncReport, SyncSecrets, SyncStatus } from "../api/types";
 import { useClient } from "../context";
 import { errorMessage, useResource } from "../hooks/useResource";
+import { t, type MessageKey } from "../i18n";
+import { tNodes } from "../i18n/react";
 import { Button, copyText, ICON_STROKE, IconButton, Segmented, Switch, useToast } from "../ui";
 import { Badge, EmptyState, ErrorNote, ResourceCard, ResourceView, SectionList, StatusRow, type BadgeTone } from "./blocks";
 import { FailureNote, toFailure, type Failure } from "./Failure";
@@ -17,10 +19,10 @@ const tags = (text: string) =>
     .filter(Boolean);
 
 function stateOf(status: SyncStatus): { label: string; tone: BadgeTone } {
-  if (!status.configured) return { label: "Off", tone: "neutral" };
-  if (!status.set_up) return { label: "Not joined yet", tone: "attention" };
-  if (!status.unlocked) return { label: "Locked", tone: "attention" };
-  return { label: "On", tone: "success" };
+  if (!status.configured) return { label: t("common.off"), tone: "neutral" };
+  if (!status.set_up) return { label: t("connections.sync.state.notJoined"), tone: "attention" };
+  if (!status.unlocked) return { label: t("connections.sync.state.locked"), tone: "attention" };
+  return { label: t("common.on"), tone: "success" };
 }
 
 /** Where synced data lives and what is included. The place cannot change once an account is joined. */
@@ -51,7 +53,7 @@ function Storage({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
           memory_tags: tags(tagText),
         });
         onChanged(next);
-        toast.notify("Sync settings saved.");
+        toast.notify(t("connections.sync.saved"));
       } catch (cause) {
         setFailure(toFailure(cause));
       } finally {
@@ -62,47 +64,47 @@ function Storage({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
   );
 
   return (
-    <SectionList title="Where to sync" description="Synced data is encrypted on this computer before it leaves, so the place only ever holds scrambled files.">
-      <form className="policy-form" aria-label="Sync storage" onSubmit={(event) => void save(event)}>
+    <SectionList title={t("connections.sync.where.title")} description={t("connections.sync.where.description")}>
+      <form className="policy-form" aria-label={t("connections.sync.storage")} onSubmit={(event) => void save(event)}>
         {locked ? (
           <p className="settings-text">
-            This device joined a sync account, so the place stays {status.backend === "dir" ? "the shared folder" : "the WebDAV address"} <code>{status.location}</code>. You can still change what is synced.
+            {tNodes(status.backend === "dir" ? "connections.sync.lockedDir" : "connections.sync.lockedWebdav", { location: <code>{status.location}</code> })}
           </p>
         ) : (
           <>
             <Segmented
-              label="Sync storage"
+              label={t("connections.sync.storage")}
               value={backend}
               onChange={setBackend}
               options={[
-                { value: "off", label: "Off" },
-                { value: "dir", label: "Shared folder" },
+                { value: "off", label: t("common.off") },
+                { value: "dir", label: t("connections.sync.backend.dir") },
                 { value: "webdav", label: "WebDAV" },
               ]}
             />
             {backend === "dir" ? (
               <div className="field">
                 <label htmlFor={`${id}-dir`}>
-                  <span>Folder</span>
+                  <span>{t("connections.sync.folder")}</span>
                 </label>
                 <input id={`${id}-dir`} value={dir} placeholder="~/Sync/openside" spellCheck={false} onChange={(event) => setDir(event.target.value)} />
-                <p className="settings-text">A folder another tool already keeps in step between your computers, such as Syncthing or a cloud drive.</p>
+                <p className="settings-text">{t("connections.sync.folderHint")}</p>
               </div>
             ) : null}
             {backend === "webdav" ? (
               <>
                 <div className="field">
                   <label htmlFor={`${id}-url`}>
-                    <span>WebDAV address</span>
+                    <span>{t("connections.sync.webdavAddress")}</span>
                   </label>
                   <input id={`${id}-url`} value={url} placeholder="https://dav.example.com/openside/" spellCheck={false} onChange={(event) => setUrl(event.target.value)} />
                 </div>
                 <div className="field">
                   <label htmlFor={`${id}-user`}>
-                    <span>Username (optional)</span>
+                    <span>{t("connections.sync.username")}</span>
                   </label>
                   <input id={`${id}-user`} value={user} autoComplete="off" spellCheck={false} onChange={(event) => setUser(event.target.value)} />
-                  <p className="settings-text">The password is typed when you unlock sync and is never saved to disk.</p>
+                  <p className="settings-text">{t("connections.sync.passwordHint")}</p>
                 </div>
               </>
             ) : null}
@@ -112,24 +114,24 @@ function Storage({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
           <>
             <div className="policy-switch">
               <div>
-                <label htmlFor={`${id}-settings`}>Sync the permission policy</label>
-                <p className="settings-text">Your allowed sites and rules follow you to every device.</p>
+                <label htmlFor={`${id}-settings`}>{t("connections.sync.policySwitch")}</label>
+                <p className="settings-text">{t("connections.sync.policyHint")}</p>
               </div>
               <Switch id={`${id}-settings`} checked={settings} onChange={setSettings} />
             </div>
             <div className="field">
               <label htmlFor={`${id}-tags`}>
-                <span>Memory tags to sync</span>
+                <span>{t("connections.sync.tags")}</span>
               </label>
               <input id={`${id}-tags`} value={tagText} placeholder="shared, travel" spellCheck={false} onChange={(event) => setTagText(event.target.value)} />
-              <p className="settings-text">Comma separated. Memories with any of these tags are synced; the rest stay on this computer.</p>
+              <p className="settings-text">{t("connections.sync.tagsHint")}</p>
             </div>
           </>
         ) : null}
-        <FailureNote failure={failure} what="change sync" onRetry={() => void save()} />
+        <FailureNote failure={failure} what={t("connections.sync.whatChange")} onRetry={() => void save()} />
         <div>
           <Button type="submit" variant="primary" disabled={busy || (backend === "dir" && !dir.trim()) || (backend === "webdav" && !url.trim())}>
-            {busy ? "Saving…" : "Save"}
+            {busy ? t("common.saving") : t("common.save")}
           </Button>
         </div>
       </form>
@@ -137,7 +139,7 @@ function Storage({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
   );
 }
 
-function Passphrase({ id, label = "Sync passphrase", hint }: { id: string; label?: string; hint?: string }) {
+function Passphrase({ id, label = t("connections.sync.passphrase"), hint }: { id: string; label?: string; hint?: string }) {
   return (
     <div className="field">
       <label htmlFor={id}>
@@ -190,42 +192,42 @@ function Account({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
   }
 
   async function copy(text: string) {
-    toast.notify((await copyText(text)) ? "Code copied" : "Could not copy; select the code instead", "success");
+    toast.notify((await copyText(text)) ? t("connections.sync.codeCopied") : t("connections.sync.copyFailed"), "success");
   }
 
   if (!status.configured) return null;
 
   if (!status.set_up) {
     return (
-      <SectionList title="Sync account" description="Start an account on this device, or join the one another device already started.">
+      <SectionList title={t("connections.sync.account.title")} description={t("connections.sync.account.description")}>
         <Segmented
-          label="Account"
+          label={t("connections.sync.account.label")}
           value={mode}
           onChange={setMode}
           options={[
-            { value: "new", label: "Start a new account" },
-            { value: "join", label: "Join with a code" },
+            { value: "new", label: t("connections.sync.account.new") },
+            { value: "join", label: t("connections.sync.account.join") },
           ]}
         />
         {created ? (
           <div className="agent-link-result" role="status">
             <p className="onb-result-title">
-              <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> Account started
+              <Check size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> {t("connections.sync.account.started")}
             </p>
             <div className="remote-copy-row">
-              <input readOnly aria-label="Sync code" value={created} onFocus={(event) => event.currentTarget.select()} />
-              <Button size="compact" aria-label="Copy the sync code" onClick={() => void copy(created)}>
-                <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> Copy
+              <input readOnly aria-label={t("connections.sync.code")} value={created} onFocus={(event) => event.currentTarget.select()} />
+              <Button aria-label={t("connections.sync.copyCode")} onClick={() => void copy(created)}>
+                <Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> {t("common.copy")}
               </Button>
             </div>
             <p className="settings-text">
-              On your other device, choose Join with a code, paste this code and type the same passphrase. The code is safe to share; the passphrase is not, and nobody can recover it for you.
+              {t("connections.sync.codeHint")}
             </p>
           </div>
         ) : (
           <form
             className="policy-form"
-            aria-label={mode === "new" ? "Start a sync account" : "Join a sync account"}
+            aria-label={t(mode === "new" ? "connections.sync.startForm" : "connections.sync.joinForm")}
             onSubmit={(event) =>
               void submit(event, async (secrets) => {
                 if (mode === "new") {
@@ -240,7 +242,7 @@ function Account({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
             {mode === "join" ? (
               <div className="field">
                 <label htmlFor="sync-code">
-                  <span>Sync code</span>
+                  <span>{t("connections.sync.code")}</span>
                 </label>
                 <input id="sync-code" value={code} placeholder="osync1-…" spellCheck={false} onChange={(event) => setCode(event.target.value)} />
               </div>
@@ -248,16 +250,16 @@ function Account({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
             {needsPassphrase(status) ? (
               <Passphrase
                 id="passphrase"
-                hint={mode === "new" ? "At least 8 characters. It encrypts everything that syncs and is never stored; you type it again after openside restarts." : "The same passphrase you chose on the first device."}
+                hint={t(mode === "new" ? "connections.sync.newHint" : "connections.sync.joinHint")}
               />
             ) : (
-              <p className="settings-text">The passphrase comes from the command in your configuration, so there is nothing to type.</p>
+              <p className="settings-text">{t("connections.sync.fromCommandSetup")}</p>
             )}
-            {needsPassword(status) ? <Passphrase id="webdav_password" label="WebDAV password" /> : null}
-            <FailureNote failure={failure} what="set up sync" onRetry={() => setFailure(null)} />
+            {needsPassword(status) ? <Passphrase id="webdav_password" label={t("connections.sync.webdavPassword")} /> : null}
+            <FailureNote failure={failure} what={t("connections.sync.whatSetup")} onRetry={() => setFailure(null)} />
             <div>
               <Button type="submit" variant="primary" disabled={busy || (mode === "join" && !code.trim())}>
-                {busy ? "Working…" : mode === "new" ? "Start account" : "Join account"}
+                {busy ? t("connections.sync.working") : mode === "new" ? t("connections.sync.start") : t("connections.sync.join")}
               </Button>
             </div>
           </form>
@@ -268,14 +270,14 @@ function Account({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
 
   if (!status.unlocked) {
     return (
-      <SectionList title="Unlock sync" description="Sync needs the passphrase after openside starts. It is kept in memory only.">
-        <form className="policy-form" aria-label="Unlock sync" onSubmit={(event) => void submit(event, (secrets) => client.unlockSync(secrets))}>
-          {needsPassphrase(status) ? <Passphrase id="passphrase" /> : <p className="settings-text">The passphrase comes from the command in your configuration.</p>}
-          {needsPassword(status) ? <Passphrase id="webdav_password" label="WebDAV password" /> : null}
-          <FailureNote failure={failure} what="unlock sync" onRetry={() => setFailure(null)} />
+      <SectionList title={t("connections.sync.unlock.title")} description={t("connections.sync.unlock.description")}>
+        <form className="policy-form" aria-label={t("connections.sync.unlock.title")} onSubmit={(event) => void submit(event, (secrets) => client.unlockSync(secrets))}>
+          {needsPassphrase(status) ? <Passphrase id="passphrase" /> : <p className="settings-text">{t("connections.sync.unlock.fromCommand")}</p>}
+          {needsPassword(status) ? <Passphrase id="webdav_password" label={t("connections.sync.webdavPassword")} /> : null}
+          <FailureNote failure={failure} what={t("connections.sync.unlock.what")} onRetry={() => setFailure(null)} />
           <div>
             <Button type="submit" variant="primary" disabled={busy}>
-              {busy ? "Unlocking…" : "Unlock"}
+              {busy ? t("connections.sync.unlock.busy") : t("connections.sync.unlock.submit")}
             </Button>
           </div>
         </form>
@@ -287,24 +289,24 @@ function Account({ status, onChanged }: { status: SyncStatus; onChanged: (next: 
 }
 
 function Report({ report }: { report: SyncReport }) {
-  const rows: [string, number][] = [
-    ["Uploaded", report.pushed],
-    ["Downloaded", report.pulled],
-    ["Applied here", report.applied],
-    ["Replaced by a newer version", report.conflicts],
-    ["Rejected", report.rejected],
-    ["Waiting", report.deferred],
+  const rows: [MessageKey, number][] = [
+    ["connections.sync.report.uploaded", report.pushed],
+    ["connections.sync.report.downloaded", report.pulled],
+    ["connections.sync.report.applied", report.applied],
+    ["connections.sync.report.replaced", report.conflicts],
+    ["connections.sync.report.rejected", report.rejected],
+    ["connections.sync.report.waiting", report.deferred],
   ];
   return (
-    <div className="sync-report" role="status" aria-label="Last sync">
+    <div className="sync-report" role="status" aria-label={t("connections.sync.report.label")}>
       {rows.map(([label, value]) => (
-        <StatusRow key={label} label={label}>
+        <StatusRow key={label} label={t(label)}>
           {value}
         </StatusRow>
       ))}
-      <StatusRow label="Vault items">{report.vault_available ? "Included" : "Left out (the vault is locked)"}</StatusRow>
-      {report.rejected > 0 ? <p className="settings-text">Rejected records failed their integrity check and were not applied.</p> : null}
-      {report.deferred > 0 ? <p className="settings-text">Waiting records arrive once the vault is unlocked or policy sync is on.</p> : null}
+      <StatusRow label={t("connections.sync.report.vaultItems")}>{report.vault_available ? t("connections.sync.report.included") : t("connections.sync.report.leftOut")}</StatusRow>
+      {report.rejected > 0 ? <p className="settings-text">{t("connections.sync.report.rejectedNote")}</p> : null}
+      {report.deferred > 0 ? <p className="settings-text">{t("connections.sync.report.waitingNote")}</p> : null}
     </div>
   );
 }
@@ -330,23 +332,23 @@ function Running({ status, onChanged }: { status: SyncStatus; onChanged: () => v
 
   return (
     <SectionList
-      title="This device"
+      title={t("connections.sync.running.title")}
       actions={
-        <Button size="compact" variant="primary" disabled={busy || status.exhausted} onClick={() => void run()}>
+        <Button variant="primary" disabled={busy || status.exhausted} onClick={() => void run()}>
           <RefreshCw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          {busy ? "Syncing…" : "Sync now"}
+          {busy ? t("connections.sync.running.syncing") : t("connections.sync.running.syncNow")}
         </Button>
       }
     >
-      {status.exhausted ? <ErrorNote>This account cannot take more changes. Local changes stay waiting until you start a new account.</ErrorNote> : null}
+      {status.exhausted ? <ErrorNote>{t("connections.sync.running.exhausted")}</ErrorNote> : null}
       <div className="settings-group">
-        <StatusRow label="Last sync">{status.last_sync ? formatDateTime(status.last_sync) : "Never"}</StatusRow>
-        <StatusRow label="Records">{status.records}</StatusRow>
-        <StatusRow label="Waiting to upload">{status.pending}</StatusRow>
-        {status.account_id ? <StatusRow label="Account"><code>{status.account_id}</code></StatusRow> : null}
-        {status.device_id ? <StatusRow label="This device"><code>{status.device_id}</code></StatusRow> : null}
+        <StatusRow label={t("connections.sync.running.lastSync")}>{status.last_sync ? formatDateTime(status.last_sync) : t("connections.sync.running.never")}</StatusRow>
+        <StatusRow label={t("connections.sync.running.records")}>{status.records}</StatusRow>
+        <StatusRow label={t("connections.sync.running.pending")}>{status.pending}</StatusRow>
+        {status.account_id ? <StatusRow label={t("connections.sync.running.account")}><code>{status.account_id}</code></StatusRow> : null}
+        {status.device_id ? <StatusRow label={t("connections.sync.running.device")}><code>{status.device_id}</code></StatusRow> : null}
       </div>
-      <FailureNote failure={failure} what="sync" onRetry={() => void run()} />
+      <FailureNote failure={failure} what={t("connections.sync.running.what")} onRetry={() => void run()} />
       {report ? <Report report={report} /> : null}
     </SectionList>
   );
@@ -381,13 +383,13 @@ function PinnedTabs() {
   }
 
   return (
-    <SectionList title="Pinned tabs" description="Pages you keep close. They follow you to your other devices once sync is on.">
-      <ResourceView resource={tabs} what="pinned tabs">
+    <SectionList title={t("connections.sync.pinned.title")} description={t("connections.sync.pinned.description")}>
+      <ResourceView resource={tabs} what={t("connections.sync.pinned.what")}>
         {({ tabs: list }) =>
           list.length === 0 ? (
-            <EmptyState icon={Pin} title="No pinned tabs" detail="Add an address below." />
+            <EmptyState icon={Pin} title={t("connections.sync.pinned.emptyTitle")} detail={t("connections.sync.pinned.emptyDetail")} />
           ) : (
-            <ul className="resource-list" aria-label="Pinned tabs">
+            <ul className="resource-list" aria-label={t("connections.sync.pinned.listLabel")}>
               {list.map((tab) => (
                 <li key={tab.id}>
                   <ResourceCard
@@ -395,7 +397,7 @@ function PinnedTabs() {
                     title={tab.title || tab.url}
                     detail={tab.title ? tab.url : undefined}
                     trailing={
-                      <IconButton label={`Unpin ${tab.title || tab.url}`} onClick={() => void remove(tab)}>
+                      <IconButton label={t("connections.sync.pinned.unpin", { name: tab.title || tab.url })} onClick={() => void remove(tab)}>
                         <Trash2 size={18} strokeWidth={ICON_STROKE} aria-hidden="true" />
                       </IconButton>
                     }
@@ -406,13 +408,13 @@ function PinnedTabs() {
           )
         }
       </ResourceView>
-      <form className="agent-link-form" onSubmit={(event) => void add(event)} aria-label="Pin a tab">
+      <form className="agent-link-form" onSubmit={(event) => void add(event)} aria-label={t("connections.sync.pinned.form")}>
         <label className="field">
-          <span>Address</span>
+          <span>{t("connections.sync.pinned.address")}</span>
           <input value={url} placeholder="https://example.com" spellCheck={false} onChange={(event) => setUrl(event.target.value)} />
         </label>
         <Button type="submit" disabled={!url.trim()}>
-          Pin
+          {t("connections.sync.pinned.pin")}
         </Button>
       </form>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
@@ -434,13 +436,13 @@ export function SyncPage() {
 
   return (
     <div className="manage-body" data-section="sync">
-      <ResourceView resource={status ? { ...resource, data: status } : resource} what="sync">
+      <ResourceView resource={status ? { ...resource, data: status } : resource} what={t("connections.sync.what")}>
         {(current) => {
           const state = stateOf(current);
           return (
             <>
               <p className="settings-text">
-                Keep settings, pinned tabs, vault items and chosen memories in step between your devices, end to end encrypted. <Badge tone={state.tone}>{state.label}</Badge>
+                {t("connections.sync.intro")} <Badge tone={state.tone}>{state.label}</Badge>
               </p>
               <Storage key={`${current.set_up}-${current.location}`} status={current} onChanged={setSaved} />
               <Account status={current} onChanged={setSaved} />

@@ -4,9 +4,10 @@ import { Avatar } from "../components/Avatar";
 import { useClient } from "../context";
 import { useTeam } from "../hooks/useAgents";
 import { errorMessage } from "../hooks/useResource";
+import { t, type MessageKey } from "../i18n";
 import { Button, Dialog, DialogActions, Select } from "../ui";
 import { ErrorNote } from "./blocks";
-import { ACCESS_OPTIONS, accessOf, activeAgents, identityLine } from "./connectionsView";
+import { accessOf, accessOptions, activeAgents, identityLine } from "./connectionsView";
 
 export type RevokeMode = "forget" | "sign_out";
 
@@ -27,17 +28,17 @@ export function RevokeDialog({
   const { connection, mode } = target;
   const signOut = mode === "sign_out";
   const separate = connection.account_space !== null;
-  const description = separate
-    ? `This deletes the separate browser profile for this ${connection.site} account, with its cookies and site data. Your other accounts on ${connection.site} are not touched, and agents lose access to this one.`
-    : signOut
-      ? `This clears the cookies and site data for ${connection.site} in the agent browser. Every account signed in to ${connection.site} there is signed out, and agents lose access.`
-      : `This removes ${connection.site} from this list along with its per-agent access settings. The browser stays signed in, so agents can still open ${connection.site} like any other site. To end the sign-in, use Sign out.`;
-  const title = separate ? `Remove this ${connection.site} account?` : signOut ? `Sign out of ${connection.site}?` : `Forget ${connection.site}?`;
+  const site = { site: connection.site };
+  const description = t(
+    separate ? "connections.revoke.separateDescription" : signOut ? "connections.revoke.signOutDescription" : "connections.revoke.forgetDescription",
+    site,
+  );
+  const title = t(separate ? "connections.revoke.separateTitle" : signOut ? "connections.revoke.signOutTitle" : "connections.revoke.forgetTitle", site);
   return (
     <Dialog open={open} onClose={onClose} title={title} description={description}>
       <form
         className="dialog-form"
-        aria-label={separate ? "Remove account" : signOut ? "Sign out" : "Forget"}
+        aria-label={t(separate ? "connections.revoke.removeAccount" : signOut ? "connections.revoke.signOut" : "connections.revoke.forget")}
         onSubmit={(event) => {
           event.preventDefault();
           onClose();
@@ -48,13 +49,13 @@ export function RevokeDialog({
         {connection.vault_item_id ? (
           <label className="conn-check">
             <input type="checkbox" checked={vaultToo} onChange={(event) => setVaultToo(event.target.checked)} />
-            <span>Also delete the saved login from the Vault</span>
+            <span>{t("connections.revoke.deleteVaultToo")}</span>
           </label>
         ) : null}
         <DialogActions>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("common.cancel")}</Button>
           <Button type="submit" variant="primary" className="confirm-danger">
-            {separate ? "Remove" : signOut ? "Sign out" : "Forget"}
+            {t(separate ? "common.remove" : signOut ? "connections.revoke.signOut" : "connections.revoke.forget")}
           </Button>
         </DialogActions>
       </form>
@@ -97,36 +98,36 @@ export function AccessDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      title="Agent access"
-      description={connection ? `Who may use the ${connection.site} sign-in (${identityLine(connection)}). “Ask me first” sends you a request before the agent uses your sign-in; allowing it once covers the page the agent is on until it opens another.` : undefined}
+      title={t("connections.accessDialog.title")}
+      description={connection ? t("connections.accessDialog.description", { site: connection.site, identity: identityLine(connection) }) : undefined}
     >
       {connection ? (
         <div className="dialog-form">
-          <ul className="resource-list conn-access-list" aria-label="Agent access">
+          <ul className="resource-list conn-access-list" aria-label={t("connections.accessDialog.title")}>
             {agents.map((agent) => (
               <li key={agent.id} className="conn-access-row">
                 <Avatar chief={agent.kind === "chief"} initials={agent.initials} color={agent.color} size={32} />
                 <span className="conn-access-name">{agent.name}</span>
                 <Select
                   variant="inline"
-                  aria-label={`${agent.name}'s access to ${connection.site}`}
+                  aria-label={t("connections.accessDialog.selectLabel", { agent: agent.name, site: connection.site })}
                   disabled={pending === agent.id}
                   value={accessOf(connection, agent)}
                   onChange={(value) => void change(connection, agent.id, value as ConnectionAccess)}
-                  options={ACCESS_OPTIONS}
+                  options={accessOptions()}
                 />
               </li>
             ))}
           </ul>
           {connection.account_space === null && connection.accounts_on_site > 1 ? (
             <p className="conn-note">
-              {connection.site} has more than one account in the agent browser, and an agent cannot tell them apart there. So every account must allow it: one “Blocked” blocks the site, and “Ask me first” on any of them asks you.
+              {t("connections.accessDialog.sharedNote", { site: connection.site })}
             </p>
           ) : null}
           {error ? <ErrorNote>{error}</ErrorNote> : null}
           <DialogActions>
             <Button variant="primary" onClick={onClose}>
-              Done
+              {t("common.done")}
             </Button>
           </DialogActions>
         </div>
@@ -135,11 +136,7 @@ export function AccessDialog({
   );
 }
 
-const COSTS = [
-  "Uses about 200–400 MB of memory while it is open, and closes after 10 minutes unused.",
-  "Takes a few seconds to start after sitting idle, and about 50–150 MB on disk.",
-  "You sign in once there, including any second step, and again whenever it expires.",
-];
+const COSTS: MessageKey[] = ["connections.addAccount.cost.memory", "connections.addAccount.cost.start", "connections.addAccount.cost.signIn"];
 
 /** A separate browser profile for one more account on a site that has no account switcher. */
 export function AddAccountDialog({
@@ -188,12 +185,12 @@ export function AddAccountDialog({
     <Dialog
       open={open}
       onClose={close}
-      title="Add another account"
-      description="Most sites let you switch accounts from their own menu, and agents use that. For a site that does not, openside can keep one more account in a separate browser profile."
+      title={t("connections.addAccount.title")}
+      description={t("connections.addAccount.description")}
     >
-      <form className="dialog-form" onSubmit={(event) => void create(event)} aria-label="Add another account">
+      <form className="dialog-form" onSubmit={(event) => void create(event)} aria-label={t("connections.addAccount.title")}>
         <label className="field">
-          <span>Site</span>
+          <span>{t("connections.addAccount.site")}</span>
           <input
             inputMode="url"
             list="conn-known-sites"
@@ -211,16 +208,16 @@ export function AddAccountDialog({
             ))}
           </datalist>
         </label>
-        <ul className="conn-costs" aria-label="What a separate profile costs">
+        <ul className="conn-costs" aria-label={t("connections.addAccount.costsLabel")}>
           {COSTS.map((line) => (
-            <li key={line}>{line}</li>
+            <li key={line}>{t(line)}</li>
           ))}
         </ul>
         {error ? <ErrorNote>{error}</ErrorNote> : null}
         <DialogActions>
-          <Button onClick={close}>Cancel</Button>
+          <Button onClick={close}>{t("common.cancel")}</Button>
           <Button type="submit" variant="primary" disabled={busy || clean.length === 0}>
-            Create and sign in
+            {t("connections.addAccount.create")}
           </Button>
         </DialogActions>
       </form>

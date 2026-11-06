@@ -3,10 +3,13 @@ import type { AgentSummary, ChannelAccount, ChannelAccountOptions, UpdateChannel
 import { Avatar } from "../components/Avatar";
 import { useClient } from "../context";
 import { errorMessage } from "../hooks/useResource";
+import { roleOf } from "../hooks/useAgents";
+import { t } from "../i18n";
 import { ErrorNote } from "../pages/blocks";
 import { Button, Dialog, DialogActions, Select, Spinner, Switch, type SelectOption } from "../ui";
 import { hasAllowList, ID_PATTERN, isLegacy, listText, parseList, serviceOf, slugify, testSummary, type ChannelKind, type ListKey } from "./services";
 import { WebhookUrl } from "./WebhookUrl";
+import "./channels.css";
 
 const SECRET_INPUT = { autoComplete: "new-password", autoCapitalize: "none", autoCorrect: "off", spellCheck: false } as const;
 const CHIEF_ID = "chief";
@@ -32,18 +35,18 @@ function teammateOptions(agents: readonly AgentSummary[] | null, current: string
   const options: SelectOption[] = [
     {
       value: "",
-      label: chief?.name ?? "Your assistant",
-      detail: "Default · answers when nobody else is chosen",
+      label: chief?.name ?? t("models.channels.yourAssistant"),
+      detail: t("models.channels.form.chiefDetail"),
       icon: chief ? <Avatar chief initials={chief.initials} color={chief.color} size={24} /> : undefined,
     },
     ...active
       .filter((agent) => agent.kind === "teammate")
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map((agent) => ({ value: agent.id, label: agent.name, detail: agent.persona.role, icon: <Avatar initials={agent.initials} color={agent.color} size={24} /> })),
+      .map((agent) => ({ value: agent.id, label: agent.name, detail: roleOf(agent), icon: <Avatar initials={agent.initials} color={agent.color} size={24} /> })),
   ];
   if (current && current !== CHIEF_ID && !options.some((option) => option.value === current)) {
     const retired = agents?.find((agent) => agent.id === current);
-    options.push({ value: current, label: retired ? `${retired.name} (retired)` : current, disabled: true });
+    options.push({ value: current, label: retired ? t("models.channels.form.retired", { name: retired.name }) : current, disabled: true });
   }
   return options;
 }
@@ -71,7 +74,6 @@ function AccountForm({
   onClose,
   onSaved,
   onTested,
-  onRemote,
 }: {
   kind: ChannelKind;
   account: ChannelAccount | null;
@@ -80,7 +82,6 @@ function AccountForm({
   onClose: () => void;
   onSaved: (message: string) => Promise<void>;
   onTested: () => Promise<void>;
-  onRemote: () => void;
 }) {
   const client = useClient();
   const service = serviceOf(kind);
@@ -132,12 +133,12 @@ function AccountForm({
     const name = label.trim();
     const next = options();
     const problem = (() => {
-      if (!name) return "Give the account a name.";
-      if (!account && !ID_PATTERN.test(id)) return "The id needs 1–40 lowercase letters, digits, - or _.";
-      if (kind === "discord" && !next.public_key) return "Paste the application's public key from the Discord Developer Portal.";
-      if (kind === "telegram" && pollTimeout.trim() && !(Number.isInteger(next.poll_timeout_secs) && (next.poll_timeout_secs ?? 0) > 0)) return "The poll timeout is a whole number of seconds.";
-      if (enabled && !hasAllowList(next)) return "Add at least one allowed chat, channel or person before turning the account on, or save it turned off.";
-      if (secrets && (!secrets.token || (service.signingSecret && !secrets.signing))) return service.signingSecret ? "Paste both the bot token and the signing secret." : "Paste the bot token.";
+      if (!name) return t("models.channels.form.nameRequired");
+      if (!account && !ID_PATTERN.test(id)) return t("models.channels.form.idInvalid");
+      if (kind === "discord" && !next.public_key) return t("models.channels.form.publicKeyRequired");
+      if (kind === "telegram" && pollTimeout.trim() && !(Number.isInteger(next.poll_timeout_secs) && (next.poll_timeout_secs ?? 0) > 0)) return t("models.channels.form.pollInvalid");
+      if (enabled && !hasAllowList(next)) return t("models.channels.form.allowListRequired");
+      if (secrets && (!secrets.token || (service.signingSecret && !secrets.signing))) return service.signingSecret ? t("models.channels.form.tokenAndSecretRequired") : t("models.channels.form.tokenRequired");
       return null;
     })();
     if (problem) {
@@ -157,10 +158,10 @@ function AccountForm({
         if (JSON.stringify(next) !== JSON.stringify(account.options)) patch.options = next;
         if (credentials) patch.credentials = credentials;
         if (Object.keys(patch).length) await client.updateChannelAccount(kind, account.id, patch);
-        await onSaved(credentials ? `${name} saved with new credentials.` : `${name} saved.`);
+        await onSaved(credentials ? t("models.channels.form.savedWithCredentials", { name }) : t("models.channels.form.saved", { name }));
       } else if (credentials) {
         await client.addChannelAccount(kind, { id, label: name, enabled, agent_id: agentId || null, options: next, credentials });
-        await onSaved(`${name} added.`);
+        await onSaved(t("models.channels.form.added", { name }));
       }
       onClose();
     } catch (cause) {
@@ -188,8 +189,8 @@ function AccountForm({
   const legacy = account !== null && isLegacy(account);
 
   return (
-    <form className="dialog-form channel-form" onSubmit={(event) => void submit(event)} aria-label={`${service.name} account`}>
-      <Field id="channel-name" label="Name">
+    <form className="dialog-form channel-form" onSubmit={(event) => void submit(event)} aria-label={t("models.channels.form.label", { service: service.name })}>
+      <Field id="channel-name" label={t("models.dialog.name")}>
         <input
           id="channel-name"
           value={label}
@@ -197,14 +198,14 @@ function AccountForm({
             setLabel(event.target.value);
             if (!account && !idTouched) setId(slugify(event.target.value));
           }}
-          placeholder="Work, Personal, Support…"
+          placeholder={t("models.channels.form.namePlaceholder")}
           maxLength={128}
           autoFocus
           required
         />
       </Field>
       {account ? null : (
-        <Field id="channel-id" label="Account id" help="Lowercase letters, digits, - and _. It names this account in the address and cannot change later.">
+        <Field id="channel-id" label={t("models.channels.form.id")} help={t("models.channels.form.idHelp")}>
           <input
             id="channel-id"
             value={id}
@@ -221,15 +222,15 @@ function AccountForm({
           />
         </Field>
       )}
-      <Field id="channel-teammate" label="Answers as" help="New conversations on this account go to this teammate. Existing conversations keep theirs.">
+      <Field id="channel-teammate" label={t("models.channels.form.answersAs")} help={t("models.channels.form.answersAsHelp")}>
         <Select id="channel-teammate" variant="field" aria-describedby="channel-teammate-help" value={agentId} onChange={setAgentId} options={teammateOptions(agents, agentId)} />
       </Field>
 
       <div className="channel-section" role="group" aria-labelledby="channel-who-title">
-        <h3 id="channel-who-title">Who may talk to it</h3>
-        <p className="field-help">Add at least one before turning the account on. Separate ids with commas.</p>
+        <h3 id="channel-who-title">{t("models.channels.form.who")}</h3>
+        <p className="field-help">{t("models.channels.form.whoHelp")}</p>
         {service.lists.map((list) => (
-          <Field key={list.key} id={`channel-${list.key}`} label={list.label} help={list.hint}>
+          <Field key={list.key} id={`channel-${list.key}`} label={t(list.label)} help={t(list.hint)}>
             <input
               id={`channel-${list.key}`}
               value={lists[list.key]}
@@ -242,37 +243,37 @@ function AccountForm({
           </Field>
         ))}
         {kind === "discord" ? (
-          <Field id="channel-public-key" label="Application public key" help="From General Information in the Discord Developer Portal. openside uses it to check that callbacks really come from Discord.">
-            <input id="channel-public-key" value={publicKey} onChange={(event) => setPublicKey(event.target.value)} placeholder="64 hexadecimal characters" aria-describedby="channel-public-key-help" autoCapitalize="none" spellCheck={false} />
+          <Field id="channel-public-key" label={t("models.channels.form.publicKey")} help={t("models.channels.form.publicKeyHelp")}>
+            <input id="channel-public-key" value={publicKey} onChange={(event) => setPublicKey(event.target.value)} placeholder={t("models.channels.form.publicKeyPlaceholder")} aria-describedby="channel-public-key-help" autoCapitalize="none" spellCheck={false} />
           </Field>
         ) : null}
         {kind === "telegram" ? (
-          <Field id="channel-poll" label="Poll timeout (seconds)" help="Optional. How long each wait for new messages lasts.">
+          <Field id="channel-poll" label={t("models.channels.form.poll")} help={t("models.channels.form.pollHelp")}>
             <input id="channel-poll" type="number" min={1} inputMode="numeric" value={pollTimeout} onChange={(event) => setPollTimeout(event.target.value)} placeholder="30" aria-describedby="channel-poll-help" />
           </Field>
         ) : null}
       </div>
 
       <div className="channel-section" role="group" aria-labelledby="channel-credentials-title">
-        <h3 id="channel-credentials-title">Credentials</h3>
+        <h3 id="channel-credentials-title">{t("models.channels.form.credentials")}</h3>
         {replacing ? (
           <>
             <p className="field-help">
               {legacy
-                ? "This account still reads its credentials from config.toml. Paste them here to move it into the vault; its conversations are kept."
-                : "Stored encrypted in the vault on the computer running openside, and never shown again."}
+                ? t("models.channels.form.legacyReplace")
+                : t("models.channels.form.stored")}
             </p>
-            <Field id="channel-token" label="Bot token">
+            <Field id="channel-token" label={t("models.channels.form.token")}>
               <input id="channel-token" name="token" type="password" {...SECRET_INPUT} data-1p-ignore data-lpignore="true" />
             </Field>
             {service.signingSecret ? (
-              <Field id="channel-signing" label="Signing secret" help="Basic Information → App Credentials in your Slack app. Both values replace the old ones together.">
+              <Field id="channel-signing" label={t("models.channels.form.signing")} help={t("models.channels.form.signingHelp")}>
                 <input id="channel-signing" name="signing_secret" type="password" {...SECRET_INPUT} aria-describedby="channel-signing-help" data-1p-ignore data-lpignore="true" />
               </Field>
             ) : null}
             {account ? (
-              <Button variant="ghost" size="compact" className="channel-keep" onClick={() => setReplacing(false)}>
-                {legacy ? "Not now" : "Keep the current credentials"}
+              <Button variant="ghost" className="channel-keep" onClick={() => setReplacing(false)}>
+                {legacy ? t("models.channels.form.notNow") : t("models.channels.form.keep")}
               </Button>
             ) : null}
           </>
@@ -280,11 +281,11 @@ function AccountForm({
           <div className="channel-credentials-kept">
             <p className="field-help">
               {legacy
-                ? "This account still reads its credentials from config.toml. Moving them into the vault lets you manage and rotate them here; its conversations are kept."
-                : "Stored encrypted in the vault. They are never shown, and a new set replaces the old one."}
+                ? t("models.channels.form.legacyKept")
+                : t("models.channels.form.kept")}
             </p>
-            <Button size="compact" onClick={() => setReplacing(true)}>
-              {legacy ? "Move to vault" : "Replace credentials"}
+            <Button onClick={() => setReplacing(true)}>
+              {legacy ? t("models.channels.moveToVault") : t("models.channels.form.replace")}
             </Button>
           </div>
         )}
@@ -292,33 +293,33 @@ function AccountForm({
 
       {service.callback ? (
         <div className="channel-section" role="group" aria-labelledby="channel-callback-title">
-          <h3 id="channel-callback-title">Callback address</h3>
+          <h3 id="channel-callback-title">{t("models.channels.form.callback")}</h3>
           {account?.webhook_url ? (
             <>
-              <p className="field-help">{service.callback.steps}</p>
-              <WebhookUrl account={account} onRemote={onRemote} />
+              <p className="field-help">{t(service.callback.steps)}</p>
+              <WebhookUrl account={account} />
             </>
           ) : (
-            <p className="field-help">After you save, the address to paste into {service.name} appears here and on the account's row.</p>
+            <p className="field-help">{t("models.channels.form.callbackLater", { service: service.name })}</p>
           )}
         </div>
       ) : null}
 
       <div className="channel-enable">
         <label htmlFor="channel-enabled">
-          <strong>Turn on</strong>
-          <span className="field-help">{account ? "Off stops this account only." : "You can also save it off and turn it on later."}</span>
+          <strong>{t("models.channels.form.turnOn")}</strong>
+          <span className="field-help">{account ? t("models.channels.form.offHelp") : t("models.channels.form.offNewHelp")}</span>
         </label>
-        <Switch id="channel-enabled" label={`Turn on ${label.trim() || "this account"}`} checked={enabled} onChange={setEnabled} />
+        <Switch id="channel-enabled" label={label.trim() ? t("models.channels.turnOnNamed", { name: label.trim() }) : t("models.channels.turnOnThis")} checked={enabled} onChange={setEnabled} />
       </div>
 
       {account ? (
         <div className="channel-test-row">
-          <Button size="compact" onClick={() => void runTest()} disabled={testing || !account.secret_present}>
+          <Button onClick={() => void runTest()} disabled={testing || !account.secret_present}>
             {testing ? <Spinner size={14} /> : null}
-            Test connection
+            {t("models.channels.test")}
           </Button>
-          <span className="field-help">Checks the saved credentials with {service.name}. It never sends a message{service.callback ? " and does not check the callback address" : ""}.</span>
+          <span className="field-help">{t(service.callback ? "models.channels.form.testHelpCallback" : "models.channels.form.testHelp", { service: service.name })}</span>
           {test ? (
             <p role="status" className={test.ok ? "channel-result" : "channel-result channel-result--bad"}>
               {test.text}
@@ -329,9 +330,9 @@ function AccountForm({
 
       {error ? <ErrorNote>{error}</ErrorNote> : null}
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("common.cancel")}</Button>
         <Button type="submit" variant="primary" disabled={busy}>
-          {busy ? "Saving…" : account ? "Save" : "Add account"}
+          {busy ? t("common.saving") : account ? t("common.save") : t("models.channels.form.addAccount")}
         </Button>
       </DialogActions>
     </form>
@@ -348,7 +349,6 @@ export function AccountDialog({
   onClose,
   onSaved,
   onTested,
-  onRemote,
 }: {
   open: boolean;
   kind: ChannelKind;
@@ -359,7 +359,6 @@ export function AccountDialog({
   onClose: () => void;
   onSaved: (message: string) => Promise<void>;
   onTested: () => Promise<void>;
-  onRemote: () => void;
 }) {
   const service = serviceOf(kind);
   return (
@@ -367,10 +366,10 @@ export function AccountDialog({
       open={open}
       onClose={onClose}
       size="wide"
-      title={account ? `Edit ${account.label}` : `Add ${service.name} account`}
-      description={account ? `${service.name} · ${account.id}` : service.blurb}
+      title={account ? t("models.channels.form.editTitle", { name: account.label }) : t("models.channels.form.addTitle", { service: service.name })}
+      description={account ? `${service.name} · ${account.id}` : t(service.blurb)}
     >
-      <AccountForm kind={kind} account={account} replaceCredentials={replaceCredentials} agents={agents} onClose={onClose} onSaved={onSaved} onTested={onTested} onRemote={onRemote} />
+      <AccountForm kind={kind} account={account} replaceCredentials={replaceCredentials} agents={agents} onClose={onClose} onSaved={onSaved} onTested={onTested} />
     </Dialog>
   );
 }

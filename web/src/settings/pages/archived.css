@@ -1,0 +1,20 @@
+/*
+ * Archived chats' empty card, measured against Aside (vm2/archived-0): a 12px glyph in the 32px
+ * tile, 13px under the tile to the title, a 14px description 6px under it, and the tile 52px
+ * below the card's top. Scoped here because no other Aside capture shows the shared empty state
+ * to confirm these values for Passwords or Skills.
+ */
+.archived-empty .ui-empty {
+  padding: 26px 24px 28px;
+}
+.archived-empty .ui-empty-tile {
+  margin-bottom: 13px;
+}
+.archived-empty .ui-empty-tile > svg {
+  width: 12px;
+  height: 12px;
+}
+.archived-empty .ui-empty-description {
+  margin-top: 6px;
+  font-size: var(--text-md);
+}

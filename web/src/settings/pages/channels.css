@@ -1,0 +1,100 @@
+/*
+ * Settings › Channels: one card of platform rows (Aside's 32px logo tile, name, second line and
+ * the grey + tile), each followed by its accounts. A platform keeps the card's 1px hairlines
+ * between its rows, and an account's avatar lines up under the platform name.
+ */
+
+.channel-platform {
+  display: grid;
+  gap: 1px;
+  background: var(--row-divider);
+}
+
+/* Aside: the tile sits 10px inside the card and the name 10px after it. */
+.channel-platform > .ui-row {
+  gap: 10px;
+  padding-left: 10px;
+}
+
+.channel-logo {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-control);
+  color: #ffffff;
+}
+.channel-logo[data-kind="telegram"] {
+  background: #2aabee;
+}
+.channel-logo[data-kind="slack"] {
+  background: #4a154b;
+}
+.channel-logo[data-kind="discord"] {
+  background: #5865f2;
+}
+.channel-logo > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.channel-platform .ui-row-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Aside's + is a 30px grey tile with a light glyph, not a bare icon button. */
+.channel-add.ui-icon-button {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-control);
+  background: var(--empty-tile);
+  color: color-mix(in srgb, var(--muted) 70%, var(--card-bg));
+}
+.channel-add.ui-icon-button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--muted);
+}
+
+/* 10px row padding + 32px tile + 10px gap: the account's avatar starts under the platform name. */
+.channel-account {
+  background: var(--card-bg);
+}
+.channel-account > .ui-row {
+  padding-left: 52px;
+}
+.channel-account .ui-row-description {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+.channel-account-route {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.channel-account-route strong {
+  color: var(--row-title);
+  font-weight: var(--weight-medium);
+}
+/* A flex item drops a leading space, so the separator is drawn here instead of in the text. */
+.channel-account-id {
+  flex: none;
+}
+.channel-account-id::before {
+  content: "·";
+  margin: 0 4px;
+}
+.channel-account-id code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+/* The callback address, legacy hint and test result under an account, aligned with its text. */
+.channel-account-detail {
+  padding: 0 14px 12px 88px;
+}
+.channel-account-detail > :first-child {
+  margin-top: 0;
+}

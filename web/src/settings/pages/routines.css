@@ -1,0 +1,117 @@
+/* Settings › Routines (vm2/routines-0): one card of routine rows ending in "+ Create", and the routine dialog. */
+.routines-page {
+  display: grid;
+  gap: 32px;
+}
+.routines-page > .ui-section + .ui-section {
+  margin-top: 0;
+}
+
+/* The card draws hairlines as 1px gaps over its divider colour; the list keeps that grid. */
+.routines-card ul {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.routines-card .ui-row-control {
+  gap: 4px;
+}
+
+/* Aside's "+ Create": the muted 14px of an empty action, the row height of a one-line row. */
+.routines-create {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--settings-row-height-single);
+  padding: 0 10px;
+  border: 0;
+  background: var(--card-bg);
+  color: var(--row-desc);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+}
+.routines-create:hover {
+  color: var(--text);
+}
+.routines-create:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+/* Aside's plus is a 10px glyph starting 14px into the card; lucide draws it in 14/24 of its box. */
+.routines-create > svg {
+  width: 17px;
+  height: 17px;
+}
+
+.routines-form .field > span,
+.routines-form .field > label {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.routines-form textarea {
+  resize: vertical;
+  font: inherit;
+}
+.routines-hint {
+  margin: 0;
+  color: var(--row-desc);
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+.routines-existing {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+.routines-mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.routines-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.routines-inline > input[type="number"] {
+  width: 5.5rem;
+}
+.routines-when > .field {
+  flex: 1;
+  min-width: 0;
+}
+.routines-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.routines-runs {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.routines-runs li {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+.routines-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.routines-runs p {
+  margin: 0;
+  color: var(--row-desc);
+  font-size: var(--text-xs);
+}

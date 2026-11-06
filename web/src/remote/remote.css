@@ -1,6 +1,6 @@
 /*
- * Remote access and the "connect a phone" flow. Sits inside the Settings/Workspace dialogs and the
- * setup guide, so it uses the same glass-inset rows, the 0.75 / 0.8125 / 0.875 / 0.9375rem type
+ * Remote access and the "connect a phone" flow. Sits inside the Settings/Workspace dialogs, so it
+ * uses the same glass-inset rows, the 0.75 / 0.8125 / 0.875 / 0.9375rem type
  * scale and the pages.css colour rule: colour marks state only, the accent is the primary action.
  */
 
@@ -395,7 +395,7 @@
     /* iOS Safari zooms the page when a focused control's text is under 16px. */
     font-size: 16px;
   }
-  .remote-url .ui-button--compact,
+  .remote-url .ui-button,
   .remote-actions .ui-button,
   .pair-actions .ui-button,
   .pair-expiry .ui-button,
@@ -409,5 +409,70 @@
   }
   .remote-scope {
     min-height: 48px;
+  }
+}
+
+/* Settings › Developers › Remote Control (vm2/developers-0): the row's ⓘ link and the Advanced panel. */
+.remote-control-line {
+  display: block;
+}
+/* The global `:where(button)` adds a control's height and padding; this is a text link. */
+.help-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  min-height: 0;
+  margin-top: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.help-link:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+.help-link > svg {
+  flex: none;
+  width: 11px;
+  height: 11px;
+}
+.remote-advanced-chevron {
+  transition: transform var(--fast) var(--ease);
+}
+.remote-advanced-toggle[aria-expanded="true"] .remote-advanced-chevron {
+  transform: rotate(180deg);
+}
+.remote-advanced {
+  display: grid;
+  gap: 12px;
+  padding: 4px 13px 13px;
+  background: var(--card-bg);
+}
+.remote-advanced[hidden] {
+  display: none;
+}
+.remote-advanced > .remote-note {
+  margin: 0;
+}
+.remote-help {
+  display: grid;
+  gap: 10px;
+}
+.remote-help p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .remote-advanced-chevron {
+    transition: none;
   }
 }

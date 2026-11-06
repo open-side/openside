@@ -82,7 +82,7 @@ describe("ScopeNotice", () => {
   it("points an older daemon's user to Devices rather than a command", async () => {
     const fake = daemon({}, (call) => (call.path.startsWith("/v1/devices/me") ? json(404, { code: "not_found", message: "no" }) : undefined));
     show(fake.client);
-    expect(await screen.findByText(/Workspace → Devices/)).toBeInTheDocument();
+    expect(await screen.findByText(/Settings → Account/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Ask for access" })).toBeNull();
   });
 });

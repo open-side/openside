@@ -1,0 +1,162 @@
+/* Settings › General, Appearance, Account and Security & Privacy (aside-measure-settings §1–4). */
+.personal-page {
+  display: grid;
+  gap: 32px;
+}
+.personal-page > .ui-section + .ui-section {
+  margin-top: 0;
+}
+
+.personal-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--avatar-bg);
+  color: var(--avatar-fg);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.personal-avatar[data-size="40"] {
+  width: 40px;
+  height: 40px;
+  font-size: 1rem;
+}
+/* The 40px tile sits in a 60px row (§1: profile row). */
+.personal-account .ui-row {
+  min-height: 60px;
+}
+.personal-account .ui-row-leading {
+  width: auto;
+  height: auto;
+}
+
+.personal-actions,
+.personal-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.personal-name-input {
+  width: 160px;
+  height: 32px;
+}
+
+.personal-device-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.personal-device-list > li + li {
+  border-top: 1px solid var(--card-border);
+}
+
+.personal-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.personal-error {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--danger);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.personal-subheading {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.personal-languages {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+.personal-language-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.personal-language-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  font-size: 0.875rem;
+}
+.personal-language-list li > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.personal-inline-form {
+  display: flex;
+  gap: 8px;
+}
+.personal-inline-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.personal-field {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.personal-textarea {
+  width: 100%;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.personal-wide-input {
+  width: 100%;
+  height: 32px;
+}
+.personal-checks {
+  margin: 16px 0 0;
+  padding: 0;
+  border: 0;
+}
+.personal-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  font-size: 0.875rem;
+}
+.personal-check input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.personal-capture {
+  display: grid;
+  place-items: center;
+  min-height: 64px;
+  border: 1px dashed var(--control-border);
+  border-radius: var(--radius-control);
+}
+.personal-capture:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+.personal-footer {
+  margin: 4px 12px 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.personal-footer a {
+  color: var(--link);
+}
