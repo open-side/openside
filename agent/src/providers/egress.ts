@@ -395,6 +395,14 @@ let rawFetch: typeof fetch | undefined;
 export const directFetch: FetchImpl = (input, init) => (rawFetch ?? globalThis.fetch)(input, init);
 
 /**
+ * The IP literal `anthropicDirectFetch` is handing to `coworkFetch` right now, if any.
+ * `coworkFetch` dials through `node:https` synchronously, and Bun's `import * as https`
+ * namespace shares the default export `installEgress` patches, so without this exemption
+ * the process guard refuses the address `checkedFetch` already checked and pinned.
+ */
+let pinnedDispatch: string | undefined;
+
+/**
  * pi-ai's first-party Anthropic transport (it keeps that TLS profile) for the
  * direct HTTPS requests `checkedFetch` produces; anything else it would hand
  * to the guarded global `fetch`, so it goes to `directFetch` here.
@@ -402,7 +410,15 @@ export const directFetch: FetchImpl = (input, init) => (rawFetch ?? globalThis.f
 export const anthropicDirectFetch: FetchImpl = (input, init) => {
 	const url = requestUrl(input);
 	const proxied = typeof Reflect.get(init ?? {}, "proxy") === "string";
-	return url.protocol === "https:" && !proxied ? coworkFetch(input, init) : directFetch(input, init);
+	if (url.protocol !== "https:" || proxied) return directFetch(input, init);
+	const host = url.hostname.replace(/^\[|\]$/g, "");
+	if (!isIP(host)) return coworkFetch(input, init);
+	pinnedDispatch = host;
+	try {
+		return coworkFetch(input, init);
+	} finally {
+		pinnedDispatch = undefined;
+	}
 };
 
 /**
@@ -430,6 +446,7 @@ export function activeEgress(): Egress | undefined {
 function guardedHost(scheme: string, host: string | undefined, port: number | string | undefined): void {
 	const guard = active;
 	if (!guard) return;
+	if (pinnedDispatch !== undefined && host?.replace(/^\[|\]$/g, "") === pinnedDispatch) return;
 	refusing(() => guard.check(scheme, host ?? "localhost", portOf(scheme, port)));
 }
 
@@ -528,11 +545,12 @@ function wrapMethod(owner: object, name: string, guard: (args: unknown[]) => unk
  * transports are patched once.
  *
  * Gap: modules that import `node:net`/`tls`/`http`/`https` as `* as`
- * namespaces hold their own bindings, which these patches never reach. In
+ * namespaces may hold their own bindings, which these patches never reach. In
  * the omp packages that is pi-ai's `utils/proxy.ts` `connectProxiedSocket`
- * (used only by the cursor provider, which openside does not route) and
- * `cowork-fetch.ts`, which only receives requests `checkedFetch` already
- * checked and pinned.
+ * (used only by the cursor provider, which openside does not route). Under Bun
+ * the namespace of `cowork-fetch.ts` does see the patched `https.request`; it only
+ * receives requests `checkedFetch` already checked and pinned, which
+ * `anthropicDirectFetch` exempts for the duration of its synchronous dispatch.
  */
 export function installEgress(allow: Iterable<string>): Egress {
 	const first = active === undefined;

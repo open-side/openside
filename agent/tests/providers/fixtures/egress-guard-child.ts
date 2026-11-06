@@ -1,7 +1,8 @@
 // Runs in its own process: the guard patches process globals for good.
 import http from "node:http";
+import https from "node:https";
 import net from "node:net";
-import { egressResolver, installEgress } from "../../../src/providers/egress";
+import { anthropicDirectFetch, egressResolver, installEgress, makeEgressFetch } from "../../../src/providers/egress";
 
 const outcome = async (run: () => unknown): Promise<string> => {
 	try {
@@ -30,12 +31,33 @@ const server = Bun.serve({
 	port: 0,
 	fetch: request => new Response(`host=${request.headers.get("host")}`),
 });
-const answers: Record<string, string> = { "rebind.example": "10.0.0.7", "lan.test": "127.0.0.1" };
+// anthropic.test answers with a TEST-NET address nothing listens on: reaching the dial at all
+// (a timeout, not a refusal) is what proves the guard let the pinned address through.
+// anthropic6.test does the same over IPv6 (documentation prefix); mapped.example answers an
+// IPv4-mapped form of a private address through a wildcard entry.
+const answers: Record<string, { address: string; family: 4 | 6 }> = {
+	"rebind.example": { address: "10.0.0.7", family: 4 },
+	"lan.test": { address: "127.0.0.1", family: 4 },
+	"anthropic.test": { address: "192.0.2.1", family: 4 },
+	"anthropic6.test": { address: "2001:db8::1", family: 6 },
+	"mapped.example": { address: "::ffff:10.0.0.7", family: 6 },
+};
 const realLookup = egressResolver.lookup;
 egressResolver.lookup = async host => {
-	const address = answers[host];
-	return address ? [{ address, family: 4 }] : realLookup(host);
+	const answer = answers[host];
+	return answer ? [answer] : realLookup(host);
 };
+const pinnedAnthropic = (origin: string, url = `${origin}/v1/messages`, allow: string[] = []) =>
+	makeEgressFetch(
+		allow,
+		origin,
+		anthropicDirectFetch,
+	)(url, {
+		method: "POST",
+		headers: {},
+		body: "{}",
+		signal: AbortSignal.timeout(300),
+	});
 // Only a wildcard admits rebind.example, so its internal answers are refused;
 // lan.test is listed exactly, so the guard dials its loopback answer.
 const guard = installEgress(["allowed.invalid", "*.example", "lan.test"]);
@@ -59,6 +81,18 @@ const results: Record<string, string> = {
 			return error instanceof Error ? error.name : "error";
 		}
 	})(),
+	anthropicPinned: await outcome(() => pinnedAnthropic("https://anthropic.test")),
+	anthropicPinnedV6: await outcome(() => pinnedAnthropic("https://anthropic6.test")),
+	// A wildcard-admitted name whose answer is a mapped private address never gets pinned.
+	anthropicMappedPrivate: await outcome(() =>
+		pinnedAnthropic("https://api.anthropic.com", "https://mapped.example/v1/messages", ["*.example"]),
+	),
+	// The exemption covers only the pinned dispatch, never a later direct dial of that address
+	// or another spelling of it.
+	httpsLiteral: await socketOutcome(() => https.get("https://192.0.2.1/")),
+	httpsLiteralV6: await socketOutcome(() => https.get("https://[2001:db8::1]/")),
+	httpsMapped: await socketOutcome(() => https.get("https://[::ffff:192.0.2.1]/")),
+	httpsMappedPrivate: await socketOutcome(() => https.get("https://[::ffff:10.0.0.7]/")),
 };
 guard.allowEndpoint("https://collector.invalid/v1");
 results.fetchAdmitted = await outcome(async () => {

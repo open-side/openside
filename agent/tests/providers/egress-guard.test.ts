@@ -28,6 +28,13 @@ describe("egress guard", () => {
 			httpRebind: "EgressRefused",
 			webSocketRebind: "EgressRefused",
 			fetchPinned: expect.stringMatching(/^host=lan\.test:\d+$/),
+			anthropicPinned: expect.not.stringMatching(/^(EgressRefused|allowed)$/),
+			anthropicPinnedV6: expect.not.stringMatching(/^(EgressRefused|allowed)$/),
+			anthropicMappedPrivate: "EgressRefused",
+			httpsLiteral: "EgressRefused",
+			httpsLiteralV6: "EgressRefused",
+			httpsMapped: "EgressRefused",
+			httpsMappedPrivate: "EgressRefused",
 			fetchAdmitted: "allowed",
 		});
 		expect(stderr).toContain("outbound connection to https://collector.invalid:443 is not in network.allow");
