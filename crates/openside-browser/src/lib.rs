@@ -25,13 +25,13 @@ mod snapshot;
 mod snapshot_view;
 
 pub use browser::{browser_shutdown_crashes, ProfileWriteGuard};
+pub use browser::{safe_file_name, CookieBaseline, CookieKey, SAFE_NAME_BYTES};
 pub use browser::{
     ActOutcome, Action, Browser, BrowserConfig, BrowserEndpoint, BrowserEvent,
     ConnectionRestrictions, DocumentCheck, DocumentPermission, DocumentRequest, DownloadStatus,
     NavigationCheck, NavigationGuard, NodeHandle, OpenedBy, OwnerNavigationCheck, PointHit,
     PointLabel, PointerAction, Screencast, ScreencastFrame, TabInfo, PAGE_COMMANDS, VIEWPORT,
 };
-pub use browser::{CookieBaseline, CookieKey};
 pub use browser::{
     DialogClaim, DialogInfo, DownloadInfo, FileChooserInfo, PageEvent, ScreenshotArea,
     ScreenshotClip,
@@ -42,8 +42,10 @@ pub use browser::{
 };
 pub use browser::{FormFieldBinding, FrameHit, FrameInfo};
 pub use gateway::{
-    FocusDecision, Gateway, GatewayConfig, GatewayEvent, GatewayEventError, GatewayOwner,
-    GatewayScreenshot, GatewayTab, GatewayTabs, EVENT_BUFFER as GATEWAY_EVENT_BUFFER,
+    BrowserPrefUpdate, BrowserPrefs, CookiePolicy, FocusDecision, Gateway, GatewayConfig,
+    GatewayEvent, GatewayEventError, GatewayOwner, GatewayScreenshot, GatewayTab, GatewayTabs,
+    NativeTool, SearchEngine, SearchEngines, EVENT_BUFFER as GATEWAY_EVENT_BUFFER,
+    NATIVE_TOOLS_CAPABILITY, PERSON_ROLE, PERSON_SESSION, PREFS_CAPABILITY,
 };
 pub use snapshot::{RefTarget, Snapshot, SnapshotDiff, SnapshotNode};
 pub use snapshot_view::{Hunk, Omission, ScopeHint, SnapshotPatch, SnapshotView};

@@ -86,12 +86,13 @@ impl Browser {
         state.closing_tabs.insert(tab.to_owned());
         drop(state);
         let inner = std::sync::Arc::clone(&self.inner);
-        let (tab, root, url, pid) = (
+        let (tab, root, url) = (
             tab.to_owned(),
             self.profile_path().to_owned(),
             self.ws_url.clone(),
-            self.process_id(),
         );
+        #[cfg(unix)]
+        let pid = self.process_id();
         let (finished, completion) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let mut replacement = None;

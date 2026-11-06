@@ -267,6 +267,130 @@ pub struct GatewayScreenshot {
     pub png: Vec<u8>,
 }
 
+/// Capability the person's own browser (person-role gateway) advertises for `prefs.get` and
+/// `prefs.set` on its startup profile. Agent browsers never serve it.
+pub const PREFS_CAPABILITY: &str = "browser_prefs";
+/// Capability the person-role gateway advertises for `native.open`.
+pub const NATIVE_TOOLS_CAPABILITY: &str = "native_tools";
+/// Discovery role of the person's own browser.
+pub const PERSON_ROLE: &str = "person";
+/// The fixed session scope requests to a person-role gateway carry.
+pub const PERSON_SESSION: &str = "person";
+
+/// A native tool of the person's browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeTool {
+    /// The Task manager.
+    TaskManager,
+    /// Developer tools for the selected tab of the person's most recently active window.
+    DevTools,
+}
+
+impl NativeTool {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::TaskManager => "task_manager",
+            Self::DevTools => "devtools",
+        }
+    }
+}
+
+/// Allowlisted settings of the browser's own (non-incognito) profile, read from Chromium.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct BrowserPrefs {
+    /// `browser.enable_spellchecking`.
+    pub spell_check: bool,
+    /// `intl.accept_languages`, in order.
+    pub accept_languages: Vec<String>,
+    /// Third-party cookie blocking as chrome://settings shows it.
+    pub third_party_cookies: CookiePolicy,
+    /// Default auto picture-in-picture content setting is not `block`; None without a map.
+    pub auto_picture_in_picture: Option<bool>,
+    /// Default page zoom in percent; None without zoom preferences.
+    pub default_zoom_percent: Option<u16>,
+    /// Built-in search engines and the current default.
+    pub search_engine: SearchEngines,
+    /// The openside extension's global `mini-popup` command is bound; None while the extension
+    /// is not enabled in the profile.
+    pub mini_popup: Option<bool>,
+}
+
+/// Third-party cookie policy.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CookiePolicy {
+    /// Allowed outside incognito.
+    Allow,
+    /// Blocked.
+    Block,
+}
+
+/// Prepopulated search engines only; user-added engines and URLs are never sent.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SearchEngines {
+    /// Prepopulated id of the default, None when it is not a built-in engine.
+    pub current: Option<u32>,
+    /// Selectable engines.
+    pub options: Vec<SearchEngine>,
+}
+
+/// One prepopulated search engine.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SearchEngine {
+    /// Chromium prepopulated engine id.
+    pub id: u32,
+    /// Display name.
+    pub name: String,
+}
+
+/// One `prefs.set` write; the browser validates the value again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BrowserPrefUpdate {
+    /// Spell check on or off.
+    SpellCheck(bool),
+    /// Preferred page languages, most preferred first.
+    AcceptLanguages(Vec<String>),
+    /// Third-party cookie blocking.
+    ThirdPartyCookies(CookiePolicy),
+    /// Automatic picture-in-picture.
+    AutoPictureInPicture(bool),
+    /// Default zoom from chrome://settings' preset list.
+    DefaultZoomPercent(u16),
+    /// Prepopulated engine id from [`SearchEngines::options`].
+    SearchEngine(u32),
+    /// Bind or unbind the openside extension's global mini popup shortcut.
+    MiniPopup(bool),
+}
+
+impl BrowserPrefUpdate {
+    /// The wire name of the setting, without its value.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::SpellCheck(_) => "spell_check",
+            Self::AcceptLanguages(_) => "accept_languages",
+            Self::ThirdPartyCookies(_) => "third_party_cookies",
+            Self::AutoPictureInPicture(_) => "auto_picture_in_picture",
+            Self::DefaultZoomPercent(_) => "default_zoom_percent",
+            Self::SearchEngine(_) => "search_engine",
+            Self::MiniPopup(_) => "mini_popup",
+        }
+    }
+
+    fn payload(&self) -> Value {
+        let value = match self {
+            Self::SpellCheck(on) | Self::AutoPictureInPicture(on) | Self::MiniPopup(on) => {
+                json!(on)
+            }
+            Self::AcceptLanguages(tags) => json!(tags),
+            Self::ThirdPartyCookies(CookiePolicy::Allow) => json!("allow"),
+            Self::ThirdPartyCookies(CookiePolicy::Block) => json!("block"),
+            Self::DefaultZoomPercent(percent) => json!(percent),
+            Self::SearchEngine(id) => json!(id),
+        };
+        json!({"name": self.name(), "value": value})
+    }
+}
+
 /// One pushed browser event in connection order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GatewayEvent {
@@ -387,6 +511,9 @@ struct Discovery {
     instance_id: String,
     socket: String,
     token_file: String,
+    /// `person` for the person's own browser; `agent` for a daemon-launched one.
+    #[serde(default)]
+    role: Option<String>,
 }
 
 fn invalid(reason: &'static str) -> BrowserError {
@@ -639,6 +766,62 @@ impl Gateway {
         .await
     }
 
+    #[cfg(not(target_os = "linux"))]
+    /// The person's own browser publishes its gateway only on Linux.
+    pub async fn connect_person(
+        _runtime_dir: &std::path::Path,
+        _command_timeout: Duration,
+    ) -> Result<Option<Self>, BrowserError> {
+        Ok(None)
+    }
+
+    #[cfg(target_os = "linux")]
+    /// Connect to the person's own browser: the person-role gateway that `openside-browser`
+    /// starts under `<runtime_dir>/openside/browser/`. None when no such browser runs. Stale
+    /// instance directories of a browser that exited are skipped; agent instances never match.
+    pub async fn connect_person(
+        runtime_dir: &Path,
+        command_timeout: Duration,
+    ) -> Result<Option<Self>, BrowserError> {
+        let browsers = runtime_dir.join("openside").join("browser");
+        let entries = match std::fs::read_dir(&browsers) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        check_private(&std::fs::symlink_metadata(&browsers)?, 0o700)?;
+        for entry in entries.flatten() {
+            let Some(instance_id) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(pinned) = PinnedDirectory::open(&entry.path()) else {
+                continue;
+            };
+            let found = pinned.discovery(&instance_id).and_then(|discovery| {
+                if discovery.role.as_deref() != Some(PERSON_ROLE) {
+                    return Err(invalid("not a person gateway"));
+                }
+                Ok((pinned.token()?, pinned.socket()?))
+            });
+            let Ok((token, socket)) = found else {
+                continue;
+            };
+            if let Ok(gateway) = Self::connect(
+                &socket,
+                &instance_id,
+                &token,
+                PERSON_SESSION.to_owned(),
+                None,
+                command_timeout,
+            )
+            .await
+            {
+                return Ok(Some(gateway));
+            }
+        }
+        Ok(None)
+    }
+
     #[cfg(target_os = "linux")]
     /// Authenticate over an already discovered socket.
     async fn connect(
@@ -848,6 +1031,70 @@ impl Gateway {
             .await?;
         serde_json::from_value(result["tab"].clone())
             .map_err(|_| BrowserError::InvalidResponse("gateway tab"))
+    }
+
+    /// Whether the browser serves `prefs.get`/`prefs.set`.
+    pub fn supports_prefs(&self) -> bool {
+        self.capabilities
+            .iter()
+            .any(|name| name == PREFS_CAPABILITY)
+    }
+
+    /// Read the allowlisted settings of the browser's own profile.
+    pub async fn prefs(&self) -> Result<BrowserPrefs, BrowserError> {
+        self.prefs_request("prefs.get", json!({})).await
+    }
+
+    /// Write one setting and return every allowlisted value read back afterwards.
+    pub async fn set_pref(&self, update: &BrowserPrefUpdate) -> Result<BrowserPrefs, BrowserError> {
+        self.prefs_request("prefs.set", update.payload()).await
+    }
+
+    async fn prefs_request(
+        &self,
+        kind: &str,
+        payload: Value,
+    ) -> Result<BrowserPrefs, BrowserError> {
+        // Older patched builds answer unknown types with invalid_request, which would read
+        // as a refused value; never send what the browser did not advertise.
+        if !self.supports_prefs() {
+            return Err(BrowserError::Gateway {
+                code: "unsupported".to_owned(),
+                message: "browser settings are not exposed by this build".to_owned(),
+            });
+        }
+        let result = self.request(kind, payload).await?;
+        serde_json::from_value(result).map_err(|_| BrowserError::InvalidResponse("browser prefs"))
+    }
+
+    /// False once the browser closed the connection (for example, the browser exited).
+    pub fn is_connected(&self) -> bool {
+        !self.reader.is_finished()
+    }
+
+    /// True when the gateway is the person's own browser and opens its native tools.
+    pub fn supports_native_tools(&self) -> bool {
+        self.capabilities
+            .iter()
+            .any(|name| name == NATIVE_TOOLS_CAPABILITY)
+    }
+
+    /// Open the person's Task manager or developer tools in their own browser.
+    pub async fn open_native_tool(&self, tool: NativeTool) -> Result<(), BrowserError> {
+        if !self.supports_native_tools() {
+            return Err(BrowserError::Gateway {
+                code: "unsupported".to_owned(),
+                message: "native tools are not exposed by this browser".to_owned(),
+            });
+        }
+        let result = self
+            .request("native.open", json!({"tool": tool.wire()}))
+            .await?;
+        if result["opened"] == true {
+            Ok(())
+        } else {
+            Err(BrowserError::InvalidResponse("native tool result"))
+        }
     }
 
     /// Next pushed event in connection order; see the module notes for overflow behavior.
@@ -1219,6 +1466,206 @@ mod tests {
         ));
         server.await.unwrap();
         assert_eq!(gateway.next_event().await, Err(GatewayEventError::Closed));
+    }
+
+    fn prefs_payload(spell_check: bool) -> Value {
+        json!({"spell_check":spell_check,"accept_languages":["ko","en-US"],
+            "third_party_cookies":"allow","auto_picture_in_picture":null,
+            "default_zoom_percent":100,
+            "search_engine":{"current":1,"options":[{"id":1,"name":"Google"}]}})
+    }
+
+    #[tokio::test]
+    async fn prefs_round_trip_one_allowlisted_write_and_read_back() {
+        let fixture = fixture(None);
+        let listener = listen(&fixture.launch);
+        let instance = fixture.launch.instance_id.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            server_frame(&mut stream).await;
+            server_send(
+                &mut stream,
+                json!({"kind":"welcome","v":1,"instance_id":instance,
+                    "capabilities":[PREFS_CAPABILITY]}),
+            )
+            .await;
+            let request = server_frame(&mut stream).await;
+            assert_eq!(
+                (&request["type"], &request["payload"]),
+                (&json!("prefs.get"), &json!({}))
+            );
+            server_send(
+                &mut stream,
+                json!({"v":1,"kind":"result","type":"prefs.get","id":request["id"],
+                    "payload":prefs_payload(true)}),
+            )
+            .await;
+            let request = server_frame(&mut stream).await;
+            assert_eq!(request["type"], "prefs.set");
+            assert_eq!(
+                request["payload"],
+                json!({"name":"spell_check","value":false})
+            );
+            server_send(
+                &mut stream,
+                json!({"v":1,"kind":"result","type":"prefs.set","id":request["id"],
+                    "payload":prefs_payload(false)}),
+            )
+            .await;
+            let request = server_frame(&mut stream).await;
+            assert_eq!(
+                request["payload"],
+                json!({"name":"mini_popup","value":true})
+            );
+            let mut written = prefs_payload(false);
+            written["mini_popup"] = json!(true);
+            server_send(
+                &mut stream,
+                json!({"v":1,"kind":"result","type":"prefs.set","id":request["id"],
+                    "payload":written}),
+            )
+            .await;
+            let request = server_frame(&mut stream).await;
+            assert_eq!(
+                request["payload"],
+                json!({"name":"third_party_cookies","value":"block"})
+            );
+            server_send(
+                &mut stream,
+                json!({"v":1,"kind":"error","type":"prefs.set","id":request["id"],
+                    "code":"policy_denied","message":"preference is managed","details":{}}),
+            )
+            .await;
+        });
+        let gateway = connect(&fixture, Duration::from_secs(2)).await;
+        assert!(gateway.supports_prefs());
+        let prefs = gateway.prefs().await.unwrap();
+        assert!(prefs.spell_check);
+        assert_eq!(prefs.accept_languages, ["ko", "en-US"]);
+        assert_eq!(prefs.third_party_cookies, CookiePolicy::Allow);
+        assert_eq!(prefs.auto_picture_in_picture, None);
+        assert_eq!(prefs.default_zoom_percent, Some(100));
+        assert_eq!(prefs.search_engine.current, Some(1));
+        // Builds from before the mini popup leave the field out.
+        assert_eq!(prefs.mini_popup, None);
+        let prefs = gateway
+            .set_pref(&BrowserPrefUpdate::SpellCheck(false))
+            .await
+            .unwrap();
+        assert!(!prefs.spell_check);
+        let prefs = gateway
+            .set_pref(&BrowserPrefUpdate::MiniPopup(true))
+            .await
+            .unwrap();
+        assert_eq!(prefs.mini_popup, Some(true));
+        assert!(matches!(
+            gateway
+                .set_pref(&BrowserPrefUpdate::ThirdPartyCookies(CookiePolicy::Block))
+                .await,
+            Err(BrowserError::Gateway { code, .. }) if code == "policy_denied"
+        ));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_person_gateway_is_found_by_role_and_carries_the_person_scope() {
+        // An agent instance with a live socket sits next to the person's browser.
+        let fixture = fixture(None);
+        publish(&fixture.launch);
+        let _agent = listen(&fixture.launch);
+        let person = GatewayLaunch {
+            runtime_dir: fixture.launch.runtime_dir.clone(),
+            instance_id: "fedcba9876543210".to_owned(),
+            session_id: PERSON_SESSION.to_owned(),
+            subagent_id: None,
+        };
+        let directory = person.directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        private(&directory, 0o700);
+        private(directory.parent().unwrap(), 0o700);
+        let token = directory.join(TOKEN_FILE);
+        std::fs::write(&token, format!("{TOKEN}\n")).unwrap();
+        private(&token, 0o600);
+        // `listen` publishes an agent discovery; the person browser's names its role.
+        let listener = listen(&person);
+        let discovery = directory.join(DISCOVERY_FILE);
+        std::fs::write(
+            &discovery,
+            json!({"protocol":PROTOCOL,"versions":[1],"instance_id":person.instance_id,
+                "pid":1,"socket":SOCKET_FILE,"token_file":TOKEN_FILE,"role":PERSON_ROLE})
+            .to_string(),
+        )
+        .unwrap();
+        private(&discovery, 0o600);
+        let instance = person.instance_id.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            server_frame(&mut stream).await;
+            server_send(
+                &mut stream,
+                json!({"kind":"welcome","v":1,"instance_id":instance,
+                    "capabilities":[PREFS_CAPABILITY, NATIVE_TOOLS_CAPABILITY]}),
+            )
+            .await;
+            let request = server_frame(&mut stream).await;
+            assert_eq!(
+                (
+                    &request["type"],
+                    &request["session_id"],
+                    &request["payload"]
+                ),
+                (
+                    &json!("native.open"),
+                    &json!(PERSON_SESSION),
+                    &json!({"tool":"devtools"})
+                )
+            );
+            server_send(
+                &mut stream,
+                json!({"v":1,"kind":"result","type":"native.open","id":request["id"],
+                    "payload":{"opened":true}}),
+            )
+            .await;
+        });
+        let gateway = Gateway::connect_person(fixture.root.path(), Duration::from_secs(2))
+            .await
+            .unwrap()
+            .expect("person gateway");
+        assert!(gateway.supports_prefs() && gateway.supports_native_tools());
+        gateway
+            .open_native_tool(NativeTool::DevTools)
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        let empty = tempfile::tempdir().unwrap();
+        assert!(
+            Gateway::connect_person(empty.path(), Duration::from_secs(2))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn prefs_are_never_requested_from_a_build_without_the_capability() {
+        let fixture = fixture(None);
+        let listener = listen(&fixture.launch);
+        let instance = fixture.launch.instance_id.clone();
+        let server = tokio::spawn(async move {
+            let mut stream = accept(&listener, &instance).await;
+            // The client must close without sending any request frame.
+            let mut byte = [0_u8; 1];
+            assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
+        });
+        let gateway = connect(&fixture, Duration::from_secs(2)).await;
+        assert!(!gateway.supports_prefs());
+        assert!(matches!(
+            gateway.prefs().await,
+            Err(BrowserError::Gateway { code, .. }) if code == "unsupported"
+        ));
+        drop(gateway);
+        server.await.unwrap();
     }
 
     #[tokio::test]

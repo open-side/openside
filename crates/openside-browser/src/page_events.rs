@@ -47,6 +47,15 @@ pub struct DownloadInfo {
     pub space: Option<String>,
     /// Terminal state, once Chromium reported one.
     pub status: Option<DownloadStatus>,
+    /// Bytes Chromium reported written so far.
+    pub received_bytes: u64,
+    /// Expected size; 0 while the server has not announced one.
+    pub total_bytes: u64,
+    /// Canceled by this controller because it outgrew [`Browser::set_download_limit`].
+    pub over_limit: bool,
+    /// URL of the starting tab's page when the download began: what policy judges for a
+    /// `blob:` or `data:` download, which has no origin of its own.
+    pub page_url: Option<String>,
 }
 
 /// A file chooser the page opened while interception is on (`Page.setInterceptFileChooserDialog`).
@@ -108,6 +117,11 @@ struct HubState {
     open_dialogs: HashMap<String, DialogInfo>,
     downloads: HashMap<String, DownloadInfo>,
     download_order: VecDeque<String>,
+    /// Per-file byte ceiling; `None` leaves downloads unbounded.
+    download_limit: Option<u64>,
+    /// Finished downloads whose Chromium file was deleted, with the copy the caller kept (if
+    /// any); `save_download` reads that copy instead. Evicted with the download's record.
+    released: HashMap<String, Option<std::path::PathBuf>>,
 }
 
 impl Default for PageHub {
@@ -196,6 +210,7 @@ impl PageHub {
             if state.download_order.len() >= DOWNLOAD_RECORDS {
                 if let Some(oldest) = state.download_order.pop_front() {
                     state.downloads.remove(&oldest);
+                    state.released.remove(&oldest);
                 }
             }
             state.download_order.push_back(info.guid.clone());
@@ -216,6 +231,74 @@ impl PageHub {
 
     pub(super) fn download(&self, guid: &str) -> Option<DownloadInfo> {
         self.0.state.lock().downloads.get(guid).cloned()
+    }
+
+    pub(super) fn downloads_of(&self, owner: &str) -> Vec<DownloadInfo> {
+        let state = self.0.state.lock();
+        state
+            .download_order
+            .iter()
+            .filter_map(|guid| state.downloads.get(guid))
+            .filter(|download| download.owner.as_deref() == Some(owner))
+            .cloned()
+            .collect()
+    }
+
+    pub(super) fn set_download_limit(&self, limit: Option<u64>) {
+        self.0.state.lock().download_limit = limit;
+    }
+
+    /// Marks a finished download released; `false` when it is unknown or still running. The
+    /// first release wins, so a repeated one cannot replace the kept copy `saveAs` reads.
+    pub(super) fn release(&self, guid: &str, kept: Option<std::path::PathBuf>) -> bool {
+        let mut state = self.0.state.lock();
+        if !state
+            .downloads
+            .get(guid)
+            .is_some_and(|record| record.status.is_some())
+        {
+            return false;
+        }
+        state.released.entry(guid.to_owned()).or_insert(kept);
+        true
+    }
+
+    /// `Some(kept)` once the download was released.
+    pub(super) fn released(&self, guid: &str) -> Option<Option<std::path::PathBuf>> {
+        self.0.state.lock().released.get(guid).cloned()
+    }
+
+    /// Guids of the recorded downloads Chromium is still writing.
+    pub(super) fn running_downloads(&self) -> std::collections::HashSet<String> {
+        self.0
+            .state
+            .lock()
+            .downloads
+            .values()
+            .filter(|record| record.status.is_none())
+            .map(|record| record.guid.clone())
+            .collect()
+    }
+
+    /// Records progress of a running download. Returns the record the first time it grows past
+    /// the limit (by its announced size or by what was written), so the caller cancels it once.
+    pub(super) fn download_progress(
+        &self,
+        guid: &str,
+        received: u64,
+        total: u64,
+    ) -> Option<DownloadInfo> {
+        let mut state = self.0.state.lock();
+        let limit = state.download_limit;
+        let record = state.downloads.get_mut(guid)?;
+        record.received_bytes = received;
+        record.total_bytes = total;
+        let over = limit.is_some_and(|limit| received > limit || total > limit);
+        if !over || record.over_limit || record.status.is_some() {
+            return None;
+        }
+        record.over_limit = true;
+        Some(record.clone())
     }
 
     fn open_dialog(&self, tab_id: &str) -> Option<DialogInfo> {
@@ -369,5 +452,69 @@ pub(super) fn page_event(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn started(hub: &PageHub, guid: &str) {
+        hub.download_started(DownloadInfo {
+            guid: guid.into(),
+            url: "https://files.example/a.bin".into(),
+            suggested_filename: "a.bin".into(),
+            tab_id: None,
+            owner: Some("s".into()),
+            space: None,
+            status: None,
+            received_bytes: 0,
+            total_bytes: 0,
+            over_limit: false,
+            page_url: None,
+        });
+    }
+
+    /// `handle_event` records progress before it applies the terminal state, so a download
+    /// whose first and only report is a terminal one past the limit is still `over_limit`
+    /// (the daemon reports it as `too_large`, not `canceled`).
+    #[test]
+    fn terminal_progress_past_the_limit_marks_the_download_over_limit() {
+        let hub = PageHub::default();
+        hub.set_download_limit(Some(1000));
+        for (guid, status) in [
+            ("c", DownloadStatus::Canceled),
+            ("d", DownloadStatus::Completed),
+        ] {
+            started(&hub, guid);
+            assert!(hub.download_progress(guid, 5000, 0).is_some());
+            hub.download_finished(guid, status);
+            let record = hub.download(guid).unwrap();
+            assert!(record.over_limit, "{guid}");
+            assert_eq!(record.received_bytes, 5000);
+        }
+        started(&hub, "small");
+        assert!(hub.download_progress("small", 10, 10).is_none());
+        hub.download_finished("small", DownloadStatus::Canceled);
+        assert!(!hub.download("small").unwrap().over_limit);
+        // Reported once: later progress for a download already over the limit cancels nothing.
+        started(&hub, "twice");
+        assert!(hub.download_progress("twice", 2000, 0).is_some());
+        assert!(hub.download_progress("twice", 3000, 0).is_none());
+    }
+
+    #[test]
+    fn a_download_is_released_once_and_keeps_its_first_copy() {
+        let hub = PageHub::default();
+        started(&hub, "g");
+        assert!(
+            !hub.release("g", None),
+            "a running download is not released"
+        );
+        hub.download_finished("g", DownloadStatus::Completed);
+        let kept = std::path::PathBuf::from("/artifacts/s/downloads/g/a.bin");
+        assert!(hub.release("g", Some(kept.clone())));
+        assert!(hub.release("g", None));
+        assert_eq!(hub.released("g"), Some(Some(kept)));
     }
 }

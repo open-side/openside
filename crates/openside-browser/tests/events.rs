@@ -334,6 +334,100 @@ async fn space_downloads_stay_in_the_space_folder() {
     browser.shutdown().await.ok();
 }
 
+/// `read_download` reads at most `max + 1` bytes of the file as it is on disk, which may have
+/// grown past what Chromium announced and wrote; it serves only the owner, and once the raw
+/// file is swapped for a link to a file outside the profile neither a read nor a save follows it.
+#[tokio::test]
+async fn download_reads_are_bounded_and_never_follow_a_swapped_source() {
+    use std::io::Write;
+    let _serial = serial().await;
+    let Some(config) = browser_config() else {
+        return;
+    };
+    let fixture = Fixture::start().await;
+    let (browser, _controller) = Browser::launch(config).await.unwrap();
+    let tab = browser
+        .create_agent_tab("alice", &fixture.page())
+        .await
+        .unwrap();
+    ready(&browser, &tab).await;
+    let mut events = browser.page_events();
+    browser
+        .evaluate(&tab.id, "document.getElementById('get').click(); true")
+        .await
+        .unwrap();
+    let PageEvent::DownloadStarted(download) = next_page_event(&mut events, |event| {
+        matches!(event, PageEvent::DownloadStarted(_))
+    })
+    .await
+    else {
+        unreachable!()
+    };
+    let guid = download.guid;
+    browser
+        .wait_download(&guid, std::time::Instant::now() + Duration::from_secs(10))
+        .await
+        .unwrap();
+    let body = b"downloaded bytes\n";
+    let record = browser.download(&guid).unwrap();
+    assert_eq!(record.received_bytes, body.len() as u64);
+
+    assert_eq!(
+        browser.read_download("alice", &guid, 100).await.unwrap(),
+        body
+    );
+    assert_eq!(
+        browser.read_download("alice", &guid, 17).await.unwrap(),
+        body,
+        "a file exactly at the ceiling reads whole"
+    );
+    assert_eq!(
+        browser.read_download("alice", &guid, 4).await.unwrap(),
+        b"downl",
+        "one byte past the ceiling tells the caller it is over"
+    );
+    assert!(matches!(
+        browser.read_download("mallory", &guid, 100).await,
+        Err(BrowserError::OwnershipDenied(_))
+    ));
+
+    // Bytes written after completion count: the bound applies to the file, not the announcement.
+    let raw = browser.profile_path().join("downloads").join(&guid);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&raw)
+        .unwrap()
+        .write_all(&[b'+'; 100])
+        .unwrap();
+    let grown = browser.read_download("alice", &guid, 1000).await.unwrap();
+    assert_eq!(grown.len(), body.len() + 100);
+    assert!(grown.len() as u64 > record.received_bytes.max(record.total_bytes));
+    assert_eq!(
+        browser
+            .read_download("alice", &guid, 50)
+            .await
+            .unwrap()
+            .len(),
+        51
+    );
+
+    // Swapped for a link to a file outside the profile: refused, nothing read or copied.
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("secret");
+    std::fs::write(&secret, b"outside secret").unwrap();
+    std::fs::remove_file(&raw).unwrap();
+    std::os::unix::fs::symlink(&secret, &raw).unwrap();
+    assert!(browser.read_download("alice", &guid, 1000).await.is_err());
+    assert!(browser
+        .save_download("alice", &guid, Some("leak.txt"))
+        .await
+        .is_err());
+    let folder = browser.session_downloads("alice").await.unwrap();
+    assert!(!folder.join("leak.txt").exists());
+    assert_eq!(std::fs::read(&secret).unwrap(), b"outside secret");
+    browser.shutdown().await.ok();
+}
+
 /// A popup is reported with its opener and keeps the opener's session and space.
 #[tokio::test]
 async fn popups_are_reported_with_opener_owner_and_space() {

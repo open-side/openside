@@ -20,8 +20,8 @@ use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use openside_browser::{
-    Browser, BrowserConfig, BrowserError, BrowserEvent, Gateway, GatewayConfig, GatewayEvent,
-    GatewayOwner, GatewayScreenshot, OpenedBy,
+    Browser, BrowserConfig, BrowserError, BrowserEvent, BrowserPrefUpdate, CookiePolicy, Gateway,
+    GatewayConfig, GatewayEvent, GatewayOwner, GatewayScreenshot, OpenedBy,
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -46,6 +46,7 @@ setInterval(() => console.debug(bait), 50);
 const CHILD: &str = r#"<!doctype html><html lang="en"><head><title>Child</title></head>
 <body><h1>Child</h1></body></html>"#;
 
+/// The agent role; the person role advertises only `browser_prefs` and `native_tools`.
 const CAPABILITIES: [&str; 8] = [
     "tab_lifecycle",
     "focus",
@@ -196,6 +197,96 @@ impl Patched {
             .unwrap()
             .unwrap_or_else(|| panic!("gateway does not know target {target}"))
     }
+}
+
+/// The person's own browser as `tools/openside-browser` starts it: a person-role gateway for
+/// the Default profile, and no agent gateway for `Browser::launch` to attach.
+struct Person {
+    browser: Browser,
+    gateway: Gateway,
+    _runtime: TempDir,
+}
+
+impl Person {
+    async fn launch(executable: &Path, args: &[String], extensions: Vec<PathBuf>) -> Self {
+        let runtime = private_runtime_dir();
+        let launcher = runtime.path().join("chrome-launcher");
+        let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+        let mut script = format!("#!/bin/sh\nexec {}", quote(&executable.to_string_lossy()));
+        for arg in [
+            "--openside-gateway-instance-id=person-0123456789abcdef".to_owned(),
+            format!(
+                "--openside-gateway-runtime-dir={}",
+                runtime.path().display()
+            ),
+            "--openside-gateway-role=person".to_owned(),
+            "--profile-directory=Default".to_owned(),
+        ]
+        .iter()
+        .chain(args)
+        {
+            script.push(' ');
+            script.push_str(&quote(arg));
+        }
+        script.push_str(" \"$@\"\n");
+        std::fs::write(&launcher, script).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = BrowserConfig {
+            gateway: None,
+            extensions,
+            ..BrowserConfig::new(launcher)
+        };
+        let (browser, _events) = Browser::launch(config).await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let gateway = loop {
+            if let Some(gateway) = Gateway::connect_person(runtime.path(), Duration::from_secs(10))
+                .await
+                .unwrap()
+            {
+                break gateway;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "person browser did not publish a gateway; runtime dir holds {:?}",
+                walk(runtime.path())
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        Self {
+            browser,
+            gateway,
+            _runtime: runtime,
+        }
+    }
+}
+
+/// A preference as chrome://settings in `browser` reads it.
+async fn settings_pref(browser: &Browser, key: &str) -> Value {
+    let mut raw = RawCdp::connect(browser).await;
+    let (_, session) = raw.open("chrome://settings/languages", false).await;
+    let expression = format!(
+        r#"(async () => {{
+        for (let i = 0; i < 100 && !(window.chrome && chrome.settingsPrivate); i++) {{
+            await new Promise(r => setTimeout(r, 100));
+        }}
+        return await new Promise(r => chrome.settingsPrivate.getPref({key:?}, p => r(p.value)));
+    }})()"#
+    );
+    // The evaluation can start in the blank document the navigation then replaces.
+    for _ in 0..20 {
+        let reply = raw
+            .reply(
+                Some(&session),
+                "Runtime.evaluate",
+                json!({"expression":expression,"awaitPromise":true,"returnByValue":true}),
+            )
+            .await;
+        if reply.get("error").is_none() {
+            return reply["result"]["result"]["value"].clone();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("chrome://settings never answered for {key}");
 }
 
 async fn gateway_event(
@@ -496,7 +587,7 @@ async fn gateway_hello_publishes_private_discovery_and_rejects_bad_clients() {
         json!({"protocol":"openside.browser","versions":[1],
             "instance_id":patched.gateway().instance_id(),
             "pid":patched.browser.process_id(),
-            "socket":"gateway.sock","token_file":"gateway.token"})
+            "socket":"gateway.sock","token_file":"gateway.token","role":"agent"})
     );
     let token = std::fs::read_to_string(directory.join("gateway.token")).unwrap();
     assert!(!discovery.to_string().contains(token.trim()));
@@ -1523,6 +1614,1348 @@ async fn native_ux_defaults_are_enabled() {
     }
     eprintln!("patched native UX: {}", status["ux"]);
     patched.browser.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn browser_prefs_read_and_write_the_profile_through_the_gateway() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let person = Person::launch(&executable, &[], Vec::new()).await;
+    let gateway = &person.gateway;
+    let before = gateway.prefs().await.unwrap();
+    assert!(before.spell_check, "{before:?}");
+    assert!(!before.accept_languages.is_empty(), "{before:?}");
+    assert_eq!(before.default_zoom_percent, Some(100));
+    // A fresh profile has not loaded its engines; the browser loads them first.
+    assert!(!before.search_engine.options.is_empty(), "{before:?}");
+    assert!(
+        before
+            .search_engine
+            .options
+            .iter()
+            .all(|engine| engine.id > 0 && !engine.name.is_empty()),
+        "{before:?}"
+    );
+
+    let after = gateway
+        .set_pref(&BrowserPrefUpdate::SpellCheck(false))
+        .await
+        .unwrap();
+    assert!(!after.spell_check);
+    let after = gateway
+        .set_pref(&BrowserPrefUpdate::AcceptLanguages(vec![
+            "ko".into(),
+            "en-US".into(),
+        ]))
+        .await
+        .unwrap();
+    assert_eq!(after.accept_languages, ["ko", "en-US"]);
+    // Flip whatever the build defaults to (ungoogled-chromium blocks).
+    let (cookies, cookie_mode) = match before.third_party_cookies {
+        CookiePolicy::Block => (CookiePolicy::Allow, 2),
+        CookiePolicy::Allow => (CookiePolicy::Block, 1),
+    };
+    let after = gateway
+        .set_pref(&BrowserPrefUpdate::ThirdPartyCookies(cookies))
+        .await
+        .unwrap();
+    assert_eq!(after.third_party_cookies, cookies);
+    let after = gateway
+        .set_pref(&BrowserPrefUpdate::AutoPictureInPicture(false))
+        .await
+        .unwrap();
+    assert_eq!(after.auto_picture_in_picture, Some(false));
+    let after = gateway
+        .set_pref(&BrowserPrefUpdate::DefaultZoomPercent(125))
+        .await
+        .unwrap();
+    assert_eq!(after.default_zoom_percent, Some(125));
+    if let Some(other) = before
+        .search_engine
+        .options
+        .iter()
+        .find(|engine| Some(engine.id) != before.search_engine.current)
+    {
+        let after = gateway
+            .set_pref(&BrowserPrefUpdate::SearchEngine(other.id))
+            .await
+            .unwrap();
+        assert_eq!(after.search_engine.current, Some(other.id));
+    }
+
+    // chrome://settings reads the same profile values the gateway wrote.
+    let mut seen = Vec::new();
+    for key in [
+        "browser.enable_spellchecking",
+        "intl.accept_languages",
+        "profile.cookie_controls_mode",
+    ] {
+        seen.push(settings_pref(&person.browser, key).await);
+    }
+    assert_eq!(seen, [json!(false), json!("ko,en-US"), json!(cookie_mode)]);
+
+    for (update, code) in [
+        (
+            BrowserPrefUpdate::DefaultZoomPercent(101),
+            "invalid_request",
+        ),
+        (
+            BrowserPrefUpdate::AcceptLanguages(vec!["ko,en".into()]),
+            "invalid_request",
+        ),
+        (
+            BrowserPrefUpdate::AcceptLanguages(vec!["ko".into(), "KO".into()]),
+            "invalid_request",
+        ),
+        (BrowserPrefUpdate::SearchEngine(999_999), "invalid_request"),
+    ] {
+        let result = gateway.set_pref(&update).await;
+        assert!(
+            matches!(&result, Err(BrowserError::Gateway { code: refused, .. }) if refused == code),
+            "{update:?}: {result:?}; before {before:?}"
+        );
+    }
+    let unknown = gateway
+        .request(
+            "prefs.set",
+            json!({"name":"download.default_directory","value":"/tmp"}),
+        )
+        .await;
+    assert!(
+        matches!(&unknown, Err(BrowserError::Gateway { code, .. }) if code == "invalid_request"),
+        "{unknown:?}"
+    );
+    person.browser.shutdown().await.unwrap();
+}
+
+fn gateway_code<T: std::fmt::Debug>(result: &Result<T, BrowserError>) -> &str {
+    match result {
+        Err(BrowserError::Gateway { code, .. }) => code,
+        other => panic!("expected a gateway refusal, got {other:?}"),
+    }
+}
+
+/// An unpacked extension carrying the openside extension's manifest key, so it gets the pinned
+/// id the gateway looks for, and its global `mini-popup` command without a suggested key.
+fn mini_popup_extension() -> TempDir {
+    let protocol = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/desktopNotifyProtocol.ts"),
+    )
+    .unwrap();
+    let key = protocol
+        .split("EXTENSION_KEY =")
+        .nth(1)
+        .and_then(|rest| rest.split('"').nth(1))
+        .expect("EXTENSION_KEY in web/src/desktopNotifyProtocol.ts");
+    let extension = tempfile::tempdir().unwrap();
+    std::fs::write(
+        extension.path().join("manifest.json"),
+        json!({"manifest_version":3,"name":"mini popup probe","version":"1","key":key,
+            "background":{"service_worker":"sw.js"},
+            "commands":{"mini-popup":{"description":"Open the mini popup","global":true}}})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(extension.path().join("sw.js"), "// mini popup probe\n").unwrap();
+    extension
+}
+
+/// An unpacked extension whose browser-only `hold` command suggests Alt+Space, which Chromium
+/// grants it on install.
+fn alt_space_extension() -> TempDir {
+    let extension = tempfile::tempdir().unwrap();
+    std::fs::write(
+        extension.path().join("manifest.json"),
+        json!({"manifest_version":3,"name":"alt space holder","version":"1",
+            "background":{"service_worker":"sw.js"},
+            "commands":{"hold":{"description":"Hold Alt+Space",
+                "suggested_key":{"default":"Alt+Space"}}}})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(extension.path().join("sw.js"), "// alt space holder\n").unwrap();
+    extension
+}
+
+/// A command of the extension named `extension` as chrome://extensions/shortcuts in `browser`
+/// reads it.
+async fn shortcuts_page_command(browser: &Browser, extension: &str, command: &str) -> Value {
+    let mut raw = RawCdp::connect(browser).await;
+    let (_, session) = raw.open("chrome://extensions/shortcuts", false).await;
+    let expression = format!(
+        r#"(async () => {{
+        for (let i = 0; i < 100 && !(window.chrome && chrome.developerPrivate); i++) {{
+            await new Promise(r => setTimeout(r, 100));
+        }}
+        const info = (await chrome.developerPrivate.getExtensionsInfo()).find(e => e.name === {extension:?});
+        const command = info.commands.find(c => c.name === {command:?});
+        return {{keybinding: command.keybinding, scope: command.scope, active: command.isActive}};
+    }})()"#
+    );
+    // The evaluation can start in the blank document the navigation then replaces.
+    for _ in 0..20 {
+        let reply = raw
+            .reply(
+                Some(&session),
+                "Runtime.evaluate",
+                json!({"expression":expression,"awaitPromise":true,"returnByValue":true}),
+            )
+            .await;
+        if reply.get("error").is_none() && reply["result"]["exceptionDetails"].is_null() {
+            return reply["result"]["result"]["value"].clone();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("chrome://extensions/shortcuts never answered");
+}
+
+#[tokio::test]
+async fn browser_prefs_bind_the_mini_popup_shortcut_of_the_openside_extension() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    // Without the openside extension there is no mini popup to bind; a malformed value is
+    // still refused as malformed.
+    let bare = Person::launch(&executable, &[], Vec::new()).await;
+    assert_eq!(bare.gateway.prefs().await.unwrap().mini_popup, None);
+    assert_eq!(
+        gateway_code(
+            &bare
+                .gateway
+                .set_pref(&BrowserPrefUpdate::MiniPopup(true))
+                .await
+        ),
+        "unsupported"
+    );
+    assert_eq!(
+        gateway_code(
+            &bare
+                .gateway
+                .request("prefs.set", json!({"name":"mini_popup","value":"on"}))
+                .await
+        ),
+        "invalid_request"
+    );
+    bare.browser.shutdown().await.unwrap();
+
+    let extension = mini_popup_extension();
+    let person = Person::launch(&executable, &[], vec![extension.path().to_owned()]).await;
+    let gateway = &person.gateway;
+    // The unpacked extension finishes loading after the gateway is up. A fresh profile never
+    // binds the command by itself: the toggle starts off.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let prefs = gateway.prefs().await.unwrap();
+        if let Some(enabled) = prefs.mini_popup {
+            assert!(!enabled, "{prefs:?}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the extension never loaded: {prefs:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let on = gateway
+        .set_pref(&BrowserPrefUpdate::MiniPopup(true))
+        .await
+        .unwrap();
+    assert_eq!(on.mini_popup, Some(true));
+    assert_eq!(gateway.prefs().await.unwrap().mini_popup, Some(true));
+    assert_eq!(
+        shortcuts_page_command(&person.browser, "mini popup probe", "mini-popup").await,
+        json!({"keybinding":"Alt+Space","scope":"GLOBAL","active":true})
+    );
+    // Turning it on again is idempotent.
+    let again = gateway
+        .set_pref(&BrowserPrefUpdate::MiniPopup(true))
+        .await
+        .unwrap();
+    assert_eq!(again.mini_popup, Some(true));
+
+    let off = gateway
+        .set_pref(&BrowserPrefUpdate::MiniPopup(false))
+        .await
+        .unwrap();
+    assert_eq!(off.mini_popup, Some(false));
+    assert_eq!(gateway.prefs().await.unwrap().mini_popup, Some(false));
+    assert_eq!(
+        shortcuts_page_command(&person.browser, "mini popup probe", "mini-popup").await
+            ["keybinding"],
+        json!("")
+    );
+    person.browser.shutdown().await.unwrap();
+
+    // Another extension holding Alt+Space keeps it: turning the mini popup on is refused and
+    // the setting stays off.
+    let holder = alt_space_extension();
+    let person = Person::launch(
+        &executable,
+        &[],
+        vec![extension.path().to_owned(), holder.path().to_owned()],
+    )
+    .await;
+    let gateway = &person.gateway;
+    let held = json!({"keybinding":"Alt+Space","scope":"CHROME","active":true});
+    assert_eq!(
+        shortcuts_page_command(&person.browser, "alt space holder", "hold").await,
+        held
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while gateway.prefs().await.unwrap().mini_popup.is_none() {
+        assert!(Instant::now() < deadline, "the extension never loaded");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let refused = gateway.set_pref(&BrowserPrefUpdate::MiniPopup(true)).await;
+    assert_eq!(gateway_code(&refused), "unsupported");
+    assert_eq!(gateway.prefs().await.unwrap().mini_popup, Some(false));
+    assert_eq!(
+        shortcuts_page_command(&person.browser, "alt space holder", "hold").await,
+        held
+    );
+    assert_eq!(
+        shortcuts_page_command(&person.browser, "mini popup probe", "mini-popup").await
+            ["keybinding"],
+        json!("")
+    );
+    person.browser.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn split_view_keys_open_side_by_side_and_stacked_splits() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let probe = probe_server().await;
+    let extension = tabs_extension();
+    let person = Person::launch(&executable, &[], vec![extension.path().to_owned()]).await;
+    let mut raw = RawCdp::connect(&person.browser).await;
+    let worker = extension_worker(&mut raw).await;
+    const VIEWPORT: &str = "[innerWidth, innerHeight]";
+    // Ctrl+Shift+\ splits side by side, Ctrl+Shift+- stacked; the page's viewport halves along
+    // that axis. The key reaches the page first, which leaves it unhandled.
+    for (key, code, key_code, stacked) in
+        [("|", "Backslash", 220, false), ("_", "Minus", 189, true)]
+    {
+        let (target, session) = raw.open(&probe, true).await;
+        let window = window_of(&mut raw, &target).await;
+        let activated = in_extension(
+            &mut raw,
+            &worker,
+            &format!(
+                "const [tab] = await chrome.tabs.query({{windowId: {window}}}); \
+                 await chrome.tabs.update(tab.id, {{active: true}}); \
+                 await chrome.windows.update({window}, {{focused: true}}); return true;"
+            ),
+        )
+        .await;
+        assert_eq!(activated, true, "{activated}");
+        raw.wait_until(&session, "document.visibilityState === 'visible'")
+            .await;
+        let before = raw.eval(&session, VIEWPORT).await;
+        for kind in ["rawKeyDown", "keyUp"] {
+            raw.call(
+                Some(&session),
+                "Input.dispatchKeyEvent",
+                json!({"type":kind,"modifiers":2 | 8,"key":key,"code":code,
+                    "windowsVirtualKeyCode":key_code,"nativeVirtualKeyCode":key_code}),
+            )
+            .await;
+        }
+        let split = format!(
+            "const tabs = await chrome.tabs.query({{windowId: {window}}}); \
+             return tabs.length === 2 && tabs.every(tab => tab.splitViewId > 0) \
+                 && tabs[0].splitViewId === tabs[1].splitViewId;"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while in_extension(&mut raw, &worker, &split).await != true {
+            assert!(Instant::now() < deadline, "{code}: no split opened");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        // The split's own frame takes a few pixels on both axes; only the split axis halves.
+        let (width, height) = (before[0].as_i64().unwrap(), before[1].as_i64().unwrap());
+        let (halved, kept) = if stacked {
+            (("innerHeight", height), ("innerWidth", width))
+        } else {
+            (("innerWidth", width), ("innerHeight", height))
+        };
+        raw.wait_until(
+            &session,
+            &format!(
+                "{} < {} * 0.6 && {} > {} * 0.9",
+                halved.0, halved.1, kept.0, kept.1
+            ),
+        )
+        .await;
+    }
+    person.browser.shutdown().await.unwrap();
+}
+
+/// One `test.tab_rename` round trip. Every answer has the title the tab strip renders, whether
+/// the tab has a name, the tab context menu's command ids, whether Reset is enabled, and the open
+/// editor's text.
+async fn tab_rename(gateway: &Gateway, payload: Value) -> Value {
+    gateway.request("test.tab_rename", payload).await.unwrap()
+}
+
+/// Renames through the real menu item and editor bubble: opens it from the context menu, checks
+/// it is prefilled with the current title, types `text` over the selection and presses Enter.
+async fn rename_in_editor(gateway: &Gateway, tab_id: &str, text: &str) -> Value {
+    let before = tab_rename(gateway, json!({"tab_id":tab_id,"action":"get"})).await;
+    let open = tab_rename(gateway, json!({"tab_id":tab_id,"action":"open_editor"})).await;
+    assert_eq!(open["editor"], before["title"], "{open}");
+    tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"edit","text":text,"key":"enter"}),
+    )
+    .await
+}
+
+/// Polls until the tab strip shows `expected`; the page title can arrive after the load event.
+async fn tab_strip_title(gateway: &Gateway, tab_id: &str, expected: &str) -> Value {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let answer = tab_rename(gateway, json!({"tab_id":tab_id,"action":"get"})).await;
+            if answer["title"] == expected {
+                return answer;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("tab strip never showed {expected:?}"))
+}
+
+/// The commands right after Duplicate (2), up to Pin (6), in menu order.
+fn rename_items(answer: &Value) -> Vec<i64> {
+    let menu: Vec<i64> = answer["menu"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_i64().unwrap())
+        .collect();
+    let duplicate = menu.iter().position(|&id| id == 2).expect("Duplicate item");
+    let pin = menu.iter().position(|&id| id == 6).expect("Pin item");
+    menu[duplicate + 1..pin].to_vec()
+}
+
+/// Polls a CDP target until its page has committed `url`.
+async fn target_url(raw: &mut RawCdp, target: &str, url: &str) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let info = raw
+                .call(None, "Target.getTargetInfo", json!({"targetId":target}))
+                .await;
+            if info["targetInfo"]["url"] == url {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("page never committed {url:?}"));
+}
+
+/// Polls until the tab has (or has no) name; for navigations that give no other signal.
+async fn tab_strip_custom(gateway: &Gateway, tab_id: &str, custom: bool) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while tab_rename(gateway, json!({"tab_id":tab_id,"action":"get"})).await["custom"] != custom
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the tab's name never became custom={custom}"));
+}
+
+/// Polls a CDP target until its page reports `title`.
+async fn target_title(raw: &mut RawCdp, target: &str, title: &str) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let info = raw
+                .call(None, "Target.getTargetInfo", json!({"targetId":target}))
+                .await;
+            if info["targetInfo"]["title"] == title {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("page title never became {title:?}"));
+}
+
+/// Tab rename (S20, UX-06) through the real tab context menu and editor bubble. The menu offers
+/// Rename tab (29) right after Duplicate, and Reset tab name (30) only while the tab has a name.
+/// Esc or an untouched field changes nothing; Enter and losing focus commit; an empty name and
+/// Reset clear it. The name replaces the title the tab strip renders, survives page retitles,
+/// same-origin navigations and reloads, and is dropped by a cross-origin navigation; the page and
+/// its CDP target keep the page title.
+#[tokio::test]
+async fn tab_rename_survives_same_origin_and_clears_cross_origin() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let probe = probe_server().await;
+    // The test method exists only behind its switch.
+    let plain = Patched::launch(&executable, "rename-off").await;
+    let tab = plain
+        .browser
+        .create_agent_tab("rename-off", &probe)
+        .await
+        .unwrap();
+    let tab_id = plain.gateway_tab(&tab.id).await.tab_id;
+    assert_eq!(
+        gateway_code(
+            &plain
+                .gateway()
+                .request("test.tab_rename", json!({"tab_id":tab_id,"action":"get"}))
+                .await
+        ),
+        "invalid_request"
+    );
+    plain.browser.shutdown().await.unwrap();
+
+    let patched = Patched::launch_args(
+        &executable,
+        "rename-session",
+        None,
+        &["--openside-test-tab-rename".to_owned()],
+    )
+    .await;
+    let tab = patched
+        .browser
+        .create_agent_tab("rename-session", &probe)
+        .await
+        .unwrap();
+    ready(&patched.browser, &tab).await;
+    let tab_id = patched.gateway_tab(&tab.id).await.tab_id;
+    let gateway = patched.gateway();
+    let get = json!({"tab_id":tab_id,"action":"get"});
+
+    let unnamed = tab_strip_title(gateway, &tab_id, "Probe").await;
+    assert_eq!(unnamed["custom"], false);
+    assert_eq!(rename_items(&unnamed), [29]);
+    assert_eq!(unnamed["reset_enabled"], false);
+    assert_eq!(unnamed["editor"], Value::Null);
+    assert_eq!(
+        gateway_code(
+            &gateway
+                .request("test.tab_rename", json!({"tab_id":tab_id,"action":"reset"}))
+                .await
+        ),
+        "unavailable"
+    );
+
+    // The restore path takes only "<tuple origin>\n<one-line UTF-8 name>" whose origin is the
+    // page being restored, and gives the name the same normalization and cap as typing it.
+    let origin = probe.url.split('/').take(3).collect::<Vec<_>>().join("/");
+    let restore = |bytes: Vec<u8>| {
+        let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        tab_rename(
+            gateway,
+            json!({"tab_id":tab_id,"action":"restore","extra_hex":hex}),
+        )
+    };
+    let restored = restore(format!("{origin}\n  Restored   name ").into_bytes()).await;
+    assert_eq!(restored["title"], "Restored name");
+    assert_eq!(restored["custom"], true);
+    let capped = restore(format!("{origin}\n{}", "\u{1d11e}".repeat(300)).into_bytes()).await;
+    assert_eq!(capped["title"], "\u{1d11e}".repeat(256));
+    let stale = origin.replace("127.0.0.1", "localhost");
+    let mut invalid_utf8 = format!("{origin}\n").into_bytes();
+    invalid_utf8.extend([0xff, b'A']);
+    for malformed in [
+        b"Restored".to_vec(),
+        b"\nRestored".to_vec(),
+        b"not a url\nRestored".to_vec(),
+        b"null\nRestored".to_vec(),
+        format!("{origin}/\nRestored").into_bytes(),
+        format!("{stale}\nRestored").into_bytes(),
+        format!("{origin}\nRestored\nname").into_bytes(),
+        format!("{origin}\n").into_bytes(),
+        format!("{origin}\n   ").into_bytes(),
+        invalid_utf8,
+    ] {
+        let answer = restore(malformed.clone()).await;
+        assert_eq!(
+            answer["custom"],
+            false,
+            "{:?}",
+            String::from_utf8_lossy(&malformed)
+        );
+        assert_eq!(answer["title"], "Probe");
+    }
+
+    // Esc, and Enter on the untouched prefilled title, change nothing and close the editor.
+    let open = tab_rename(gateway, json!({"tab_id":tab_id,"action":"open_editor"})).await;
+    assert_eq!(open["editor"], "Probe");
+    let escaped = tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"edit","text":"Ignored","key":"escape"}),
+    )
+    .await;
+    assert_eq!(escaped["custom"], false);
+    assert_eq!(escaped["editor"], Value::Null);
+    tab_rename(gateway, json!({"tab_id":tab_id,"action":"open_editor"})).await;
+    let untouched = tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"edit","key":"enter"}),
+    )
+    .await;
+    assert_eq!(untouched["custom"], false);
+    assert_eq!(untouched["editor"], Value::Null);
+
+    // Enter commits; whitespace runs collapse as they do in a tab title.
+    let named = rename_in_editor(gateway, &tab_id, "  Release   notes ").await;
+    assert_eq!(named["title"], "Release notes");
+    assert_eq!(named["custom"], true);
+    assert_eq!(named["editor"], Value::Null);
+    assert_eq!(rename_items(&named), [29, 30]);
+    assert_eq!(named["reset_enabled"], true);
+    assert_eq!(named["saved"], true);
+    assert_eq!(
+        patched
+            .browser
+            .evaluate(&tab.id, "document.title")
+            .await
+            .unwrap(),
+        "Probe"
+    );
+    let mut raw = RawCdp::connect(&patched.browser).await;
+    target_title(&mut raw, &tab.id, "Probe").await;
+    // The gateway's tab records keep the page title too.
+    assert_eq!(patched.gateway_tab(&tab.id).await.title, "Probe");
+
+    // Losing focus commits too.
+    let open = tab_rename(gateway, json!({"tab_id":tab_id,"action":"open_editor"})).await;
+    assert_eq!(open["editor"], "Release notes");
+    let blurred = tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"edit","text":"Docs","key":"blur"}),
+    )
+    .await;
+    assert_eq!(blurred["title"], "Docs");
+    assert_eq!(blurred["editor"], Value::Null);
+
+    // The page retitling itself keeps the name once the browser has the new page title.
+    patched
+        .browser
+        .evaluate(&tab.id, "document.title = 'Retitled'")
+        .await
+        .unwrap();
+    target_title(&mut raw, &tab.id, "Retitled").await;
+    assert_eq!(tab_rename(gateway, get.clone()).await["title"], "Docs");
+    // So do a same-origin navigation and a reload.
+    patched
+        .browser
+        .navigate("rename-session", &tab.id, &probe.child())
+        .await
+        .unwrap();
+    target_title(&mut raw, &tab.id, "Child").await;
+    assert_eq!(tab_rename(gateway, get.clone()).await["title"], "Docs");
+    patched
+        .browser
+        .evaluate(
+            &tab.id,
+            "window.before_reload = true; location.reload(); true",
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let fresh = patched
+                .browser
+                .evaluate(
+                    &tab.id,
+                    "window.before_reload === undefined && document.readyState === 'complete'",
+                )
+                .await;
+            if matches!(fresh, Ok(Value::Bool(true))) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("reload never finished");
+    let reloaded = tab_rename(gateway, get.clone()).await;
+    assert_eq!(reloaded["title"], "Docs");
+    assert_eq!(reloaded["custom"], true);
+
+    // Another origin (same port, other host) drops it; the page title shows again.
+    let other_origin = probe.url.replace("127.0.0.1", "localhost");
+    patched
+        .browser
+        .navigate("rename-session", &tab.id, &other_origin)
+        .await
+        .unwrap();
+    let cleared = tab_strip_title(gateway, &tab_id, "Probe").await;
+    assert_eq!(cleared["custom"], false);
+    assert_eq!(rename_items(&cleared), [29]);
+
+    // Reset is the menu item; an empty name clears too.
+    rename_in_editor(gateway, &tab_id, "Draft").await;
+    let reset = tab_rename(gateway, json!({"tab_id":tab_id,"action":"reset"})).await;
+    assert_eq!(reset["title"], "Probe");
+    assert_eq!(reset["custom"], false);
+    assert_eq!(rename_items(&reset), [29]);
+    assert_eq!(reset["reset_enabled"], false);
+    rename_in_editor(gateway, &tab_id, "Draft").await;
+    let emptied = rename_in_editor(gateway, &tab_id, "   ").await;
+    assert_eq!(emptied["title"], "Probe");
+    assert_eq!(emptied["custom"], false);
+
+    // Names are capped at 256 grapheme clusters: characters outside the BMP, a combining
+    // sequence and an emoji ZWJ sequence at the boundary stay whole, and a cut right after a
+    // space drops that space.
+    let astral = rename_in_editor(gateway, &tab_id, &"\u{1d11e}".repeat(256)).await;
+    assert_eq!(astral["title"], "\u{1d11e}".repeat(256));
+    let long = rename_in_editor(gateway, &tab_id, &"\u{1d11e}".repeat(257)).await;
+    assert_eq!(long["title"], "\u{1d11e}".repeat(256));
+    assert_eq!(long["custom"], true);
+    let combining = format!("{}e\u{301}", "a".repeat(255));
+    let named = rename_in_editor(gateway, &tab_id, &format!("{combining}tail")).await;
+    assert_eq!(named["title"], combining.as_str());
+    let family = format!(
+        "{}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}",
+        "a".repeat(255)
+    );
+    let named = rename_in_editor(gateway, &tab_id, &format!("{family}x")).await;
+    assert_eq!(named["title"], family.as_str());
+    let cut = rename_in_editor(gateway, &tab_id, &format!("{} tail", "a".repeat(255))).await;
+    assert_eq!(cut["title"], "a".repeat(255));
+
+    // A name on a page that is not http or https (here a file: page) shows but is not saved
+    // with the session, since restore would never accept it.
+    let local_dir = TempDir::new().unwrap();
+    let local = local_dir.path().join("local.html");
+    std::fs::write(&local, "<title>Local</title>").unwrap();
+    let local_url = format!("file://{}", local.display());
+    tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"navigate","url":local_url}),
+    )
+    .await;
+    target_url(&mut raw, &tab.id, &local_url).await;
+    tab_strip_title(gateway, &tab_id, "Local").await;
+    let local_name = rename_in_editor(gateway, &tab_id, "Notes").await;
+    assert_eq!(local_name["custom"], true);
+    assert_eq!(local_name["saved"], false);
+
+    // about:blank the page opens itself inherits its origin and keeps the name; one the browser
+    // loads (typed, or here the gateway) has no origin and drops it.
+    patched
+        .browser
+        .evaluate(
+            &tab.id,
+            "setTimeout(() => { location = 'about:blank'; }); true",
+        )
+        .await
+        .unwrap();
+    target_url(&mut raw, &tab.id, "about:blank").await;
+    assert_eq!(tab_rename(gateway, get.clone()).await["custom"], true);
+    tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"navigate","url":"about:blank"}),
+    )
+    .await;
+    tab_strip_custom(gateway, &tab_id, false).await;
+
+    // An error page counts as the URL it failed to load: a same-origin failure keeps the name,
+    // another origin's drops it.
+    patched
+        .browser
+        .navigate("rename-session", &tab.id, &probe.url)
+        .await
+        .unwrap();
+    tab_strip_title(gateway, &tab_id, "Probe").await;
+    rename_in_editor(gateway, &tab_id, "Docs").await;
+    let session = raw
+        .call(
+            None,
+            "Target.attachToTarget",
+            json!({"targetId":tab.id,"flatten":true}),
+        )
+        .await["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let offline = |offline: bool| json!({"offline":offline,"latency":0,"downloadThroughput":-1,"uploadThroughput":-1});
+    raw.call(Some(&session), "Network.enable", json!({})).await;
+    raw.call(
+        Some(&session),
+        "Network.emulateNetworkConditions",
+        offline(true),
+    )
+    .await;
+    let failed = format!("{}?offline", probe.child());
+    tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"navigate","url":failed}),
+    )
+    .await;
+    target_url(&mut raw, &tab.id, &failed).await;
+    let kept = tab_rename(gateway, get.clone()).await;
+    assert_eq!(kept["title"], "Docs");
+    assert_eq!(kept["custom"], true);
+    tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"navigate",
+            "url":failed.replace("127.0.0.1", "localhost")}),
+    )
+    .await;
+    tab_strip_custom(gateway, &tab_id, false).await;
+    raw.call(
+        Some(&session),
+        "Network.emulateNetworkConditions",
+        offline(false),
+    )
+    .await;
+
+    // Closing a tab while its editor is open closes the editor without a crash.
+    let other = patched
+        .browser
+        .create_agent_tab("rename-session", &probe)
+        .await
+        .unwrap();
+    ready(&patched.browser, &other).await;
+    let other_id = patched.gateway_tab(&other.id).await.tab_id;
+    let open = tab_rename(gateway, json!({"tab_id":other_id,"action":"open_editor"})).await;
+    assert_eq!(open["editor"], "Probe");
+    raw.call(None, "Target.closeTarget", json!({"targetId":other.id}))
+        .await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while tab_rename(gateway, get.clone()).await["editor"] != Value::Null {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the editor outlived its tab");
+
+    patched.browser.shutdown().await.unwrap();
+}
+
+/// A tab's name is saved with the session: after a restart that restores the last session the
+/// tab shows it again, and the cross-origin rule still holds against the origin it was given on.
+#[tokio::test]
+async fn tab_rename_survives_a_restart_with_session_restore() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let probe = probe_server().await;
+    let profile = TempDir::new().unwrap();
+    let switch = "--openside-test-tab-rename".to_owned();
+    let first = Patched::launch_profile(
+        &executable,
+        "rename-restart",
+        None,
+        std::slice::from_ref(&switch),
+        Some(profile.path()),
+    )
+    .await;
+    let tab = first
+        .browser
+        .create_agent_tab("rename-restart", &probe)
+        .await
+        .unwrap();
+    ready(&first.browser, &tab).await;
+    let tab_id = first.gateway_tab(&tab.id).await.tab_id;
+    tab_strip_title(first.gateway(), &tab_id, "Probe").await;
+    let named = rename_in_editor(first.gateway(), &tab_id, "Release notes").await;
+    assert_eq!(named["title"], "Release notes");
+    // Chromium writes session commands on a 2.5 s timer; SIGTERM then quits it the way a person
+    // closing the browser does, which saves the session.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let pid = first.browser.process_id();
+    let status = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    tokio::time::timeout(Duration::from_secs(20), async {
+        // The test process is Chromium's parent and reaps it only in `shutdown`: until then an
+        // exited browser is a zombie.
+        while std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            !stat
+                .rsplit(')')
+                .next()
+                .unwrap_or("")
+                .trim_start()
+                .starts_with('Z')
+        }) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("browser did not exit on SIGTERM");
+    let _ = tokio::time::timeout(Duration::from_secs(10), first.browser.shutdown()).await;
+
+    let second = Patched::launch_profile(
+        &executable,
+        "rename-restart",
+        None,
+        &[switch, "--restore-last-session".to_owned()],
+        Some(profile.path()),
+    )
+    .await;
+    let mut raw = RawCdp::connect(&second.browser).await;
+    let target = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let targets = raw.call(None, "Target.getTargets", json!({})).await;
+            if let Some(found) = targets["targetInfos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|info| info["type"] == "page" && info["url"] == probe.url.as_str())
+            {
+                return found["targetId"].as_str().unwrap().to_owned();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the named tab was not restored");
+    let tab_id = second.gateway_tab(&target).await.tab_id;
+    let gateway = second.gateway();
+    let restored = tab_strip_title(gateway, &tab_id, "Release notes").await;
+    assert_eq!(restored["custom"], true);
+    assert_eq!(rename_items(&restored), [29, 30]);
+
+    // The restored name belongs to the origin it was given on: a same-origin page keeps it, and
+    // another origin drops it.
+    tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"navigate","url":probe.child()}),
+    )
+    .await;
+    target_title(&mut raw, &target, "Child").await;
+    let kept = tab_rename(gateway, json!({"tab_id":tab_id,"action":"get"})).await;
+    assert_eq!(kept["title"], "Release notes");
+    assert_eq!(kept["custom"], true);
+    tab_rename(
+        gateway,
+        json!({"tab_id":tab_id,"action":"navigate",
+            "url":probe.url.replace("127.0.0.1", "localhost")}),
+    )
+    .await;
+    let cleared = tab_strip_title(gateway, &tab_id, "Probe").await;
+    assert_eq!(cleared["custom"], false);
+
+    second.browser.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn browser_prefs_wait_for_search_engines_is_bounded() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let person = Person::launch(
+        &executable,
+        &["--openside-test-search-engines-never-load".to_owned()],
+        Vec::new(),
+    )
+    .await;
+    let gateway = &person.gateway;
+    // A malformed request is refused at once; it never waits for the engines.
+    let started = Instant::now();
+    let malformed = gateway
+        .request(
+            "prefs.set",
+            json!({"name":"default_zoom_percent","value":101}),
+        )
+        .await;
+    assert_eq!(gateway_code(&malformed), "invalid_request");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    let started = Instant::now();
+    let results = futures_util::future::join_all((0..10).map(|_| gateway.prefs())).await;
+    let mut codes: Vec<&str> = results.iter().map(gateway_code).collect();
+    codes.sort_unstable();
+    // Eight wait and expire; the rest are refused instead of queueing.
+    assert_eq!(
+        codes,
+        [vec!["resource_exhausted"; 2], vec!["timeout"; 8]].concat()
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(11),
+        "{:?}",
+        started.elapsed()
+    );
+    // Expired waits are released: a later request waits again, it is not refused.
+    let again = gateway
+        .set_pref(&BrowserPrefUpdate::SpellCheck(false))
+        .await;
+    assert_eq!(gateway_code(&again), "timeout");
+    person.browser.shutdown().await.unwrap();
+}
+
+/// Two patched browsers side by side: the agent browser and the person's own. Settings reach the
+/// person's startup profile only; the agent gateway refuses them and its profile is untouched.
+#[tokio::test]
+async fn browser_prefs_hit_the_person_profile_never_the_agent_profile() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let agent = Patched::launch(&executable, "prefs-agent").await;
+    let person = Person::launch(&executable, &[], Vec::new()).await;
+    assert!(!agent.gateway().supports_prefs());
+    assert_eq!(
+        gateway_code(&agent.gateway().request("prefs.get", json!({})).await),
+        "role_denied"
+    );
+    assert_eq!(
+        gateway_code(
+            &agent
+                .gateway()
+                .request("prefs.set", json!({"name":"spell_check","value":false}))
+                .await
+        ),
+        "role_denied"
+    );
+    assert_eq!(
+        gateway_code(
+            &agent
+                .gateway()
+                .request("native.open", json!({"tool":"task_manager"}))
+                .await
+        ),
+        "role_denied"
+    );
+    let written = person
+        .gateway
+        .set_pref(&BrowserPrefUpdate::SpellCheck(false))
+        .await
+        .unwrap();
+    assert!(!written.spell_check);
+    assert_eq!(
+        settings_pref(&person.browser, "browser.enable_spellchecking").await,
+        json!(false)
+    );
+    assert_eq!(
+        settings_pref(&agent.browser, "browser.enable_spellchecking").await,
+        json!(true)
+    );
+    person.browser.shutdown().await.unwrap();
+    agent.browser.shutdown().await.unwrap();
+}
+
+/// An unpacked MV3 extension allowed to take over the person's privacy settings.
+fn privacy_extension() -> TempDir {
+    let extension = tempfile::tempdir().unwrap();
+    std::fs::write(
+        extension.path().join("manifest.json"),
+        json!({"manifest_version":3,"name":"privacy probe","version":"1",
+            "permissions":["privacy"],"background":{"service_worker":"sw.js"},
+            // An engine the person's browser gained from an extension: never listed.
+            "chrome_settings_overrides":{"search_provider":{"name":"Probe search",
+                "keyword":"probe","search_url":"https://probe.example/?q={searchTerms}",
+                "favicon_url":"https://probe.example/favicon.ico","encoding":"UTF-8",
+                "is_default":false}}})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(extension.path().join("sw.js"), "// privacy probe\n").unwrap();
+    extension
+}
+
+#[tokio::test]
+async fn browser_prefs_refuse_controlled_settings_and_never_expose_custom_engines() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let extension = privacy_extension();
+    let person = Person::launch(&executable, &[], vec![extension.path().to_owned()]).await;
+    let gateway = &person.gateway;
+    let listed = gateway.request("prefs.get", json!({})).await.unwrap();
+    assert!(
+        listed["search_engine"]["options"]
+            .as_array()
+            .is_some_and(|options| !options.is_empty()),
+        "{listed}"
+    );
+    let text = listed.to_string();
+    for leak in [
+        "Ask openside",
+        "openside routines",
+        "Probe search",
+        "probe",
+        "127.0.0.1",
+        "searchTerms",
+        "http",
+    ] {
+        assert!(!text.contains(leak), "{leak} leaked: {text}");
+    }
+
+    let extra = gateway
+        .request(
+            "prefs.set",
+            json!({"name":"spell_check","value":false,"profile":"Other"}),
+        )
+        .await;
+    assert_eq!(gateway_code(&extra), "invalid_request");
+
+    // An extension taking over third-party cookies makes the setting not the person's to change.
+    let mut raw = RawCdp::connect(&person.browser).await;
+    let worker = extension_worker(&mut raw).await;
+    raw.eval(
+        &worker,
+        "chrome.privacy.websites.thirdPartyCookiesAllowed.set({value: true}); true",
+    )
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let result = gateway
+            .set_pref(&BrowserPrefUpdate::ThirdPartyCookies(CookiePolicy::Block))
+            .await;
+        if result.is_err() {
+            assert_eq!(gateway_code(&result), "policy_denied");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "extension never took control: {result:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // A malformed value is refused as malformed even for a controlled setting.
+    let invalid = gateway
+        .request(
+            "prefs.set",
+            json!({"name":"third_party_cookies","value":"sometimes"}),
+        )
+        .await;
+    assert_eq!(gateway_code(&invalid), "invalid_request");
+    assert_eq!(
+        gateway.prefs().await.unwrap().third_party_cookies,
+        CookiePolicy::Allow
+    );
+    person.browser.shutdown().await.unwrap();
+}
+
+/// The person's browser serves settings and native tools only; the browser itself refuses every
+/// tab and agent method, and never reports the person's tabs as events.
+#[tokio::test]
+async fn person_role_refuses_every_tab_and_agent_method() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let probe = probe_server().await;
+    let person = Person::launch(&executable, &[], Vec::new()).await;
+    let mut capabilities = person.gateway.capabilities().to_vec();
+    capabilities.sort();
+    assert_eq!(capabilities, ["browser_prefs", "native_tools"]);
+    // A tab the person opens is never adopted or reported.
+    let mut raw = RawCdp::connect(&person.browser).await;
+    let (target, _) = raw.open(&probe.url, false).await;
+    for (kind, payload) in [
+        ("tabs.list", json!({})),
+        ("browser.status", json!({})),
+        ("focus.request", json!({"tab_id":target,"grant_id":null})),
+        (
+            "screenshot.capture",
+            json!({"tab_id":target,"format":"png"}),
+        ),
+        ("tab.set_label", json!({"tab_id":target,"label":"x"})),
+        (
+            "autofill.fields",
+            json!({"tab_id":target,"origin":"http://127.0.0.1"}),
+        ),
+        (
+            "autofill.fill",
+            json!({"tab_id":target,"handle":"h","origin":"o","value":"v"}),
+        ),
+        ("tab.open", json!({"url":"https://example.com/"})),
+        ("tab.close", json!({"tab_id":target})),
+        ("dialog.respond", json!({"tab_id":target,"accept":true})),
+        ("download.cancel", json!({"download_id":"1"})),
+        ("no.such.method", json!({})),
+    ] {
+        assert_eq!(
+            gateway_code(&person.gateway.request(kind, payload).await),
+            "role_denied",
+            "{kind}"
+        );
+    }
+    let quiet = tokio::time::timeout(Duration::from_secs(1), person.gateway.next_event()).await;
+    assert!(quiet.is_err(), "person gateway sent an event: {quiet:?}");
+    person.browser.shutdown().await.unwrap();
+}
+
+/// `--incognito` makes the person's windows off the record, never the profile the gateway serves:
+/// settings are read and written on the regular startup profile, and native tools need one of its
+/// normal windows.
+#[tokio::test]
+async fn person_role_under_incognito_serves_the_regular_profile_only() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let person = Person::launch(&executable, &["--incognito".to_owned()], Vec::new()).await;
+    let gateway = &person.gateway;
+    assert!(gateway.prefs().await.unwrap().spell_check);
+    let written = gateway
+        .set_pref(&BrowserPrefUpdate::SpellCheck(false))
+        .await
+        .unwrap();
+    assert!(!written.spell_check);
+    assert!(!gateway.prefs().await.unwrap().spell_check);
+    assert_eq!(
+        gateway_code(
+            &gateway
+                .request("native.open", json!({"tool":"devtools"}))
+                .await
+        ),
+        "unsupported"
+    );
+    person.browser.shutdown().await.unwrap();
+}
+
+/// A startup profile outside the user data dir is never the person's: nothing is read, written
+/// or opened, and a malformed request is still malformed.
+#[tokio::test]
+async fn person_role_without_a_valid_startup_profile_serves_nothing() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    // Without its startup profile loaded the browser refuses CDP context management, so it runs
+    // bare here: only the person gateway is needed.
+    let runtime = private_runtime_dir();
+    let user_data = tempfile::tempdir().unwrap();
+    let mut browser = tokio::process::Command::new(&executable)
+        .args([
+            "--headless=new".to_owned(),
+            "--no-first-run".to_owned(),
+            "--no-default-browser-check".to_owned(),
+            format!("--user-data-dir={}", user_data.path().display()),
+            "--openside-gateway-instance-id=person-0123456789abcdef".to_owned(),
+            format!(
+                "--openside-gateway-runtime-dir={}",
+                runtime.path().display()
+            ),
+            "--openside-gateway-role=person".to_owned(),
+            "--profile-directory=nested/Other".to_owned(),
+            "about:blank".to_owned(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let gateway = loop {
+        if let Some(gateway) = Gateway::connect_person(runtime.path(), Duration::from_secs(10))
+            .await
+            .unwrap()
+        {
+            break gateway;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no person gateway: {:?}",
+            walk(runtime.path())
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let gateway = &gateway;
+    assert_eq!(gateway_code(&gateway.prefs().await), "unsupported");
+    assert_eq!(
+        gateway_code(
+            &gateway
+                .set_pref(&BrowserPrefUpdate::SpellCheck(false))
+                .await
+        ),
+        "unsupported"
+    );
+    for payload in [
+        json!({"name":"default_zoom_percent","value":101}),
+        json!({"name":"spell_check","value":"no"}),
+        json!({"name":"download.default_directory","value":"/tmp"}),
+    ] {
+        assert_eq!(
+            gateway_code(&gateway.request("prefs.set", payload.clone()).await),
+            "invalid_request",
+            "{payload}"
+        );
+    }
+    assert_eq!(
+        gateway_code(
+            &gateway
+                .request("native.open", json!({"tool":"task_manager"}))
+                .await
+        ),
+        "unsupported"
+    );
+    browser.kill().await.unwrap();
+}
+
+/// native.open reaches the browser's own Task manager and DevTools for the person's profile.
+#[tokio::test]
+async fn person_native_tools_open_task_manager_and_devtools() {
+    let _serial = serial().await;
+    let Some(executable) = patched_executable() else {
+        return;
+    };
+    let probe = probe_server().await;
+    let person = Person::launch(&executable, &[], Vec::new()).await;
+    let mut raw = RawCdp::connect(&person.browser).await;
+    raw.open(&probe.url, false).await;
+    let devtools_targets = |targets: &Value| {
+        targets["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|target| {
+                target["url"]
+                    .as_str()
+                    .is_some_and(|url| url.starts_with("devtools://devtools/"))
+            })
+            .count()
+    };
+    let before = devtools_targets(&raw.call(None, "Target.getTargets", json!({})).await);
+    person
+        .gateway
+        .open_native_tool(openside_browser::NativeTool::DevTools)
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while devtools_targets(&raw.call(None, "Target.getTargets", json!({})).await) <= before {
+        assert!(Instant::now() < deadline, "no DevTools window opened");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // The browser answers opened only after chrome::OpenTaskManager ran for the person's window.
+    person
+        .gateway
+        .open_native_tool(openside_browser::NativeTool::TaskManager)
+        .await
+        .unwrap();
+    for payload in [
+        json!({}),
+        json!({"tool":"bookmarks"}),
+        json!({"tool":"devtools","tab_id":1}),
+    ] {
+        assert_eq!(
+            gateway_code(&person.gateway.request("native.open", payload).await),
+            "invalid_request"
+        );
+    }
+    assert!(person.browser.is_connected());
+    person.browser.shutdown().await.unwrap();
 }
 
 #[tokio::test]

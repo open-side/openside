@@ -258,7 +258,7 @@ impl Browser {
     }
 }
 
-const SPACE_DOWNLOADS: &str = "space-downloads";
+pub(super) const SPACE_DOWNLOADS: &str = "space-downloads";
 
 pub(super) async fn sweep_downloads(
     profile: &std::path::Path,

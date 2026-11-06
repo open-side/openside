@@ -56,6 +56,7 @@ mod page_events;
 pub use page_events::{DialogClaim, DialogInfo, DownloadInfo, FileChooserInfo, PageEvent};
 #[path = "downloads.rs"]
 mod downloads;
+pub use downloads::{safe_file_name, SAFE_NAME_BYTES};
 #[path = "screenshot.rs"]
 mod screenshot;
 pub use screenshot::{ScreenshotArea, ScreenshotClip};
@@ -3949,6 +3950,10 @@ async fn handle_event(inner: &Inner, event: Value) {
                 owner: tab.and_then(|tab| tab.owner_session_id.clone()),
                 space: tab.and_then(|tab| tab.browser_context_id.clone()),
                 status: None,
+                received_bytes: 0,
+                total_bytes: 0,
+                over_limit: false,
+                page_url: tab.map(|tab| tab.url.clone()),
             });
             let _ = inner.events.send(BrowserEvent::DownloadStarted {
                 guid: text("guid"),
@@ -3958,17 +3963,31 @@ async fn handle_event(inner: &Inner, event: Value) {
             });
         }
         "Browser.downloadProgress" => {
+            let guid = params["guid"].as_str().unwrap_or_default().to_owned();
             let status = match params["state"].as_str() {
                 Some("completed") => Some(DownloadStatus::Completed),
                 Some("canceled") => Some(DownloadStatus::Canceled),
                 _ => None,
             };
+            let bytes = |field: &str| params[field].as_f64().unwrap_or(0.0).max(0.0) as u64;
+            let oversize =
+                inner
+                    .page
+                    .download_progress(&guid, bytes("receivedBytes"), bytes("totalBytes"));
             if let Some(status) = status {
-                let guid = params["guid"].as_str().unwrap_or_default().to_owned();
                 inner.page.download_finished(&guid, status);
                 let _ = inner
                     .events
                     .send(BrowserEvent::DownloadFinished { guid, status });
+            } else if let Some(record) = oversize {
+                // Not awaited under the ledger lock: the reply arrives on the CDP reader task.
+                drop(state);
+                let mut cancel = json!({"guid": record.guid});
+                if let Some(context) = record.space {
+                    cancel["browserContextId"] = json!(context);
+                }
+                // The canceled progress event that follows reports the terminal state.
+                let _ = inner.cdp.call(None, "Browser.cancelDownload", cancel).await;
             }
         }
         _ => {}
