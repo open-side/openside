@@ -1,0 +1,27 @@
+[package]
+name = "openside-computer"
+description = "Native computer use for openside: eligibility, app windows, window frames and input confined to one connected window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# Scriptable in-memory backend for daemon tests.
+fake = []
+
+[dependencies]
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "process", "sync", "time", "io-util", "macros", "rt"] }
+tokio-util = "0.7"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["ioctl", "fs"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

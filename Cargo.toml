@@ -22,6 +22,7 @@ members = [
     "crates/openside-push",
     "crates/openside-relay",
     "crates/openside-model-fetch",
+    "crates/openside-computer",
 ]
 
 [workspace.package]
