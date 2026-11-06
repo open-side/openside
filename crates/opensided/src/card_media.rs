@@ -50,34 +50,6 @@ fn source(raw: &str) -> Result<Url, ToolError> {
     Ok(url)
 }
 
-// Restrict IPv6 to ordinary global unicast; translated, mapped and transition ranges must
-// not turn an apparently public destination into a private IPv4 socket at the network edge.
-fn public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            !(a == 0
-                || a == 10
-                || a == 127
-                || a >= 224
-                || (a == 100 && (64..=127).contains(&b))
-                || (a == 169 && b == 254)
-                || (a == 172 && (16..=31).contains(&b))
-                || (a == 192 && (b == 168 || b == 0 || (b == 88 && c == 99)))
-                || (a == 198 && (b == 18 || b == 19 || (b == 51 && c == 100)))
-                || ip.octets() == [168, 63, 129, 16]
-                || (a == 203 && b == 0 && c == 113))
-        }
-        IpAddr::V6(ip) => {
-            let s = ip.segments();
-            (s[0] & 0xe000) == 0x2000
-                && s[0] != 0x2002
-                && !(s[0] == 0x2001 && (s[1] < 0x200 || s[1] == 0xdb8))
-                && !(s[0] == 0x3fff && s[1] < 0x1000)
-        }
-    }
-}
-
 struct Response {
     status: u16,
     location: Option<String>,
@@ -210,7 +182,11 @@ async fn fetch_with(
             return Err(denied());
         }
         let addresses = transport.resolve(&url).await?;
-        if addresses.is_empty() || addresses.iter().any(|a| !public_ip(a.ip())) {
+        if addresses.is_empty()
+            || addresses
+                .iter()
+                .any(|a| !crate::net_guard::public_ip(a.ip()))
+        {
             return Err(denied());
         }
         // A new credential-free client gets precisely the checked socket, not another DNS lookup.
@@ -504,34 +480,6 @@ pub(crate) async fn materialize(
 mod tests {
     use super::*;
     use parking_lot::Mutex;
-    #[test]
-    fn ssrf_address_matrix() {
-        for ip in [
-            "127.0.0.1",
-            "0.0.0.0",
-            "10.1.2.3",
-            "172.31.0.1",
-            "192.168.1.1",
-            "169.254.169.254",
-            "100.100.100.200",
-            "224.1.1.1",
-            "198.18.0.1",
-            "::1",
-            "::ffff:8.8.8.8",
-            "::ffff:127.0.0.1",
-            "fc00::1",
-            "fe80::1",
-            "ff02::1",
-            "64:ff9b::a00:1",
-            "2002:7f00:1::",
-            "2001:db8::1",
-        ] {
-            assert!(!public_ip(ip.parse().unwrap()), "{ip}");
-        }
-        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            assert!(public_ip(ip.parse().unwrap()), "{ip}");
-        }
-    }
     struct Fake {
         responses: Mutex<Vec<Response>>,
         pins: Mutex<Vec<SocketAddr>>,

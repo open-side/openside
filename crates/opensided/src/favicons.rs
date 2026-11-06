@@ -289,6 +289,47 @@ pub(crate) async fn populate(card: &mut Card, ctx: &ToolEnv) {
     }
 }
 
+/// Inline icon for a `websearch`/`webfetch` citation of `origin`: the one the agent's own
+/// `tab` shows for that origin, else one this session already cached. Inline because the
+/// public icon route only serves origins a card references. Never fetches from the network:
+/// a citation must not contact the cited site.
+pub(crate) async fn for_citation(
+    ctx: &ToolEnv,
+    tab: Option<(&Browser, &str)>,
+    origin: &str,
+) -> Option<FaviconRef> {
+    if !canonical(origin) {
+        return None;
+    }
+    let key = Key {
+        origin: origin.into(),
+        session: ctx.session.clone(),
+    };
+    if let Some((browser, tab)) = tab {
+        if let Some(pixels) = for_tab(browser, ctx.session.as_str(), tab, origin)
+            .await
+            .and_then(|data| Browser::validated_favicon(&data))
+        {
+            let state = ctx.shared.db.state(&ctx.session).await.ok()?;
+            if !state.incognito && state.browser_space != openside_proto::BrowserSpace::Isolated {
+                // Shared with cards that later cite the same origin.
+                ctx.shared
+                    .favicons
+                    .cache
+                    .lock()
+                    .insert(key, Some(pixels.clone()), Instant::now());
+            }
+            return Some(data_ref(&pixels));
+        }
+    }
+    // A miss is not cached: the icon may simply not have loaded yet, and a negative entry
+    // would hide it from cards for that origin.
+    match ctx.shared.favicons.cache.lock().get(&key, Instant::now()) {
+        Some(Some(bytes)) => Some(data_ref(&bytes)),
+        _ => None,
+    }
+}
+
 fn references(card: &Card, origin: &str) -> bool {
     let site = |site: &CardSite| {
         matches!(&site.favicon_ref,Some(FaviconRef::Origin {origin: found}) if found == origin)
